@@ -426,7 +426,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         ))
                     })?;
                 let high_type = high.get_type(self.schema)?;
-                let high_coerced_type = comparison_coercion(&expr_type, &low_type)
+                let high_coerced_type = comparison_coercion(&expr_type, &high_type)
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "Failed to coerce types {expr_type} and {high_type} in BETWEEN expression"
@@ -943,7 +943,7 @@ pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
             );
         }
 
-        // coerce data type and nullablity for each field
+        // coerce data type and nullability for each field
         for (union_datatype, union_nullable, union_field_map, plan_field) in izip!(
             union_datatypes.iter_mut(),
             union_nullabilities.iter_mut(),
@@ -995,16 +995,19 @@ fn project_with_column_index(
         .enumerate()
         .map(|(i, e)| match e {
             Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
-                e.unalias().alias(schema.field(i).name())
+                Ok(e.unalias().alias(schema.field(i).name()))
             }
             Expr::Column(Column {
                 relation: _,
                 ref name,
-            }) if name != schema.field(i).name() => e.alias(schema.field(i).name()),
-            Expr::Alias { .. } | Expr::Column { .. } => e,
-            _ => e.alias(schema.field(i).name()),
+            }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
+            Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
+            Expr::Wildcard { .. } => {
+                plan_err!("Wildcard should be expanded before type coercion")
+            }
+            _ => Ok(e.alias(schema.field(i).name())),
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     Projection::try_new_with_schema(alias_expr, input, schema)
         .map(LogicalPlan::Projection)
@@ -1018,6 +1021,10 @@ mod test {
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
+    use crate::analyzer::type_coercion::{
+        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
+    };
+    use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
     use datafusion_common::{DFSchema, DFSchemaRef, Result, ScalarValue};
@@ -1031,11 +1038,6 @@ mod test {
         Volatility,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
-
-    use crate::analyzer::type_coercion::{
-        coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
-    };
-    use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -1357,7 +1359,7 @@ mod test {
 
         let err = Projection::try_new(vec![udaf], empty).err().unwrap();
         assert!(
-            err.strip_backtrace().starts_with("Error during planning: Error during planning: Coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
+            err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to MY_AVG function: coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
         );
         Ok(())
     }
@@ -1407,7 +1409,7 @@ mod test {
             .err()
             .unwrap()
             .strip_backtrace();
-        assert!(err.starts_with("Error during planning: Error during planning: Coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed."));
+        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to avg function: coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed."));
         Ok(())
     }
 
@@ -1458,7 +1460,7 @@ mod test {
         let empty = empty_with_type(Utf8);
         let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
         let expected =
-            "Filter: a BETWEEN Utf8(\"2002-05-08\") AND CAST(CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AS Utf8)\
+            "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) AND CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\")\
             \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
@@ -1476,6 +1478,17 @@ mod test {
         // TODO: we should cast col(a).
         let expected =
             "Filter: CAST(a AS Date32) BETWEEN CAST(Utf8(\"2002-05-08\") AS Date32) + IntervalYearMonth(\"1\") AND CAST(Utf8(\"2002-12-08\") AS Date32)\
+            \n  EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
+    }
+
+    #[test]
+    fn between_null() -> Result<()> {
+        let expr = lit(ScalarValue::Null).between(lit(ScalarValue::Null), lit(2i64));
+        let empty = empty();
+        let plan = LogicalPlan::Filter(Filter::try_new(expr, empty)?);
+        let expected =
+            "Filter: CAST(NULL AS Int64) BETWEEN CAST(NULL AS Int64) AND Int64(2)\
             \n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
     }
@@ -1847,7 +1860,7 @@ mod test {
 
     #[test]
     fn tes_case_when_list() -> Result<()> {
-        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int64, true));
         let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
                 Field::new(
@@ -1869,7 +1882,7 @@ mod test {
         test_case_expression!(
             Some("list"),
             vec![(Box::new(col("large_list")), Box::new(lit("1")))],
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1877,7 +1890,7 @@ mod test {
         test_case_expression!(
             Some("large_list"),
             vec![(Box::new(col("list")), Box::new(lit("1")))],
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1885,7 +1898,7 @@ mod test {
         test_case_expression!(
             Some("list"),
             vec![(Box::new(col("fixed_list")), Box::new(lit("1")))],
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1893,7 +1906,7 @@ mod test {
         test_case_expression!(
             Some("fixed_list"),
             vec![(Box::new(col("list")), Box::new(lit("1")))],
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1901,7 +1914,7 @@ mod test {
         test_case_expression!(
             Some("fixed_list"),
             vec![(Box::new(col("large_list")), Box::new(lit("1")))],
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1909,7 +1922,7 @@ mod test {
         test_case_expression!(
             Some("large_list"),
             vec![(Box::new(col("fixed_list")), Box::new(lit("1")))],
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             Utf8,
             schema
         );
@@ -1918,7 +1931,7 @@ mod test {
 
     #[test]
     fn test_then_else_list() -> Result<()> {
-        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let inner_field = Arc::new(Field::new_list_field(DataType::Int64, true));
         let schema = Arc::new(DFSchema::from_unqualified_fields(
             vec![
                 Field::new("boolean", DataType::Boolean, true),
@@ -1946,7 +1959,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("list")))
             ],
             DataType::Boolean,
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
 
@@ -1957,7 +1970,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("large_list")))
             ],
             DataType::Boolean,
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
 
@@ -1969,7 +1982,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("list")))
             ],
             DataType::Boolean,
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
 
@@ -1980,7 +1993,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("fixed_list")))
             ],
             DataType::Boolean,
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
 
@@ -1992,7 +2005,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("large_list")))
             ],
             DataType::Boolean,
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
 
@@ -2003,7 +2016,7 @@ mod test {
                 (Box::new(col("boolean")), Box::new(col("fixed_list")))
             ],
             DataType::Boolean,
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             schema
         );
         Ok(())

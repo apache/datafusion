@@ -163,6 +163,7 @@ pub(crate) fn is_lateral(factor: &TableFactor) -> bool {
     match factor {
         TableFactor::Derived { lateral, .. } => *lateral,
         TableFactor::Function { lateral, .. } => *lateral,
+        TableFactor::UNNEST { .. } => true,
         _ => false,
     }
 }

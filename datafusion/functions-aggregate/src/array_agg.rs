@@ -17,25 +17,25 @@
 
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
-use arrow::array::{new_empty_array, Array, ArrayRef, AsArray, StructArray};
+use arrow::array::{new_empty_array, Array, ArrayRef, AsArray, ListArray, StructArray};
 use arrow::datatypes::DataType;
 
 use arrow_schema::{Field, Fields};
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::{array_into_list_array_nullable, get_row_at_idx};
+use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{internal_err, Result};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{Accumulator, Signature, Volatility};
 use datafusion_expr::{AggregateUDFImpl, Documentation};
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
 use datafusion_functions_aggregate_common::utils::ordering_fields;
+use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use std::collections::{HashSet, VecDeque};
 use std::mem::{size_of, size_of_val};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udaf_expr_and_func!(
     ArrayAgg,
@@ -45,6 +45,20 @@ make_udaf_expr_and_func!(
     array_agg_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.",
+    syntax_example = "array_agg(expression [ORDER BY expression])",
+    sql_example = r#"```sql
+> SELECT array_agg(column_name ORDER BY other_column) FROM table_name;
++-----------------------------------------------+
+| array_agg(column_name ORDER BY other_column)  |
++-----------------------------------------------+
+| [element1, element2, element3]                |
++-----------------------------------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 #[derive(Debug)]
 /// ARRAY_AGG aggregate expression
 pub struct ArrayAgg {
@@ -77,8 +91,7 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::List(Arc::new(Field::new(
-            "item",
+        Ok(DataType::List(Arc::new(Field::new_list_field(
             arg_types[0].clone(),
             true,
         ))))
@@ -89,7 +102,7 @@ impl AggregateUDFImpl for ArrayAgg {
             return Ok(vec![Field::new_list(
                 format_state_name(args.name, "distinct_array_agg"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.input_types[0].clone(), true),
+                Field::new_list_field(args.input_types[0].clone(), true),
                 true,
             )]);
         }
@@ -97,7 +110,7 @@ impl AggregateUDFImpl for ArrayAgg {
         let mut fields = vec![Field::new_list(
             format_state_name(args.name, "array_agg"),
             // See COMMENTS.md to understand why nullable is set to true
-            Field::new("item", args.input_types[0].clone(), true),
+            Field::new_list_field(args.input_types[0].clone(), true),
             true,
         )];
 
@@ -108,7 +121,7 @@ impl AggregateUDFImpl for ArrayAgg {
         let orderings = args.ordering_fields.to_vec();
         fields.push(Field::new_list(
             format_state_name(args.name, "array_agg_orderings"),
-            Field::new("item", DataType::Struct(Fields::from(orderings)), true),
+            Field::new_list_field(DataType::Struct(Fields::from(orderings)), true),
             false,
         ));
 
@@ -146,31 +159,8 @@ impl AggregateUDFImpl for ArrayAgg {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_agg_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_agg_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-                "Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.",
-
-            "array_agg(expression [ORDER BY expression])")
-            .with_sql_example(r#"```sql
-> SELECT array_agg(column_name ORDER BY other_column) FROM table_name;
-+-----------------------------------------------+
-| array_agg(column_name ORDER BY other_column)  |
-+-----------------------------------------------+
-| [element1, element2, element3]                |
-+-----------------------------------------------+
-```"#, 
-            )
-            .with_standard_argument("expression", None)
-            .build()
-    })
 }
 
 #[derive(Debug)]
@@ -186,6 +176,67 @@ impl ArrayAggAccumulator {
             values: vec![],
             datatype: datatype.clone(),
         })
+    }
+
+    /// This function will return the underlying list array values if all valid values are consecutive without gaps (i.e. no null value point to a non empty list)
+    /// If there are gaps but only in the end of the list array, the function will return the values without the null values in the end
+    fn get_optional_values_to_merge_as_is(list_array: &ListArray) -> Option<ArrayRef> {
+        let offsets = list_array.value_offsets();
+        // Offsets always have at least 1 value
+        let initial_offset = offsets[0];
+        let null_count = list_array.null_count();
+
+        // If no nulls than just use the fast path
+        // This is ok as the state is a ListArray rather than a ListViewArray so all the values are consecutive
+        if null_count == 0 {
+            // According to Arrow specification, the first offset can be non-zero
+            let list_values = list_array.values().slice(
+                initial_offset as usize,
+                (offsets[offsets.len() - 1] - initial_offset) as usize,
+            );
+            return Some(list_values);
+        }
+
+        // If all the values are null than just return an empty values array
+        if list_array.null_count() == list_array.len() {
+            return Some(list_array.values().slice(0, 0));
+        }
+
+        // According to the Arrow spec, null values can point to non empty lists
+        // So this will check if all null values starting from the first valid value to the last one point to a 0 length list so we can just slice the underlying value
+
+        // Unwrapping is safe as we just checked if there is a null value
+        let nulls = list_array.nulls().unwrap();
+
+        let mut valid_slices_iter = nulls.valid_slices();
+
+        // This is safe as we validated that that are at least 1 valid value in the array
+        let (start, end) = valid_slices_iter.next().unwrap();
+
+        let start_offset = offsets[start];
+
+        // End is exclusive, so it already point to the last offset value
+        // This is valid as the length of the array is always 1 less than the length of the offsets
+        let mut end_offset_of_last_valid_value = offsets[end];
+
+        for (start, end) in valid_slices_iter {
+            // If there is a null value that point to a non empty list than the start offset of the valid value
+            // will be different that the end offset of the last valid value
+            if offsets[start] != end_offset_of_last_valid_value {
+                return None;
+            }
+
+            // End is exclusive, so it already point to the last offset value
+            // This is valid as the length of the array is always 1 less than the length of the offsets
+            end_offset_of_last_valid_value = offsets[end];
+        }
+
+        let consecutive_valid_values = list_array.values().slice(
+            start_offset as usize,
+            (end_offset_of_last_valid_value - start_offset) as usize,
+        );
+
+        Some(consecutive_valid_values)
     }
 }
 
@@ -218,9 +269,21 @@ impl Accumulator for ArrayAggAccumulator {
         }
 
         let list_arr = as_list_array(&states[0])?;
-        for arr in list_arr.iter().flatten() {
-            self.values.push(arr);
+
+        match Self::get_optional_values_to_merge_as_is(list_arr) {
+            Some(values) => {
+                // Make sure we don't insert empty lists
+                if values.len() > 0 {
+                    self.values.push(values);
+                }
+            }
+            None => {
+                for arr in list_arr.iter().flatten() {
+                    self.values.push(arr);
+                }
+            }
         }
+
         Ok(())
     }
 
@@ -238,9 +301,8 @@ impl Accumulator for ArrayAggAccumulator {
         }
 
         let concated_array = arrow::compute::concat(&element_arrays)?;
-        let list_array = array_into_list_array_nullable(concated_array);
 
-        Ok(ScalarValue::List(Arc::new(list_array)))
+        Ok(SingleRowListArrayBuilder::new(concated_array).build_list_scalar())
     }
 
     fn size(&self) -> usize {
@@ -530,9 +592,7 @@ impl OrderSensitiveArrayAggAccumulator {
 
         let ordering_array =
             StructArray::try_new(struct_field, column_wise_ordering_values, None)?;
-        Ok(ScalarValue::List(Arc::new(array_into_list_array_nullable(
-            Arc::new(ordering_array),
-        ))))
+        Ok(SingleRowListArrayBuilder::new(Arc::new(ordering_array)).build_list_scalar())
     }
 }
 

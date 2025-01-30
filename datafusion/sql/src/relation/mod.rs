@@ -188,6 +188,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context.set_outer_query_schema(old_query_schema);
         planner_context.set_outer_from_schema(Some(old_from_schema));
 
+        // We can omit the subquery wrapper if there are no columns
+        // referencing the outer scope.
+        if outer_ref_columns.is_empty() {
+            return Ok(plan);
+        }
+
         match plan {
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 subquery_alias(

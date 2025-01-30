@@ -25,7 +25,6 @@ pub mod default_table_source;
 pub mod dynamic_file;
 pub mod empty;
 pub mod file_format;
-pub mod function;
 pub mod listing;
 pub mod listing_table_factory;
 pub mod memory;
@@ -34,12 +33,9 @@ pub mod provider;
 pub mod schema_adapter;
 mod statistics;
 pub mod stream;
-pub mod streaming;
 pub mod view;
 
 // backwards compatibility
-pub use datafusion_execution::object_store;
-
 pub use self::default_table_source::{
     provider_as_source, source_as_provider, DefaultTableSource,
 };
@@ -47,6 +43,7 @@ pub use self::memory::MemTable;
 pub use self::view::ViewTable;
 pub use crate::catalog::TableProvider;
 pub use crate::logical_expr::TableType;
+pub use datafusion_execution::object_store;
 pub use statistics::get_statistics_with_limit;
 
 use arrow_schema::{Schema, SortOptions};

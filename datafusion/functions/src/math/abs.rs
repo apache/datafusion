@@ -18,7 +18,7 @@
 //! math expressions
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{
     ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
@@ -26,20 +26,20 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, not_impl_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 type MathArrayFunction = fn(&Vec<ArrayRef>) -> Result<ArrayRef>;
 
 macro_rules! make_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |args: &Vec<ArrayRef>| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let array = downcast_named_arg!(&args[0], "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array.unary(|x| x.abs());
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -49,7 +49,7 @@ macro_rules! make_abs_function {
 macro_rules! make_try_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |args: &Vec<ArrayRef>| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let array = downcast_named_arg!(&args[0], "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array.try_unary(|x| {
                 x.checked_abs().ok_or_else(|| {
                     ArrowError::ComputeError(format!(
@@ -67,7 +67,7 @@ macro_rules! make_try_abs_function {
 macro_rules! make_decimal_abs_function {
     ($ARRAY_TYPE:ident) => {{
         |args: &Vec<ArrayRef>| {
-            let array = downcast_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+            let array = downcast_named_arg!(&args[0], "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array
                 .unary(|x| x.wrapping_abs())
                 .with_data_type(args[0].data_type().clone());
@@ -103,6 +103,12 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
         other => not_impl_err!("Unsupported data type {other:?} for function abs"),
     }
 }
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns the absolute value of a number.",
+    syntax_example = "abs(numeric_expression)",
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct AbsFunc {
     signature: Signature,
@@ -193,20 +199,6 @@ impl ScalarUDFImpl for AbsFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_abs_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_abs_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-            "Returns the absolute value of a number.",
-            "abs(numeric_expression)",
-        )
-        .with_standard_argument("numeric_expression", Some("Numeric"))
-        .build()
-    })
 }

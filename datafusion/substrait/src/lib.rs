@@ -75,6 +75,7 @@
 //! ```
 pub mod extensions;
 pub mod logical_plan;
+#[cfg(feature = "physical")]
 pub mod physical_plan;
 pub mod serializer;
 pub mod variation_const;

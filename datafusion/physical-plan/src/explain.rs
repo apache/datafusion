@@ -20,7 +20,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{DisplayAs, ExecutionMode, PlanProperties, SendableRecordBatchStream};
+use super::{DisplayAs, PlanProperties, SendableRecordBatchStream};
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
@@ -74,11 +75,11 @@ impl ExplainExec {
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(schema: SchemaRef) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
         PlanProperties::new(
-            eq_properties,
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Final,
+            Boundedness::Bounded,
         )
     }
 }

@@ -25,17 +25,17 @@ use arrow_buffer::BooleanBuffer;
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
 use crate::utils::make_scalar_function;
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(ArrayHas,
@@ -57,6 +57,27 @@ make_udf_expr_and_func!(ArrayHasAny,
     array_has_any_udf // internal function name
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns true if the array contains the element.",
+    syntax_example = "array_has(array, element)",
+    sql_example = r#"```sql
+> select array_has([1, 2, 3], 2);
++-----------------------------+
+| array_has(List([1,2,3]), 2) |
++-----------------------------+
+| true                        |
++-----------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "element",
+        description = "Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub struct ArrayHas {
     signature: Signature,
@@ -106,7 +127,7 @@ impl ScalarUDFImpl for ArrayHas {
         match &args[1] {
             ColumnarValue::Array(array_needle) => {
                 // the needle is already an array, convert the haystack to an array of the same length
-                let haystack = args[0].to_owned().into_array(array_needle.len())?;
+                let haystack = args[0].to_array(array_needle.len())?;
                 let array = array_has_inner_for_array(&haystack, array_needle)?;
                 Ok(ColumnarValue::Array(array))
             }
@@ -118,7 +139,7 @@ impl ScalarUDFImpl for ArrayHas {
                 }
 
                 // since the needle is a scalar, convert it to an array of size 1
-                let haystack = args[0].to_owned().into_array(1)?;
+                let haystack = args[0].to_array(1)?;
                 let needle = scalar_needle.to_array_of_size(1)?;
                 let needle = Scalar::new(needle);
                 let array = array_has_inner_for_scalar(&haystack, &needle)?;
@@ -138,39 +159,8 @@ impl ScalarUDFImpl for ArrayHas {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_has_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_has_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns true if the array contains the element.",
-
-            "array_has(array, element)")
-            .with_sql_example(
-                r#"```sql
-> select array_has([1, 2, 3], 2);
-+-----------------------------+
-| array_has(List([1,2,3]), 2) |
-+-----------------------------+
-| true                        |
-+-----------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "element",
-                "Scalar or Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
 }
 
 fn array_has_inner_for_scalar(
@@ -214,8 +204,7 @@ fn array_has_dispatch_for_array<O: OffsetSizeTrait>(
         let is_nested = arr.data_type().is_nested();
         let needle_row = Scalar::new(needle.slice(i, 1));
         let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
-        let is_contained = eq_array.true_count() > 0;
-        boolean_builder.append_value(is_contained)
+        boolean_builder.append_value(eq_array.true_count() > 0);
     }
 
     Ok(Arc::new(boolean_builder.finish()))
@@ -248,10 +237,7 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
             continue;
         }
         let sliced_array = eq_array.slice(start, length);
-        // For nested list, check number of nulls
-        if sliced_array.null_count() != length {
-            final_contained[i] = Some(sliced_array.true_count() > 0);
-        }
+        final_contained[i] = Some(sliced_array.true_count() > 0);
     }
 
     Ok(Arc::new(BooleanArray::from(final_contained)))
@@ -287,6 +273,27 @@ fn array_has_any_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns true if all elements of sub-array exist in array.",
+    syntax_example = "array_has_all(array, sub-array)",
+    sql_example = r#"```sql
+> select array_has_all([1, 2, 3, 4], [2, 3]);
++--------------------------------------------+
+| array_has_all(List([1,2,3,4]), List([2,3])) |
++--------------------------------------------+
+| true                                       |
++--------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "sub-array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub struct ArrayHasAll {
     signature: Signature,
@@ -337,39 +344,31 @@ impl ScalarUDFImpl for ArrayHasAll {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_has_all_doc())
+        self.doc()
     }
 }
 
-fn get_array_has_all_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns true if all elements of sub-array exist in array.",
-
-            "array_has_all(array, sub-array)")
-            .with_sql_example(
-                r#"```sql
-> select array_has_all([1, 2, 3, 4], [2, 3]);
-+--------------------------------------------+
-| array_has_all(List([1,2,3,4]), List([2,3])) |
-+--------------------------------------------+
-| true                                       |
-+--------------------------------------------+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns true if any elements exist in both arrays.",
+    syntax_example = "array_has_any(array, sub-array)",
+    sql_example = r#"```sql
+> select array_has_any([1, 2, 3], [3, 4]);
++------------------------------------------+
+| array_has_any(List([1,2,3]), List([3,4])) |
++------------------------------------------+
+| true                                     |
++------------------------------------------+
 ```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "sub-array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
-}
-
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "sub-array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub struct ArrayHasAny {
     signature: Signature,
@@ -386,7 +385,7 @@ impl ArrayHasAny {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            aliases: vec![String::from("list_has_any")],
+            aliases: vec![String::from("list_has_any"), String::from("arrays_overlap")],
         }
     }
 }
@@ -420,37 +419,8 @@ impl ScalarUDFImpl for ArrayHasAny {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_has_any_doc())
+        self.doc()
     }
-}
-
-fn get_array_has_any_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns true if any elements exist in both arrays.",
-
-            "array_has_any(array, sub-array)")
-            .with_sql_example(
-                r#"```sql
-> select array_has_any([1, 2, 3], [3, 4]);
-+------------------------------------------+
-| array_has_any(List([1,2,3]), List([3,4])) |
-+------------------------------------------+
-| true                                     |
-+------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "sub-array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
 }
 
 /// Represents the type of comparison for array_has.

@@ -196,7 +196,7 @@ fn populate_csv_partitions(
     Ok(schema)
 }
 
-/// Specialised String representation
+/// Specialized String representation
 fn col_str(column: &ArrayRef, row_index: usize) -> String {
     // NullArray::is_null() does not work on NullArray.
     // can remove check for DataType::Null when

@@ -22,11 +22,11 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Result,
 };
-use datafusion_expr::expr::WildcardOptions;
 use datafusion_expr::expr::{ScalarFunction, Unnest};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{
-    expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
+    expr, qualified_wildcard, wildcard, Expr, ExprFunctionExt, ExprSchemable,
+    WindowFrame, WindowFunctionDefinition,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
@@ -167,6 +167,11 @@ impl FunctionArgs {
                 FunctionArgumentClause::Separator(sep) => {
                     return not_impl_err!(
                         "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
+                    )
+                }
+                FunctionArgumentClause::JsonNullClause(jn) => {
+                    return not_impl_err!(
+                        "Calling {name}: JSON NULL clause not supported in function arguments: {jn}"
                     )
                 }
             }
@@ -413,17 +418,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
                 operator: _,
-            } => Ok(Expr::Wildcard {
-                qualifier: None,
-                options: WildcardOptions::default(),
-            }),
+            } => Ok(wildcard()),
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
-            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(Expr::Wildcard {
-                qualifier: None,
-                options: WildcardOptions::default(),
-            }),
+            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(wildcard()),
             FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 // Sanity check on qualifier with schema
@@ -431,10 +430,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if qualified_indices.is_empty() {
                     return plan_err!("Invalid qualifier {qualifier}");
                 }
-                Ok(Expr::Wildcard {
-                    qualifier: Some(qualifier),
-                    options: WildcardOptions::default(),
-                })
+                Ok(qualified_wildcard(qualifier))
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }

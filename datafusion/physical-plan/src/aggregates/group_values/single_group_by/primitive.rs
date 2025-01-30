@@ -17,19 +17,18 @@
 
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::array::BooleanBufferBuilder;
-use arrow::buffer::NullBuffer;
 use arrow::datatypes::i256;
 use arrow::record_batch::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;
 use half::f16;
-use hashbrown::raw::RawTable;
+use hashbrown::hash_table::HashTable;
 use std::mem::size_of;
 use std::sync::Arc;
 
@@ -86,7 +85,7 @@ pub struct GroupValuesPrimitive<T: ArrowPrimitiveType> {
     ///
     /// We don't store the hashes as hashing fixed width primitives
     /// is fast enough for this not to benefit performance
-    map: RawTable<usize>,
+    map: HashTable<usize>,
     /// The group index of the null value if any
     null_group: Option<usize>,
     /// The values for each group index
@@ -100,7 +99,7 @@ impl<T: ArrowPrimitiveType> GroupValuesPrimitive<T> {
         assert!(PrimitiveArray::<T>::is_compatible(&data_type));
         Self {
             data_type,
-            map: RawTable::with_capacity(128),
+            map: HashTable::with_capacity(128),
             values: Vec::with_capacity(128),
             null_group: None,
             random_state: Default::default(),
@@ -126,22 +125,19 @@ where
                 Some(key) => {
                     let state = &self.random_state;
                     let hash = key.hash(state);
-                    let insert = self.map.find_or_find_insert_slot(
+                    let insert = self.map.entry(
                         hash,
                         |g| unsafe { self.values.get_unchecked(*g).is_eq(key) },
                         |g| unsafe { self.values.get_unchecked(*g).hash(state) },
                     );
 
-                    // SAFETY: No mutation occurred since find_or_find_insert_slot
-                    unsafe {
-                        match insert {
-                            Ok(v) => *v.as_ref(),
-                            Err(slot) => {
-                                let g = self.values.len();
-                                self.map.insert_in_slot(hash, slot, g);
-                                self.values.push(key);
-                                g
-                            }
+                    match insert {
+                        hashbrown::hash_table::Entry::Occupied(o) => *o.get(),
+                        hashbrown::hash_table::Entry::Vacant(v) => {
+                            let g = self.values.len();
+                            v.insert(g);
+                            self.values.push(key);
+                            g
                         }
                     }
                 }
@@ -169,10 +165,12 @@ where
             null_idx: Option<usize>,
         ) -> PrimitiveArray<T> {
             let nulls = null_idx.map(|null_idx| {
-                let mut buffer = BooleanBufferBuilder::new(values.len());
-                buffer.append_n(values.len(), true);
-                buffer.set_bit(null_idx, false);
-                unsafe { NullBuffer::new_unchecked(buffer.finish(), 1) }
+                let mut buffer = NullBufferBuilder::new(values.len());
+                buffer.append_n_non_nulls(null_idx);
+                buffer.append_null();
+                buffer.append_n_non_nulls(values.len() - null_idx - 1);
+                // NOTE: The inner builder must be constructed as there is at least one null
+                buffer.finish().unwrap()
             });
             PrimitiveArray::<T>::new(values.into(), nulls)
         }
@@ -183,18 +181,18 @@ where
                 build_primitive(std::mem::take(&mut self.values), self.null_group.take())
             }
             EmitTo::First(n) => {
-                // SAFETY: self.map outlives iterator and is not modified concurrently
-                unsafe {
-                    for bucket in self.map.iter() {
-                        // Decrement group index by n
-                        match bucket.as_ref().checked_sub(n) {
-                            // Group index was >= n, shift value down
-                            Some(sub) => *bucket.as_mut() = sub,
-                            // Group index was < n, so remove from table
-                            None => self.map.erase(bucket),
+                self.map.retain(|group_idx| {
+                    // Decrement group index by n
+                    match group_idx.checked_sub(n) {
+                        // Group index was >= n, shift value down
+                        Some(sub) => {
+                            *group_idx = sub;
+                            true
                         }
+                        // Group index was < n, so remove from table
+                        None => false,
                     }
-                }
+                });
                 let null_group = match &mut self.null_group {
                     Some(v) if *v >= n => {
                         *v -= n;
@@ -208,6 +206,7 @@ where
                 build_primitive(split, null_group)
             }
         };
+
         Ok(vec![Arc::new(array.with_data_type(self.data_type.clone()))])
     }
 

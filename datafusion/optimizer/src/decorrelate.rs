@@ -22,7 +22,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::simplify_expressions::ExprSimplifier;
-use crate::utils::collect_subquery_cols;
 
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
@@ -30,7 +29,9 @@ use datafusion_common::tree_node::{
 use datafusion_common::{plan_err, Column, DFSchemaRef, HashMap, Result, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::utils::{conjunction, find_join_exprs, split_conjunction};
+use datafusion_expr::utils::{
+    collect_subquery_cols, conjunction, find_join_exprs, split_conjunction,
+};
 use datafusion_expr::{
     expr, lit, BinaryExpr, Cast, EmptyRelation, Expr, FetchType, LogicalPlan,
     LogicalPlanBuilder, Operator,

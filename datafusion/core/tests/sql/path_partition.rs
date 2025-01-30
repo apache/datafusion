@@ -183,7 +183,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     max_limit += 1;
     let last_batch = results
         .last()
-        .expect("There shouled be at least one record batch returned");
+        .expect("There should be at least one record batch returned");
     let last_row_idx = last_batch.num_rows() - 1;
     let mut min_limit =
         match ScalarValue::try_from_array(last_batch.column(0), last_row_idx)? {
@@ -218,10 +218,11 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     assert_eq!(min_limit, resulting_limit);
 
     let s = ScalarValue::try_from_array(results[0].column(1), 0)?;
-    let month = match extract_as_utf(&s) {
-        Some(month) => month,
-        s => panic!("Expected month as Dict(_, Utf8) found {s:?}"),
-    };
+    assert!(
+        matches!(s.data_type(), DataType::Dictionary(_, v) if v.as_ref() == &DataType::Utf8),
+        "Expected month as Dict(_, Utf8) found {s:?}"
+    );
+    let month = s.try_as_str().flatten().unwrap();
 
     let sql_on_partition_boundary = format!(
         "SELECT month from t where month = '{}' LIMIT {}",
@@ -239,15 +240,6 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let partition_row_count = max_limit - 1;
     assert_eq!(partition_row_count, resulting_limit);
     Ok(())
-}
-
-fn extract_as_utf(v: &ScalarValue) -> Option<String> {
-    if let ScalarValue::Dictionary(_, v) = v {
-        if let ScalarValue::Utf8(v) = v.as_ref() {
-            return v.clone();
-        }
-    }
-    None
 }
 
 #[tokio::test]
@@ -568,7 +560,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
 
     assert!(
         result.is_err(),
-        "Dupplicate qualified name should raise error"
+        "Duplicate qualified name should raise error"
     );
     Ok(())
 }

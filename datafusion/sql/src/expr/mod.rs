@@ -20,10 +20,10 @@ use arrow_schema::TimeUnit;
 use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
-use recursive::recursive;
 use sqlparser::ast::{
     BinaryOperator, CastFormat, CastKind, DataType as SQLDataType, DictionaryField,
-    Expr as SQLExpr, MapEntry, StructField, Subscript, TrimWhereField, Value,
+    Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry, StructField, Subscript,
+    TrimWhereField, Value,
 };
 
 use datafusion_common::{
@@ -50,6 +50,19 @@ mod unary_op;
 mod value;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
+    pub(crate) fn sql_expr_to_logical_expr_with_alias(
+        &self,
+        sql: SQLExprWithAlias,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let mut expr =
+            self.sql_expr_to_logical_expr(sql.expr, schema, planner_context)?;
+        if let Some(alias) = sql.alias {
+            expr = expr.alias(alias.value);
+        }
+        Ok(expr)
+    }
     pub(crate) fn sql_expr_to_logical_expr(
         &self,
         sql: SQLExpr,
@@ -131,6 +144,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )))
     }
 
+    pub fn sql_to_expr_with_alias(
+        &self,
+        sql: SQLExprWithAlias,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let mut expr =
+            self.sql_expr_to_logical_expr_with_alias(sql, schema, planner_context)?;
+        expr = self.rewrite_partial_qualifier(expr, schema);
+        self.validate_schema_satisfies_exprs(schema, &[expr.clone()])?;
+        let (expr, _) = expr.infer_placeholder_types(schema)?;
+        Ok(expr)
+    }
+
     /// Generate a relational expression from a SQL expression
     pub fn sql_to_expr(
         &self,
@@ -169,7 +196,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Internal implementation. Use
     /// [`Self::sql_expr_to_logical_expr`] to plan exprs.
-    #[recursive]
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn sql_expr_to_logical_expr_internal(
         &self,
         sql: SQLExpr,
@@ -565,13 +592,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
             }
-            SQLExpr::Wildcard => Ok(Expr::Wildcard {
+            SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
                 qualifier: None,
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             }),
-            SQLExpr::QualifiedWildcard(object_name) => Ok(Expr::Wildcard {
+            SQLExpr::QualifiedWildcard(object_name, _token) => Ok(Expr::Wildcard {
                 qualifier: Some(self.object_name_to_table_reference(object_name)?),
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             }),
             SQLExpr::Tuple(values) => self.parse_tuple(schema, planner_context, values),
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),
@@ -1091,8 +1118,11 @@ mod tests {
             None
         }
 
-        fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
-            None
+        fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
+            match name {
+                "sum" => Some(datafusion_functions_aggregate::sum::sum_udaf()),
+                _ => None,
+            }
         }
 
         fn get_variable_type(&self, _variable_names: &[String]) -> Option<DataType> {
@@ -1112,7 +1142,7 @@ mod tests {
         }
 
         fn udaf_names(&self) -> Vec<String> {
-            Vec::new()
+            vec!["sum".to_string()]
         }
 
         fn udwf_names(&self) -> Vec<String> {
@@ -1167,4 +1197,25 @@ mod tests {
     test_stack_overflow!(2048);
     test_stack_overflow!(4096);
     test_stack_overflow!(8192);
+    #[test]
+    fn test_sql_to_expr_with_alias() {
+        let schema = DFSchema::empty();
+        let mut planner_context = PlannerContext::default();
+
+        let expr_str = "SUM(int_col) as sum_int_col";
+
+        let dialect = GenericDialect {};
+        let mut parser = Parser::new(&dialect).try_with_sql(expr_str).unwrap();
+        // from sqlparser
+        let sql_expr = parser.parse_expr_with_alias().unwrap();
+
+        let context_provider = TestContextProvider::new();
+        let sql_to_rel = SqlToRel::new(&context_provider);
+
+        let expr = sql_to_rel
+            .sql_expr_to_logical_expr_with_alias(sql_expr, &schema, &mut planner_context)
+            .unwrap();
+
+        assert!(matches!(expr, Expr::Alias(_)));
+    }
 }

@@ -29,11 +29,10 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     col,
-    dml::CopyTo,
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
-    ColumnarValue, CreateExternalTable, CreateIndex, DdlStatement, ScalarUDF,
-    ScalarUDFImpl, Signature, Statement, Volatility,
+    ColumnarValue, CreateIndex, DdlStatement, ScalarUDF, ScalarUDFImpl, Signature,
+    Statement, Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -157,70 +156,6 @@ fn parse_ident_normalization() {
             assert_eq!(expected, format!("Ok({plan})"));
         } else {
             assert_eq!(expected, plan.unwrap_err().strip_backtrace());
-        }
-    }
-}
-
-#[test]
-fn test_parse_options_value_normalization() {
-    let test_data = [
-        (
-            "CREATE EXTERNAL TABLE test OPTIONS ('location' 'LoCaTiOn') STORED AS PARQUET LOCATION 'fake_location'",
-            "CreateExternalTable: Bare { table: \"test\" }",
-            HashMap::from([("format.location", "LoCaTiOn")]),
-            false,
-        ),
-        (
-            "CREATE EXTERNAL TABLE test OPTIONS ('location' 'LoCaTiOn') STORED AS PARQUET LOCATION 'fake_location'",
-            "CreateExternalTable: Bare { table: \"test\" }",
-            HashMap::from([("format.location", "location")]),
-            true,
-        ),
-        (
-            "COPY test TO 'fake_location' STORED AS PARQUET OPTIONS ('location' 'LoCaTiOn')",
-            "CopyTo: format=csv output_url=fake_location options: (format.location LoCaTiOn)\n  TableScan: test",
-            HashMap::from([("format.location", "LoCaTiOn")]),
-            false,
-        ),
-        (
-            "COPY test TO 'fake_location' STORED AS PARQUET OPTIONS ('location' 'LoCaTiOn')",
-            "CopyTo: format=csv output_url=fake_location options: (format.location location)\n  TableScan: test",
-            HashMap::from([("format.location", "location")]),
-            true,
-        ),
-    ];
-
-    for (sql, expected_plan, expected_options, enable_options_value_normalization) in
-        test_data
-    {
-        let plan = logical_plan_with_options(
-            sql,
-            ParserOptions {
-                parse_float_as_decimal: false,
-                enable_ident_normalization: false,
-                support_varchar_with_length: false,
-                enable_options_value_normalization,
-            },
-        );
-        if let Ok(plan) = plan {
-            assert_eq!(expected_plan, format!("{plan}"));
-
-            match plan {
-                LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
-                    CreateExternalTable { options, .. },
-                ))
-                | LogicalPlan::Copy(CopyTo { options, .. }) => {
-                    expected_options.iter().for_each(|(k, v)| {
-                        assert_eq!(Some(&v.to_string()), options.get(*k));
-                    });
-                }
-                _ => panic!(
-                    "Expected Ddl(CreateExternalTable) or Copy(CopyTo) but got {:?}",
-                    plan
-                ),
-            }
-        } else {
-            assert_eq!(expected_plan, plan.unwrap_err().strip_backtrace());
         }
     }
 }
@@ -557,7 +492,8 @@ Dml: op=[Insert Into] table=[test_decimal]
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named nonexistent. Valid fields are id, price."
+    "Schema error: No field named nonexistent. \
+    Valid fields are id, price."
 )]
 #[case::target_column_count_mismatch(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
@@ -570,10 +506,6 @@ Dml: op=[Insert Into] table=[test_decimal]
 #[case::extra_placeholder(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2, $3, $4)",
     "Error during planning: Placeholder $4 refers to a non existent column"
-)]
-#[case::placeholder_type_unresolved(
-    "INSERT INTO person (id, first_name, last_name) VALUES ($2, $4, $6)",
-    "Error during planning: Placeholder type could not be resolved. Make sure that the placeholder is bound to a concrete type, e.g. by providing parameter values."
 )]
 #[case::placeholder_type_unresolved(
     "INSERT INTO person (id, first_name, last_name) VALUES ($id, $first_name, $last_name)",
@@ -1427,9 +1359,11 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
     let sql = "SELECT sum(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!("Schema error: No field named doesnotexist. Valid fields are \"sum(person.age)\", \
+    let expected = "Schema error: No field named doesnotexist. \
+        Valid fields are \"sum(person.age)\", \
         person.id, person.first_name, person.last_name, person.age, person.state, \
-        person.salary, person.birth_date, person.\"😀\".", err.strip_backtrace());
+        person.salary, person.birth_date, person.\"😀\".";
+    assert_eq!(err.strip_backtrace(), expected);
 }
 
 #[test]
@@ -3133,9 +3067,8 @@ fn lateral_constant() {
             \n  Cross Join: \
             \n    TableScan: j1\
             \n    SubqueryAlias: j2\
-            \n      Subquery:\
-            \n        Projection: Int64(1)\
-            \n          EmptyRelation";
+            \n      Projection: Int64(1)\
+            \n        EmptyRelation";
     quick_test(sql, expected);
 }
 
@@ -3231,6 +3164,21 @@ fn lateral_nested_left_join() {
             \n          Projection: *\
             \n            Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id\
             \n              TableScan: j3";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn lateral_unnest() {
+    let sql = "SELECT * from unnest_table u, unnest(u.array_col)";
+    let expected = "Projection: *\
+            \n  Cross Join: \
+            \n    SubqueryAlias: u\
+            \n      TableScan: unnest_table\
+            \n    Subquery:\
+            \n      Projection: __unnest_placeholder(outer_ref(u.array_col),depth=1) AS UNNEST(outer_ref(u.array_col))\
+            \n        Unnest: lists[__unnest_placeholder(outer_ref(u.array_col))|depth=1] structs[]\
+            \n          Projection: outer_ref(u.array_col) AS __unnest_placeholder(outer_ref(u.array_col))\
+            \n            EmptyRelation";
     quick_test(sql, expected);
 }
 
@@ -3691,10 +3639,8 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
 #[test]
 fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
-    assert_eq!(
-        logical_plan(sql).unwrap_err().strip_backtrace(),
-        "Schema error: No field named id."
-    )
+    let expected = "Schema error: No field named id.";
+    assert_eq!(logical_plan(sql).unwrap_err().strip_backtrace(), expected);
 }
 
 #[test]
@@ -4389,18 +4335,14 @@ fn test_multi_grouping_sets() {
 fn test_field_not_found_window_function() {
     let order_by_sql = "SELECT count() OVER (order by a);";
     let order_by_err = logical_plan(order_by_sql).expect_err("query should have failed");
-    assert_eq!(
-        "Schema error: No field named a.",
-        order_by_err.strip_backtrace()
-    );
+    let expected = "Schema error: No field named a.";
+    assert_eq!(order_by_err.strip_backtrace(), expected);
 
     let partition_by_sql = "SELECT count() OVER (PARTITION BY a);";
     let partition_by_err =
         logical_plan(partition_by_sql).expect_err("query should have failed");
-    assert_eq!(
-        "Schema error: No field named a.",
-        partition_by_err.strip_backtrace()
-    );
+    let expected = "Schema error: No field named a.";
+    assert_eq!(partition_by_err.strip_backtrace(), expected);
 
     let qualified_sql =
         "SELECT order_id, MAX(qty) OVER (PARTITION BY orders.order_id) from orders";
@@ -4554,4 +4496,130 @@ fn test_custom_type_plan() -> Result<()> {
     assert_eq!(plan.to_string(), expected);
 
     Ok(())
+}
+
+fn error_message_test(sql: &str, err_msg_starts_with: &str) {
+    let err = logical_plan(sql).expect_err("query should have failed");
+    assert!(
+        err.strip_backtrace().starts_with(err_msg_starts_with),
+        "Expected error to start with '{}', but got: '{}'",
+        err_msg_starts_with,
+        err.strip_backtrace(),
+    );
+}
+
+#[test]
+fn test_error_message_invalid_scalar_function_signature() {
+    error_message_test(
+        "select sqrt()",
+        "Error during planning: sqrt does not support zero arguments",
+    );
+    error_message_test(
+        "select sqrt(1, 2)",
+        "Error during planning: Failed to coerce arguments",
+    );
+}
+
+#[test]
+fn test_error_message_invalid_aggregate_function_signature() {
+    error_message_test(
+        "select sum()",
+        "Error during planning: sum does not support zero arguments",
+    );
+    // We keep two different prefixes because they clarify each other.
+    // It might be incorrect, and we should consider keeping only one.
+    error_message_test(
+        "select max(9, 3)",
+        "Error during planning: Execution error: User-defined coercion failed",
+    );
+}
+
+#[test]
+fn test_error_message_invalid_window_function_signature() {
+    error_message_test(
+        "select rank(1) over()",
+        "Error during planning: The function expected zero argument but received 1",
+    );
+}
+
+#[test]
+fn test_error_message_invalid_window_aggregate_function_signature() {
+    error_message_test(
+        "select sum() over()",
+        "Error during planning: sum does not support zero arguments",
+    );
+}
+
+// Test issue: https://github.com/apache/datafusion/issues/14058
+// Select with wildcard over a USING/NATURAL JOIN should deduplicate condition columns.
+#[test]
+fn test_using_join_wildcard_schema() {
+    let sql = "SELECT * FROM orders o1 JOIN orders o2 USING (order_id)";
+    let plan = logical_plan(sql).unwrap();
+    let count = plan
+        .schema()
+        .iter()
+        .filter(|(_, f)| f.name() == "order_id")
+        .count();
+    // Only one order_id column
+    assert_eq!(count, 1);
+
+    let sql = "SELECT * FROM orders o1 NATURAL JOIN orders o2";
+    let plan = logical_plan(sql).unwrap();
+    // Only columns from one join side should be present
+    let expected_fields = vec![
+        "o1.order_id".to_string(),
+        "o1.customer_id".to_string(),
+        "o1.o_item_id".to_string(),
+        "o1.qty".to_string(),
+        "o1.price".to_string(),
+        "o1.delivered".to_string(),
+    ];
+    assert_eq!(plan.schema().field_names(), expected_fields);
+
+    // Reproducible example of issue #14058
+    let sql = "WITH t1 AS (SELECT 1 AS id, 'a' AS value1),
+        t2 AS (SELECT 1 AS id, 'x' AS value2)
+        SELECT * FROM t1 NATURAL JOIN t2";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        plan.schema().field_names(),
+        [
+            "t1.id".to_string(),
+            "t1.value1".to_string(),
+            "t2.value2".to_string()
+        ]
+    );
+
+    // Multiple joins
+    let sql = "WITH t1 AS (SELECT 1 AS a, 1 AS b),
+        t2 AS (SELECT 1 AS a, 2 AS c),
+        t3 AS (SELECT 1 AS c, 2 AS d)
+        SELECT * FROM t1 NATURAL JOIN t2 RIGHT JOIN t3 USING (c)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        plan.schema().field_names(),
+        [
+            "t1.a".to_string(),
+            "t1.b".to_string(),
+            "t2.c".to_string(),
+            "t3.d".to_string()
+        ]
+    );
+
+    // Subquery
+    let sql = "WITH t1 AS (SELECT 1 AS a, 1 AS b),
+        t2 AS (SELECT 1 AS a, 2 AS c),
+        t3 AS (SELECT 1 AS c, 2 AS d)
+        SELECT * FROM (SELECT * FROM t1 LEFT JOIN t2 USING(a)) NATURAL JOIN t3";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        plan.schema().field_names(),
+        [
+            "t1.a".to_string(),
+            "t1.b".to_string(),
+            "t2.c".to_string(),
+            "t3.d".to_string()
+        ]
+    );
 }

@@ -19,11 +19,12 @@ use std::sync::Arc;
 
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
+use datafusion::datasource::physical_plan::FileSink;
 use datafusion::physical_expr::window::{SlidingAggregateWindowExpr, StandardWindowExpr};
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
 use datafusion::physical_plan::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr, UnKnownColumn,
 };
 use datafusion::physical_plan::udaf::AggregateFunctionExpr;
 use datafusion::physical_plan::windows::{PlainAggregateWindowExpr, WindowUDFExpr};
@@ -220,6 +221,14 @@ pub fn serialize_physical_expr(
                 },
             )),
         })
+    } else if let Some(expr) = expr.downcast_ref::<UnKnownColumn>() {
+        Ok(protobuf::PhysicalExprNode {
+            expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
+                protobuf::UnknownColumn {
+                    name: expr.name().to_string(),
+                },
+            )),
+        })
     } else if let Some(expr) = expr.downcast_ref::<BinaryExpr>() {
         let binary_expr = Box::new(protobuf::PhysicalBinaryExprNode {
             l: Some(Box::new(serialize_physical_expr(expr.left(), codec)?)),
@@ -339,6 +348,7 @@ pub fn serialize_physical_expr(
                     args: serialize_physical_exprs(expr.args(), codec)?,
                     fun_definition: (!buf.is_empty()).then_some(buf),
                     return_type: Some(expr.return_type().try_into()?),
+                    nullable: expr.nullable(),
                 },
             )),
         })
@@ -519,6 +529,7 @@ pub fn serialize_file_scan_config(
                 physical_sort_expr_nodes: e,
             })
             .collect::<Vec<_>>(),
+        constraints: Some(conf.constraints.clone().into()),
     })
 }
 
@@ -600,6 +611,7 @@ impl TryFrom<&FileSinkConfig> for protobuf::FileSinkConfig {
             table_partition_cols,
             keep_partition_by_columns: conf.keep_partition_by_columns,
             insert_op: conf.insert_op as i32,
+            file_extension: conf.file_extension.to_string(),
         })
     }
 }

@@ -25,6 +25,11 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::common::can_project;
+use crate::execution_plan::CardinalityEffect;
+use crate::projection::{
+    make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
+    ProjectionExec,
+};
 use crate::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan,
@@ -36,7 +41,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, plan_err, project_schema, DataFusionError, Result,
+    internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -45,10 +50,10 @@ use datafusion_physical_expr::expressions::BinaryExpr;
 use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
-    analyze, split_conjunction, AnalysisContext, ConstExpr, ExprBoundaries, PhysicalExpr,
+    analyze, split_conjunction, AcrossPartitions, AnalysisContext, ConstExpr,
+    ExprBoundaries, PhysicalExpr,
 };
 
-use crate::execution_plan::CardinalityEffect;
 use futures::stream::{Stream, StreamExt};
 use log::trace;
 
@@ -218,13 +223,23 @@ impl FilterExec {
                 if binary.op() == &Operator::Eq {
                     // Filter evaluates to single value for all partitions
                     if input_eqs.is_expr_constant(binary.left()) {
+                        let (expr, across_parts) = (
+                            binary.right(),
+                            input_eqs.get_expr_constant_value(binary.right()),
+                        );
                         res_constants.push(
-                            ConstExpr::from(binary.right()).with_across_partitions(true),
-                        )
+                            ConstExpr::new(Arc::clone(expr))
+                                .with_across_partitions(across_parts),
+                        );
                     } else if input_eqs.is_expr_constant(binary.right()) {
+                        let (expr, across_parts) = (
+                            binary.left(),
+                            input_eqs.get_expr_constant_value(binary.left()),
+                        );
                         res_constants.push(
-                            ConstExpr::from(binary.left()).with_across_partitions(true),
-                        )
+                            ConstExpr::new(Arc::clone(expr))
+                                .with_across_partitions(across_parts),
+                        );
                     }
                 }
             }
@@ -252,8 +267,12 @@ impl FilterExec {
             .into_iter()
             .filter(|column| stats.column_statistics[column.index()].is_singleton())
             .map(|column| {
+                let value = stats.column_statistics[column.index()]
+                    .min_value
+                    .get_value();
                 let expr = Arc::new(column) as _;
-                ConstExpr::new(expr).with_across_partitions(true)
+                ConstExpr::new(expr)
+                    .with_across_partitions(AcrossPartitions::Uniform(value.cloned()))
             });
         // This is for statistics
         eq_properties = eq_properties.with_constants(constants);
@@ -272,10 +291,12 @@ impl FilterExec {
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
+
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
-            input.execution_mode(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         ))
     }
 }
@@ -382,6 +403,38 @@ impl ExecutionPlan for FilterExec {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::LowerEqual
     }
+
+    /// Tries to swap `projection` with its input (`filter`). If possible, performs
+    /// the swap and returns [`FilterExec`] as the top plan. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection does not narrow the schema, we should not try to push it down:
+        if projection.expr().len() < projection.input().schema().fields().len() {
+            // Each column in the predicate expression must exist after the projection.
+            if let Some(new_predicate) =
+                update_expr(self.predicate(), projection.expr(), false)?
+            {
+                return FilterExec::try_new(
+                    new_predicate,
+                    make_with_child(projection, self.input())?,
+                )
+                .and_then(|e| {
+                    let selectivity = self.default_selectivity();
+                    e.with_default_selectivity(selectivity)
+                })
+                .map(|e| Some(Arc::new(e) as _));
+            }
+        }
+        try_embed_projection(projection, self)
+    }
+}
+
+impl EmbeddedProjection for FilterExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
 }
 
 /// This function ensures that all bounds in the `ExprBoundaries` vector are
@@ -404,6 +457,16 @@ fn collect_new_statistics(
                     ..
                 },
             )| {
+                let Some(interval) = interval else {
+                    // If the interval is `None`, we can say that there are no rows:
+                    return ColumnStatistics {
+                        null_count: Precision::Exact(0),
+                        max_value: Precision::Exact(ScalarValue::Null),
+                        min_value: Precision::Exact(ScalarValue::Null),
+                        sum_value: Precision::Exact(ScalarValue::Null),
+                        distinct_count: Precision::Exact(0),
+                    };
+                };
                 let (lower, upper) = interval.into_bounds();
                 let (min_value, max_value) = if lower.eq(&upper) {
                     (Precision::Exact(lower), Precision::Exact(upper))
@@ -414,6 +477,7 @@ fn collect_new_statistics(
                     null_count: input_column_stats[idx].null_count.to_inexact(),
                     max_value,
                     min_value,
+                    sum_value: Precision::Absent,
                     distinct_count: distinct_count.to_inexact(),
                 }
             },
@@ -1025,14 +1089,18 @@ mod tests {
             statistics.column_statistics,
             vec![
                 ColumnStatistics {
-                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
-                    max_value: Precision::Inexact(ScalarValue::Int32(Some(100))),
-                    ..Default::default()
+                    min_value: Precision::Exact(ScalarValue::Null),
+                    max_value: Precision::Exact(ScalarValue::Null),
+                    sum_value: Precision::Exact(ScalarValue::Null),
+                    distinct_count: Precision::Exact(0),
+                    null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
-                    min_value: Precision::Inexact(ScalarValue::Int32(Some(1))),
-                    max_value: Precision::Inexact(ScalarValue::Int32(Some(3))),
-                    ..Default::default()
+                    min_value: Precision::Exact(ScalarValue::Null),
+                    max_value: Precision::Exact(ScalarValue::Null),
+                    sum_value: Precision::Exact(ScalarValue::Null),
+                    distinct_count: Precision::Exact(0),
+                    null_count: Precision::Exact(0),
                 },
             ]
         );
@@ -1132,6 +1200,7 @@ mod tests {
                 null_count: Precision::Absent,
                 min_value: Precision::Inexact(ScalarValue::Int32(Some(5))),
                 max_value: Precision::Inexact(ScalarValue::Int32(Some(10))),
+                sum_value: Precision::Absent,
                 distinct_count: Precision::Absent,
             }],
         };

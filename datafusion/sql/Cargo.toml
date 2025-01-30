@@ -39,16 +39,18 @@ path = "src/lib.rs"
 default = ["unicode_expressions", "unparser"]
 unicode_expressions = []
 unparser = []
+recursive_protection = ["dep:recursive"]
 
 [dependencies]
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
+bigdecimal = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
-recursive = { workspace = true }
+recursive = { workspace = true, optional = true }
 regex = { workspace = true }
 sqlparser = { workspace = true }
 

@@ -17,22 +17,22 @@
 
 //! [`ScalarUDFImpl`] definitions for `array_append`, `array_prepend` and `array_concat` functions.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::{any::Any, cmp::Ordering};
 
 use arrow::array::{Capacities, MutableArrayData};
 use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
 use arrow_schema::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
 };
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     type_coercion::binary::get_wider_type, ColumnarValue, Documentation, ScalarUDFImpl,
     Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 use crate::utils::{align_array_dimensions, check_datatypes, make_scalar_function};
 
@@ -44,6 +44,24 @@ make_udf_expr_and_func!(
     array_append_udf                              // internal function name
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Appends an element to the end of an array.",
+    syntax_example = "array_append(array, element)",
+    sql_example = r#"```sql
+> select array_append([1, 2, 3], 4);
++--------------------------------------+
+| array_append(List([1,2,3]),Int64(4)) |
++--------------------------------------+
+| [1, 2, 3, 4]                         |
++--------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "element", description = "Element to append to the array.")
+)]
 #[derive(Debug)]
 pub struct ArrayAppend {
     signature: Signature,
@@ -99,39 +117,8 @@ impl ScalarUDFImpl for ArrayAppend {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_append_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_append_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Appends an element to the end of an array.",
-
-            "array_append(array, element)")
-            .with_sql_example(
-                r#"```sql
-> select array_append([1, 2, 3], 4);
-+--------------------------------------+
-| array_append(List([1,2,3]),Int64(4)) |
-+--------------------------------------+
-| [1, 2, 3, 4]                         |
-+--------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "element",
-                "Element to append to the array.",
-            )
-            .build()
-    })
 }
 
 make_udf_expr_and_func!(
@@ -142,6 +129,24 @@ make_udf_expr_and_func!(
     array_prepend_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Prepends an element to the beginning of an array.",
+    syntax_example = "array_prepend(element, array)",
+    sql_example = r#"```sql
+> select array_prepend(1, [2, 3, 4]);
++---------------------------------------+
+| array_prepend(Int64(1),List([2,3,4])) |
++---------------------------------------+
+| [1, 2, 3, 4]                          |
++---------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(name = "element", description = "Element to prepend to the array.")
+)]
 #[derive(Debug)]
 pub struct ArrayPrepend {
     signature: Signature,
@@ -197,39 +202,8 @@ impl ScalarUDFImpl for ArrayPrepend {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_prepend_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION_PREPEND: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_prepend_doc() -> &'static Documentation {
-    DOCUMENTATION_PREPEND.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Prepends an element to the beginning of an array.",
-
-            "array_prepend(element, array)")
-            .with_sql_example(
-                r#"```sql
-> select array_prepend(1, [2, 3, 4]);
-+---------------------------------------+
-| array_prepend(Int64(1),List([2,3,4])) |
-+---------------------------------------+
-| [1, 2, 3, 4]                          |
-+---------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "element",
-                "Element to prepend to the array.",
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
 }
 
 make_udf_expr_and_func!(
@@ -239,6 +213,27 @@ make_udf_expr_and_func!(
     array_concat_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Concatenates arrays.",
+    syntax_example = "array_concat(array[, ..., array_n])",
+    sql_example = r#"```sql
+> select array_concat([1, 2], [3, 4], [5, 6]);
++---------------------------------------------------+
+| array_concat(List([1,2]),List([3,4]),List([5,6])) |
++---------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                |
++---------------------------------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array_n",
+        description = "Subsequent array column or literal array to concatenate."
+    )
+)]
 #[derive(Debug)]
 pub struct ArrayConcat {
     signature: Signature,
@@ -319,37 +314,8 @@ impl ScalarUDFImpl for ArrayConcat {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_concat_doc())
+        self.doc()
     }
-}
-
-fn get_array_concat_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Concatenates arrays.",
-
-            "array_concat(array[, ..., array_n])")
-            .with_sql_example(
-                r#"```sql
-> select array_concat([1, 2], [3, 4], [5, 6]);
-+---------------------------------------------------+
-| array_concat(List([1,2]),List([3,4]),List([5,6])) |
-+---------------------------------------------------+
-| [1, 2, 3, 4, 5, 6]                                |
-+---------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression to concatenate. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "array_n",
-                "Subsequent array column or literal array to concatenate.",
-            )
-            .build()
-    })
 }
 
 /// Array_concat/Array_cat SQL function
@@ -388,7 +354,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut array_lengths = vec![];
     let mut arrays = vec![];
-    let mut valid = BooleanBufferBuilder::new(row_count);
+    let mut valid = NullBufferBuilder::new(row_count);
     for i in 0..row_count {
         let nulls = list_arrays
             .iter()
@@ -399,7 +365,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         let is_null = nulls.iter().all(|&x| x);
         if is_null {
             array_lengths.push(0);
-            valid.append(false);
+            valid.append_null();
         } else {
             // Get all the arrays on i-th row
             let values = list_arrays
@@ -416,12 +382,11 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let concatenated_array = arrow::compute::concat(elements.as_slice())?;
             array_lengths.push(concatenated_array.len());
             arrays.push(concatenated_array);
-            valid.append(true);
+            valid.append_non_null();
         }
     }
     // Assume all arrays have the same data type
     let data_type = list_arrays[0].value_type();
-    let buffer = valid.finish();
 
     let elements = arrays
         .iter()
@@ -429,10 +394,10 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<Vec<&dyn Array>>();
 
     let list_arr = GenericListArray::<O>::new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
         Arc::new(arrow::compute::concat(elements.as_slice())?),
-        Some(NullBuffer::new(buffer)),
+        valid.finish(),
     );
 
     Ok(Arc::new(list_arr))
@@ -558,7 +523,7 @@ where
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new("item", data_type.to_owned(), true)),
+        Arc::new(Field::new_list_field(data_type.to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
         arrow_array::make_array(data),
         None,

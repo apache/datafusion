@@ -30,10 +30,11 @@ use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
-    project_schema, DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan,
-    Partitioning, PlanProperties, SendableRecordBatchStream,
+    project_schema, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PlanProperties, SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
 
@@ -214,7 +215,8 @@ impl CustomExec {
         PlanProperties::new(
             eq_properties,
             Partitioning::UnknownPartitioning(1),
-            ExecutionMode::Bounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         )
     }
 }

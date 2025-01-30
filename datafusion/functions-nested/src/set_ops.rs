@@ -27,15 +27,15 @@ use arrow::row::{RowConverter, SortField};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(
@@ -62,10 +62,43 @@ make_udf_expr_and_func!(
     array_distinct_udf
 );
 
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.",
+    syntax_example = "array_union(array1, array2)",
+    sql_example = r#"```sql
+> select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 3, 4]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6]                                 |
++----------------------------------------------------+
+> select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
++----------------------------------------------------+
+| array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
++----------------------------------------------------+
+| [1, 2, 3, 4, 5, 6, 7, 8]                           |
++----------------------------------------------------+
+```"#,
+    argument(
+        name = "array1",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array2",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArrayUnion {
+pub struct ArrayUnion {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayUnion {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayUnion {
@@ -111,47 +144,37 @@ impl ScalarUDFImpl for ArrayUnion {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_union_doc())
+        self.doc()
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_union_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.",
-
-            "array_union(array1, array2)")
-            .with_sql_example(
-                r#"```sql
-> select array_union([1, 2, 3, 4], [5, 6, 3, 4]);
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an array of elements in the intersection of array1 and array2.",
+    syntax_example = "array_intersect(array1, array2)",
+    sql_example = r#"```sql
+> select array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);
 +----------------------------------------------------+
-| array_union([1, 2, 3, 4], [5, 6, 3, 4]);           |
+| array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);       |
 +----------------------------------------------------+
-| [1, 2, 3, 4, 5, 6]                                 |
+| [3, 4]                                             |
 +----------------------------------------------------+
-> select array_union([1, 2, 3, 4], [5, 6, 7, 8]);
+> select array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);
 +----------------------------------------------------+
-| array_union([1, 2, 3, 4], [5, 6, 7, 8]);           |
+| array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);       |
 +----------------------------------------------------+
-| [1, 2, 3, 4, 5, 6, 7, 8]                           |
+| []                                                 |
 +----------------------------------------------------+
 ```"#,
-            )
-            .with_argument(
-                "array1",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "array2",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
-}
-
+    argument(
+        name = "array1",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "array2",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayIntersect {
     signature: Signature,
@@ -201,45 +224,27 @@ impl ScalarUDFImpl for ArrayIntersect {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_intersect_doc())
+        self.doc()
     }
 }
 
-fn get_array_intersect_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns an array of elements in the intersection of array1 and array2.",
-
-            "array_intersect(array1, array2)")
-            .with_sql_example(
-                r#"```sql
-> select array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);
-+----------------------------------------------------+
-| array_intersect([1, 2, 3, 4], [5, 6, 3, 4]);       |
-+----------------------------------------------------+
-| [3, 4]                                             |
-+----------------------------------------------------+
-> select array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);
-+----------------------------------------------------+
-| array_intersect([1, 2, 3, 4], [5, 6, 7, 8]);       |
-+----------------------------------------------------+
-| []                                                 |
-+----------------------------------------------------+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns distinct values from the array after removing duplicates.",
+    syntax_example = "array_distinct(array)",
+    sql_example = r#"```sql
+> select array_distinct([1, 3, 2, 3, 1, 2, 4]);
++---------------------------------+
+| array_distinct(List([1,2,3,4])) |
++---------------------------------+
+| [1, 2, 3, 4]                    |
++---------------------------------+
 ```"#,
-            )
-            .with_argument(
-                "array1",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "array2",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
-}
-
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct ArrayDistinct {
     signature: Signature,
@@ -270,13 +275,10 @@ impl ScalarUDFImpl for ArrayDistinct {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            )))),
-            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
-                "item",
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(
+                Field::new_list_field(field.data_type().clone(), true),
+            ))),
+            LargeList(field) => Ok(LargeList(Arc::new(Field::new_list_field(
                 field.data_type().clone(),
                 true,
             )))),
@@ -299,33 +301,8 @@ impl ScalarUDFImpl for ArrayDistinct {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_distinct_doc())
+        self.doc()
     }
-}
-
-fn get_array_distinct_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns distinct values from the array after removing duplicates.",
-
-            "array_distinct(array)")
-            .with_sql_example(
-                r#"```sql
-> select array_distinct([1, 3, 2, 3, 1, 2, 4]);
-+---------------------------------+
-| array_distinct(List([1,2,3,4])) |
-+---------------------------------+
-| [1, 2, 3, 4]                    |
-+---------------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .build()
-    })
 }
 
 /// array_distinct SQL function
@@ -376,10 +353,10 @@ fn generic_set_lists<OffsetSize: OffsetSizeTrait>(
     set_op: SetOp,
 ) -> Result<ArrayRef> {
     if matches!(l.value_type(), Null) {
-        let field = Arc::new(Field::new("item", r.value_type(), true));
+        let field = Arc::new(Field::new_list_field(r.value_type(), true));
         return general_array_distinct::<OffsetSize>(r, &field);
     } else if matches!(r.value_type(), Null) {
-        let field = Arc::new(Field::new("item", l.value_type(), true));
+        let field = Arc::new(Field::new_list_field(l.value_type(), true));
         return general_array_distinct::<OffsetSize>(l, &field);
     }
 
@@ -536,17 +513,25 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
     array: &GenericListArray<OffsetSize>,
     field: &FieldRef,
 ) -> Result<ArrayRef> {
+    if array.is_empty() {
+        return Ok(Arc::new(array.clone()) as ArrayRef);
+    }
     let dt = array.value_type();
     let mut offsets = Vec::with_capacity(array.len());
     offsets.push(OffsetSize::usize_as(0));
     let mut new_arrays = Vec::with_capacity(array.len());
     let converter = RowConverter::new(vec![SortField::new(dt)])?;
     // distinct for each list in ListArray
-    for arr in array.iter().flatten() {
+    for arr in array.iter() {
+        let last_offset: OffsetSize = offsets.last().copied().unwrap();
+        let Some(arr) = arr else {
+            // Add same offset for null
+            offsets.push(last_offset);
+            continue;
+        };
         let values = converter.convert_columns(&[arr])?;
         // sort elements in list and remove duplicates
         let rows = values.iter().sorted().dedup().collect::<Vec<_>>();
-        let last_offset: OffsetSize = offsets.last().copied().unwrap();
         offsets.push(last_offset + OffsetSize::usize_as(rows.len()));
         let arrays = converter.convert_rows(rows)?;
         let array = match arrays.first() {
@@ -557,6 +542,9 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         };
         new_arrays.push(array);
     }
+    if new_arrays.is_empty() {
+        return Ok(Arc::new(array.clone()) as ArrayRef);
+    }
     let offsets = OffsetBuffer::new(offsets.into());
     let new_arrays_ref = new_arrays.iter().map(|v| v.as_ref()).collect::<Vec<_>>();
     let values = compute::concat(&new_arrays_ref)?;
@@ -564,6 +552,7 @@ fn general_array_distinct<OffsetSize: OffsetSizeTrait>(
         Arc::clone(field),
         offsets,
         values,
-        None,
+        // Keep the list nulls
+        array.nulls().cloned(),
     )?))
 }

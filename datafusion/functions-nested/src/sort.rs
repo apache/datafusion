@@ -20,17 +20,17 @@
 use crate::utils::make_scalar_function;
 use arrow::compute;
 use arrow_array::{Array, ArrayRef, ListArray};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, Field, SortOptions};
 use datafusion_common::cast::{as_list_array, as_string_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     ArraySort,
@@ -40,10 +40,48 @@ make_udf_expr_and_func!(
     array_sort_udf
 );
 
+/// Implementation of `array_sort` function
+///
+/// `array_sort` sorts the elements of an array
+///
+/// # Example
+///
+/// `array_sort([3, 1, 2])` returns `[1, 2, 3]`
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Sort array.",
+    syntax_example = "array_sort(array, desc, nulls_first)",
+    sql_example = r#"```sql
+> select array_sort([3, 1, 2]);
++-----------------------------+
+| array_sort(List([3,1,2]))   |
++-----------------------------+
+| [1, 2, 3]                   |
++-----------------------------+
+```"#,
+    argument(
+        name = "array",
+        description = "Array expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "desc",
+        description = "Whether to sort in descending order(`ASC` or `DESC`)."
+    ),
+    argument(
+        name = "nulls_first",
+        description = "Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`)."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArraySort {
+pub struct ArraySort {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArraySort {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArraySort {
@@ -70,13 +108,10 @@ impl ScalarUDFImpl for ArraySort {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            )))),
-            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
-                "item",
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(
+                Field::new_list_field(field.data_type().clone(), true),
+            ))),
+            LargeList(field) => Ok(LargeList(Arc::new(Field::new_list_field(
                 field.data_type().clone(),
                 true,
             )))),
@@ -99,43 +134,8 @@ impl ScalarUDFImpl for ArraySort {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_sort_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_sort_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Sort array.",
-
-            "array_sort(array, desc, nulls_first)")
-            .with_sql_example(
-                r#"```sql
-> select array_sort([3, 1, 2]);
-+-----------------------------+
-| array_sort(List([3,1,2]))   |
-+-----------------------------+
-| [1, 2, 3]                   |
-+-----------------------------+
-```"#,
-            )
-            .with_argument(
-                "array",
-                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "desc",
-                "Whether to sort in descending order(`ASC` or `DESC`).",
-            )
-            .with_argument(
-                "nulls_first",
-                "Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).",
-            )
-            .build()
-    })
 }
 
 /// Array_sort SQL function
@@ -172,11 +172,11 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut array_lengths = vec![];
     let mut arrays = vec![];
-    let mut valid = BooleanBufferBuilder::new(row_count);
+    let mut valid = NullBufferBuilder::new(row_count);
     for i in 0..row_count {
         if list_array.is_null(i) {
             array_lengths.push(0);
-            valid.append(false);
+            valid.append_null();
         } else {
             let arr_ref = list_array.value(i);
             let arr_ref = arr_ref.as_ref();
@@ -184,7 +184,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let sorted_array = compute::sort(arr_ref, sort_option)?;
             array_lengths.push(sorted_array.len());
             arrays.push(sorted_array);
-            valid.append(true);
+            valid.append_non_null();
         }
     }
 
@@ -198,10 +198,10 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<Vec<&dyn Array>>();
 
     let list_arr = ListArray::new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
         Arc::new(compute::concat(elements.as_slice())?),
-        Some(NullBuffer::new(buffer)),
+        buffer,
     );
     Ok(Arc::new(list_arr))
 }

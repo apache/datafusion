@@ -261,7 +261,7 @@ pub fn can_project(
             if columns
                 .iter()
                 .max()
-                .map_or(false, |&i| i >= schema.fields().len())
+                .is_some_and(|&i| i >= schema.fields().len())
             {
                 Err(arrow_schema::ArrowError::SchemaError(format!(
                     "project index {} out of bounds, max field {}",
@@ -333,12 +333,14 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(0),
                 },
             ],
@@ -371,6 +373,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 max_value: Precision::Absent,
                 min_value: Precision::Absent,
+                sum_value: Precision::Absent,
                 null_count: Precision::Exact(3),
             }],
         };

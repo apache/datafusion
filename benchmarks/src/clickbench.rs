@@ -145,6 +145,9 @@ impl RunOpt {
                 );
                 benchmark_run.write_iter(elapsed, row_count);
             }
+            if self.common.debug {
+                ctx.sql(sql).await?.explain(false, false)?.show().await?;
+            }
         }
         benchmark_run.maybe_write_json(self.output_path.as_ref())?;
         Ok(())

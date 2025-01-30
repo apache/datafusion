@@ -17,23 +17,26 @@
 
 //! [`SessionState`]: information required to run queries in a session
 
+use std::any::Any;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
-use crate::catalog_common::information_schema::{
-    InformationSchemaProvider, INFORMATION_SCHEMA,
-};
-use crate::catalog_common::MemoryCatalogProviderList;
 use crate::datasource::cte_worktable::CteWorkTable;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
-use crate::datasource::function::{TableFunction, TableFunctionImpl};
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
-use crate::physical_optimizer::optimizer::PhysicalOptimizer;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
+use datafusion_catalog::information_schema::{
+    InformationSchemaProvider, INFORMATION_SCHEMA,
+};
+use datafusion_catalog::MemoryCatalogProviderList;
+
 use arrow_schema::{DataType, SchemaRef};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion_catalog::Session;
+use datafusion_catalog::{Session, TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
@@ -62,20 +65,19 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
-use sqlparser::ast::Expr as SQLExpr;
+use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
 use sqlparser::dialect::dialect_from_str;
-use std::any::Any;
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
 
@@ -126,9 +128,9 @@ pub struct SessionState {
     session_id: String,
     /// Responsible for analyzing and rewrite a logical plan before optimization
     analyzer: Analyzer,
-    /// Provides support for customising the SQL planner, e.g. to add support for custom operators like `->>` or `?`
+    /// Provides support for customizing the SQL planner, e.g. to add support for custom operators like `->>` or `?`
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
-    /// Provides support for customising the SQL type planning
+    /// Provides support for customizing the SQL type planning
     type_planner: Option<Arc<dyn TypePlanner>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
@@ -297,7 +299,7 @@ impl SessionState {
     }
 
     /// Retrieve the [`SchemaProvider`] for a specific [`TableReference`], if it
-    /// esists.
+    /// exists.
     pub fn schema_for_ref(
         &self,
         table_ref: impl Into<TableReference>,
@@ -501,11 +503,22 @@ impl SessionState {
         sql: &str,
         dialect: &str,
     ) -> datafusion_common::Result<SQLExpr> {
+        self.sql_to_expr_with_alias(sql, dialect).map(|x| x.expr)
+    }
+
+    /// parse a sql string into a sqlparser-rs AST [`SQLExprWithAlias`].
+    ///
+    /// See [`Self::create_logical_expr`] for parsing sql to [`Expr`].
+    pub fn sql_to_expr_with_alias(
+        &self,
+        sql: &str,
+        dialect: &str,
+    ) -> datafusion_common::Result<SQLExprWithAlias> {
         let dialect = dialect_from_str(dialect).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
-                     Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi."
+                         Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
+                         MsSQL, ClickHouse, BigQuery, Ansi."
             )
         })?;
 
@@ -516,16 +529,16 @@ impl SessionState {
 
     /// Resolve all table references in the SQL statement. Does not include CTE references.
     ///
-    /// See [`catalog::resolve_table_references`] for more information.
+    /// See [`datafusion_catalog::resolve_table_references`] for more information.
     ///
-    /// [`catalog::resolve_table_references`]: crate::catalog_common::resolve_table_references
+    /// [`datafusion_catalog::resolve_table_references`]: datafusion_catalog::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        let (table_refs, _) = crate::catalog_common::resolve_table_references(
+        let (table_refs, _) = datafusion_catalog::resolve_table_references(
             statement,
             enable_ident_normalization,
         )?;
@@ -604,7 +617,7 @@ impl SessionState {
     ) -> datafusion_common::Result<Expr> {
         let dialect = self.config.options().sql_parser.dialect.as_str();
 
-        let sql_expr = self.sql_to_expr(sql, dialect)?;
+        let sql_expr = self.sql_to_expr_with_alias(sql, dialect)?;
 
         let provider = SessionContextProvider {
             state: self,
@@ -612,7 +625,7 @@ impl SessionState {
         };
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-        query.sql_to_expr(sql_expr, df_schema, &mut PlannerContext::new())
+        query.sql_to_expr_with_alias(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
     /// Returns the [`Analyzer`] for this session
@@ -1074,6 +1087,7 @@ impl SessionStateBuilder {
             .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
             .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
             .with_window_functions(SessionStateDefaults::default_window_functions())
+            .with_table_function_list(SessionStateDefaults::default_table_functions())
     }
 
     /// Set the session id.
@@ -1185,6 +1199,19 @@ impl SessionStateBuilder {
         table_functions: HashMap<String, Arc<TableFunction>>,
     ) -> Self {
         self.table_functions = Some(table_functions);
+        self
+    }
+
+    /// Set the list of [`TableFunction`]s
+    pub fn with_table_function_list(
+        mut self,
+        table_functions: Vec<Arc<TableFunction>>,
+    ) -> Self {
+        let functions = table_functions
+            .into_iter()
+            .map(|f| (f.name().to_string(), f))
+            .collect();
+        self.table_functions = Some(functions);
         self
     }
 
@@ -1960,11 +1987,11 @@ pub(crate) struct PreparedPlan {
 #[cfg(test)]
 mod tests {
     use super::{SessionContextProvider, SessionStateBuilder};
-    use crate::catalog_common::MemoryCatalogProviderList;
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
     use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
+    use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;

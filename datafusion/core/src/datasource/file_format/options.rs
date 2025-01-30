@@ -87,6 +87,8 @@ pub struct CsvReadOptions<'a> {
     pub file_compression_type: FileCompressionType,
     /// Indicates how the file is sorted
     pub file_sort_order: Vec<Vec<SortExpr>>,
+    /// Optional regex to match null values
+    pub null_regex: Option<String>,
 }
 
 impl Default for CsvReadOptions<'_> {
@@ -112,6 +114,7 @@ impl<'a> CsvReadOptions<'a> {
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             file_sort_order: vec![],
             comment: None,
+            null_regex: None,
         }
     }
 
@@ -210,6 +213,12 @@ impl<'a> CsvReadOptions<'a> {
     /// Configure if file has known sort order
     pub fn file_sort_order(mut self, file_sort_order: Vec<Vec<SortExpr>>) -> Self {
         self.file_sort_order = file_sort_order;
+        self
+    }
+
+    /// Configure the null parsing regex.
+    pub fn null_regex(mut self, null_regex: Option<String>) -> Self {
+        self.null_regex = null_regex;
         self
     }
 }
@@ -534,7 +543,8 @@ impl ReadOptions<'_> for CsvReadOptions<'_> {
             .with_terminator(self.terminator)
             .with_newlines_in_values(self.newlines_in_values)
             .with_schema_infer_max_rec(self.schema_infer_max_records)
-            .with_file_compression_type(self.file_compression_type.to_owned());
+            .with_file_compression_type(self.file_compression_type.to_owned())
+            .with_null_regex(self.null_regex.clone());
 
         ListingOptions::new(Arc::new(file_format))
             .with_file_extension(self.file_extension)

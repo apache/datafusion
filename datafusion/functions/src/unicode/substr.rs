@@ -16,23 +16,46 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-use crate::strings::{make_and_append_view, StringArrayType};
+use crate::strings::make_and_append_view;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
-    Array, ArrayIter, ArrayRef, AsArray, GenericStringArray, Int64Array, OffsetSizeTrait,
-    StringViewArray,
+    Array, ArrayIter, ArrayRef, AsArray, GenericStringBuilder, Int64Array,
+    OffsetSizeTrait, StringArrayType, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Extracts a substring of a specified number of characters from a specific starting position in a string.",
+    syntax_example = "substr(str, start_pos[, length])",
+    alternative_syntax = "substring(str from start_pos for length)",
+    sql_example = r#"```sql
+> select substr('datafusion', 5, 3);
++----------------------------------------------+
+| substr(Utf8("datafusion"),Int64(5),Int64(3)) |
++----------------------------------------------+
+| fus                                          |
++----------------------------------------------+ 
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "start_pos",
+        description = "Character position to start the substring at. The first character in the string has a position of 1."
+    ),
+    argument(
+        name = "length",
+        description = "Number of characters to extract. If not specified, returns the rest of the string after the start position."
+    )
+)]
 #[derive(Debug)]
 pub struct SubstrFunc {
     signature: Signature,
@@ -154,32 +177,8 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_substr_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_substr_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Extracts a substring of a specified number of characters from a specific starting position in a string.",
-            "substr(str, start_pos[, length])")
-            .with_sql_example(r#"```sql
-> select substr('datafusion', 5, 3);
-+----------------------------------------------+
-| substr(Utf8("datafusion"),Int64(5),Int64(3)) |
-+----------------------------------------------+
-| fus                                          |
-+----------------------------------------------+ 
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("start_pos", "Character position to start the substring at. The first character in the string has a position of 1.")
-            .with_argument("length", "Number of characters to extract. If not specified, returns the rest of the string after the start position.")
-            .with_alternative_syntax("substring(str from start_pos for length)")
-            .build()
-    })
 }
 
 /// Extracts the substring of string starting at the start'th character, and extending for count characters if that is specified. (Same as substring(string from start for count).)
@@ -448,10 +447,9 @@ where
     match args.len() {
         1 => {
             let iter = ArrayIter::new(string_array);
-
-            let result = iter
-                .zip(start_array.iter())
-                .map(|(string, start)| match (string, start) {
+            let mut result_builder = GenericStringBuilder::<T>::new();
+            for (string, start) in iter.zip(start_array.iter()) {
+                match (string, start) {
                     (Some(string), Some(start)) => {
                         let (start, end) = get_true_start_end(
                             string,
@@ -460,47 +458,51 @@ where
                             enable_ascii_fast_path,
                         ); // start, end is byte-based
                         let substr = &string[start..end];
-                        Some(substr.to_string())
+                        result_builder.append_value(substr);
                     }
-                    _ => None,
-                })
-                .collect::<GenericStringArray<T>>();
-            Ok(Arc::new(result) as ArrayRef)
+                    _ => {
+                        result_builder.append_null();
+                    }
+                }
+            }
+            Ok(Arc::new(result_builder.finish()) as ArrayRef)
         }
         2 => {
             let iter = ArrayIter::new(string_array);
             let count_array = count_array_opt.unwrap();
+            let mut result_builder = GenericStringBuilder::<T>::new();
 
-            let result = iter
-                .zip(start_array.iter())
-                .zip(count_array.iter())
-                .map(|((string, start), count)| {
-                    match (string, start, count) {
-                        (Some(string), Some(start), Some(count)) => {
-                            if count < 0 {
-                                exec_err!(
+            for ((string, start), count) in
+                iter.zip(start_array.iter()).zip(count_array.iter())
+            {
+                match (string, start, count) {
+                    (Some(string), Some(start), Some(count)) => {
+                        if count < 0 {
+                            return exec_err!(
                                 "negative substring length not allowed: substr(<str>, {start}, {count})"
-                            )
-                            } else {
-                                if start == i64::MIN {
-                                    return exec_err!("negative overflow when calculating skip value");
-                                }
-                                let (start, end) = get_true_start_end(
-                                    string,
-                                    start,
-                                    Some(count as u64),
-                                    enable_ascii_fast_path,
-                                ); // start, end is byte-based
-                                let substr = &string[start..end];
-                                Ok(Some(substr.to_string()))
+                            );
+                        } else {
+                            if start == i64::MIN {
+                                return exec_err!(
+                                    "negative overflow when calculating skip value"
+                                );
                             }
+                            let (start, end) = get_true_start_end(
+                                string,
+                                start,
+                                Some(count as u64),
+                                enable_ascii_fast_path,
+                            ); // start, end is byte-based
+                            let substr = &string[start..end];
+                            result_builder.append_value(substr);
                         }
-                        _ => Ok(None),
                     }
-                })
-                .collect::<Result<GenericStringArray<T>>>()?;
-
-            Ok(Arc::new(result) as ArrayRef)
+                    _ => {
+                        result_builder.append_null();
+                    }
+                }
+            }
+            Ok(Arc::new(result_builder.finish()) as ArrayRef)
         }
         other => {
             exec_err!("substr was called with {other} arguments. It requires 2 or 3.")
@@ -523,7 +525,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
             ],
@@ -534,7 +536,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -547,7 +549,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "this és longer than 12B"
                 )))),
@@ -561,7 +563,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "this is longer than 12B"
                 )))),
@@ -574,7 +576,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "joséésoj"
                 )))),
@@ -587,7 +589,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -601,7 +603,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from(
                     "alphabet"
                 )))),
@@ -615,7 +617,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
@@ -626,7 +628,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
@@ -637,7 +639,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(-5i64)),
             ],
@@ -648,7 +650,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
             ],
@@ -659,7 +661,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
@@ -670,7 +672,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(3i64)),
             ],
@@ -681,7 +683,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(-3i64)),
             ],
@@ -692,7 +694,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(30i64)),
             ],
@@ -703,7 +705,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
@@ -714,7 +716,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(3i64)),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
@@ -726,7 +728,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(3i64)),
                 ColumnarValue::Scalar(ScalarValue::from(20i64)),
@@ -738,7 +740,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
@@ -751,7 +753,7 @@ mod tests {
         // starting from 5 (10 + -5)
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(-5i64)),
                 ColumnarValue::Scalar(ScalarValue::from(10i64)),
@@ -764,7 +766,7 @@ mod tests {
         // starting from -1 (4 + -5)
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(-5i64)),
                 ColumnarValue::Scalar(ScalarValue::from(4i64)),
@@ -777,7 +779,7 @@ mod tests {
         // starting from 0 (5 + -5)
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(-5i64)),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
@@ -789,7 +791,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
                 ColumnarValue::Scalar(ScalarValue::from(20i64)),
@@ -801,7 +803,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(3i64)),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
@@ -813,7 +815,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("alphabet")),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),
                 ColumnarValue::Scalar(ScalarValue::from(-1i64)),
@@ -825,7 +827,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
@@ -851,7 +853,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abc")),
                 ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
             ],
@@ -862,7 +864,7 @@ mod tests {
         );
         test_function!(
             SubstrFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("overflow")),
                 ColumnarValue::Scalar(ScalarValue::from(-9223372036854775808i64)),
                 ColumnarValue::Scalar(ScalarValue::from(1i64)),

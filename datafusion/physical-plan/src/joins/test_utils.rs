@@ -47,21 +47,23 @@ use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 
 pub fn compare_batches(collected_1: &[RecordBatch], collected_2: &[RecordBatch]) {
+    let left_row_num: usize = collected_1.iter().map(|batch| batch.num_rows()).sum();
+    let right_row_num: usize = collected_2.iter().map(|batch| batch.num_rows()).sum();
+    if left_row_num == 0 && right_row_num == 0 {
+        return;
+    }
     // compare
     let first_formatted = pretty_format_batches(collected_1).unwrap().to_string();
     let second_formatted = pretty_format_batches(collected_2).unwrap().to_string();
 
-    let mut first_formatted_sorted: Vec<&str> = first_formatted.trim().lines().collect();
-    first_formatted_sorted.sort_unstable();
+    let mut first_lines: Vec<&str> = first_formatted.trim().lines().collect();
+    first_lines.sort_unstable();
 
-    let mut second_formatted_sorted: Vec<&str> =
-        second_formatted.trim().lines().collect();
-    second_formatted_sorted.sort_unstable();
+    let mut second_lines: Vec<&str> = second_formatted.trim().lines().collect();
+    second_lines.sort_unstable();
 
-    for (i, (first_line, second_line)) in first_formatted_sorted
-        .iter()
-        .zip(&second_formatted_sorted)
-        .enumerate()
+    for (i, (first_line, second_line)) in
+        first_lines.iter().zip(&second_lines).enumerate()
     {
         assert_eq!((i, first_line), (i, second_line));
     }

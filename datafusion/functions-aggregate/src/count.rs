@@ -18,12 +18,13 @@
 use ahash::RandomState;
 use datafusion_common::stats::Precision;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
+use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::mem::{size_of, size_of_val};
 use std::ops::BitAnd;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::{
     array::{ArrayRef, AsArray},
@@ -45,7 +46,6 @@ use arrow::{
 use datafusion_common::{
     downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
@@ -79,6 +79,27 @@ pub fn count_distinct(expr: Expr) -> Expr {
     ))
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the number of non-null values in the specified column. To include null values in the total count, use `count(*)`.",
+    syntax_example = "count(expression)",
+    sql_example = r#"```sql
+> SELECT count(column_name) FROM table_name;
++-----------------------+
+| count(column_name)     |
++-----------------------+
+| 100                   |
++-----------------------+
+
+> SELECT count(*) FROM table_name;
++------------------+
+| count(*)         |
++------------------+
+| 120              |
++------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 pub struct Count {
     signature: Signature,
 }
@@ -102,7 +123,7 @@ impl Count {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::VariadicAny, TypeSignature::NullAry],
+                vec![TypeSignature::VariadicAny, TypeSignature::Nullary],
                 Volatility::Immutable,
             ),
         }
@@ -135,7 +156,7 @@ impl AggregateUDFImpl for Count {
             Ok(vec![Field::new_list(
                 format_state_name(args.name, "count distinct"),
                 // See COMMENTS.md to understand why nullable is set to true
-                Field::new("item", args.input_types[0].clone(), true),
+                Field::new_list_field(args.input_types[0].clone(), true),
                 false,
             )])
         } else {
@@ -328,37 +349,8 @@ impl AggregateUDFImpl for Count {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_count_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_count_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-                "Returns the number of non-null values in the specified column. To include null values in the total count, use `count(*)`.",
-
-            "count(expression)")
-            .with_sql_example(r#"```sql
-> SELECT count(column_name) FROM table_name;
-+-----------------------+
-| count(column_name)     |
-+-----------------------+
-| 100                   |
-+-----------------------+
-
-> SELECT count(*) FROM table_name;
-+------------------+
-| count(*)         |
-+------------------+
-| 120              |
-+------------------+
-```"#)
-            .with_standard_argument("expression", None)
-            .build()
-    })
 }
 
 #[derive(Debug)]

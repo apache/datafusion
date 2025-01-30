@@ -138,7 +138,11 @@ impl<R: Read> AvroArrowArrayReader<'_, R> {
             }
             AvroSchema::Array(schema) => {
                 let sub_parent_field_name = format!("{}.element", parent_field_name);
-                Self::child_schema_lookup(&sub_parent_field_name, schema, schema_lookup)?;
+                Self::child_schema_lookup(
+                    &sub_parent_field_name,
+                    &schema.items,
+                    schema_lookup,
+                )?;
             }
             _ => (),
         }

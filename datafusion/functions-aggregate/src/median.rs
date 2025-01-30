@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::mem::{size_of, size_of_val};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{downcast_integer, ArrowNumericType};
 use arrow::{
@@ -30,16 +31,16 @@ use arrow::{
 
 use arrow::array::Array;
 use arrow::array::ArrowNativeTypeOp;
-use arrow::datatypes::ArrowNativeType;
+use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType};
 
 use datafusion_common::{DataFusionError, HashSet, Result, ScalarValue};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     Documentation, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::Hashable;
+use datafusion_macros::user_doc;
 
 make_udaf_expr_and_func!(
     Median,
@@ -49,6 +50,20 @@ make_udaf_expr_and_func!(
     median_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the median value in the specified column.",
+    syntax_example = "median(expression)",
+    sql_example = r#"```sql
+> SELECT median(column_name) FROM table_name;
++----------------------+
+| median(column_name)   |
++----------------------+
+| 45.5                 |
++----------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "The")
+)]
 /// MEDIAN aggregate expression. If using the non-distinct variation, then this uses a
 /// lot of memory because all values need to be stored in memory before a result can be
 /// computed. If an approximation is sufficient then APPROX_MEDIAN provides a much more
@@ -103,7 +118,7 @@ impl AggregateUDFImpl for Median {
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
         //Intermediate state is a list of the elements we have collected so far
-        let field = Field::new("item", args.input_types[0].clone(), true);
+        let field = Field::new_list_field(args.input_types[0].clone(), true);
         let state_name = if args.is_distinct {
             "distinct_median"
         } else {
@@ -155,32 +170,8 @@ impl AggregateUDFImpl for Median {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_median_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_median_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-            "Returns the median value in the specified column.",
-            "median(expression)",
-        )
-        .with_sql_example(
-            r#"```sql
-> SELECT median(column_name) FROM table_name;
-+----------------------+
-| median(column_name)   |
-+----------------------+
-| 45.5                 |
-+----------------------+
-```"#,
-        )
-        .with_standard_argument("expression", None)
-        .build()
-    })
 }
 
 /// The median accumulator accumulates the raw input values
@@ -310,6 +301,21 @@ impl<T: ArrowNumericType> Accumulator for DistinctMedianAccumulator<T> {
     }
 }
 
+/// Get maximum entry in the slice,
+fn slice_max<T>(array: &[T::Native]) -> T::Native
+where
+    T: ArrowPrimitiveType,
+    T::Native: PartialOrd, // Ensure the type supports PartialOrd for comparison
+{
+    // Make sure that, array is not empty.
+    debug_assert!(!array.is_empty());
+    // `.unwrap()` is safe here as the array is supposed to be non-empty
+    *array
+        .iter()
+        .max_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Less))
+        .unwrap()
+}
+
 fn calculate_median<T: ArrowNumericType>(
     mut values: Vec<T::Native>,
 ) -> Option<T::Native> {
@@ -320,8 +326,11 @@ fn calculate_median<T: ArrowNumericType>(
         None
     } else if len % 2 == 0 {
         let (low, high, _) = values.select_nth_unstable_by(len / 2, cmp);
-        let (_, low, _) = low.select_nth_unstable_by(low.len() - 1, cmp);
-        let median = low.add_wrapping(*high).div_wrapping(T::Native::usize_as(2));
+        // Get the maximum of the low (left side after bi-partitioning)
+        let left_max = slice_max::<T>(low);
+        let median = left_max
+            .add_wrapping(*high)
+            .div_wrapping(T::Native::usize_as(2));
         Some(median)
     } else {
         let (_, median, _) = values.select_nth_unstable_by(len / 2, cmp);

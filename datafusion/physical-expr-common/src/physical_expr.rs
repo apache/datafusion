@@ -31,6 +31,9 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
 
+/// Shared [`PhysicalExpr`].
+pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
+
 /// [`PhysicalExpr`]s represent expressions such as `A + 1` or `CAST(c1 AS int)`.
 ///
 /// `PhysicalExpr` knows its type, nullability and can be evaluated directly on
@@ -159,9 +162,7 @@ pub trait DynEq {
 
 impl<T: Eq + Any> DynEq for T {
     fn dyn_eq(&self, other: &dyn Any) -> bool {
-        other
-            .downcast_ref::<Self>()
-            .map_or(false, |other| other == self)
+        other.downcast_ref::<Self>() == Some(self)
     }
 }
 
@@ -214,14 +215,42 @@ pub fn with_new_children_if_necessary(
     }
 }
 
+#[deprecated(since = "44.0.0")]
+pub fn down_cast_any_ref(any: &dyn Any) -> &dyn Any {
+    if any.is::<Arc<dyn PhysicalExpr>>() {
+        any.downcast_ref::<Arc<dyn PhysicalExpr>>()
+            .unwrap()
+            .as_any()
+    } else if any.is::<Box<dyn PhysicalExpr>>() {
+        any.downcast_ref::<Box<dyn PhysicalExpr>>()
+            .unwrap()
+            .as_any()
+    } else {
+        any
+    }
+}
+
 /// Returns [`Display`] able a list of [`PhysicalExpr`]
 ///
 /// Example output: `[a + 1, b]`
-pub fn format_physical_expr_list(exprs: &[Arc<dyn PhysicalExpr>]) -> impl Display + '_ {
-    struct DisplayWrapper<'a>(&'a [Arc<dyn PhysicalExpr>]);
-    impl Display for DisplayWrapper<'_> {
+pub fn format_physical_expr_list<T>(exprs: T) -> impl Display
+where
+    T: IntoIterator,
+    T::Item: Display,
+    T::IntoIter: Clone,
+{
+    struct DisplayWrapper<I>(I)
+    where
+        I: Iterator + Clone,
+        I::Item: Display;
+
+    impl<I> Display for DisplayWrapper<I>
+    where
+        I: Iterator + Clone,
+        I::Item: Display,
+    {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            let mut iter = self.0.iter();
+            let mut iter = self.0.clone();
             write!(f, "[")?;
             if let Some(expr) = iter.next() {
                 write!(f, "{}", expr)?;
@@ -233,5 +262,6 @@ pub fn format_physical_expr_list(exprs: &[Arc<dyn PhysicalExpr>]) -> impl Displa
             Ok(())
         }
     }
-    DisplayWrapper(exprs)
+
+    DisplayWrapper(exprs.into_iter())
 }

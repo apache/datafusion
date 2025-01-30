@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::cmp::Ordering;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array,
@@ -31,12 +31,28 @@ use datafusion_common::cast::{
 };
 use datafusion_common::exec_err;
 use datafusion_common::Result;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns a specified number of characters from the left side of a string.",
+    syntax_example = "left(str, n)",
+    sql_example = r#"```sql
+> select left('datafusion', 4);
++-----------------------------------+
+| left(Utf8("datafusion"),Int64(4)) |
++-----------------------------------+
+| data                              |
++-----------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "n", description = "Number of characters to return."),
+    related_udf(name = "right")
+)]
 #[derive(Debug)]
 pub struct LeftFunc {
     signature: Signature,
@@ -99,34 +115,8 @@ impl ScalarUDFImpl for LeftFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_left_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_left_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Returns a specified number of characters from the left side of a string.",
-            "left(str, n)",
-        )
-        .with_sql_example(
-            r#"```sql
-> select left('datafusion', 4);
-+-----------------------------------+
-| left(Utf8("datafusion"),Int64(4)) |
-+-----------------------------------+
-| data                              |
-+-----------------------------------+
-```"#,
-        )
-        .with_standard_argument("str", Some("String"))
-        .with_argument("n", "Number of characters to return.")
-        .with_related_udf("right")
-        .build()
-    })
 }
 
 /// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.
@@ -188,7 +178,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
@@ -199,7 +189,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(200i64)),
             ],
@@ -210,7 +200,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(-2i64)),
             ],
@@ -221,7 +211,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(-200i64)),
             ],
@@ -232,7 +222,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::from(0i64)),
             ],
@@ -243,7 +233,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::from(2i64)),
             ],
@@ -254,7 +244,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("abcde")),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
@@ -265,7 +255,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(5i64)),
             ],
@@ -276,7 +266,7 @@ mod tests {
         );
         test_function!(
             LeftFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::from("joséésoj")),
                 ColumnarValue::Scalar(ScalarValue::from(-3i64)),
             ],

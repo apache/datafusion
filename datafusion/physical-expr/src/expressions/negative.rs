@@ -145,6 +145,7 @@ impl PhysicalExpr for NegativeExpr {
         Ok(ExprProperties {
             sort_properties: -children[0].sort_properties,
             range: children[0].range.clone().arithmetic_negate()?,
+            preserves_lex_ordering: false,
         })
     }
 }

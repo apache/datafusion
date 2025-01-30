@@ -19,7 +19,6 @@
 
 use std::any::Any;
 use std::mem::size_of_val;
-use std::sync::OnceLock;
 
 use arrow::array::ArrayRef;
 use arrow::array::BooleanArray;
@@ -31,7 +30,6 @@ use arrow::datatypes::Field;
 use datafusion_common::internal_err;
 use datafusion_common::{downcast_value, not_impl_err};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
@@ -40,6 +38,7 @@ use datafusion_expr::{
 };
 
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
+use datafusion_macros::user_doc;
 
 // returns the new value after bool_and/bool_or with the new values, taking nullability into account
 macro_rules! typed_bool_and_or_batch {
@@ -92,6 +91,20 @@ make_udaf_expr_and_func!(
     bool_or_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns true if all non-null input values are true, otherwise false.",
+    syntax_example = "bool_and(expression)",
+    sql_example = r#"```sql
+> SELECT bool_and(column_name) FROM table_name;
++----------------------------+
+| bool_and(column_name)       |
++----------------------------+
+| true                        |
++----------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "The")
+)]
 /// BOOL_AND aggregate expression
 #[derive(Debug)]
 pub struct BoolAnd {
@@ -178,32 +191,8 @@ impl AggregateUDFImpl for BoolAnd {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_bool_and_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_bool_and_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-            "Returns true if all non-null input values are true, otherwise false.",
-            "bool_and(expression)",
-        )
-        .with_sql_example(
-            r#"```sql
-> SELECT bool_and(column_name) FROM table_name;
-+----------------------------+
-| bool_and(column_name)       |
-+----------------------------+
-| true                        |
-+----------------------------+
-```"#,
-        )
-        .with_standard_argument("expression", None)
-        .build()
-    })
 }
 
 #[derive(Debug, Default)]
@@ -240,6 +229,20 @@ impl Accumulator for BoolAndAccumulator {
     }
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns true if all non-null input values are true, otherwise false.",
+    syntax_example = "bool_and(expression)",
+    sql_example = r#"```sql
+> SELECT bool_and(column_name) FROM table_name;
++----------------------------+
+| bool_and(column_name)       |
++----------------------------+
+| true                        |
++----------------------------+
+```"#,
+    standard_argument(name = "expression", prefix = "The")
+)]
 /// BOOL_OR aggregate expression
 #[derive(Debug, Clone)]
 pub struct BoolOr {
@@ -327,30 +330,8 @@ impl AggregateUDFImpl for BoolOr {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_bool_or_doc())
+        self.doc()
     }
-}
-
-fn get_bool_or_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_GENERAL,
-            "Returns true if any non-null input value is true, otherwise false.",
-            "bool_or(expression)",
-        )
-        .with_sql_example(
-            r#"```sql
-> SELECT bool_or(column_name) FROM table_name;
-+----------------------------+
-| bool_or(column_name)        |
-+----------------------------+
-| true                        |
-+----------------------------+
-```"#,
-        )
-        .with_standard_argument("expression", None)
-        .build()
-    })
 }
 
 #[derive(Debug, Default)]

@@ -20,14 +20,13 @@
 use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::mem::align_of_val;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::Float64Array;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 
 use datafusion_common::{internal_err, not_impl_err, Result};
 use datafusion_common::{plan_err, ScalarValue};
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_STATISTICAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
@@ -35,6 +34,7 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions_aggregate_common::stats::StatsType;
+use datafusion_macros::user_doc;
 
 use crate::variance::{VarianceAccumulator, VarianceGroupsAccumulator};
 
@@ -46,6 +46,20 @@ make_udaf_expr_and_func!(
     stddev_udaf
 );
 
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the standard deviation of a set of numbers.",
+    syntax_example = "stddev(expression)",
+    sql_example = r#"```sql
+> SELECT stddev(column_name) FROM table_name;
++----------------------+
+| stddev(column_name)   |
++----------------------+
+| 12.34                |
++----------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
 pub struct Stddev {
     signature: Signature,
@@ -134,32 +148,8 @@ impl AggregateUDFImpl for Stddev {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_stddev_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_stddev_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STATISTICAL,
-            "Returns the standard deviation of a set of numbers.",
-            "stddev(expression)",
-        )
-        .with_sql_example(
-            r#"```sql
-> SELECT stddev(column_name) FROM table_name;
-+----------------------+
-| stddev(column_name)   |
-+----------------------+
-| 12.34                |
-+----------------------+
-```"#,
-        )
-        .with_standard_argument("expression", None)
-        .build()
-    })
 }
 
 make_udaf_expr_and_func!(
@@ -170,6 +160,20 @@ make_udaf_expr_and_func!(
     stddev_pop_udaf
 );
 
+#[user_doc(
+    doc_section(label = "Statistical Functions"),
+    description = "Returns the population standard deviation of a set of numbers.",
+    syntax_example = "stddev_pop(expression)",
+    sql_example = r#"```sql
+> SELECT stddev_pop(column_name) FROM table_name;
++--------------------------+
+| stddev_pop(column_name)   |
++--------------------------+
+| 10.56                    |
++--------------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 /// STDDEV_POP population aggregate expression
 pub struct StddevPop {
     signature: Signature,
@@ -258,30 +262,8 @@ impl AggregateUDFImpl for StddevPop {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_stddev_pop_doc())
+        self.doc()
     }
-}
-
-fn get_stddev_pop_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STATISTICAL,
-            "Returns the population standard deviation of a set of numbers.",
-            "stddev_pop(expression)",
-        )
-        .with_sql_example(
-            r#"```sql
-> SELECT stddev_pop(column_name) FROM table_name;
-+--------------------------+
-| stddev_pop(column_name)   |
-+--------------------------+
-| 10.56                    |
-+--------------------------+
-```"#,
-        )
-        .with_standard_argument("expression", None)
-        .build()
-    })
 }
 
 /// An accumulator to compute the average

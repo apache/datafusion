@@ -19,6 +19,7 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
+use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
@@ -29,7 +30,9 @@ use crate::{DataFusionError, Result};
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
-/// in the [`ConfigOptions`] configuration tree
+/// in the [`ConfigOptions`] configuration tree.
+///
+/// `transform` is used to normalize values before parsing.
 ///
 /// For example,
 ///
@@ -38,7 +41,7 @@ use crate::{DataFusionError, Result};
 ///    /// Amazing config
 ///    pub struct MyConfig {
 ///        /// Field 1 doc
-///        field1: String, default = "".to_string()
+///        field1: String, transform = str::to_lowercase, default = "".to_string()
 ///
 ///        /// Field 2 doc
 ///        field2: usize, default = 232
@@ -67,9 +70,12 @@ use crate::{DataFusionError, Result};
 ///     fn set(&mut self, key: &str, value: &str) -> Result<()> {
 ///         let (key, rem) = key.split_once('.').unwrap_or((key, ""));
 ///         match key {
-///             "field1" => self.field1.set(rem, value),
-///             "field2" => self.field2.set(rem, value),
-///             "field3" => self.field3.set(rem, value),
+///             "field1" => {
+///                 let value = str::to_lowercase(value);
+///                 self.field1.set(rem, value.as_ref())
+///             },
+///             "field2" => self.field2.set(rem, value.as_ref()),
+///             "field3" => self.field3.set(rem, value.as_ref()),
 ///             _ => _internal_err!(
 ///                 "Config value \"{}\" not found on MyConfig",
 ///                 key
@@ -102,25 +108,33 @@ use crate::{DataFusionError, Result};
 /// ```
 ///
 /// NB: Misplaced commas may result in nonsensical errors
-///
-#[macro_export]
 macro_rules! config_namespace {
     (
-     $(#[doc = $struct_d:tt])*
-     $vis:vis struct $struct_name:ident {
-        $(
-        $(#[doc = $d:tt])*
-        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
-        )*$(,)*
-    }
-    ) => {
-
-        $(#[doc = $struct_d])*
-        #[derive(Debug, Clone, PartialEq)]
-        $vis struct $struct_name{
+        $(#[doc = $struct_d:tt])* // Struct-level documentation attributes
+        $(#[deprecated($($struct_depr:tt)*)])? // Optional struct-level deprecated attribute
+        $(#[allow($($struct_de:tt)*)])?
+        $vis:vis struct $struct_name:ident {
             $(
-            $(#[doc = $d])*
-            $field_vis $field_name : $field_type,
+                $(#[doc = $d:tt])* // Field-level documentation attributes
+                $(#[deprecated($($field_depr:tt)*)])? // Optional field-level deprecated attribute
+                $(#[allow($($field_de:tt)*)])?
+                $field_vis:vis $field_name:ident : $field_type:ty,
+                $(warn = $warn:expr,)?
+                $(transform = $transform:expr,)?
+                default = $default:expr
+            )*$(,)*
+        }
+    ) => {
+        $(#[doc = $struct_d])* // Apply struct documentation
+        $(#[deprecated($($struct_depr)*)])? // Apply struct deprecation
+        $(#[allow($($struct_de)*)])?
+        #[derive(Debug, Clone, PartialEq)]
+        $vis struct $struct_name {
+            $(
+                $(#[doc = $d])* // Apply field documentation
+                $(#[deprecated($($field_depr)*)])? // Apply field deprecation
+                $(#[allow($($field_de)*)])?
+                $field_vis $field_name: $field_type,
             )*
         }
 
@@ -129,7 +143,16 @@ macro_rules! config_namespace {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
                 match key {
                     $(
-                       stringify!($field_name) => self.$field_name.set(rem, value),
+                        stringify!($field_name) => {
+                            // Safely apply deprecated attribute if present
+                            // $(#[allow(deprecated)])?
+                            {
+                                $(let value = $transform(value);)? // Apply transformation if specified
+                                $(log::warn!($warn);)? // Log warning if specified
+                                #[allow(deprecated)]
+                                self.$field_name.set(rem, value.as_ref())
+                            }
+                        },
                     )*
                     _ => return _config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
@@ -139,15 +162,16 @@ macro_rules! config_namespace {
 
             fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
                 $(
-                let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
-                let desc = concat!($($d),*).trim();
-                self.$field_name.visit(v, key.as_str(), desc);
+                    let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
+                    let desc = concat!($($d),*).trim();
+                    #[allow(deprecated)]
+                    self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
         }
-
         impl Default for $struct_name {
             fn default() -> Self {
+                #[allow(deprecated)]
                 Self {
                     $($field_name: $default),*
                 }
@@ -211,12 +235,15 @@ config_namespace! {
         /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
 
-        /// When set to true, SQL parser will normalize options value (convert value to lowercase)
-        pub enable_options_value_normalization: bool, default = true
+        /// When set to true, SQL parser will normalize options value (convert value to lowercase).
+        /// Note that this option is ignored and will be removed in the future. All case-insensitive values
+        /// are normalized automatically.
+        pub enable_options_value_normalization: bool, warn = "`enable_options_value_normalization` is deprecated and ignored", default = false
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
         /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
         pub dialect: String, default = "generic".to_string()
+        // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
         /// If true, permit lengths for `VARCHAR` such as `VARCHAR(20)`, but
         /// ignore the length. If false, error if a `VARCHAR` with a length is
@@ -423,6 +450,12 @@ config_namespace! {
         /// valid values are "1.0" and "2.0"
         pub writer_version: String, default = "1.0".to_string()
 
+        /// (writing) Skip encoding the embedded arrow metadata in the KV_meta
+        ///
+        /// This is analogous to the `ArrowWriterOptions::with_skip_arrow_metadata`.
+        /// Refer to <https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata>
+        pub skip_arrow_metadata: bool, default = false
+
         /// (writing) Sets default parquet compression codec.
         /// Valid values are: uncompressed, snappy, gzip(level),
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
@@ -431,7 +464,7 @@ config_namespace! {
         ///
         /// Note that this default setting is not the same as
         /// the default parquet writer setting.
-        pub compression: Option<String>, default = Some("zstd(3)".into())
+        pub compression: Option<String>, transform = str::to_lowercase, default = Some("zstd(3)".into())
 
         /// (writing) Sets if dictionary encoding is enabled. If NULL, uses
         /// default parquet writer setting
@@ -444,10 +477,13 @@ config_namespace! {
         /// Valid values are: "none", "chunk", and "page"
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub statistics_enabled: Option<String>, default = Some("page".into())
+        pub statistics_enabled: Option<String>, transform = str::to_lowercase, default = Some("page".into())
 
         /// (writing) Sets max statistics size for any column. If NULL, uses
         /// default parquet writer setting
+        /// max_statistics_size is deprecated, currently it is not being used
+        // TODO: remove once deprecated
+        #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
         pub max_statistics_size: Option<usize>, default = Some(4096)
 
         /// (writing) Target maximum number of rows in each row group (defaults to 1M
@@ -470,7 +506,7 @@ config_namespace! {
         /// delta_byte_array, rle_dictionary, and byte_stream_split.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
-        pub encoding: Option<String>, default = None
+        pub encoding: Option<String>, transform = str::to_lowercase, default = None
 
         /// (writing) Use any available bloom filters when reading parquet files
         pub bloom_filter_on_read: bool, default = true
@@ -876,8 +912,48 @@ impl ConfigOptions {
     }
 }
 
-/// [`ConfigExtension`] provides a mechanism to store third-party configuration within DataFusion
+/// [`ConfigExtension`] provides a mechanism to store third-party configuration
+/// within DataFusion [`ConfigOptions`]
 ///
+/// This mechanism can be used to pass configuration to user defined functions
+/// or optimizer passes
+///
+/// # Example
+/// ```
+/// use datafusion_common::{
+///     config::ConfigExtension, extensions_options,
+///     config::ConfigOptions,
+/// };
+///  // Define a new configuration struct using the `extensions_options` macro
+///  extensions_options! {
+///     /// My own config options.
+///     pub struct MyConfig {
+///         /// Should "foo" be replaced by "bar"?
+///         pub foo_to_bar: bool, default = true
+///
+///         /// How many "baz" should be created?
+///         pub baz_count: usize, default = 1337
+///     }
+///  }
+///
+///  impl ConfigExtension for MyConfig {
+///     const PREFIX: &'static str = "my_config";
+///  }
+///
+///  // set up config struct and register extension
+///  let mut config = ConfigOptions::default();
+///  config.extensions.insert(MyConfig::default());
+///
+///  // overwrite config default
+///  config.set("my_config.baz_count", "42").unwrap();
+///
+///  // check config state
+///  let my_config = config.extensions.get::<MyConfig>().unwrap();
+///  assert!(my_config.foo_to_bar,);
+///  assert_eq!(my_config.baz_count, 42,);
+/// ```
+///
+/// # Note:
 /// Unfortunately associated constants are not currently object-safe, and so this
 /// extends the object-safe [`ExtensionOptions`]
 pub trait ConfigExtension: ExtensionOptions {
@@ -887,16 +963,18 @@ pub trait ConfigExtension: ExtensionOptions {
     const PREFIX: &'static str;
 }
 
-/// An object-safe API for storing arbitrary configuration
+/// An object-safe API for storing arbitrary configuration.
+///
+/// See [`ConfigExtension`] for user defined configuration
 pub trait ExtensionOptions: Send + Sync + fmt::Debug + 'static {
     /// Return `self` as [`Any`]
     ///
-    /// This is needed until trait upcasting is stabilised
+    /// This is needed until trait upcasting is stabilized
     fn as_any(&self) -> &dyn Any;
 
     /// Return `self` as [`Any`]
     ///
-    /// This is needed until trait upcasting is stabilised
+    /// This is needed until trait upcasting is stabilized
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
     /// Return a deep clone of this [`ExtensionOptions`]
@@ -971,21 +1049,37 @@ impl<F: ConfigField + Default> ConfigField for Option<F> {
     }
 }
 
+fn default_transform<T>(input: &str) -> Result<T>
+where
+    T: FromStr,
+    <T as FromStr>::Err: Sync + Send + Error + 'static,
+{
+    input.parse().map_err(|e| {
+        DataFusionError::Context(
+            format!(
+                "Error parsing '{}' as {}",
+                input,
+                std::any::type_name::<T>()
+            ),
+            Box::new(DataFusionError::External(Box::new(e))),
+        )
+    })
+}
+
 #[macro_export]
 macro_rules! config_field {
     ($t:ty) => {
+        config_field!($t, value => default_transform(value)?);
+    };
+
+    ($t:ty, $arg:ident => $transform:expr) => {
         impl ConfigField for $t {
             fn visit<V: Visit>(&self, v: &mut V, key: &str, description: &'static str) {
                 v.some(key, self, description)
             }
 
-            fn set(&mut self, _: &str, value: &str) -> Result<()> {
-                *self = value.parse().map_err(|e| {
-                    DataFusionError::Context(
-                        format!(concat!("Error parsing {} as ", stringify!($t),), value),
-                        Box::new(DataFusionError::External(Box::new(e))),
-                    )
-                })?;
+            fn set(&mut self, _: &str, $arg: &str) -> Result<()> {
+                *self = $transform;
                 Ok(())
             }
         }
@@ -993,7 +1087,7 @@ macro_rules! config_field {
 }
 
 config_field!(String);
-config_field!(bool);
+config_field!(bool, value => default_transform(value.to_lowercase().as_str())?);
 config_field!(usize);
 config_field!(f64);
 config_field!(u64);
@@ -1079,6 +1173,8 @@ pub trait Visit {
 /// - `<default_value>`: Default value matching the field type like `42`.
 ///
 /// # Example
+/// See also a full example on the [`ConfigExtension`] documentation
+///
 /// ```
 /// use datafusion_common::extensions_options;
 ///
@@ -1286,8 +1382,7 @@ impl TableOptions {
     /// A new `TableOptions` instance with settings applied from the session config.
     pub fn default_from_session_config(config: &ConfigOptions) -> Self {
         let initial = TableOptions::default();
-        initial.combine_with_session_config(config);
-        initial
+        initial.combine_with_session_config(config)
     }
 
     /// Updates the current `TableOptions` with settings from a given session config.
@@ -1299,6 +1394,7 @@ impl TableOptions {
     /// # Returns
     ///
     /// A new `TableOptions` instance with updated settings from the session config.
+    #[must_use = "this method returns a new instance"]
     pub fn combine_with_session_config(&self, config: &ConfigOptions) -> Self {
         let mut clone = self.clone();
         clone.parquet.global = config.execution.parquet.clone();
@@ -1467,6 +1563,20 @@ impl TableParquetOptions {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Set whether the encoding of the arrow metadata should occur
+    /// during the writing of parquet.
+    ///
+    /// Default is to encode the arrow schema in the file kv_metadata.
+    pub fn with_skip_arrow_metadata(self, skip: bool) -> Self {
+        Self {
+            global: ParquetOptions {
+                skip_arrow_metadata: skip,
+                ..self.global
+            },
+            ..self
+        }
+    }
 }
 
 impl ConfigField for TableParquetOptions {
@@ -1505,19 +1615,23 @@ impl ConfigField for TableParquetOptions {
 macro_rules! config_namespace_with_hashmap {
     (
      $(#[doc = $struct_d:tt])*
+     $(#[deprecated($($struct_depr:tt)*)])?  // Optional struct-level deprecated attribute
      $vis:vis struct $struct_name:ident {
         $(
         $(#[doc = $d:tt])*
-        $field_vis:vis $field_name:ident : $field_type:ty, default = $default:expr
+        $(#[deprecated($($field_depr:tt)*)])? // Optional field-level deprecated attribute
+        $field_vis:vis $field_name:ident : $field_type:ty, $(transform = $transform:expr,)? default = $default:expr
         )*$(,)*
     }
     ) => {
 
         $(#[doc = $struct_d])*
+        $(#[deprecated($($struct_depr)*)])?  // Apply struct deprecation
         #[derive(Debug, Clone, PartialEq)]
         $vis struct $struct_name{
             $(
             $(#[doc = $d])*
+            $(#[deprecated($($field_depr)*)])? // Apply field deprecation
             $field_vis $field_name : $field_type,
             )*
         }
@@ -1527,7 +1641,12 @@ macro_rules! config_namespace_with_hashmap {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
                 match key {
                     $(
-                       stringify!($field_name) => self.$field_name.set(rem, value),
+                       stringify!($field_name) => {
+                           // Handle deprecated fields
+                           #[allow(deprecated)] // Allow deprecated fields
+                           $(let value = $transform(value);)?
+                           self.$field_name.set(rem, value.as_ref())
+                       },
                     )*
                     _ => _config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
@@ -1539,6 +1658,8 @@ macro_rules! config_namespace_with_hashmap {
                 $(
                 let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                 let desc = concat!($($d),*).trim();
+                // Handle deprecated fields
+                #[allow(deprecated)]
                 self.$field_name.visit(v, key.as_str(), desc);
                 )*
             }
@@ -1546,6 +1667,7 @@ macro_rules! config_namespace_with_hashmap {
 
         impl Default for $struct_name {
             fn default() -> Self {
+                #[allow(deprecated)]
                 Self {
                     $($field_name: $default),*
                 }
@@ -1557,7 +1679,7 @@ macro_rules! config_namespace_with_hashmap {
                 let parts: Vec<&str> = key.splitn(2, "::").collect();
                 match parts.as_slice() {
                     [inner_key, hashmap_key] => {
-                        // Get or create the ColumnOptions for the specified column
+                        // Get or create the struct for the specified key
                         let inner_value = self
                             .entry((*hashmap_key).to_owned())
                             .or_insert_with($struct_name::default);
@@ -1573,6 +1695,7 @@ macro_rules! config_namespace_with_hashmap {
                     $(
                     let key = format!("{}.{field}::{}", key_prefix, column_name, field = stringify!($field_name));
                     let desc = concat!($($d),*).trim();
+                    #[allow(deprecated)]
                     col_options.$field_name.visit(v, key.as_str(), desc);
                     )*
                 }
@@ -1606,7 +1729,7 @@ config_namespace_with_hashmap! {
         /// lzo, brotli(level), lz4, zstd(level), and lz4_raw.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
-        pub compression: Option<String>, default = None
+        pub compression: Option<String>, transform = str::to_lowercase, default = None
 
         /// Sets if statistics are enabled for the column
         /// Valid values are: "none", "chunk", and "page"
@@ -1624,6 +1747,9 @@ config_namespace_with_hashmap! {
 
         /// Sets max statistics size for the column path. If NULL, uses
         /// default parquet options
+        /// max_statistics_size is deprecated, currently it is not being used
+        // TODO: remove once deprecated
+        #[deprecated(since = "45.0.0", note = "Setting does not do anything")]
         pub max_statistics_size: Option<usize>, default = None
     }
 }
@@ -1655,7 +1781,10 @@ config_namespace! {
         pub timestamp_format: Option<String>, default = None
         pub timestamp_tz_format: Option<String>, default = None
         pub time_format: Option<String>, default = None
+        // The output format for Nulls in the CSV writer.
         pub null_value: Option<String>, default = None
+        // The input regex for Nulls when loading CSVs.
+        pub null_regex: Option<String>, default = None
         pub comment: Option<u8>, default = None
     }
 }

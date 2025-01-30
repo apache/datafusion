@@ -42,10 +42,10 @@ arrow = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
-rand = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.5"
+rand = { workspace = true }
 
 [[bench]]
 harness = false

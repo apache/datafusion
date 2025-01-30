@@ -20,10 +20,11 @@ use crate::fuzz_cases::equivalence::utils::{
     is_table_same_after_sort, TestScalarUDF,
 };
 use arrow_schema::SortOptions;
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::{col, BinaryExpr};
+use datafusion_physical_expr::{PhysicalExprRef, ScalarFunctionExpr};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
@@ -42,14 +43,13 @@ fn project_orderings_random() -> Result<()> {
         let table_data_with_properties =
             generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
         // Floor(a)
-        let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-        let floor_a = datafusion_physical_expr::udf::create_physical_expr(
-            &test_fun,
-            &[col("a", &test_schema)?],
+        let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
+        let col_a = col("a", &test_schema)?;
+        let floor_a = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::clone(&test_fun),
+            vec![col_a],
             &test_schema,
-            &[],
-            &DFSchema::empty(),
-        )?;
+        )?);
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(
             col("a", &test_schema)?,
@@ -82,8 +82,8 @@ fn project_orderings_random() -> Result<()> {
                 // Make sure each ordering after projection is valid.
                 for ordering in projected_eq.oeq_class().iter() {
                     let err_msg = format!(
-                        "Error in test case ordering:{:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}, proj_exprs: {:?}",
-                        ordering, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants, proj_exprs
+                        "Error in test case ordering:{:?}, eq_properties {}, proj_exprs: {:?}",
+                        ordering, eq_properties, proj_exprs,
                     );
                     // Since ordered section satisfies schema, we expect
                     // that result will be same after sort (e.g sort was unnecessary).
@@ -120,14 +120,13 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
         let table_data_with_properties =
             generate_table_for_eq_properties(&eq_properties, N_ELEMENTS, N_DISTINCT)?;
         // Floor(a)
-        let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-        let floor_a = datafusion_physical_expr::udf::create_physical_expr(
-            &test_fun,
-            &[col("a", &test_schema)?],
+        let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
+        let col_a = col("a", &test_schema)?;
+        let floor_a = Arc::new(ScalarFunctionExpr::try_new(
+            Arc::clone(&test_fun),
+            vec![col_a],
             &test_schema,
-            &[],
-            &DFSchema::empty(),
-        )?;
+        )?) as PhysicalExprRef;
         // a + b
         let a_plus_b = Arc::new(BinaryExpr::new(
             col("a", &test_schema)?,
@@ -179,8 +178,8 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
                             projected_batch.clone(),
                         )?;
                         let err_msg = format!(
-                            "Error in test case requirement:{:?}, expected: {:?}, eq_properties.oeq_class: {:?}, eq_properties.eq_group: {:?}, eq_properties.constants: {:?}, projected_eq.oeq_class: {:?}, projected_eq.eq_group: {:?}, projected_eq.constants: {:?}, projection_mapping: {:?}",
-                            requirement, expected, eq_properties.oeq_class, eq_properties.eq_group, eq_properties.constants, projected_eq.oeq_class, projected_eq.eq_group, projected_eq.constants, projection_mapping
+                            "Error in test case requirement:{:?}, expected: {:?}, eq_properties: {}, projected_eq: {}, projection_mapping: {:?}",
+                            requirement, expected, eq_properties, projected_eq, projection_mapping
                         );
                         // Check whether ordering_satisfy API result and
                         // experimental result matches.

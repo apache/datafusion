@@ -21,9 +21,12 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
+use super::invariants::{
+    assert_always_invariants, assert_executable_invariants, InvariantLevel,
+};
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
@@ -45,6 +48,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -211,10 +215,14 @@ pub enum LogicalPlan {
     /// Windows input based on a set of window spec and window
     /// function (e.g. SUM or RANK).  This is used to implement SQL
     /// window functions, and the `OVER` clause.
+    ///
+    /// See [`Window`] for more details
     Window(Window),
     /// Aggregates its input based on a set of grouping and aggregate
     /// expressions (e.g. SUM). This is used to implement SQL aggregates
     /// and `GROUP BY`.
+    ///
+    /// See [`Aggregate`] for more details
     Aggregate(Aggregate),
     /// Sorts its input according to a list of sort expressions. This
     /// is used to implement SQL `ORDER BY`
@@ -1126,6 +1134,14 @@ impl LogicalPlan {
         }
     }
 
+    /// checks that the plan conforms to the listed invariant level, returning an Error if not
+    pub fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        match check {
+            InvariantLevel::Always => assert_always_invariants(self),
+            InvariantLevel::Executable => assert_executable_invariants(self),
+        }
+    }
+
     /// Helper for [Self::with_new_exprs] to use when no expressions are expected.
     #[inline]
     #[allow(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
@@ -1201,7 +1217,7 @@ impl LogicalPlan {
     /// # let schema = Schema::new(vec![
     /// #     Field::new("id", DataType::Int32, false),
     /// # ]);
-    /// // Build SELECT * FROM t1 WHRERE id = $1
+    /// // Build SELECT * FROM t1 WHERE id = $1
     /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(placeholder("$1"))).unwrap()
     ///     .build().unwrap();
@@ -1224,7 +1240,7 @@ impl LogicalPlan {
     ///  );
     ///
     /// // Note you can also used named parameters
-    /// // Build SELECT * FROM t1 WHRERE id = $my_param
+    /// // Build SELECT * FROM t1 WHERE id = $my_param
     /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(placeholder("$my_param"))).unwrap()
     ///     .build().unwrap()
@@ -1305,18 +1321,13 @@ impl LogicalPlan {
                 join_type,
                 ..
             }) => match join_type {
-                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-                    match (left.max_rows(), right.max_rows()) {
-                        (Some(left_max), Some(right_max)) => {
-                            let min_rows = match join_type {
-                                JoinType::Left => left_max,
-                                JoinType::Right => right_max,
-                                JoinType::Full => left_max + right_max,
-                                _ => 0,
-                            };
-                            Some((left_max * right_max).max(min_rows))
-                        }
-                        _ => None,
+                JoinType::Inner => Some(left.max_rows()? * right.max_rows()?),
+                JoinType::Left | JoinType::Right | JoinType::Full => {
+                    match (left.max_rows()?, right.max_rows()?, join_type) {
+                        (0, 0, _) => Some(0),
+                        (max_rows, 0, JoinType::Left | JoinType::Full) => Some(max_rows),
+                        (0, max_rows, JoinType::Right | JoinType::Full) => Some(max_rows),
+                        (left_max, right_max, _) => Some(left_max * right_max),
                     }
                 }
                 JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -1325,17 +1336,12 @@ impl LogicalPlan {
                 JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
             },
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
-            LogicalPlan::Union(Union { inputs, .. }) => inputs
-                .iter()
-                .map(|plan| plan.max_rows())
-                .try_fold(0usize, |mut acc, input_max| {
-                    if let Some(i_max) = input_max {
-                        acc += i_max;
-                        Some(acc)
-                    } else {
-                        None
-                    }
-                }),
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                inputs.iter().try_fold(0usize, |mut acc, plan| {
+                    acc += plan.max_rows()?;
+                    Some(acc)
+                })
+            }
             LogicalPlan::TableScan(TableScan { fetch, .. }) => *fetch,
             LogicalPlan::EmptyRelation(_) => Some(0),
             LogicalPlan::RecursiveQuery(_) => None,
@@ -1491,7 +1497,9 @@ impl LogicalPlan {
                             (_, Some(dt)) => {
                                 param_types.insert(id.clone(), Some(dt.clone()));
                             }
-                            _ => {}
+                            _ => {
+                                param_types.insert(id.clone(), None);
+                            }
                         }
                     }
                     Ok(TreeNodeRecursion::Continue)
@@ -2363,6 +2371,19 @@ impl Filter {
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
+///
+/// # Output Schema
+///
+/// The output schema is the input schema followed by the window function
+/// expressions, in order.
+///
+/// For example, given the input schema `"A", "B", "C"` and the window function
+/// `SUM(A) OVER (PARTITION BY B+1 ORDER BY C)`, the output schema will be `"A",
+/// "B", "C", "SUM(A) OVER ..."` where `"SUM(A) OVER ..."` is the name of the
+/// output column.
+///
+/// Note that the `PARTITION BY` expression "B+1" is not produced in the output
+/// schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Window {
     /// The incoming logical plan
@@ -2966,6 +2987,16 @@ impl PartialOrd for DistinctOn {
 
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
+///
+/// # Output Schema
+///
+/// The output schema is the group expressions followed by the aggregate
+/// expressions in order.
+///
+/// For example, given the input schema `"A", "B", "C"` and the aggregate
+/// `SUM(A) GROUP BY C+B`, the output schema will be `"C+B", "SUM(A)"` where
+/// "C+B" and "SUM(A)" are the names of the output columns. Note that "C+B" is a
+/// single new column
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
@@ -3067,12 +3098,12 @@ impl Aggregate {
 
     /// Get the output expressions.
     fn output_expressions(&self) -> Result<Vec<&Expr>> {
-        static INTERNAL_ID_EXPR: OnceLock<Expr> = OnceLock::new();
+        static INTERNAL_ID_EXPR: LazyLock<Expr> = LazyLock::new(|| {
+            Expr::Column(Column::from_name(Aggregate::INTERNAL_GROUPING_ID))
+        });
         let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
         if self.is_grouping_set() {
-            exprs.push(INTERNAL_ID_EXPR.get_or_init(|| {
-                Expr::Column(Column::from_name(Self::INTERNAL_GROUPING_ID))
-            }));
+            exprs.push(&INTERNAL_ID_EXPR);
         }
         exprs.extend(self.aggr_expr.iter());
         debug_assert!(exprs.len() == self.schema.fields().len());
@@ -3354,6 +3385,25 @@ pub struct Subquery {
     pub outer_ref_columns: Vec<Expr>,
 }
 
+impl Normalizeable for Subquery {
+    fn can_normalize(&self) -> bool {
+        false
+    }
+}
+
+impl NormalizeEq for Subquery {
+    fn normalize_eq(&self, other: &Self) -> bool {
+        // TODO: may be implement NormalizeEq for LogicalPlan?
+        *self.subquery == *other.subquery
+            && self.outer_ref_columns.len() == other.outer_ref_columns.len()
+            && self
+                .outer_ref_columns
+                .iter()
+                .zip(other.outer_ref_columns.iter())
+                .all(|(a, b)| a.normalize_eq(b))
+    }
+}
+
 impl Subquery {
     pub fn try_from_expr(plan: &Expr) -> Result<&Subquery> {
         match plan {
@@ -3402,15 +3452,15 @@ pub enum Partitioning {
 ///   input             output_name
 ///  ┌─────────┐      ┌─────────┐
 ///  │{{1,2}}  │      │ 1       │
-///  ├─────────┼─────►├─────────┤           
-///  │{{3}}    │      │ 2       │           
-///  ├─────────┤      ├─────────┤           
-///  │{{4},{5}}│      │ 3       │           
-///  └─────────┘      ├─────────┤           
-///                   │ 4       │           
-///                   ├─────────┤           
-///                   │ 5       │           
-///                   └─────────┘           
+///  ├─────────┼─────►├─────────┤
+///  │{{3}}    │      │ 2       │
+///  ├─────────┤      ├─────────┤
+///  │{{4},{5}}│      │ 3       │
+///  └─────────┘      ├─────────┤
+///                   │ 4       │
+///                   ├─────────┤
+///                   │ 5       │
+///                   └─────────┘
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct ColumnUnnestList {
@@ -3494,9 +3544,13 @@ mod tests {
     use super::*;
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
-    use crate::{col, exists, in_subquery, lit, placeholder, GroupingSet};
+    use crate::{
+        col, exists, in_subquery, lit, placeholder, scalar_subquery, GroupingSet,
+    };
 
-    use datafusion_common::tree_node::{TransformedResult, TreeNodeVisitor};
+    use datafusion_common::tree_node::{
+        TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
+    };
     use datafusion_common::{not_impl_err, Constraint, ScalarValue};
 
     use crate::test::function_stub::count;
@@ -3609,7 +3663,7 @@ digraph {
 "#;
 
         // just test for a few key lines in the output rather than the
-        // whole thing to make test mainteance easier.
+        // whole thing to make test maintenance easier.
         let graphviz = format!("{}", plan.display_graphviz());
 
         assert_eq!(expected_graphviz, graphviz);
@@ -4156,5 +4210,164 @@ digraph {
             )
             .unwrap();
         assert_eq!(limit, new_limit);
+    }
+
+    #[test]
+    fn test_with_subqueries_jump() {
+        // The test plan contains a `Project` node above a `Filter` node, and the
+        // `Project` node contains a subquery plan with a `Filter` root node, so returning
+        // `TreeNodeRecursion::Jump` on `Project` should cause not visiting any of the
+        // `Filter`s.
+        let subquery_schema =
+            Schema::new(vec![Field::new("sub_id", DataType::Int32, false)]);
+
+        let subquery_plan =
+            table_scan(TableReference::none(), &subquery_schema, Some(vec![0]))
+                .unwrap()
+                .filter(col("sub_id").eq(lit(0)))
+                .unwrap()
+                .build()
+                .unwrap();
+
+        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, Some(vec![0]))
+            .unwrap()
+            .filter(col("id").eq(lit(0)))
+            .unwrap()
+            .project(vec![col("id"), scalar_subquery(Arc::new(subquery_plan))])
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let mut filter_found = false;
+        plan.apply_with_subqueries(|plan| {
+            match plan {
+                LogicalPlan::Projection(..) => return Ok(TreeNodeRecursion::Jump),
+                LogicalPlan::Filter(..) => filter_found = true,
+                _ => {}
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .unwrap();
+        assert!(!filter_found);
+
+        struct ProjectJumpVisitor {
+            filter_found: bool,
+        }
+
+        impl ProjectJumpVisitor {
+            fn new() -> Self {
+                Self {
+                    filter_found: false,
+                }
+            }
+        }
+
+        impl<'n> TreeNodeVisitor<'n> for ProjectJumpVisitor {
+            type Node = LogicalPlan;
+
+            fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+                match node {
+                    LogicalPlan::Projection(..) => return Ok(TreeNodeRecursion::Jump),
+                    LogicalPlan::Filter(..) => self.filter_found = true,
+                    _ => {}
+                }
+                Ok(TreeNodeRecursion::Continue)
+            }
+        }
+
+        let mut visitor = ProjectJumpVisitor::new();
+        plan.visit_with_subqueries(&mut visitor).unwrap();
+        assert!(!visitor.filter_found);
+
+        let mut filter_found = false;
+        plan.clone()
+            .transform_down_with_subqueries(|plan| {
+                match plan {
+                    LogicalPlan::Projection(..) => {
+                        return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+                    }
+                    LogicalPlan::Filter(..) => filter_found = true,
+                    _ => {}
+                }
+                Ok(Transformed::no(plan))
+            })
+            .unwrap();
+        assert!(!filter_found);
+
+        let mut filter_found = false;
+        plan.clone()
+            .transform_down_up_with_subqueries(
+                |plan| {
+                    match plan {
+                        LogicalPlan::Projection(..) => {
+                            return Ok(Transformed::new(
+                                plan,
+                                false,
+                                TreeNodeRecursion::Jump,
+                            ))
+                        }
+                        LogicalPlan::Filter(..) => filter_found = true,
+                        _ => {}
+                    }
+                    Ok(Transformed::no(plan))
+                },
+                |plan| Ok(Transformed::no(plan)),
+            )
+            .unwrap();
+        assert!(!filter_found);
+
+        struct ProjectJumpRewriter {
+            filter_found: bool,
+        }
+
+        impl ProjectJumpRewriter {
+            fn new() -> Self {
+                Self {
+                    filter_found: false,
+                }
+            }
+        }
+
+        impl TreeNodeRewriter for ProjectJumpRewriter {
+            type Node = LogicalPlan;
+
+            fn f_down(&mut self, node: Self::Node) -> Result<Transformed<Self::Node>> {
+                match node {
+                    LogicalPlan::Projection(..) => {
+                        return Ok(Transformed::new(node, false, TreeNodeRecursion::Jump))
+                    }
+                    LogicalPlan::Filter(..) => self.filter_found = true,
+                    _ => {}
+                }
+                Ok(Transformed::no(node))
+            }
+        }
+
+        let mut rewriter = ProjectJumpRewriter::new();
+        plan.rewrite_with_subqueries(&mut rewriter).unwrap();
+        assert!(!rewriter.filter_found);
+    }
+
+    #[test]
+    fn test_with_unresolved_placeholders() {
+        let field_name = "id";
+        let placeholder_value = "$1";
+        let schema = Schema::new(vec![Field::new(field_name, DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col(field_name).eq(placeholder(placeholder_value)))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Check that the placeholder parameters have not received a DataType.
+        let params = plan.get_parameter_types().unwrap();
+        assert_eq!(params.len(), 1);
+
+        let parameter_type = params.clone().get(placeholder_value).unwrap().clone();
+        assert_eq!(parameter_type, None);
     }
 }

@@ -230,7 +230,7 @@ impl Column {
                         .collect::<Vec<_>>();
                     for using_col in using_columns {
                         let all_matched = columns.iter().all(|c| using_col.contains(c));
-                        // All matched fields belong to the same using column set, in orther words
+                        // All matched fields belong to the same using column set, in other words
                         // the same join clause. We simply pick the qualifier from the first match.
                         if all_matched {
                             return Ok(columns[0].clone());
@@ -368,7 +368,8 @@ mod tests {
                 &[],
             )
             .expect_err("should've failed to find field");
-        let expected = r#"Schema error: No field named z. Valid fields are t1.a, t1.b, t2.c, t2.d, t3.a, t3.b, t3.c, t3.d, t3.e."#;
+        let expected = "Schema error: No field named z. \
+            Valid fields are t1.a, t1.b, t2.c, t2.d, t3.a, t3.b, t3.c, t3.d, t3.e.";
         assert_eq!(err.strip_backtrace(), expected);
 
         // ambiguous column reference

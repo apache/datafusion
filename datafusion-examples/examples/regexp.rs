@@ -16,9 +16,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::common::{assert_batches_eq, assert_contains};
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::{assert_batches_eq, assert_contains};
 
 /// This example demonstrates how to use the regexp_* functions
 ///
@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
 
     // invalid flags will result in an error
     let result = ctx
-        .sql(r"select regexp_like('\b4(?!000)\d\d\d\b', 4010, 'g')")
+        .sql(r"select regexp_like('\b4(?!000)\d\d\d\b', '4010', 'g')")
         .await?
         .collect()
         .await;

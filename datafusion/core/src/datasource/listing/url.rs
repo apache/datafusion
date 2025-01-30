@@ -170,7 +170,7 @@ impl ListingTableUrl {
                 if ignore_subdirectory {
                     segments
                         .next()
-                        .map_or(false, |file_name| glob.matches(file_name))
+                        .is_some_and(|file_name| glob.matches(file_name))
                 } else {
                     let stripped = segments.join(DELIMITER);
                     glob.matches(&stripped)

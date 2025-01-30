@@ -781,7 +781,7 @@ mod test {
         assert_partitioned_files(expected, actual);
     }
 
-    /// Asserts that the two groups of `ParititonedFile` are the same
+    /// Asserts that the two groups of [`PartitionedFile`] are the same
     /// (PartitionedFile doesn't implement PartialEq)
     fn assert_partitioned_files(
         expected: Option<Vec<Vec<PartitionedFile>>>,

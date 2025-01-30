@@ -17,41 +17,43 @@
 
 //! This module contains tests for limiting memory at runtime in DataFusion
 
+use std::any::Any;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, LazyLock};
+
+#[cfg(feature = "extended_tests")]
+mod memory_limit_validation;
 use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{ArrayRef, DictionaryArray};
 use arrow_schema::SortOptions;
-use async_trait::async_trait;
 use datafusion::assert_batches_eq;
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::streaming::PartitionStream;
-use datafusion_execution::memory_pool::{
-    GreedyMemoryPool, MemoryPool, TrackConsumersPool,
-};
-use datafusion_expr::{Expr, TableType};
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_plan::spill::get_record_batch_memory_size;
-use futures::StreamExt;
-use std::any::Any;
-use std::num::NonZeroUsize;
-use std::sync::{Arc, OnceLock};
-use tokio::fs::File;
-
-use datafusion::datasource::streaming::StreamingTable;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::physical_optimizer::join_selection::JoinSelection;
+use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
-use datafusion_common::{assert_contains, Result};
-
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
+use datafusion_common::{assert_contains, Result};
+use datafusion_execution::memory_pool::{
+    GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+};
 use datafusion_execution::TaskContext;
+use datafusion_expr::{Expr, TableType};
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_optimizer::join_selection::JoinSelection;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use test_utils::AccessLogGenerator;
+
+use async_trait::async_trait;
+use futures::StreamExt;
+use tokio::fs::File;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -730,15 +732,14 @@ fn maybe_split_batches(
         .collect()
 }
 
-static DICT_BATCHES: OnceLock<Vec<RecordBatch>> = OnceLock::new();
-
 /// Returns 5 sorted string dictionary batches each with 50 rows with
 /// this schema.
 ///
 /// a: Dictionary<Utf8, Int32>,
 /// b: Dictionary<Utf8, Int32>,
 fn dict_batches() -> Vec<RecordBatch> {
-    DICT_BATCHES.get_or_init(make_dict_batches).clone()
+    static DICT_BATCHES: LazyLock<Vec<RecordBatch>> = LazyLock::new(make_dict_batches);
+    DICT_BATCHES.clone()
 }
 
 fn make_dict_batches() -> Vec<RecordBatch> {

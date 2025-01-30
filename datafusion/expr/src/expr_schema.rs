@@ -24,15 +24,15 @@ use crate::type_coercion::binary::get_result_type;
 use crate::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
 };
+use crate::udf::ReturnTypeArgs;
 use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, Column, ExprSchema, Result,
-    TableReference,
+    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
+    Result, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-use recursive::recursive;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -100,7 +100,7 @@ impl ExprSchemable for Expr {
     /// expression refers to a column that does not exist in the
     /// schema, or when the expression is incorrectly typed
     /// (e.g. `[utf8] + [bool]`).
-    #[recursive]
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
@@ -146,29 +146,9 @@ impl ExprSchemable for Expr {
                     }
                 }
             }
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                let arg_data_types = args
-                    .iter()
-                    .map(|e| e.get_type(schema))
-                    .collect::<Result<Vec<_>>>()?;
-
-                // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
-                let new_data_types = data_types_with_scalar_udf(&arg_data_types, func)
-                    .map_err(|err| {
-                        plan_datafusion_err!(
-                            "{} {}",
-                            err,
-                            utils::generate_signature_error_msg(
-                                func.name(),
-                                func.signature().clone(),
-                                &arg_data_types,
-                            )
-                        )
-                    })?;
-
-                // Perform additional function arguments validation (due to limited
-                // expressiveness of `TypeSignature`), then infer return type
-                Ok(func.return_type_from_exprs(args, schema, &new_data_types)?)
+            Expr::ScalarFunction(_func) => {
+                let (return_type, _) = self.data_type_and_nullable(schema)?;
+                Ok(return_type)
             }
             Expr::WindowFunction(window_function) => self
                 .data_type_and_nullable_with_window_function(schema, window_function)
@@ -182,7 +162,10 @@ impl ExprSchemable for Expr {
                     .map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
-                            err,
+                            match err {
+                                DataFusionError::Plan(msg) => msg,
+                                err => err.to_string(),
+                            },
                             utils::generate_signature_error_msg(
                                 func.name(),
                                 func.signature().clone(),
@@ -215,13 +198,13 @@ impl ExprSchemable for Expr {
             }) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
-                data_type.clone().ok_or_else(|| {
-                    plan_datafusion_err!(
-                        "Placeholder type could not be resolved. Make sure that the \
-                         placeholder is bound to a concrete type, e.g. by providing \
-                         parameter values."
-                    )
-                })
+                if let Some(dtype) = data_type {
+                    Ok(dtype.clone())
+                } else {
+                    // If the placeholder's type hasn't been specified, treat it as
+                    // null (unspecified placeholders generate an error during planning)
+                    Ok(DataType::Null)
+                }
             }
             Expr::Wildcard { .. } => Ok(DataType::Null),
             Expr::GroupingSet(_) => {
@@ -298,8 +281,9 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast(Cast { expr, .. }) => expr.nullable(input_schema),
-            Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                Ok(func.is_nullable(args, input_schema))
+            Expr::ScalarFunction(_func) => {
+                let (_, nullable) = self.data_type_and_nullable(input_schema)?;
+                Ok(nullable)
             }
             Expr::AggregateFunction(AggregateFunction { func, .. }) => {
                 Ok(func.is_nullable())
@@ -410,6 +394,47 @@ impl ExprSchemable for Expr {
             Expr::WindowFunction(window_function) => {
                 self.data_type_and_nullable_with_window_function(schema, window_function)
             }
+            Expr::ScalarFunction(ScalarFunction { func, args }) => {
+                let (arg_types, nullables): (Vec<DataType>, Vec<bool>) = args
+                    .iter()
+                    .map(|e| e.data_type_and_nullable(schema))
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .unzip();
+                // Verify that function is invoked with correct number and type of arguments as defined in `TypeSignature`
+                let new_data_types = data_types_with_scalar_udf(&arg_types, func)
+                    .map_err(|err| {
+                        plan_datafusion_err!(
+                            "{} {}",
+                            match err {
+                                DataFusionError::Plan(msg) => msg,
+                                err => err.to_string(),
+                            },
+                            utils::generate_signature_error_msg(
+                                func.name(),
+                                func.signature().clone(),
+                                &arg_types,
+                            )
+                        )
+                    })?;
+
+                let arguments = args
+                    .iter()
+                    .map(|e| match e {
+                        Expr::Literal(sv) => Some(sv),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let args = ReturnTypeArgs {
+                    arg_types: &new_data_types,
+                    scalar_arguments: &arguments,
+                    nullables: &nullables,
+                };
+
+                let (return_type, nullable) =
+                    func.return_type_from_args(args)?.into_parts();
+                Ok((return_type, nullable))
+            }
             _ => Ok((self.get_type(schema)?, self.nullable(schema)?)),
         }
     }
@@ -486,7 +511,10 @@ impl Expr {
                     .map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
-                            err,
+                            match err {
+                                DataFusionError::Plan(msg) => msg,
+                                err => err.to_string(),
+                            },
                             utils::generate_signature_error_msg(
                                 fun.name(),
                                 fun.signature(),
@@ -505,7 +533,10 @@ impl Expr {
                     data_types_with_window_udf(&data_types, udwf).map_err(|err| {
                         plan_datafusion_err!(
                             "{} {}",
-                            err,
+                            match err {
+                                DataFusionError::Plan(msg) => msg,
+                                err => err.to_string(),
+                            },
                             utils::generate_signature_error_msg(
                                 fun.name(),
                                 fun.signature(),

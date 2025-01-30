@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::scalar_function;
+use crate::ScalarFunctionExpr;
 use crate::{
     expressions::{self, binary, like, similar_to, Column, Literal},
     PhysicalExpr,
@@ -28,7 +28,7 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
+use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
@@ -302,13 +302,11 @@ pub fn create_physical_expr(
             let physical_args =
                 create_physical_exprs(args, input_dfschema, execution_props)?;
 
-            scalar_function::create_physical_expr(
-                Arc::clone(func).as_ref(),
-                &physical_args,
+            Ok(Arc::new(ScalarFunctionExpr::try_new(
+                Arc::clone(func),
+                physical_args,
                 input_schema,
-                args,
-                input_dfschema,
-            )
+            )?))
         }
         Expr::Between(Between {
             expr,
@@ -361,6 +359,9 @@ pub fn create_physical_expr(
                 expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
+        Expr::Placeholder(Placeholder { id, .. }) => {
+            exec_err!("Placeholder '{id}' was not provided a value for execution.")
+        }
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }

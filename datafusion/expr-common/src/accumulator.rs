@@ -115,7 +115,7 @@ pub trait Accumulator: Send + Sync + Debug {
     ///              │                                │
     ///              │                                │
     /// ┌─────────────────────────┐      ┌─────────────────────────┐
-    /// │        GroubyBy         │      │        GroubyBy         │
+    /// │        GroupBy          │      │        GroupBy          │
     /// │(AggregateMode::Partial) │      │(AggregateMode::Partial) │
     /// └─────────────────────────┘      └─────────────────────────┘
     ///              ▲                                ▲
@@ -181,7 +181,7 @@ pub trait Accumulator: Send + Sync + Debug {
     ///              │                             │
     ///              │                             │
     /// ┌─────────────────────────┐  ┌──────────────────────────┐     2. Each AggregateMode::Partial
-    /// │        GroubyBy         │  │         GroubyBy         │     GroupBy has an entry for *all*
+    /// │        GroupBy          │  │       GroupBy            │     GroupBy has an entry for *all*
     /// │(AggregateMode::Partial) │  │ (AggregateMode::Partial) │     the groups
     /// └─────────────────────────┘  └──────────────────────────┘
     ///              ▲                             ▲
@@ -254,7 +254,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// or more intermediate values.
     ///
     /// For some aggregates (such as `SUM`), merge_batch is the same
-    /// as `update_batch`, but for some aggregrates (such as `COUNT`)
+    /// as `update_batch`, but for some aggregates (such as `COUNT`)
     /// the operations differ. See [`Self::state`] for more details on how
     /// state is used and merged.
     ///

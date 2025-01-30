@@ -17,6 +17,8 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
+use datafusion_catalog::memory::MemorySchemaProvider;
+use datafusion_catalog::MemoryCatalogProvider;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -27,12 +29,9 @@ use crate::{
         CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
     },
     catalog_common::listing_schema::ListingSchemaProvider,
-    catalog_common::memory::MemorySchemaProvider,
-    catalog_common::MemoryCatalogProvider,
     dataframe::DataFrame,
-    datasource::{
-        function::{TableFunction, TableFunctionImpl},
-        listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
+    datasource::listing::{
+        ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
     },
     datasource::{provider_as_source, MemTable, ViewTable},
     error::{DataFusionError, Result},
@@ -74,7 +73,9 @@ use crate::datasource::dynamic_file::DynamicListTableFactory;
 use crate::execution::session_state::SessionStateBuilder;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_catalog::{DynamicFileCatalog, SessionStore, UrlTableFactory};
+use datafusion_catalog::{
+    DynamicFileCatalog, SessionStore, TableFunction, TableFunctionImpl, UrlTableFactory,
+};
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
@@ -390,8 +391,11 @@ impl SessionContext {
             current_catalog_list,
             Arc::clone(&factory) as Arc<dyn UrlTableFactory>,
         ));
+
+        let session_id = self.session_id.clone();
         let ctx: SessionContext = self
             .into_state_builder()
+            .with_session_id(session_id)
             .with_catalog_list(catalog_list)
             .build()
             .into();
@@ -1043,7 +1047,7 @@ impl SessionContext {
         Ok(table)
     }
 
-    async fn find_and_deregister<'a>(
+    async fn find_and_deregister(
         &self,
         table_ref: impl Into<TableReference>,
         table_type: TableType,
@@ -1375,6 +1379,29 @@ impl SessionContext {
         Ok(())
     }
 
+    fn register_type_check<P: DataFilePaths>(
+        &self,
+        table_paths: P,
+        extension: impl AsRef<str>,
+    ) -> Result<()> {
+        let table_paths = table_paths.to_urls()?;
+        if table_paths.is_empty() {
+            return exec_err!("No table paths were provided");
+        }
+
+        // check if the file extension matches the expected extension
+        let extension = extension.as_ref();
+        for path in &table_paths {
+            let file_path = path.as_str();
+            if !file_path.ends_with(extension) && !path.is_collection() {
+                return exec_err!(
+                    "File path '{file_path}' does not match the expected extension '{extension}'"
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Registers an Arrow file as a table that can be referenced from
     /// SQL statements executed against this context.
     pub async fn register_arrow(
@@ -1477,10 +1504,7 @@ impl SessionContext {
     /// provided reference.
     ///
     /// [`register_table`]: SessionContext::register_table
-    pub async fn table<'a>(
-        &self,
-        table_ref: impl Into<TableReference>,
-    ) -> Result<DataFrame> {
+    pub async fn table(&self, table_ref: impl Into<TableReference>) -> Result<DataFrame> {
         let table_ref: TableReference = table_ref.into();
         let provider = self.table_provider(table_ref.clone()).await?;
         let plan = LogicalPlanBuilder::scan(
@@ -1507,7 +1531,7 @@ impl SessionContext {
     }
 
     /// Return a [`TableProvider`] for the specified table.
-    pub async fn table_provider<'a>(
+    pub async fn table_provider(
         &self,
         table_ref: impl Into<TableReference>,
     ) -> Result<Arc<dyn TableProvider>> {
@@ -1791,7 +1815,6 @@ mod tests {
     use super::{super::options::CsvReadOptions, *};
     use crate::assert_batches_eq;
     use crate::execution::memory_pool::MemoryConsumer;
-    use crate::execution::runtime_env::RuntimeEnvBuilder;
     use crate::test;
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow_schema::{DataType, TimeUnit};
@@ -1903,7 +1926,7 @@ mod tests {
     #[tokio::test]
     async fn send_context_to_threads() -> Result<()> {
         // ensure SessionContexts can be used in a multi-threaded
-        // environment. Usecase is for concurrent planing.
+        // environment. Use case is for concurrent planing.
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
         let ctx = Arc::new(create_ctx(&tmp_dir, partition_count).await?);
@@ -1931,14 +1954,12 @@ mod tests {
         let path = path.join("tests/tpch-csv");
         let url = format!("file://{}", path.display());
 
-        let runtime = RuntimeEnvBuilder::new().build_arc()?;
         let cfg = SessionConfig::new()
             .set_str("datafusion.catalog.location", url.as_str())
             .set_str("datafusion.catalog.format", "CSV")
             .set_str("datafusion.catalog.has_header", "true");
         let session_state = SessionStateBuilder::new()
             .with_config(cfg)
-            .with_runtime_env(runtime)
             .with_default_features()
             .build();
         let ctx = SessionContext::new_with_state(session_state);
@@ -2222,6 +2243,16 @@ mod tests {
             "+-----------------------------+",
         ];
         assert_batches_eq!(expected, &result);
+        Ok(())
+    }
+    #[test]
+    fn preserve_session_context_id() -> Result<()> {
+        let ctx = SessionContext::new();
+        // it does make sense to preserve session id in this case
+        // as  `enable_url_table()` can be seen as additional configuration
+        // option on ctx.
+        // some systems like datafusion ballista relies on stable session_id
+        assert_eq!(ctx.session_id(), ctx.enable_url_table().session_id());
         Ok(())
     }
 

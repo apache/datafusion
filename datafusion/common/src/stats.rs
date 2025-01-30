@@ -21,7 +21,7 @@ use std::fmt::{self, Debug, Display};
 
 use crate::{Result, ScalarValue};
 
-use arrow_schema::{Schema, SchemaRef};
+use arrow_schema::{DataType, Schema, SchemaRef};
 
 /// Represents a value with a degree of certainty. `Precision` is used to
 /// propagate information the precision of statistical values.
@@ -170,22 +170,61 @@ impl Precision<ScalarValue> {
     pub fn add(&self, other: &Precision<ScalarValue>) -> Precision<ScalarValue> {
         match (self, other) {
             (Precision::Exact(a), Precision::Exact(b)) => {
-                if let Ok(result) = a.add(b) {
-                    Precision::Exact(result)
-                } else {
-                    Precision::Absent
-                }
+                a.add(b).map(Precision::Exact).unwrap_or(Precision::Absent)
             }
             (Precision::Inexact(a), Precision::Exact(b))
             | (Precision::Exact(a), Precision::Inexact(b))
-            | (Precision::Inexact(a), Precision::Inexact(b)) => {
-                if let Ok(result) = a.add(b) {
-                    Precision::Inexact(result)
-                } else {
-                    Precision::Absent
-                }
-            }
+            | (Precision::Inexact(a), Precision::Inexact(b)) => a
+                .add(b)
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
             (_, _) => Precision::Absent,
+        }
+    }
+
+    /// Calculates the difference of two (possibly inexact) [`ScalarValue`] values,
+    /// conservatively propagating exactness information. If one of the input
+    /// values is [`Precision::Absent`], the result is `Absent` too.
+    pub fn sub(&self, other: &Precision<ScalarValue>) -> Precision<ScalarValue> {
+        match (self, other) {
+            (Precision::Exact(a), Precision::Exact(b)) => {
+                a.sub(b).map(Precision::Exact).unwrap_or(Precision::Absent)
+            }
+            (Precision::Inexact(a), Precision::Exact(b))
+            | (Precision::Exact(a), Precision::Inexact(b))
+            | (Precision::Inexact(a), Precision::Inexact(b)) => a
+                .sub(b)
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
+            (_, _) => Precision::Absent,
+        }
+    }
+
+    /// Calculates the multiplication of two (possibly inexact) [`ScalarValue`] values,
+    /// conservatively propagating exactness information. If one of the input
+    /// values is [`Precision::Absent`], the result is `Absent` too.
+    pub fn multiply(&self, other: &Precision<ScalarValue>) -> Precision<ScalarValue> {
+        match (self, other) {
+            (Precision::Exact(a), Precision::Exact(b)) => a
+                .mul_checked(b)
+                .map(Precision::Exact)
+                .unwrap_or(Precision::Absent),
+            (Precision::Inexact(a), Precision::Exact(b))
+            | (Precision::Exact(a), Precision::Inexact(b))
+            | (Precision::Inexact(a), Precision::Inexact(b)) => a
+                .mul_checked(b)
+                .map(Precision::Inexact)
+                .unwrap_or(Precision::Absent),
+            (_, _) => Precision::Absent,
+        }
+    }
+
+    /// Casts the value to the given data type, propagating exactness information.
+    pub fn cast_to(&self, data_type: &DataType) -> Result<Precision<ScalarValue>> {
+        match self {
+            Precision::Exact(value) => value.cast_to(data_type).map(Precision::Exact),
+            Precision::Inexact(value) => value.cast_to(data_type).map(Precision::Inexact),
+            Precision::Absent => Ok(Precision::Absent),
         }
     }
 }
@@ -206,6 +245,18 @@ impl<T: Debug + Clone + PartialEq + Eq + PartialOrd> Display for Precision<T> {
             Precision::Exact(inner) => write!(f, "Exact({:?})", inner),
             Precision::Inexact(inner) => write!(f, "Inexact({:?})", inner),
             Precision::Absent => write!(f, "Absent"),
+        }
+    }
+}
+
+impl From<Precision<usize>> for Precision<ScalarValue> {
+    fn from(value: Precision<usize>) -> Self {
+        match value {
+            Precision::Exact(v) => Precision::Exact(ScalarValue::UInt64(Some(v as u64))),
+            Precision::Inexact(v) => {
+                Precision::Inexact(ScalarValue::UInt64(Some(v as u64)))
+            }
+            Precision::Absent => Precision::Absent,
         }
     }
 }
@@ -401,6 +452,11 @@ impl Display for Statistics {
                 } else {
                     s
                 };
+                let s = if cs.sum_value != Precision::Absent {
+                    format!("{} Sum={}", s, cs.sum_value)
+                } else {
+                    s
+                };
                 let s = if cs.null_count != Precision::Absent {
                     format!("{} Null={}", s, cs.null_count)
                 } else {
@@ -436,6 +492,8 @@ pub struct ColumnStatistics {
     pub max_value: Precision<ScalarValue>,
     /// Minimum value of column
     pub min_value: Precision<ScalarValue>,
+    /// Sum value of a column
+    pub sum_value: Precision<ScalarValue>,
     /// Number of distinct values
     pub distinct_count: Precision<usize>,
 }
@@ -458,6 +516,7 @@ impl ColumnStatistics {
             null_count: Precision::Absent,
             max_value: Precision::Absent,
             min_value: Precision::Absent,
+            sum_value: Precision::Absent,
             distinct_count: Precision::Absent,
         }
     }
@@ -469,6 +528,7 @@ impl ColumnStatistics {
         self.null_count = self.null_count.to_inexact();
         self.max_value = self.max_value.to_inexact();
         self.min_value = self.min_value.to_inexact();
+        self.sum_value = self.sum_value.to_inexact();
         self.distinct_count = self.distinct_count.to_inexact();
         self
     }
@@ -564,6 +624,26 @@ mod tests {
     }
 
     #[test]
+    fn test_add_scalar() {
+        let precision = Precision::Exact(ScalarValue::Int32(Some(42)));
+
+        assert_eq!(
+            precision.add(&Precision::Exact(ScalarValue::Int32(Some(23)))),
+            Precision::Exact(ScalarValue::Int32(Some(65))),
+        );
+        assert_eq!(
+            precision.add(&Precision::Inexact(ScalarValue::Int32(Some(23)))),
+            Precision::Inexact(ScalarValue::Int32(Some(65))),
+        );
+        assert_eq!(
+            precision.add(&Precision::Exact(ScalarValue::Int32(None))),
+            // As per behavior of ScalarValue::add
+            Precision::Exact(ScalarValue::Int32(None)),
+        );
+        assert_eq!(precision.add(&Precision::Absent), Precision::Absent);
+    }
+
+    #[test]
     fn test_sub() {
         let precision1 = Precision::Exact(42);
         let precision2 = Precision::Inexact(23);
@@ -573,6 +653,26 @@ mod tests {
         assert_eq!(precision1.sub(&precision2), Precision::Inexact(19));
         assert_eq!(precision1.sub(&precision3), Precision::Exact(12));
         assert_eq!(precision1.sub(&absent_precision), Precision::Absent);
+    }
+
+    #[test]
+    fn test_sub_scalar() {
+        let precision = Precision::Exact(ScalarValue::Int32(Some(42)));
+
+        assert_eq!(
+            precision.sub(&Precision::Exact(ScalarValue::Int32(Some(23)))),
+            Precision::Exact(ScalarValue::Int32(Some(19))),
+        );
+        assert_eq!(
+            precision.sub(&Precision::Inexact(ScalarValue::Int32(Some(23)))),
+            Precision::Inexact(ScalarValue::Int32(Some(19))),
+        );
+        assert_eq!(
+            precision.sub(&Precision::Exact(ScalarValue::Int32(None))),
+            // As per behavior of ScalarValue::sub
+            Precision::Exact(ScalarValue::Int32(None)),
+        );
+        assert_eq!(precision.sub(&Precision::Absent), Precision::Absent);
     }
 
     #[test]
@@ -586,6 +686,54 @@ mod tests {
         assert_eq!(precision1.multiply(&precision3), Precision::Exact(30));
         assert_eq!(precision2.multiply(&precision3), Precision::Inexact(15));
         assert_eq!(precision1.multiply(&absent_precision), Precision::Absent);
+    }
+
+    #[test]
+    fn test_multiply_scalar() {
+        let precision = Precision::Exact(ScalarValue::Int32(Some(6)));
+
+        assert_eq!(
+            precision.multiply(&Precision::Exact(ScalarValue::Int32(Some(5)))),
+            Precision::Exact(ScalarValue::Int32(Some(30))),
+        );
+        assert_eq!(
+            precision.multiply(&Precision::Inexact(ScalarValue::Int32(Some(5)))),
+            Precision::Inexact(ScalarValue::Int32(Some(30))),
+        );
+        assert_eq!(
+            precision.multiply(&Precision::Exact(ScalarValue::Int32(None))),
+            // As per behavior of ScalarValue::mul_checked
+            Precision::Exact(ScalarValue::Int32(None)),
+        );
+        assert_eq!(precision.multiply(&Precision::Absent), Precision::Absent);
+    }
+
+    #[test]
+    fn test_cast_to() {
+        // Valid
+        assert_eq!(
+            Precision::Exact(ScalarValue::Int32(Some(42)))
+                .cast_to(&DataType::Int64)
+                .unwrap(),
+            Precision::Exact(ScalarValue::Int64(Some(42))),
+        );
+        assert_eq!(
+            Precision::Inexact(ScalarValue::Int32(Some(42)))
+                .cast_to(&DataType::Int64)
+                .unwrap(),
+            Precision::Inexact(ScalarValue::Int64(Some(42))),
+        );
+        // Null
+        assert_eq!(
+            Precision::Exact(ScalarValue::Int32(None))
+                .cast_to(&DataType::Int64)
+                .unwrap(),
+            Precision::Exact(ScalarValue::Int64(None)),
+        );
+        // Overflow returns error
+        assert!(Precision::Exact(ScalarValue::Int32(Some(256)))
+            .cast_to(&DataType::Int8)
+            .is_err());
     }
 
     #[test]
@@ -646,6 +794,7 @@ mod tests {
             null_count: Precision::Exact(null_count),
             max_value: Precision::Exact(ScalarValue::Int64(Some(42))),
             min_value: Precision::Exact(ScalarValue::Int64(Some(64))),
+            sum_value: Precision::Exact(ScalarValue::Int64(Some(4600))),
             distinct_count: Precision::Exact(100),
         }
     }

@@ -18,7 +18,7 @@
 //! Math function: `log()`.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use super::power::PowerFunc;
 
@@ -28,14 +28,22 @@ use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     lit, ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature::*,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
+    syntax_example = r#"log(base, numeric_expression)
+log(numeric_expression)"#,
+    standard_argument(name = "base", prefix = "Base numeric"),
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct LogFunc {
     signature: Signature,
@@ -45,21 +53,6 @@ impl Default for LogFunc {
     fn default() -> Self {
         Self::new()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_log_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-            "Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.",
-            r#"log(base, numeric_expression)
-log(numeric_expression)"#)
-            .with_standard_argument("base", Some("Base numeric"))
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
-    })
 }
 
 impl LogFunc {
@@ -189,7 +182,7 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_log_doc())
+        self.doc()
     }
 
     /// Simplify the `log` function by the relevant rules:

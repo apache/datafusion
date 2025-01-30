@@ -42,8 +42,9 @@ mod custom_sources_cases;
 /// Run all tests that are found in the `optimizer` directory
 mod optimizer;
 
-/// Run all tests that are found in the `physical_optimizer` directory
 mod physical_optimizer;
+
+mod catalog;
 
 #[cfg(test)]
 #[ctor::ctor]

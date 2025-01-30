@@ -38,6 +38,7 @@ use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
     GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
+
 use indexmap::IndexMap;
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
@@ -575,10 +576,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         projection
             .into_iter()
             .map(|expr| self.sql_select_to_rex(expr, plan, empty_from, planner_context))
-            .flat_map(|result| match result {
-                Ok(vec) => vec.into_iter().map(Ok).collect(),
-                Err(err) => vec![Err(err)],
-            })
             .collect::<Result<Vec<Expr>>>()
     }
 
@@ -589,7 +586,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-    ) -> Result<Vec<Expr>> {
+    ) -> Result<Expr> {
         match sql {
             SelectItem::UnnamedExpr(expr) => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
@@ -598,7 +595,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &[&[plan.schema()]],
                     &plan.using_columns()?,
                 )?;
-                Ok(vec![col])
+                Ok(col)
             }
             SelectItem::ExprWithAlias { expr, alias } => {
                 let select_expr =
@@ -614,7 +611,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     Expr::Column(column) if column.name.eq(&name) => col,
                     _ => col.alias(name),
                 };
-                Ok(vec![expr])
+                Ok(expr)
             }
             SelectItem::Wildcard(options) => {
                 Self::check_wildcard_options(&options)?;
@@ -627,7 +624,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                     options,
                 )?;
-                Ok(vec![wildcard_with_options(planned_options)])
+                Ok(wildcard_with_options(planned_options))
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
@@ -638,10 +635,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                     options,
                 )?;
-                Ok(vec![qualified_wildcard_with_options(
-                    qualifier,
-                    planned_options,
-                )])
+                Ok(qualified_wildcard_with_options(qualifier, planned_options))
             }
         }
     }
@@ -654,6 +648,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             opt_rename,
             opt_replace: _opt_replace,
             opt_ilike: _opt_ilike,
+            wildcard_token: _wildcard_token,
         } = options;
 
         if opt_rename.is_some() {
@@ -685,13 +680,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .items
                 .iter()
                 .map(|item| {
-                    Ok(self.sql_select_to_rex(
+                    self.sql_select_to_rex(
                         SelectItem::UnnamedExpr(item.expr.clone()),
                         plan,
                         empty_from,
                         planner_context,
-                    )?[0]
-                        .clone())
+                    )
                 })
                 .collect::<Result<Vec<_>>>()?;
             let planned_replace = PlannedReplaceSelectItem {

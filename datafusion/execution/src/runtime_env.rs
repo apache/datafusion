@@ -41,13 +41,32 @@ use url::Url;
 /// Execution runtime environment that manages system resources such
 /// as memory, disk, cache and storage.
 ///
-/// A [`RuntimeEnv`] is created from a [`RuntimeEnvBuilder`] and has the
+/// A [`RuntimeEnv`] can be created using [`RuntimeEnvBuilder`] and has the
 /// following resource management functionality:
 ///
 /// * [`MemoryPool`]: Manage memory
 /// * [`DiskManager`]: Manage temporary files on local disk
 /// * [`CacheManager`]: Manage temporary cache data during the session lifetime
 /// * [`ObjectStoreRegistry`]: Manage mapping URLs to object store instances
+///
+/// # Example: Create default `RuntimeEnv`
+/// ```
+/// # use datafusion_execution::runtime_env::RuntimeEnv;
+/// let runtime_env = RuntimeEnv::default();
+/// ```
+///
+/// # Example: Create a `RuntimeEnv` from [`RuntimeEnvBuilder`] with a new memory pool
+/// ```
+/// # use std::sync::Arc;
+/// # use datafusion_execution::memory_pool::GreedyMemoryPool;
+/// # use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+/// // restrict to using at most 100MB of memory
+/// let pool_size = 100 * 1024 * 1024;
+/// let runtime_env = RuntimeEnvBuilder::new()
+///   .with_memory_pool(Arc::new(GreedyMemoryPool::new(pool_size)))
+///   .build()
+///   .unwrap();
+/// ```
 pub struct RuntimeEnv {
     /// Runtime memory management
     pub memory_pool: Arc<dyn MemoryPool>,
@@ -66,28 +85,16 @@ impl Debug for RuntimeEnv {
 }
 
 impl RuntimeEnv {
-    #[deprecated(since = "43.0.0", note = "please use `try_new` instead")]
+    #[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
+    #[allow(deprecated)]
     pub fn new(config: RuntimeConfig) -> Result<Self> {
         Self::try_new(config)
     }
     /// Create env based on configuration
+    #[deprecated(since = "44.0.0", note = "please use `RuntimeEnvBuilder` instead")]
+    #[allow(deprecated)]
     pub fn try_new(config: RuntimeConfig) -> Result<Self> {
-        let RuntimeConfig {
-            memory_pool,
-            disk_manager,
-            cache_manager,
-            object_store_registry,
-        } = config;
-
-        let memory_pool =
-            memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
-
-        Ok(Self {
-            memory_pool,
-            disk_manager: DiskManager::try_new(disk_manager)?,
-            cache_manager: CacheManager::try_new(&cache_manager)?,
-            object_store_registry,
-        })
+        config.build()
     }
 
     /// Registers a custom `ObjectStore` to be used with a specific url.
@@ -104,26 +111,26 @@ impl RuntimeEnv {
     /// # use std::sync::Arc;
     /// # use url::Url;
     /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # let runtime_env = RuntimeEnv::try_new(Default::default()).unwrap();
+    /// # let runtime_env = RuntimeEnv::default();
     /// let url = Url::try_from("file://").unwrap();
     /// let object_store = object_store::local::LocalFileSystem::new();
     /// // register the object store with the runtime environment
     /// runtime_env.register_object_store(&url, Arc::new(object_store));
     /// ```
     ///
-    /// # Example: Register local file system object store
+    /// # Example: Register remote URL object store like [Github](https://github.com)
     ///
-    /// To register reading from urls such as <https://github.com>`
     ///
     /// ```
     /// # use std::sync::Arc;
     /// # use url::Url;
     /// # use datafusion_execution::runtime_env::RuntimeEnv;
-    /// # let runtime_env = RuntimeEnv::try_new(Default::default()).unwrap();
+    /// # let runtime_env = RuntimeEnv::default();
     /// # // use local store for example as http feature is not enabled
     /// # let http_store = object_store::local::LocalFileSystem::new();
     /// // create a new object store via object_store::http::HttpBuilder;
     /// let base_url = Url::parse("https://github.com").unwrap();
+    /// // (note this example can't depend on the http feature)
     /// // let http_store = HttpBuilder::new()
     /// //    .with_url(base_url.clone())
     /// //    .build()
@@ -157,10 +164,13 @@ impl Default for RuntimeEnv {
 
 /// Please see: <https://github.com/apache/datafusion/issues/12156>
 /// This a type alias for backwards compatibility.
+#[deprecated(since = "43.0.0", note = "please use `RuntimeEnvBuilder` instead")]
 pub type RuntimeConfig = RuntimeEnvBuilder;
 
 #[derive(Clone)]
-/// Execution runtime configuration
+/// Execution runtime configuration builder.
+///
+/// See example on [`RuntimeEnv`]
 pub struct RuntimeEnvBuilder {
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: DiskManagerConfig,
@@ -239,15 +249,20 @@ impl RuntimeEnvBuilder {
 
     /// Build a RuntimeEnv
     pub fn build(self) -> Result<RuntimeEnv> {
-        let memory_pool = self
-            .memory_pool
-            .unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
+        let Self {
+            disk_manager,
+            memory_pool,
+            cache_manager,
+            object_store_registry,
+        } = self;
+        let memory_pool =
+            memory_pool.unwrap_or_else(|| Arc::new(UnboundedMemoryPool::default()));
 
         Ok(RuntimeEnv {
             memory_pool,
-            disk_manager: DiskManager::try_new(self.disk_manager)?,
-            cache_manager: CacheManager::try_new(&self.cache_manager)?,
-            object_store_registry: self.object_store_registry,
+            disk_manager: DiskManager::try_new(disk_manager)?,
+            cache_manager: CacheManager::try_new(&cache_manager)?,
+            object_store_registry,
         })
     }
 

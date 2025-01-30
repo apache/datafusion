@@ -20,11 +20,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{DisplayAs, ExecutionMode, ExecutionPlanProperties, PlanProperties};
+use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
 use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
+use crate::execution_plan::{CardinalityEffect, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::get_field_metadata;
 use crate::windows::get_ordered_partition_by_indices;
@@ -38,18 +39,16 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
+use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
-    equivalence::{collapse_lex_req, ProjectionMapping},
-    expressions::Column,
-    physical_exprs_contains, EquivalenceProperties, LexOrdering, LexRequirement,
-    PhysicalExpr, PhysicalSortRequirement,
+    equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
+    EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
+    PhysicalSortRequirement,
 };
 
-use crate::execution_plan::CardinalityEffect;
-use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use itertools::Itertools;
 
 pub(crate) mod group_values;
@@ -249,6 +248,10 @@ impl PhysicalGroupBy {
         } else {
             self.expr.len() + 1
         }
+    }
+
+    pub fn group_schema(&self, schema: &Schema) -> Result<SchemaRef> {
+        Ok(Arc::new(Schema::new(self.group_fields(schema)?)))
     }
 
     /// Returns the fields that are used as the grouping keys.
@@ -473,7 +476,7 @@ impl AggregateExec {
             &mode,
         )?;
         new_requirement.inner.extend(req);
-        new_requirement = collapse_lex_req(new_requirement);
+        new_requirement = new_requirement.collapse();
 
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each
@@ -497,7 +500,7 @@ impl AggregateExec {
         };
 
         // construct a map from the input expression to the output expression of the Aggregation group by
-        let projection_mapping =
+        let group_expr_mapping =
             ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
 
         let required_input_ordering =
@@ -506,7 +509,7 @@ impl AggregateExec {
         let cache = Self::compute_properties(
             &input,
             Arc::clone(&schema),
-            &projection_mapping,
+            &group_expr_mapping,
             &mode,
             &input_order_mode,
         );
@@ -642,14 +645,33 @@ impl AggregateExec {
     pub fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-        projection_mapping: &ProjectionMapping,
+        group_expr_mapping: &ProjectionMapping,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
     ) -> PlanProperties {
         // Construct equivalence properties:
-        let eq_properties = input
+        let mut eq_properties = input
             .equivalence_properties()
-            .project(projection_mapping, schema);
+            .project(group_expr_mapping, schema);
+
+        // Group by expression will be a distinct value after the aggregation.
+        // Add it into the constraint set.
+        let mut constraints = eq_properties.constraints().to_vec();
+        let new_constraint = Constraint::Unique(
+            group_expr_mapping
+                .map
+                .iter()
+                .filter_map(|(_, target_col)| {
+                    target_col
+                        .as_any()
+                        .downcast_ref::<Column>()
+                        .map(|c| c.index())
+                })
+                .collect(),
+        );
+        constraints.push(new_constraint);
+        eq_properties =
+            eq_properties.with_constraints(Constraints::new_unverified(constraints));
 
         // Get output partitioning:
         let input_partitioning = input.output_partitioning().clone();
@@ -658,21 +680,24 @@ impl AggregateExec {
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
             let input_eq_properties = input.equivalence_properties();
-            input_partitioning.project(projection_mapping, input_eq_properties)
+            input_partitioning.project(group_expr_mapping, input_eq_properties)
         } else {
             input_partitioning.clone()
         };
 
-        // Determine execution mode:
-        let mut exec_mode = input.execution_mode();
-        if exec_mode == ExecutionMode::Unbounded
-            && *input_order_mode == InputOrderMode::Linear
-        {
-            // Cannot run without breaking the pipeline
-            exec_mode = ExecutionMode::PipelineBreaking;
-        }
+        // TODO: Emission type and boundedness information can be enhanced here
+        let emission_type = if *input_order_mode == InputOrderMode::Linear {
+            EmissionType::Final
+        } else {
+            input.pipeline_behavior()
+        };
 
-        PlanProperties::new(eq_properties, output_partitioning, exec_mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            input.boundedness(),
+        )
     }
 
     pub fn input_order_mode(&self) -> &InputOrderMode {
@@ -787,6 +812,19 @@ impl ExecutionPlan for AggregateExec {
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
         vec![self.required_input_ordering.clone()]
+    }
+
+    /// The output ordering of [`AggregateExec`] is determined by its `group_by`
+    /// columns. Although this method is not explicitly used by any optimizer
+    /// rules yet, overriding the default implementation ensures that it
+    /// accurately reflects the actual behavior.
+    ///
+    /// If the [`InputOrderMode`] is `Linear`, the `group_by` columns don't have
+    /// an ordering, which means the results do not either. However, in the
+    /// `Ordered` and `PartiallyOrdered` cases, the `group_by` columns do have
+    /// an ordering, which is preserved in the output.
+    fn maintains_input_order(&self) -> Vec<bool> {
+        vec![self.input_order_mode != InputOrderMode::Linear]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -907,10 +945,6 @@ fn create_schema(
         fields,
         input_schema.metadata().clone(),
     ))
-}
-
-fn group_schema(input_schema: &Schema, group_by: &PhysicalGroupBy) -> Result<SchemaRef> {
-    Ok(Arc::new(Schema::new(group_by.group_fields(input_schema)?)))
 }
 
 /// Determines the lexical ordering requirement for an aggregate expression.
@@ -1298,8 +1332,10 @@ mod tests {
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::common;
+    use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
+    use crate::metrics::MetricValue;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::RecordBatchStream;
@@ -1429,7 +1465,7 @@ mod tests {
 
     fn new_spill_ctx(batch_size: usize, max_memory: usize) -> Arc<TaskContext> {
         let session_config = SessionConfig::new().with_batch_size(batch_size);
-        let runtime = RuntimeEnvBuilder::default()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_pool(Arc::new(FairSpillPool::new(max_memory)))
             .build_arc()
             .unwrap();
@@ -1730,13 +1766,11 @@ mod tests {
 
         /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
         fn compute_properties(schema: SchemaRef) -> PlanProperties {
-            let eq_properties = EquivalenceProperties::new(schema);
             PlanProperties::new(
-                eq_properties,
-                // Output Partitioning
+                EquivalenceProperties::new(schema),
                 Partitioning::UnknownPartitioning(1),
-                // Execution Mode
-                ExecutionMode::Bounded,
+                EmissionType::Incremental,
+                Boundedness::Bounded,
             )
         }
     }
@@ -1914,7 +1948,7 @@ mod tests {
         let input: Arc<dyn ExecutionPlan> = Arc::new(TestYieldingExec::new(true));
         let input_schema = input.schema();
 
-        let runtime = RuntimeEnvBuilder::default()
+        let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(1, 1.0)
             .build_arc()?;
         let task_ctx = TaskContext::default().with_runtime(runtime);
@@ -2436,25 +2470,21 @@ mod tests {
                     "labels".to_string(),
                     DataType::Struct(
                         vec![
-                            Field::new_dict(
+                            Field::new(
                                 "a".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                                0,
-                                false,
                             ),
-                            Field::new_dict(
+                            Field::new(
                                 "b".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                                0,
-                                false,
                             ),
                         ]
                         .into(),
@@ -2466,15 +2496,13 @@ mod tests {
             vec![
                 Arc::new(StructArray::from(vec![
                     (
-                        Arc::new(Field::new_dict(
+                        Arc::new(Field::new(
                             "a".to_string(),
                             DataType::Dictionary(
                                 Box::new(DataType::Int32),
                                 Box::new(DataType::Utf8),
                             ),
                             true,
-                            0,
-                            false,
                         )),
                         Arc::new(
                             vec![Some("a"), None, Some("a")]
@@ -2483,15 +2511,13 @@ mod tests {
                         ) as ArrayRef,
                     ),
                     (
-                        Arc::new(Field::new_dict(
+                        Arc::new(Field::new(
                             "b".to_string(),
                             DataType::Dictionary(
                                 Box::new(DataType::Int32),
                                 Box::new(DataType::Utf8),
                             ),
                             true,
-                            0,
-                            false,
                         )),
                         Arc::new(
                             vec![Some("b"), Some("c"), Some("b")]
@@ -2766,6 +2792,139 @@ mod tests {
             Field::new("COUNT(a)", DataType::Int64, false),
         ]);
         assert_eq!(aggr_schema, expected_schema);
+        Ok(())
+    }
+
+    // test for https://github.com/apache/datafusion/issues/13949
+    async fn run_test_with_spill_pool_if_necessary(
+        pool_size: usize,
+        expect_spill: bool,
+    ) -> Result<()> {
+        fn create_record_batch(
+            schema: &Arc<Schema>,
+            data: (Vec<u32>, Vec<f64>),
+        ) -> Result<RecordBatch> {
+            Ok(RecordBatch::try_new(
+                Arc::clone(schema),
+                vec![
+                    Arc::new(UInt32Array::from(data.0)),
+                    Arc::new(Float64Array::from(data.1)),
+                ],
+            )?)
+        }
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
+        ]));
+
+        let batches = vec![
+            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+            create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
+        ];
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(MemoryExec::try_new(&[batches], Arc::clone(&schema), None)?);
+
+        let grouping_set = PhysicalGroupBy::new(
+            vec![(col("a", &schema)?, "a".to_string())],
+            vec![],
+            vec![vec![false]],
+        );
+
+        // Test with MIN for simple intermediate state (min) and AVG for multiple intermediate states (partial sum, partial count).
+        let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
+            Arc::new(
+                AggregateExprBuilder::new(
+                    datafusion_functions_aggregate::min_max::min_udaf(),
+                    vec![col("b", &schema)?],
+                )
+                .schema(Arc::clone(&schema))
+                .alias("MIN(b)")
+                .build()?,
+            ),
+            Arc::new(
+                AggregateExprBuilder::new(avg_udaf(), vec![col("b", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("AVG(b)")
+                    .build()?,
+            ),
+        ];
+
+        let single_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Single,
+            grouping_set,
+            aggregates,
+            vec![None, None],
+            plan,
+            Arc::clone(&schema),
+        )?);
+
+        let batch_size = 2;
+        let memory_pool = Arc::new(FairSpillPool::new(pool_size));
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(batch_size))
+                .with_runtime(Arc::new(
+                    RuntimeEnvBuilder::new()
+                        .with_memory_pool(memory_pool)
+                        .build()?,
+                )),
+        );
+
+        let result = collect(single_aggregate.execute(0, Arc::clone(&task_ctx))?).await?;
+
+        assert_spill_count_metric(expect_spill, single_aggregate);
+
+        #[rustfmt::skip]
+        assert_batches_sorted_eq!(
+            [
+                "+---+--------+--------+",
+                "| a | MIN(b) | AVG(b) |",
+                "+---+--------+--------+",
+                "| 2 | 1.0    | 1.0    |",
+                "| 3 | 2.0    | 2.0    |",
+                "| 4 | 3.0    | 3.5    |",
+                "+---+--------+--------+",
+            ],
+            &result
+        );
+
+        Ok(())
+    }
+
+    fn assert_spill_count_metric(
+        expect_spill: bool,
+        single_aggregate: Arc<AggregateExec>,
+    ) {
+        if let Some(metrics_set) = single_aggregate.metrics() {
+            let mut spill_count = 0;
+
+            // Inspect metrics for SpillCount
+            for metric in metrics_set.iter() {
+                if let MetricValue::SpillCount(count) = metric.value() {
+                    spill_count = count.value();
+                    break;
+                }
+            }
+
+            if expect_spill && spill_count == 0 {
+                panic!(
+                    "Expected spill but SpillCount metric not found or SpillCount was 0."
+                );
+            } else if !expect_spill && spill_count > 0 {
+                panic!("Expected no spill but found SpillCount metric with value greater than 0.");
+            }
+        } else {
+            panic!("No metrics returned from the operator; cannot verify spilling.");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_aggregate_with_spill_if_necessary() -> Result<()> {
+        // test with spill
+        run_test_with_spill_pool_if_necessary(2_000, true).await?;
+        // test without spill
+        run_test_with_spill_pool_if_necessary(20_000, false).await?;
         Ok(())
     }
 }
