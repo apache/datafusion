@@ -126,7 +126,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// ]);
 ///
 /// let df_schema = DFSchema::new_with_metadata(
-///  vec![(None, Field::new("c1", DataType::Int32, false).into())]);
+///  vec![(None, Field::new("c1", DataType::Int32, false).into())], HashMap::new());
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFSchema {
@@ -210,12 +210,13 @@ impl QualifiedSchema {
     ///
     /// For example, to create a schema for a table with all fields qualified by `table_name`:
     /// ```rust
+    /// use std::sync::Arc;
     /// use datafusion_common::{QualifiedSchema, TableReference};
     /// use arrow_schema::{Field, Schema};
     /// use arrow::datatypes::DataType;
-    /// let schema = Schema::new(vec![
+    /// let schema = Arc::new(Schema::new(vec![
     ///    Field::new("c1", DataType::Int32, false),
-    /// ]);
+    /// ]));
     /// let table_name = TableReference::from("table_name");
     /// let qualified_schema = QualifiedSchema::new_with_table(schema, &table_name);
     /// ```
