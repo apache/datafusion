@@ -298,7 +298,7 @@ pub enum Expr {
     /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
-    WindowFunction(Box<WindowFunction>), // Boxed as it is large (272 bytes)
+    WindowFunction(Box<WindowFunction>), // Boxed as it is large (>= 272 bytes)
     /// Returns whether the list contains the expr value.
     InList(InList),
     /// EXISTS subquery
