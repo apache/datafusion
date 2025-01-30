@@ -326,59 +326,6 @@ pub fn aggregate_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     )
 }
 
-pub fn aggregate_exec_set_monotonic(
-    input: Arc<dyn ExecutionPlan>,
-    group_by: Vec<(Arc<dyn PhysicalExpr>, String)>,
-) -> Arc<dyn ExecutionPlan> {
-    let schema = input.schema();
-    let aggregate_expr =
-        vec![
-            AggregateExprBuilder::new(count_udaf(), vec![col("d", &schema).unwrap()])
-                .schema(Arc::clone(&schema))
-                .alias("count")
-                .build()
-                .map(Arc::new)
-                .unwrap(),
-        ];
-    Arc::new(
-        AggregateExec::try_new(
-            AggregateMode::Single,
-            PhysicalGroupBy::new_single(group_by),
-            aggregate_expr,
-            vec![None],
-            input,
-            schema,
-        )
-        .unwrap(),
-    )
-}
-
-pub fn aggregate_exec_non_set_monotonic(
-    input: Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
-    let schema = input.schema();
-    let aggregate_expr =
-        vec![
-            AggregateExprBuilder::new(avg_udaf(), vec![col("d", &schema).unwrap()])
-                .schema(Arc::clone(&schema))
-                .alias("avg")
-                .build()
-                .map(Arc::new)
-                .unwrap(),
-        ];
-    Arc::new(
-        AggregateExec::try_new(
-            AggregateMode::Single,
-            PhysicalGroupBy::default(),
-            aggregate_expr,
-            vec![None],
-            input,
-            schema,
-        )
-        .unwrap(),
-    )
-}
-
 pub fn coalesce_batches_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     Arc::new(CoalesceBatchesExec::new(input, 128))
 }

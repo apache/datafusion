@@ -18,8 +18,7 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    aggregate_exec, aggregate_exec_non_set_monotonic, aggregate_exec_set_monotonic,
-    bounded_window_exec, bounded_window_exec_non_set_monotonic,
+    aggregate_exec, bounded_window_exec, bounded_window_exec_non_set_monotonic,
     bounded_window_exec_with_partition, check_integrity, coalesce_batches_exec,
     coalesce_partitions_exec, create_test_schema, create_test_schema2,
     create_test_schema3, create_test_schema4, filter_exec, global_limit_exec,
