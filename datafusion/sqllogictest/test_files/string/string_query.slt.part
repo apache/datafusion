@@ -74,6 +74,14 @@ true true
 NULL NULL
 NULL NULL
 
+# Coercion to date/time
+query BBB
+select ts = '2024-08-09T12:13:14'::timestamp, d = '2024-08-08'::date, t = '12:13:14'::time from test_datetime;
+----
+true false true
+false false false
+NULL NULL NULL
+
 # --------------------------------------
 # column comparison as filters
 # --------------------------------------
