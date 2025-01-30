@@ -43,7 +43,7 @@ use crate::expressions::Column;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow_schema::SortOptions;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr::{AggregateExprSetMonotonicity, AggregateUDF, ReversedUDAF};
+use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
 use datafusion_expr_common::type_coercion::aggregates::check_arg_count;
@@ -537,8 +537,8 @@ impl AggregateFunctionExpr {
     }
 
     /// Indicates whether the aggregation function is monotonic as a set
-    /// function. See [`AggregateExprSetMonotonicity`] for details.
-    pub fn set_monotonicity(&self) -> AggregateExprSetMonotonicity {
+    /// function. See [`SetMonotonicity`] for details.
+    pub fn set_monotonicity(&self) -> SetMonotonicity {
         let field = self.field();
         let data_type = field.data_type();
         self.fun.inner().set_monotonicity(data_type)
@@ -549,14 +549,12 @@ impl AggregateFunctionExpr {
         // If the aggregate expressions are set-monotonic, the output data is
         // naturally ordered with it per group or partition.
         let monotonicity = self.set_monotonicity();
-        if monotonicity == AggregateExprSetMonotonicity::NotMonotonic {
+        if monotonicity == SetMonotonicity::NotMonotonic {
             return None;
         }
         let expr = Arc::new(Column::new(self.name(), aggr_func_idx));
-        let options = SortOptions::new(
-            monotonicity == AggregateExprSetMonotonicity::Decreasing,
-            false,
-        );
+        let options =
+            SortOptions::new(monotonicity == SetMonotonicity::Decreasing, false);
         Some(PhysicalSortExpr { expr, options })
     }
 }

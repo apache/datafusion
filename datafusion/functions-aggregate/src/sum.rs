@@ -38,8 +38,8 @@ use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
-    Accumulator, AggregateExprSetMonotonicity, AggregateUDFImpl, Documentation,
-    GroupsAccumulator, ReversedUDAF, Signature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
+    SetMonotonicity, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::utils::Hashable;
@@ -255,15 +255,15 @@ impl AggregateUDFImpl for Sum {
         self.doc()
     }
 
-    fn set_monotonicity(&self, data_type: &DataType) -> AggregateExprSetMonotonicity {
+    fn set_monotonicity(&self, data_type: &DataType) -> SetMonotonicity {
         // `SUM` is only monotonically increasing when its input is unsigned.
         // TODO: Expand these utilizing statistics.
         match data_type {
-            DataType::UInt8 => AggregateExprSetMonotonicity::Increasing,
-            DataType::UInt16 => AggregateExprSetMonotonicity::Increasing,
-            DataType::UInt32 => AggregateExprSetMonotonicity::Increasing,
-            DataType::UInt64 => AggregateExprSetMonotonicity::Increasing,
-            _ => AggregateExprSetMonotonicity::NotMonotonic,
+            DataType::UInt8 => SetMonotonicity::Increasing,
+            DataType::UInt16 => SetMonotonicity::Increasing,
+            DataType::UInt32 => SetMonotonicity::Increasing,
+            DataType::UInt64 => SetMonotonicity::Increasing,
+            _ => SetMonotonicity::NotMonotonic,
         }
     }
 }

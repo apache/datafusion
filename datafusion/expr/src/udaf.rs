@@ -637,9 +637,9 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     }
 
     /// Indicates whether the aggregation function is monotonic as a set
-    /// function. See [`AggregateExprSetMonotonicity`] for details.
-    fn set_monotonicity(&self, _data_type: &DataType) -> AggregateExprSetMonotonicity {
-        AggregateExprSetMonotonicity::NotMonotonic
+    /// function. See [`SetMonotonicity`] for details.
+    fn set_monotonicity(&self, _data_type: &DataType) -> SetMonotonicity {
+        SetMonotonicity::NotMonotonic
     }
 }
 
@@ -835,7 +835,7 @@ pub mod aggregate_doc_sections {
 /// the other hand, `MIN` is monotonically decreasing as its value always
 /// decreases or stays the same as new values are seen.
 #[derive(Debug, Clone, PartialEq)]
-pub enum AggregateExprSetMonotonicity {
+pub enum SetMonotonicity {
     /// Aggregate value increases or stays the same as the input set grows.
     Increasing,
     /// Aggregate value decreases or stays the same as the input set grows.
