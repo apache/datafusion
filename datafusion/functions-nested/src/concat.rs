@@ -29,8 +29,7 @@ use datafusion_common::{
     cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
