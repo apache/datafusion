@@ -6029,6 +6029,15 @@ select list_has_all(make_array(1,2,3), make_array(4,5,6)),
 ----
 false true false true
 
+query BBBB
+select arrays_overlap(make_array(1,2,3), make_array(4,5,6)),
+        arrays_overlap(make_array(1,2,3), make_array(1,2,4)),
+        arrays_overlap(make_array(['aa']), make_array(['aa'],['bb'])),
+        arrays_overlap(make_array('aa',NULL), make_array('bb',NULL))
+;
+----
+false true true true
+
 query ???
 select range(column2),
        range(column1, column2),
