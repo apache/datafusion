@@ -45,7 +45,7 @@ jobs:
     name: Check License Header
     steps:
       - uses: actions/checkout@v4
-      - uses: korandoru/hawkeye@v5
+      - uses: korandoru/hawkeye@v6
 
   # Check crate compiles and base cargo check passes
   linux-build-lib:
