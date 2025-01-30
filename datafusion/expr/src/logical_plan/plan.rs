@@ -373,7 +373,7 @@ impl LogicalPlan {
     /// Gather the schema representating the metadata columns that this plan outputs.
     /// This is done by recursively traversing the plan and collecting the metadata columns that are output
     /// from inner nodes.
-    /// See [`TableProvider::metadata_columns`] for more information on metadata columns in general.
+    /// See [TableProvider](../catalog/trait.TableProvider.html#method.metadata_columns) for more information on metadata columns in general.
     pub fn metadata_schema(&self) -> &Option<QualifiedSchema> {
         match self {
             LogicalPlan::TableScan(TableScan {

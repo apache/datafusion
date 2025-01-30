@@ -58,7 +58,7 @@ impl TableSource for DefaultTableSource {
 
     /// Get a reference to the metadata columns for this table.
     /// By default this delegate to the table provider, but can be overridden by the table source.
-    /// See [`TableProvider::metadata_columns`] for more information.
+    /// See [`crate::datasource::TableProvider::metadata_columns`] for more information.
     fn metadata_columns(&self) -> Option<SchemaRef> {
         self.table_provider.metadata_columns()
     }

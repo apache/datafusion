@@ -126,7 +126,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// ]);
 ///
 /// let df_schema = DFSchema::new_with_metadata(
-///  vec![(None, Field::new("c1", DataType::Int32, false).into())],
+///  vec![(None, Field::new("c1", DataType::Int32, false).into())]);
 ///
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DFSchema {
@@ -362,8 +362,8 @@ impl DFSchema {
     /// For example, the [`ctid` column in Postgres](https://www.postgresql.org/docs/current/ddl-system-columns.html)
     /// or the [`_metadata` column that in Spark](https://docs.databricks.com/en/ingestion/file-metadata-column.html).
     ///
-    /// Implementers of [`datafusion::datasource::TableProvider`] can use this declare which columns in the table are "metadata" columns.
-    /// See also [`datafusion::datasource::TableProvider::metadata_columns`] for more information or `datafusion/core/tests/sql/metadata_columns.rs` for a full example.
+    /// Implementers of [TableProvider](../catalog/trait.TableProvider.html) can use this declare which columns in the table are "metadata" columns.
+    /// See also [TableProvider](../catalog/trait.TableProvider.html#method.metadata_columns) for more information or `datafusion/core/tests/sql/metadata_columns.rs` for a full example.
     ///
     /// Returns:
     /// - `&None` for tables that do not have metadata columns.
