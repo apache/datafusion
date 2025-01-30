@@ -29,9 +29,7 @@ use arrow::datatypes::{
     DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 use datafusion_common::types::NativeType;
-use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err, Result,
-};
+use datafusion_common::{exec_err, internal_err, plan_datafusion_err, plan_err, Result};
 use itertools::Itertools;
 
 /// The type signature of an instantiation of binary operator expression such as
@@ -867,54 +865,6 @@ fn get_wider_decimal_type(
         }
         (_, _) => None,
     }
-}
-
-/// Returns the wider type among arguments `lhs` and `rhs`.
-/// The wider type is the type that can safely represent values from both types
-/// without information loss. Returns an Error if types are incompatible.
-pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
-    use arrow::datatypes::DataType::*;
-    Ok(match (lhs, rhs) {
-        (lhs, rhs) if lhs == rhs => lhs.clone(),
-        // Right UInt is larger than left UInt.
-        (UInt8, UInt16 | UInt32 | UInt64) | (UInt16, UInt32 | UInt64) | (UInt32, UInt64) |
-        // Right Int is larger than left Int.
-        (Int8, Int16 | Int32 | Int64) | (Int16, Int32 | Int64) | (Int32, Int64) |
-        // Right Float is larger than left Float.
-        (Float16, Float32 | Float64) | (Float32, Float64) |
-        // Right String is larger than left String.
-        (Utf8, LargeUtf8) |
-        // Any right type is wider than a left hand side Null.
-        (Null, _) => rhs.clone(),
-        // Left UInt is larger than right UInt.
-        (UInt16 | UInt32 | UInt64, UInt8) | (UInt32 | UInt64, UInt16) | (UInt64, UInt32) |
-        // Left Int is larger than right Int.
-        (Int16 | Int32 | Int64, Int8) | (Int32 | Int64, Int16) | (Int64, Int32) |
-        // Left Float is larger than right Float.
-        (Float32 | Float64, Float16) | (Float64, Float32) |
-        // Left String is larger than right String.
-        (LargeUtf8, Utf8) |
-        // Any left type is wider than a right hand side Null.
-        (_, Null) => lhs.clone(),
-        (List(lhs_field), List(rhs_field)) => {
-            let field_type =
-                get_wider_type(lhs_field.data_type(), rhs_field.data_type())?;
-            if lhs_field.name() != rhs_field.name() {
-                return Err(exec_datafusion_err!(
-                    "There is no wider type that can represent both {lhs} and {rhs}."
-                ));
-            }
-            assert_eq!(lhs_field.name(), rhs_field.name());
-            let field_name = lhs_field.name();
-            let nullable = lhs_field.is_nullable() | rhs_field.is_nullable();
-            List(Arc::new(Field::new(field_name, field_type, nullable)))
-        }
-        (_, _) => {
-            return Err(exec_datafusion_err!(
-                "There is no wider type that can represent both {lhs} and {rhs}."
-            ));
-        }
-    })
 }
 
 /// Convert the numeric data type to the decimal data type.

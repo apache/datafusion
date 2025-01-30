@@ -2876,14 +2876,14 @@ select array_concat(
 [1, 2, 3]
 
 # Concatenating Mixed types (doesn't work)
-query error DataFusion error: Arrow error: Invalid argument error: It is not possible to concatenate arrays of different data types\.
+query error DataFusion error: Error during planning: It is not possible to concatenate arrays of different types\. Expected: List\(Field \{ name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), got: List\(Field \{ name: "item", data_type: LargeUtf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select array_concat(
   [arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')],
   [arrow_cast('3', 'LargeUtf8')]
 );
 
 # Concatenating Mixed types (doesn't work)
-query error DataFusion error: Execution error: There is no wider type that can represent both Utf8 and Utf8View\.
+query error DataFusion error: Error during planning: It is not possible to concatenate arrays of different types\. Expected: List\(Field \{ name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), got: List\(Field \{ name: "item", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
 select array_concat(
   [arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')],
   [arrow_cast('3', 'Utf8View')]
