@@ -495,7 +495,7 @@ async fn test_select_system_column() {
     let batch = record_batch!(
         ("other_id", UInt8, [1, 2, 3]),
         ("bank_account", UInt64, [9, 10, 11]),
-        ("_row_id", UInt32, [10, 11, 12])  // not a system column!
+        ("_row_id", UInt32, [10, 11, 12]) // not a system column!
     )
     .unwrap();
     let _ = ctx.register_batch("test2", batch);
