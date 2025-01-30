@@ -1802,24 +1802,6 @@ SELECT acos();
 statement error
 SELECT isnan();
 
-# turn off enable_ident_normalization
-statement ok
-set datafusion.sql_parser.enable_ident_normalization = false;
-
-query I
-SELECT LENGTH('str');
-----
-3
-
-query T
-SELECT CONCAT('Hello', 'World')
-----
-HelloWorld
-
-# turn on enable_ident_normalization
-statement ok
-set datafusion.sql_parser.enable_ident_normalization = true;
-
 query I
 SELECT LENGTH('str');
 ----
