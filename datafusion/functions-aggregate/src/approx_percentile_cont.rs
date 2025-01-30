@@ -53,12 +53,13 @@ create_func!(ApproxPercentileCont, approx_percentile_cont_udaf);
 
 /// Computes the approximate percentile continuous of a set of numbers
 pub fn approx_percentile_cont(
-    within_group: Vec<Sort>,
+    within_group: Option<Vec<Sort>>,
     percentile: Expr,
     centroids: Option<Expr>,
 ) -> Expr {
     let expr = within_group
-        .first()
+        .as_ref()
+        .and_then(|v| v.first())
         .map(|sort| sort.expr.clone())
         .unwrap_or_default();
 
@@ -75,7 +76,7 @@ pub fn approx_percentile_cont(
         None,
         None,
         None,
-        Some(within_group),
+        within_group,
     ))
 }
 
