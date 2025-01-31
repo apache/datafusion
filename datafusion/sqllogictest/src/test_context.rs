@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -27,7 +28,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volatility};
+use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion::{
@@ -37,7 +38,7 @@ use datafusion::{
 use datafusion_catalog::CatalogProvider;
 use datafusion_catalog::{memory::MemoryCatalogProvider, memory::MemorySchemaProvider};
 use datafusion_common::cast::as_float64_array;
-use datafusion_common::DataFusionError;
+use datafusion_common::{plan_err, Result, DataFusionError};
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
@@ -112,6 +113,10 @@ impl TestContext {
             "metadata.slt" => {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx()).await;
+            }
+            "case.slt" => {
+                info!("Registering case conversaion");
+                register_to_large_list(test_ctx.session_ctx());
             }
             _ => {
                 info!("Using default SessionContext");
@@ -214,7 +219,7 @@ pub async fn register_temp_table(ctx: &SessionContext) {
 
     #[async_trait]
     impl TableProvider for TestTable {
-        fn as_any(&self) -> &dyn std::any::Any {
+        fn as_any(&self) -> &dyn Any {
             self
         }
 
@@ -401,4 +406,59 @@ fn create_example_udf() -> ScalarUDF {
         Volatility::Immutable,
         adder,
     )
+}
+
+fn register_to_large_list(ctx: &SessionContext) {
+    ctx.register_udf(ScalarUDF::from(ToLargeList::new()))
+}
+
+/// `to_large_list()` converts its argument `ListArray` to a `LargeListArray`
+#[derive(Debug)]
+struct ToLargeList {
+    signature: Signature
+}
+
+impl ToLargeList {
+    fn new() -> Self {
+        Self {
+            signature: Signature::array(Volatility::Immutable)
+        }
+    }
+}
+impl ScalarUDFImpl for ToLargeList {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "to_large_list"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        if arg_types.len() != 1  {
+            return plan_err!("to_large_list() takes exactly one argument");
+        }
+        let DataType::List(field) = &arg_types[0] else {
+            return plan_err!("to_large_list() takes a list as its argument");
+        };
+
+        Ok(DataType::LargeList(Arc::clone(field)))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match &args.args[0] {
+            ColumnarValue::Array(array) => {
+                let cast_array = arrow::compute::cast(array, args.return_type)?;
+                Ok(ColumnarValue::Array(cast_array))
+            }
+            ColumnarValue::Scalar(scalar) => {
+                let cast_scalar = scalar.cast_to(args.return_type)?;
+                Ok(ColumnarValue::Scalar(cast_scalar))
+            }
+        }
+    }
 }

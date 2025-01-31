@@ -308,3 +308,84 @@ NULL NULL false
 
 statement ok
 drop table foo
+
+####
+#### Case with structs with subfields that need to be coerced
+#####
+
+statement ok
+create table t as values
+(
+ true,                                       -- column1 boolean (so the case isn't constant folded)
+ [{ 'foo': 'bar' }],                         -- column2 has List of Struct w/ Utf8
+ [{ 'foo': arrow_cast('bar', 'Utf8View') }]  -- column3 has List of Struct w/ Utf8View
+)
+
+query B?
+select column1, column2 from t;
+----
+true [{foo: bar}]
+
+query TT
+select arrow_typeof(column1), arrow_typeof(column2) from t;
+----
+Boolean List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+# Force coercion of column2 to Utf8View
+query ??
+select
+  case when column1     then column2 else column3 end,
+  case when not column1 then column2 else column3 end
+from t;
+----
+[{c0: bar}] [{c0: bar}]
+
+query T
+select
+  arrow_typeof(case when column1     then column2 else column3 end)
+from t;
+----
+List(Field { name: "item", data_type: Struct([Field { name: "c0", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+
+# Force coercion of column2 to a LargeList
+# this requires that the List is coerced as well as the Struct fields within the list
+query ?
+select
+  case when column1  then to_large_list(column2) else column3 end
+from t;
+----
+[{c0: bar}]
+
+query T
+select
+  arrow_typeof(case when column1  then to_large_list(column2) else column3 end)
+from t;
+----
+LargeList(Field { name: "item", data_type: Struct([Field { name: "c0", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+
+# Force coercion of column3 to a LargeList
+# this requires that the List is coerced as well as the Struct fields within the list
+query ?
+select
+  case when column1  then column2 else to_large_list(column3) end
+from t;
+----
+[{c0: bar}]
+
+# Force coercion of column2 to a LargeList with inner coersion
+# this requires that the List is coerced as well as the Struct fields within the list
+query ?
+select
+  case
+    when column1 IS TRUE then column2
+    when column1 IS FALSE then to_large_list(column3)
+    else NULL
+    end
+from t;
+----
+[{c0: bar}]
+
+
+statement ok
+drop table t;
