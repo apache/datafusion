@@ -418,3 +418,62 @@ FROM t;
 
 statement ok
 drop table t
+
+# Fix coercion of lists of structs
+# https://github.com/apache/datafusion/issues/14154
+
+statement ok
+create or replace table t as values
+(
+ 100,                                         -- column1 int (so the case isn't constant folded)
+ [{ 'foo': arrow_cast('baz', 'Utf8View') }],  -- column2 has List of Struct w/ Utf8View
+ [{ 'foo': 'bar' }],                          -- column3 has List of Struct w/ Utf8
+ [{ 'foo': 'blarg' }]                         -- column4 has List of Struct w/ Utf8
+);
+
+# This case forces all branches to be coerced to the same type
+query error
+SELECT
+  case
+    when column1 > 0 then column2
+    when column1 < 0 then column3
+    else column4
+  end
+FROM t;
+----
+DataFusion error: type_coercion
+caused by
+Error during planning: Failed to coerce then ([List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })]) and else (Some(List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }))) to common types in CASE WHEN expression
+
+
+# different orders of the branches
+query error
+SELECT
+  case
+    when column1 > 0 then column3 -- NB different order
+    when column1 < 0 then column4
+    else column2
+  end
+FROM t;
+----
+DataFusion error: type_coercion
+caused by
+Error during planning: Failed to coerce then ([List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })]) and else (Some(List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }))) to common types in CASE WHEN expression
+
+
+# different orders of the branches
+query ?
+SELECT
+  case
+    when column1 > 0 then column4 -- NB different order
+    when column1 < 0 then column2
+    else column3
+  end
+FROM t;
+----
+[{c0: blarg}]
+
+
+
+statement ok
+drop table t
