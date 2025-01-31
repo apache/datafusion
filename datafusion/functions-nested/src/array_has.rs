@@ -385,7 +385,7 @@ impl ArrayHasAny {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            aliases: vec![String::from("list_has_any")],
+            aliases: vec![String::from("list_has_any"), String::from("arrays_overlap")],
         }
     }
 }

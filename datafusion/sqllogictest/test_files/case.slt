@@ -289,12 +289,22 @@ query B
 select case when a=1 then false end from foo;
 ----
 false
-false
-false
-false
-false
-false
+NULL
+NULL
+NULL
+NULL
+NULL
 
+query IBB
+SELECT c,
+    CASE WHEN c > 0 THEN true END AS c1,
+    CASE WHEN c > 0 THEN true ELSE false END AS c2
+FROM (VALUES (1), (0), (-1), (NULL)) AS t(c)
+----
+1 true true
+0 NULL false
+-1 NULL false
+NULL NULL false
 
 statement ok
 drop table foo
