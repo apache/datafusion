@@ -830,13 +830,10 @@ pub fn exprlist_to_fields<'a>(
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
-        .collect::<Vec<_>>();
-    
-    // After a projection any system columns that are included in the result cease to be system columns
-    let result = result
-        .into_iter()
+        // After a projection any system columns that are included in the result cease to be system columns
         .map(|(q, f)| (q, f.to_non_system_column()))
-        .collect();
+        .collect::<Vec<_>>();
+
     Ok(result)
 }
 
