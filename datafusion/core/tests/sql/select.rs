@@ -377,6 +377,7 @@ async fn test_select_system_column() {
     let select0 = "SELECT * FROM test order by id";
     let df = ctx.sql(select0).await.unwrap();
     let batchs = df.collect().await.unwrap();
+    #[rustfmt::skip]
     let expected = [
         "+----+--------------+",
         "| id | bank_account |",
@@ -391,6 +392,7 @@ async fn test_select_system_column() {
     let select1 = "SELECT _rowid FROM test order by _rowid";
     let df = ctx.sql(select1).await.unwrap();
     let batchs = df.collect().await.unwrap();
+    #[rustfmt::skip]
     let expected = [
         "+--------+",
         "| _rowid |",
@@ -405,6 +407,7 @@ async fn test_select_system_column() {
     let select2 = "SELECT _rowid, id FROM test order by _rowid";
     let df = ctx.sql(select2).await.unwrap();
     let batchs = df.collect().await.unwrap();
+    #[rustfmt::skip]
     let expected = [
         "+--------+----+",
         "| _rowid | id |",
@@ -419,6 +422,7 @@ async fn test_select_system_column() {
     let select3 = "SELECT _rowid, id FROM test WHERE _rowid = 0";
     let df = ctx.sql(select3).await.unwrap();
     let batchs = df.collect().await.unwrap();
+    #[rustfmt::skip]
     let expected = [
         "+--------+----+",
         "| _rowid | id |",
@@ -431,6 +435,7 @@ async fn test_select_system_column() {
     let select4 = "SELECT _rowid FROM test LIMIT 1";
     let df = ctx.sql(select4).await.unwrap();
     let batchs = df.collect().await.unwrap();
+    #[rustfmt::skip]
     let expected = [
         "+--------+",
         "| _rowid |",
@@ -443,6 +448,7 @@ async fn test_select_system_column() {
     let select5 = "SELECT _rowid, id FROM test WHERE _rowid % 2 = 1";
     let df = ctx.sql(select5).await.unwrap();
     let batchs = df.collect().await.unwrap();
+    #[rustfmt::skip]
     let expected = [
         "+--------+----+",
         "| _rowid | id |",
@@ -455,6 +461,7 @@ async fn test_select_system_column() {
     let select6 = "SELECT _rowid, _file FROM test order by _rowid";
     let df = ctx.sql(select6).await.unwrap();
     let batchs = df.collect().await.unwrap();
+    #[rustfmt::skip]
     let expected = [
         "+--------+--------+",
         "| _rowid | _file  |",
@@ -466,11 +473,18 @@ async fn test_select_system_column() {
     ];
     assert_batches_sorted_eq!(expected, &batchs);
 
-    let select6 = "SELECT id FROM test order by _rowid desc";
+    let select6 = "SELECT id FROM test order by _rowid asc";
     let df = ctx.sql(select6).await.unwrap();
     let batchs = df.collect().await.unwrap();
+    #[rustfmt::skip]
     let expected = [
-        "+----+", "| id |", "+----+", "| 3  |", "| 2  |", "| 1  |", "+----+",
+        "+----+",
+        "| id |",
+        "+----+",
+        "| 1  |",
+        "| 2  |",
+        "| 3  |",
+        "+----+",
     ];
     assert_batches_sorted_eq!(expected, &batchs);
 
@@ -495,21 +509,22 @@ async fn test_select_system_column() {
     let batch = record_batch!(
         ("other_id", UInt8, [1, 2, 3]),
         ("bank_account", UInt64, [9, 10, 11]),
-        ("_row_id", UInt32, [10, 11, 12]) // not a system column!
+        ("_rowid", UInt32, [10, 11, 12]) // not a system column!
     )
     .unwrap();
     let _ = ctx.register_batch("test2", batch);
 
-    // Normally _row_id would be a name conflict
-    // But when it's a conflict between a metadata column and a non-metadata column, the non metadata column should be used
+    // Normally _rowid would be a name conflict and throw an error during planning.
+    // But when it's a conflict between a system column and a non system column,
+    // the non system column should be used.
     let select7 =
-        "SELECT id, other_id, _row_id FROM test INNER JOIN test2 ON id = other_id";
+        "SELECT id, other_id, _rowid FROM test INNER JOIN test2 ON id = other_id";
     let df = ctx.sql(select7).await.unwrap();
     let batchs = df.collect().await.unwrap();
     #[rustfmt::skip]
     let expected = [
         "+----+----------+---------+",
-        "| id | other_id | _row_id |",
+        "| id | other_id | _rowid |",
         "+----+----------+---------+",
         "| 1  | 1        | 10      |",
         "| 2  | 2        | 11      |",
@@ -518,8 +533,85 @@ async fn test_select_system_column() {
     ];
     assert_batches_sorted_eq!(expected, &batchs);
 
-    // Demonstrate that for other columns we get a conflict
+    // Sanity check: for other columns we do get a conflict
     let select7 =
         "SELECT id, other_id, bank_account FROM test INNER JOIN test2 ON id = other_id";
     assert!(ctx.sql(select7).await.is_err());
+
+    // Demonstrate that we can join on _rowid
+    let batch = record_batch!(
+        ("other_id", UInt8, [2, 3, 4]),
+        ("_rowid", UInt32, [2, 3, 4])
+    )
+    .unwrap();
+    let batch = batch
+        .with_schema(Arc::new(Schema::new(vec![
+            Field::new("other_id", DataType::UInt8, true),
+            Field::new("_rowid", DataType::UInt32, true).to_system_column(),
+        ])))
+        .unwrap();
+    let _ = ctx.register_batch("test2", batch);
+
+    let select8 = "SELECT id, other_id, _rowid FROM test JOIN test2 ON _rowid = _rowid";
+    let df = ctx.sql(select8).await.unwrap();
+    let batches = df.collect().await.unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+----------+---------+",
+        "| id | other_id | _rowid |",
+        "+----+----------+---------+",
+        "| 2  | 2        | 2       |",
+        "+----+----------+---------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batches);
+
+    // Once passed through a projection, system columns are no longer available
+    let select9 = r"
+        WITH cte AS (SELECT * FROM test)
+        SELECT * FROM cte
+    ";
+    let df = ctx.sql(select9).await.unwrap();
+    let batches = df.collect().await.unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+----------+---------+",
+        "| id | other_id | _rowid |",
+        "+----+----------+---------+",
+        "| 2  | 2        | 2       |",
+        "+----+----------+---------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batches);
+    let select10 = r"
+        WITH cte AS (SELECT * FROM test)
+        SELECT _rowid FROM cte
+    ";
+    let df = ctx.sql(select10).await.unwrap();
+    let batches = df.collect().await.unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+----------+---------+",
+        "| id | other_id | _rowid |",
+        "+----+----------+---------+",
+        "| 2  | 2        | 2       |",
+        "+----+----------+---------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batches);
+
+    // And if passed explicitly selected and passed through a projection
+    // they are no longer system columns.
+    let select11 = r"
+        WITH cte AS (SELECT id, _rowid FROM test)
+        SELECT * FROM cte
+    ";
+    let df = ctx.sql(select11).await.unwrap();
+    let batches = df.collect().await.unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+---------+",
+        "| id | _rowid  |",
+        "+----+---------+",
+        "| 2  | 2       |",
+        "+----+---------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batches);
 }
