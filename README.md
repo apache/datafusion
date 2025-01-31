@@ -26,7 +26,6 @@
 [![Open Issues][open-issues-badge]][open-issues-url]
 [![Discord chat][discord-badge]][discord-url]
 
-
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
 [license-badge]: https://img.shields.io/badge/license-Apache%20v2-blue.svg
