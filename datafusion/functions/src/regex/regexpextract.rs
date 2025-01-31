@@ -15,10 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::array::builder::GenericStringBuilder;
-use arrow::array::{Array, ArrayRef, AsArray, OffsetSizeTrait};
+use arrow::array::{
+    Array, ArrayRef, AsArray, OffsetSizeTrait, PrimitiveArray, StringArrayType,
+};
 use arrow::datatypes::{DataType, Int64Type};
 use datafusion_common::{
     cast::as_generic_string_array, exec_err, internal_err, plan_err, DataFusionError,
@@ -135,22 +139,42 @@ impl ScalarUDFImpl for RegexpExtractFunc {
 
 fn regexp_extract_func(args: &[ArrayRef; 3]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::Utf8 | DataType::Utf8View => regexp_extract::<i32>(args),
-        DataType::LargeUtf8 => regexp_extract::<i64>(args),
+        DataType::Utf8 => {
+            let target = as_generic_string_array::<i32>(&args[0])?;
+            let pattern = as_generic_string_array::<i32>(&args[1])?;
+            let idx = args[2].as_primitive::<Int64Type>();
+            regexp_extract::<i32>(target, pattern, idx)
+        }
+        DataType::LargeUtf8 => {
+            let target = as_generic_string_array::<i64>(&args[0])?;
+            let pattern = as_generic_string_array::<i64>(&args[1])?;
+            let idx = args[2].as_primitive::<Int64Type>();
+            regexp_extract::<i64>(target, pattern, idx)
+        }
+        DataType::Utf8View => {
+            let target = args[0].as_string_view();
+            let pattern = args[1].as_string_view();
+            let idx = args[2].as_primitive::<Int64Type>();
+            regexp_extract::<i32>(target, pattern, idx)
+        }
         other => {
             internal_err!("Unsupported data type {other:?} for function regexp_extract")
         }
     }
 }
 
-fn regexp_extract<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let target = as_generic_string_array::<T>(&args[0])?;
-    let pattern = as_generic_string_array::<T>(&args[1])?;
-    let idx = args[2].as_primitive::<Int64Type>();
-
+fn regexp_extract<'a, T>(
+    target: impl StringArrayType<'a>,
+    pattern: impl StringArrayType<'a>,
+    idx: &PrimitiveArray<Int64Type>,
+) -> Result<ArrayRef>
+where
+    T: OffsetSizeTrait,
+{
     let mut builder = GenericStringBuilder::<T>::new();
+    let mut regex_cache: HashMap<&str, Regex> = HashMap::new();
 
-    for ((t_opt, p_opt), i_opt) in target.iter().zip(pattern).zip(idx) {
+    for ((t_opt, p_opt), i_opt) in target.iter().zip(pattern.iter()).zip(idx) {
         match (t_opt, p_opt, i_opt) {
             (None, _, _) | (_, None, _) | (_, _, None) => {
                 // If any of arguments is null, the result will be null too
@@ -161,9 +185,18 @@ fn regexp_extract<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     return exec_err!("idx in regexp_extract can't be negative");
                 }
 
-                let re = Regex::new(pattern_str).map_err(|e| {
-                    DataFusionError::Execution(format!("Can't compile regexp: {e}"))
-                })?;
+                let re = match regex_cache.entry(pattern_str) {
+                    Entry::Occupied(occupied_entry) => occupied_entry.into_mut(),
+                    Entry::Vacant(vacant_entry) => {
+                        let compiled = Regex::new(pattern_str).map_err(|e| {
+                            DataFusionError::Execution(format!(
+                                "Can't compile regexp: {e}"
+                            ))
+                        })?;
+                        vacant_entry.insert(compiled)
+                    }
+                };
+
                 let caps_opt = re.captures(target_str);
 
                 match caps_opt {

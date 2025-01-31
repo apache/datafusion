@@ -1925,7 +1925,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 Extract a specific group matched by [regular expression](https://docs.rs/regex/latest/regex/#syntax). If the regex did not match, or the specified group did not match, an empty string is returned..
 
 ```
-regexp_extract(str, regexp[, idx])
+regexp_extract(str, regexp, idx)
 ```
 
 #### Arguments
