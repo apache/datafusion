@@ -2662,7 +2662,7 @@ impl Union {
     /// Constructs new Union instance deriving schema from inputs.
     ///
     /// `loose_types` if true, inputs do not have to have matching types and produced schema will
-    /// take type from the first input. TODO (https://github.com/apache/datafusion/issues/14380) this is not necessarily reasonable behavior.
+    /// take type from the first input. TODO (<https://github.com/apache/datafusion/issues/14380>) this is not necessarily reasonable behavior.
     fn derive_schema_from_inputs(
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
