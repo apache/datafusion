@@ -15,14 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer that rewrites [`ExecutionPlan`]s.
-//!
-//! These rules take advantage of physical plan properties , such as
-//! "Repartition" or "Sortedness"
-//!
-//! [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
-
-pub mod optimizer;
-pub mod projection_pushdown;
-
-pub use datafusion_physical_optimizer::*;
+mod memory;

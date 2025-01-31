@@ -17,21 +17,25 @@
 
 //! [`SessionState`]: information required to run queries in a session
 
+use std::any::Any;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
-use crate::catalog_common::information_schema::{
-    InformationSchemaProvider, INFORMATION_SCHEMA,
-};
-use crate::catalog_common::MemoryCatalogProviderList;
 use crate::datasource::cte_worktable::CteWorkTable;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
-use crate::physical_optimizer::optimizer::PhysicalOptimizer;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
+use datafusion_catalog::information_schema::{
+    InformationSchemaProvider, INFORMATION_SCHEMA,
+};
+use datafusion_catalog::MemoryCatalogProviderList;
+
 use arrow_schema::{DataType, SchemaRef};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use datafusion_catalog::{Session, TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
@@ -61,20 +65,19 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
 use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
 use sqlparser::dialect::dialect_from_str;
-use std::any::Any;
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
 
@@ -526,16 +529,16 @@ impl SessionState {
 
     /// Resolve all table references in the SQL statement. Does not include CTE references.
     ///
-    /// See [`catalog::resolve_table_references`] for more information.
+    /// See [`datafusion_catalog::resolve_table_references`] for more information.
     ///
-    /// [`catalog::resolve_table_references`]: crate::catalog_common::resolve_table_references
+    /// [`datafusion_catalog::resolve_table_references`]: datafusion_catalog::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        let (table_refs, _) = crate::catalog_common::resolve_table_references(
+        let (table_refs, _) = datafusion_catalog::resolve_table_references(
             statement,
             enable_ident_normalization,
         )?;
@@ -1984,11 +1987,11 @@ pub(crate) struct PreparedPlan {
 #[cfg(test)]
 mod tests {
     use super::{SessionContextProvider, SessionStateBuilder};
-    use crate::catalog_common::MemoryCatalogProviderList;
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
     use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
+    use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;

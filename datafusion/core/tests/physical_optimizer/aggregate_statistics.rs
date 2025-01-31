@@ -15,31 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::config::ConfigOptions;
-use datafusion_execution::TaskContext;
-use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::aggregates::AggregateExec;
-use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::ExecutionPlan;
 use std::sync::Arc;
 
-use datafusion_common::Result;
-
-use datafusion_physical_plan::aggregates::PhysicalGroupBy;
-use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::common;
-use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::memory::MemoryExec;
+use crate::physical_optimizer::test_utils::TestAggregate;
 
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_int64_array;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::Result;
+use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast};
-use datafusion_physical_optimizer::test_utils::TestAggregate;
+use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::aggregates::AggregateMode;
+use datafusion_physical_plan::aggregates::PhysicalGroupBy;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::common;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::memory::MemoryExec;
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::ExecutionPlan;
 
 /// Mock data using a MemoryExec which has an exact count statistic
 fn mock_data() -> Result<Arc<MemoryExec>> {
