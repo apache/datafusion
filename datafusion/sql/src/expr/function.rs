@@ -222,6 +222,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             within_group,
         } = function_args;
 
+        if over.is_some() && !within_group.is_empty() {
+            return plan_err!("OVER and WITHIN GROUP clause are can not be used together. \
+                OVER is for window function, whereas WITHIN GROUP is for ordered set aggregate function");
+        }
+
         // If function is a window function (it has an OVER clause),
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.

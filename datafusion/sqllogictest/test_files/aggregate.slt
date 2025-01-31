@@ -117,7 +117,7 @@ statement error DataFusion error: This feature is not implemented: Multiple colu
 SELECT approx_percentile_cont(0.95) WITHIN GROUP (ORDER BY c5, c12) FROM aggregate_test_100
 
 # Not supported over sliding windows
-query error This feature is not implemented: Aggregate can not be used as a sliding accumulator because `retract_batch` is not implemented
+query error DataFusion error: Error during planning: OVER and WITHIN GROUP clause are can not be used together. OVER is for window function, whereas WITHIN GROUP is for ordered set aggregate function
 SELECT approx_percentile_cont(0.5)
 WITHIN GROUP (ORDER BY c3)
 OVER (ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
