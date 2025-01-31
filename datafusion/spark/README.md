@@ -17,6 +17,6 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# datafusion-functions-spark: Spark-compatible Expressions
+# datafusion-spark: Spark-compatible Expressions
 
 This crate provides Apache Spark-compatible expressions for use with DataFusion.

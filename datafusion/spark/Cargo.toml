@@ -16,7 +16,7 @@
 # under the License.
 
 [package]
-name = "datafusion-functions-spark"
+name = "datafusion-spark"
 description = "DataFusion expressions that emulate Apache Spark's behavior"
 version = { workspace = true }
 homepage = { workspace = true }
