@@ -2653,6 +2653,7 @@ impl Union {
     /// Constructs new Union instance deriving schema from inputs.
     /// Inputs do not have to have matching types and produced schema will
     /// take type from the first input.
+    // TODO (https://github.com/apache/datafusion/issues/14380): Avoid creating uncoerced union at all.
     pub fn try_new_with_loose_types(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true)?;
         Ok(Union { inputs, schema })
@@ -2661,7 +2662,7 @@ impl Union {
     /// Constructs new Union instance deriving schema from inputs.
     ///
     /// `loose_types` if true, inputs do not have to have matching types and produced schema will
-    /// take type from the first input. TODO this is not necessarily reasonable behavior.
+    /// take type from the first input. TODO (https://github.com/apache/datafusion/issues/14380) this is not necessarily reasonable behavior.
     fn derive_schema_from_inputs(
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
