@@ -354,6 +354,14 @@ impl<'a> DFParser<'a> {
                         self.parse_create()
                     }
                     Keyword::COPY => {
+                        if let Token::Word(w) = self.parser.peek_nth_token(1).token {
+                            // use native parser for COPY INTO
+                            if w.keyword == Keyword::INTO {
+                                return Ok(Statement::Statement(Box::from(
+                                    self.parser.parse_statement()?,
+                                )));
+                            }
+                        }
                         self.parser.next_token(); // COPY
                         self.parse_copy()
                     }
