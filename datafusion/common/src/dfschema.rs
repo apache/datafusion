@@ -494,6 +494,29 @@ impl DFSchema {
                 // Project a.id as id   TableScan b id
                 // In this case, there isn't `ambiguous name` problem. When `matches` just contains
                 // one field without qualifier, we should return it.
+                // Another scenario where we can disambiguate is when we have a conflict between
+                // a system column and a non system column.
+                // In this case we return the non system column.
+                let mut non_system_columns = HashSet::new();
+                for (_, f) in matches.iter() {
+                    if !f.is_system_column() {
+                        non_system_columns.insert(f.name().to_string());
+                    }
+                }
+                let matches_filtered = matches
+                    .iter()
+                    .filter_map(|(q, f)| {
+                        if f.is_system_column() && non_system_columns.contains(f.name()) {
+                            None
+                        } else {
+                            Some((q, f))
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if matches_filtered.len() == 1 {
+                    let (q, f) = matches_filtered[0];
+                    return Ok((*q, *f));
+                }
                 let fields_without_qualifier = matches
                     .iter()
                     .filter(|(q, _)| q.is_none())
