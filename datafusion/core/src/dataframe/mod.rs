@@ -1004,7 +1004,9 @@ impl DataFrame {
     ///
     /// `left_cols` and `right_cols` are used to form "equijoin" predicates (see
     /// example below), which are then combined with the optional `filter`
-    /// expression.
+    /// expression. If `left_cols` and `right_cols` contain ambiguous column
+    /// references, they will be disambiguated by prioritizing the left relation
+    /// for `left_cols` and the right relation for `right_cols`.
     ///
     /// Note that in case of outer join, the `filter` is applied to only matched rows.
     ///
