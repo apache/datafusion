@@ -166,7 +166,7 @@ sed -i -e 's~^sqllogictest.*~sqllogictest = { git = "https://github.com/Omega359
 
 echo "Replacing the datafusion/sqllogictest/bin/sqllogictests.rs file with a custom version required for running completion"
 
-# replace the sqllogictest.rs with a customized version. This is tied to a specific version of the gist
+# replace the sqllogictest.rs with a customized version.
 cp datafusion/sqllogictest/regenerate/sqllogictests.rs datafusion/sqllogictest/bin/sqllogictests.rs
 
 echo "Running the sqllogictests with sqlite completion. This will take approximately an hour to run"
