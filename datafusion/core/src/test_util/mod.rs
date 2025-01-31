@@ -24,7 +24,6 @@ pub mod csv;
 
 use std::any::Any;
 use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -44,7 +43,7 @@ use crate::prelude::{CsvReadOptions, SessionContext};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
-use datafusion_common::{DataFusionError, TableReference};
+use datafusion_common::TableReference;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
 
 use async_trait::async_trait;
@@ -54,8 +53,6 @@ use tempfile::TempDir;
 #[cfg(feature = "parquet")]
 pub use datafusion_common::test_util::parquet_test_data;
 pub use datafusion_common::test_util::{arrow_test_data, get_data_dir};
-use datafusion_execution::TaskContext;
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 /// Scan an empty data source, mainly used in tests
 pub fn scan_empty(
@@ -220,7 +217,7 @@ impl TableProvider for TestTableProvider {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(TestTableExec {}))
+        unimplemented!("TestTableProvider is a stub for testing.")
     }
 }
 
@@ -274,74 +271,4 @@ pub fn bounded_stream(batch: RecordBatch, limit: usize) -> SendableRecordBatchSt
         limit,
         batch,
     })
-}
-
-#[derive(Debug)]
-struct TestTableExec {}
-
-impl DisplayAs for TestTableExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "TestTableExec")
-    }
-}
-
-impl ExecutionPlan for TestTableExec {
-    fn name(&self) -> &str {
-        "TestTableExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        unimplemented!()
-    }
-
-    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-        vec![]
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
-    }
-
-    fn execute(
-        &self,
-        _partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream> {
-        Err(DataFusionError::NotImplemented("for test".to_string()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::prelude::SessionContext;
-    use crate::test_util::TestTableProvider;
-    use datafusion_catalog::TableProvider;
-    use datafusion_execution::TaskContext;
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn table_provider_scan_err() -> datafusion_common::Result<()> {
-        let provider = TestTableProvider {
-            url: "test".to_string(),
-            schema: Arc::new(arrow_schema::Schema::empty()),
-        };
-        let exec = provider
-            .scan(&SessionContext::new().state(), None, &[], None)
-            .await?;
-        let result = exec.execute(1, Arc::new(TaskContext::default()));
-        let error = result.err();
-        assert_eq!(
-            error.unwrap().strip_backtrace(),
-            "This feature is not implemented: for test"
-        );
-
-        Ok(())
-    }
 }
