@@ -33,7 +33,7 @@ use crate::kernels::temporal::{date_trunc_array_fmt_dyn, date_trunc_dyn};
 pub struct DateTruncExpr {
     /// An array with DataType::Date32
     child: Arc<dyn PhysicalExpr>,
-    /// Scalar UTF8 string matching the valid values in Spark SQL: https://spark.apache.org/docs/latest/api/sql/index.html#trunc
+    /// Scalar UTF8 string matching the valid values in Spark SQL: <https://spark.apache.org/docs/latest/api/sql/index.html#trunc>
     format: Arc<dyn PhysicalExpr>,
 }
 

@@ -227,7 +227,7 @@ fn pre_timestamp_cast(array: ArrayRef, timezone: String) -> Result<ArrayRef, Arr
 /// instead of Err to avoid the cost of formatting the error strings and is
 /// optimized to remove a memcpy that exists in the original function
 /// we can remove this code once we upgrade to a version of arrow-rs that
-/// includes https://github.com/apache/arrow-rs/pull/6419
+/// includes <https://github.com/apache/arrow-rs/pull/6419>
 #[inline]
 pub fn is_valid_decimal_precision(value: i128, precision: u8) -> bool {
     precision <= DECIMAL128_MAX_PRECISION

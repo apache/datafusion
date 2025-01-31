@@ -38,7 +38,7 @@ use std::sync::Arc;
 /// differences in whitespace handling and does not support all the features of Java's
 /// regular expression engine, which are documented at:
 ///
-/// https://docs.oracle.com/javase/8/docs/api/java/util/regex/Pattern.html
+/// <https://docs.oracle.com/javase/8/docs/api/java/util/regex/Pattern.html>
 #[derive(Debug)]
 pub struct RLike {
     child: Arc<dyn PhysicalExpr>,

@@ -34,10 +34,10 @@ use crate::kernels::temporal::{timestamp_trunc_array_fmt_dyn, timestamp_trunc_dy
 pub struct TimestampTruncExpr {
     /// An array with DataType::Timestamp(TimeUnit::Microsecond, None)
     child: Arc<dyn PhysicalExpr>,
-    /// Scalar UTF8 string matching the valid values in Spark SQL: https://spark.apache.org/docs/latest/api/sql/index.html#date_trunc
+    /// Scalar UTF8 string matching the valid values in Spark SQL: <https://spark.apache.org/docs/latest/api/sql/index.html#date_trunc>
     format: Arc<dyn PhysicalExpr>,
     /// String containing a timezone name. The name must be found in the standard timezone
-    /// database (https://en.wikipedia.org/wiki/List_of_tz_database_time_zones). The string is
+    /// database (<https://en.wikipedia.org/wiki/List_of_tz_database_time_zones>). The string is
     /// later parsed into a chrono::TimeZone.
     /// Timestamp arrays in this implementation are kept in arrays of UTC timestamps (in micros)
     /// along with a single value for the associated TimeZone. The timezone offset is applied
