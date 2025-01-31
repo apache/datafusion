@@ -34,6 +34,25 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::expressions::PhysicalSortExpr;
+use crate::joins::utils::{
+    build_join_schema, check_join_is_valid, estimate_join_statistics,
+    reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
+    JoinOnRef,
+};
+use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
+use crate::projection::{
+    join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs, update_join_on, ProjectionExec,
+};
+use crate::spill::spill_record_batches;
+use crate::{
+    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
+    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
+};
+
 use arrow::array::*;
 use arrow::compute::{
     self, concat_batches, filter_record_batch, is_not_null, take, SortOptions,
@@ -53,21 +72,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-
-use crate::execution_plan::{boundedness_from_children, EmissionType};
-use crate::expressions::PhysicalSortExpr;
-use crate::joins::utils::{
-    build_join_schema, check_join_is_valid, estimate_join_statistics,
-    reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
-    JoinOnRef,
-};
-use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use crate::spill::spill_record_batches;
-use crate::{
-    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
-};
 
 use futures::{Stream, StreamExt};
 
@@ -503,6 +507,61 @@ impl ExecutionPlan for SortMergeJoinExec {
             &self.join_type,
             &self.schema,
         )
+    }
+
+    /// Tries to swap the projection with its input [`SortMergeJoinExec`]. If it can be done,
+    /// it returns the new swapped version having the [`SortMergeJoinExec`] as the top plan.
+    /// Otherwise, it returns None.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
+        let Some(projection_as_columns) = physical_to_column_exprs(projection.expr())
+        else {
+            return Ok(None);
+        };
+
+        let (far_right_left_col_ind, far_left_right_col_ind) = join_table_borders(
+            self.left().schema().fields().len(),
+            &projection_as_columns,
+        );
+
+        if !join_allows_pushdown(
+            &projection_as_columns,
+            &self.schema(),
+            far_right_left_col_ind,
+            far_left_right_col_ind,
+        ) {
+            return Ok(None);
+        }
+
+        let Some(new_on) = update_join_on(
+            &projection_as_columns[0..=far_right_left_col_ind as _],
+            &projection_as_columns[far_left_right_col_ind as _..],
+            self.on(),
+            self.left().schema().fields().len(),
+        ) else {
+            return Ok(None);
+        };
+
+        let (new_left, new_right) = new_join_children(
+            &projection_as_columns,
+            far_right_left_col_ind,
+            far_left_right_col_ind,
+            self.children()[0],
+            self.children()[1],
+        )?;
+
+        Ok(Some(Arc::new(SortMergeJoinExec::try_new(
+            Arc::new(new_left),
+            Arc::new(new_right),
+            new_on,
+            self.filter.clone(),
+            self.join_type,
+            self.sort_options.clone(),
+            self.null_equals_null,
+        )?)))
     }
 }
 

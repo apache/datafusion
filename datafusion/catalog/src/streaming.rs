@@ -23,12 +23,12 @@ use std::sync::Arc;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 
-use crate::datasource::TableProvider;
-use crate::physical_plan::streaming::{PartitionStream, StreamingTableExec};
-use crate::physical_plan::ExecutionPlan;
-use datafusion_catalog::Session;
+use crate::Session;
+use crate::TableProvider;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{Expr, TableType};
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use datafusion_physical_plan::ExecutionPlan;
 use log::debug;
 
 /// A [`TableProvider`] that streams a set of [`PartitionStream`]

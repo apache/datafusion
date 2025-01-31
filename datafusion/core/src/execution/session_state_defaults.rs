@@ -17,7 +17,6 @@
 
 use crate::catalog::{CatalogProvider, TableProviderFactory};
 use crate::catalog_common::listing_schema::ListingSchemaProvider;
-use crate::catalog_common::{MemoryCatalogProvider, MemorySchemaProvider};
 use crate::datasource::file_format::arrow::ArrowFormatFactory;
 use crate::datasource::file_format::avro::AvroFormatFactory;
 use crate::datasource::file_format::csv::CsvFormatFactory;
@@ -31,6 +30,7 @@ use crate::execution::context::SessionState;
 use crate::functions_nested;
 use crate::{functions, functions_aggregate, functions_table, functions_window};
 use datafusion_catalog::TableFunction;
+use datafusion_catalog::{MemoryCatalogProvider, MemorySchemaProvider};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;

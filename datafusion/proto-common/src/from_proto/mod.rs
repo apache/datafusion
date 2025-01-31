@@ -701,6 +701,11 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
             } else {
                 Precision::Absent
             },
+            sum_value: if let Some(sum) = &cs.sum_value {
+                sum.clone().into()
+            } else {
+                Precision::Absent
+            },
             distinct_count: if let Some(dc) = &cs.distinct_count {
                 dc.clone().into()
             } else {
@@ -936,6 +941,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     fn try_from(
         value: &protobuf::ParquetOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
+        #[allow(deprecated)] // max_statistics_size
         Ok(ParquetOptions {
             enable_page_index: value.enable_page_index,
             pruning: value.pruning,
@@ -1013,6 +1019,7 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
     fn try_from(
         value: &protobuf::ParquetColumnOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
+        #[allow(deprecated)] // max_statistics_size
         Ok(ParquetColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::parquet_column_options::CompressionOpt::Compression(v) => Some(v),
