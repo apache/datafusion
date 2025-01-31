@@ -1411,8 +1411,7 @@ mod tests {
         assert_eq!(verified_stmt(sql), expected);
         Ok(())
     }
-
-
+    
     #[test]
     fn skip_copy_into_snowflake() -> Result<(), ParserError> {
         let sql = "COPY INTO foo FROM @~/staged FILE_FORMAT = (FORMAT_NAME = 'mycsv');";
@@ -1427,7 +1426,6 @@ mod tests {
         }
         Ok(())
     }
-
 
     #[test]
     fn explain_copy_to_table_to_table() -> Result<(), ParserError> {
