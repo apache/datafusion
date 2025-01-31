@@ -20,6 +20,7 @@
 
 pub mod arrow_wrappers;
 pub mod execution_plan;
+pub mod insert_op;
 pub mod plan_properties;
 pub mod record_batch_stream;
 pub mod session_config;
