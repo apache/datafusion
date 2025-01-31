@@ -24,7 +24,8 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field};
 use datafusion::logical_expr::{
-    type_coercion::aggregates::avg_return_type, Accumulator, EmitTo, GroupsAccumulator, Signature,
+    type_coercion::aggregates::avg_return_type, Accumulator, EmitTo, GroupsAccumulator,
+    Signature,
 };
 use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_physical_expr::expressions::format_state_name;
@@ -111,10 +112,12 @@ impl AggregateUDFImpl for Avg {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         // instantiate specialized accumulator based for the type
         match (&self.input_data_type, &self.result_data_type) {
-            (Float64, Float64) => Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
-                &self.input_data_type,
-                |sum: f64, count: i64| Ok(sum / count as f64),
-            ))),
+            (Float64, Float64) => {
+                Ok(Box::new(AvgGroupsAccumulator::<Float64Type, _>::new(
+                    &self.input_data_type,
+                    |sum: f64, count: i64| Ok(sum / count as f64),
+                )))
+            }
 
             _ => not_impl_err!(
                 "AvgGroupsAccumulator for ({} --> {})",

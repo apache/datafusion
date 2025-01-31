@@ -116,7 +116,9 @@ fn spark_chr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     Some(ch) => Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
                         ch.to_string(),
                     )))),
-                    None => exec_err!("requested character was incompatible for encoding."),
+                    None => {
+                        exec_err!("requested character was incompatible for encoding.")
+                    }
                 }
             }
         }

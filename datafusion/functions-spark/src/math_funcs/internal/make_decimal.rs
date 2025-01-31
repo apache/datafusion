@@ -60,7 +60,9 @@ pub fn spark_make_decimal(
 #[inline]
 fn long_to_decimal(v: &Option<i64>, precision: u8) -> Option<i128> {
     match v {
-        Some(v) if validate_decimal_precision(*v as i128, precision).is_ok() => Some(*v as i128),
+        Some(v) if validate_decimal_precision(*v as i128, precision).is_ok() => {
+            Some(*v as i128)
+        }
         _ => None,
     }
 }

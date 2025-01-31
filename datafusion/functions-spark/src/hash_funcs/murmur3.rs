@@ -25,7 +25,9 @@ use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
 
 /// Spark compatible murmur3 hash (just `hash` in Spark) in vectorized execution fashion
-pub fn spark_murmur3_hash(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
+pub fn spark_murmur3_hash(
+    args: &[ColumnarValue],
+) -> Result<ColumnarValue, DataFusionError> {
     let length = args.len();
     let seed = &args[length - 1];
     match seed {
@@ -195,9 +197,14 @@ mod tests {
 
     use crate::murmur3::create_murmur3_hashes;
     use crate::test_hashes_with_nulls;
-    use datafusion::arrow::array::{ArrayRef, Int32Array, Int64Array, Int8Array, StringArray};
+    use datafusion::arrow::array::{
+        ArrayRef, Int32Array, Int64Array, Int8Array, StringArray,
+    };
 
-    fn test_murmur3_hash<I: Clone, T: arrow_array::Array + From<Vec<Option<I>>> + 'static>(
+    fn test_murmur3_hash<
+        I: Clone,
+        T: arrow_array::Array + From<Vec<Option<I>>> + 'static,
+    >(
         values: Vec<Option<I>>,
         expected: Vec<u32>,
     ) {
@@ -271,8 +278,8 @@ mod tests {
         .map(|s| Some(s.to_string()))
         .collect::<Vec<Option<String>>>();
         let expected: Vec<u32> = vec![
-            3286402344, 2486176763, 142593372, 885025535, 2395000894, 1485273170, 0xfa37157b,
-            1322437556, 0xe860e5cc, 814637928,
+            3286402344, 2486176763, 142593372, 885025535, 2395000894, 1485273170,
+            0xfa37157b, 1322437556, 0xe860e5cc, 814637928,
         ];
 
         test_murmur3_hash::<String, StringArray>(input.clone(), expected);

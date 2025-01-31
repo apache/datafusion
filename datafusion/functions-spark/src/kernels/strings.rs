@@ -51,7 +51,11 @@ pub fn string_space(length: &dyn Array) -> Result<ArrayRef, DataFusionError> {
     }
 }
 
-pub fn substring(array: &dyn Array, start: i64, length: u64) -> Result<ArrayRef, DataFusionError> {
+pub fn substring(
+    array: &dyn Array,
+    start: i64,
+    length: u64,
+) -> Result<ArrayRef, DataFusionError> {
     match array.data_type() {
         DataType::LargeUtf8 => substring_by_char(
             array
@@ -88,7 +92,8 @@ pub fn substring(array: &dyn Array, start: i64, length: u64) -> Result<ArrayRef,
 
 fn generic_string_space<OffsetSize: OffsetSizeTrait>(length: &Int32Array) -> ArrayRef {
     let array_len = length.len();
-    let mut offsets = MutableBuffer::new((array_len + 1) * std::mem::size_of::<OffsetSize>());
+    let mut offsets =
+        MutableBuffer::new((array_len + 1) * std::mem::size_of::<OffsetSize>());
     let mut length_so_far = OffsetSize::zero();
 
     // compute null bitmap (copy)

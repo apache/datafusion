@@ -26,7 +26,9 @@ use arrow_array::{
     downcast_dictionary_array, downcast_temporal_array,
     temporal_conversions::*,
     timezone::Tz,
-    types::{ArrowDictionaryKeyType, ArrowTemporalType, Date32Type, TimestampMicrosecondType},
+    types::{
+        ArrowDictionaryKeyType, ArrowTemporalType, Date32Type, TimestampMicrosecondType,
+    },
     ArrowNumericType,
 };
 
@@ -250,7 +252,10 @@ fn trunc_date_to_microsec<T: Timelike>(dt: T) -> Option<T> {
 ///   array is an array of Date32 values. The array may be a dictionary array.
 ///
 ///   format is a scalar string specifying the format to apply to the timestamp value.
-pub(crate) fn date_trunc_dyn(array: &dyn Array, format: String) -> Result<ArrayRef, SparkError> {
+pub(crate) fn date_trunc_dyn(
+    array: &dyn Array,
+    format: String,
+) -> Result<ArrayRef, SparkError> {
     match array.data_type().clone() {
         DataType::Dictionary(_, _) => {
             downcast_dictionary_array!(
@@ -285,21 +290,21 @@ where
     let iter = ArrayIter::new(array);
     match array.data_type() {
         DataType::Date32 => match format.to_uppercase().as_str() {
-            "YEAR" | "YYYY" | "YY" => Ok(as_datetime_with_op::<&PrimitiveArray<T>, T, _>(
-                iter,
-                builder,
-                |dt| as_days_from_unix_epoch(trunc_date_to_year(dt)),
-            )),
+            "YEAR" | "YYYY" | "YY" => Ok(
+                as_datetime_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, |dt| {
+                    as_days_from_unix_epoch(trunc_date_to_year(dt))
+                }),
+            ),
             "QUARTER" => Ok(as_datetime_with_op::<&PrimitiveArray<T>, T, _>(
                 iter,
                 builder,
                 |dt| as_days_from_unix_epoch(trunc_date_to_quarter(dt)),
             )),
-            "MONTH" | "MON" | "MM" => Ok(as_datetime_with_op::<&PrimitiveArray<T>, T, _>(
-                iter,
-                builder,
-                |dt| as_days_from_unix_epoch(trunc_date_to_month(dt)),
-            )),
+            "MONTH" | "MON" | "MM" => Ok(
+                as_datetime_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, |dt| {
+                    as_days_from_unix_epoch(trunc_date_to_month(dt))
+                }),
+            ),
             "WEEK" => Ok(as_datetime_with_op::<&PrimitiveArray<T>, T, _>(
                 iter,
                 builder,
@@ -417,17 +422,21 @@ macro_rules! date_trunc_array_fmt_helper {
                                 as_days_from_unix_epoch(trunc_date_to_year(dt))
                             }))
                         }
-                        "QUARTER" => Ok(as_datetime_with_op_single(val, &mut builder, |dt| {
-                            as_days_from_unix_epoch(trunc_date_to_quarter(dt))
-                        })),
+                        "QUARTER" => {
+                            Ok(as_datetime_with_op_single(val, &mut builder, |dt| {
+                                as_days_from_unix_epoch(trunc_date_to_quarter(dt))
+                            }))
+                        }
                         "MONTH" | "MON" | "MM" => {
                             Ok(as_datetime_with_op_single(val, &mut builder, |dt| {
                                 as_days_from_unix_epoch(trunc_date_to_month(dt))
                             }))
                         }
-                        "WEEK" => Ok(as_datetime_with_op_single(val, &mut builder, |dt| {
-                            as_days_from_unix_epoch(trunc_date_to_week(dt))
-                        })),
+                        "WEEK" => {
+                            Ok(as_datetime_with_op_single(val, &mut builder, |dt| {
+                                as_days_from_unix_epoch(trunc_date_to_week(dt))
+                            }))
+                        }
                         _ => Err(SparkError::Internal(format!(
                             "Unsupported format: {:?} for function 'date_trunc'",
                             $formats.value(index)
@@ -536,56 +545,68 @@ where
     match array.data_type() {
         DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => {
             match format.to_uppercase().as_str() {
-                "YEAR" | "YYYY" | "YY" => {
-                    as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, tz, |dt| {
-                        as_micros_from_unix_epoch_utc(trunc_date_to_year(dt))
-                    })
-                }
-                "QUARTER" => {
-                    as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, tz, |dt| {
-                        as_micros_from_unix_epoch_utc(trunc_date_to_quarter(dt))
-                    })
-                }
-                "MONTH" | "MON" | "MM" => {
-                    as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, tz, |dt| {
-                        as_micros_from_unix_epoch_utc(trunc_date_to_month(dt))
-                    })
-                }
-                "WEEK" => {
-                    as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, tz, |dt| {
-                        as_micros_from_unix_epoch_utc(trunc_date_to_week(dt))
-                    })
-                }
-                "DAY" | "DD" => {
-                    as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, tz, |dt| {
-                        as_micros_from_unix_epoch_utc(trunc_date_to_day(dt))
-                    })
-                }
-                "HOUR" => {
-                    as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, tz, |dt| {
-                        as_micros_from_unix_epoch_utc(trunc_date_to_hour(dt))
-                    })
-                }
-                "MINUTE" => {
-                    as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, tz, |dt| {
-                        as_micros_from_unix_epoch_utc(trunc_date_to_minute(dt))
-                    })
-                }
-                "SECOND" => {
-                    as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, tz, |dt| {
-                        as_micros_from_unix_epoch_utc(trunc_date_to_second(dt))
-                    })
-                }
-                "MILLISECOND" => {
-                    as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, tz, |dt| {
-                        as_micros_from_unix_epoch_utc(trunc_date_to_ms(dt))
-                    })
-                }
-                "MICROSECOND" => {
-                    as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(iter, builder, tz, |dt| {
-                        as_micros_from_unix_epoch_utc(trunc_date_to_microsec(dt))
-                    })
-                }
+                "YEAR" | "YYYY" | "YY" => as_timestamp_tz_with_op::<
+                    &PrimitiveArray<T>,
+                    T,
+                    _,
+                >(iter, builder, tz, |dt| {
+                    as_micros_from_unix_epoch_utc(trunc_date_to_year(dt))
+                }),
+                "QUARTER" => as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(
+                    iter,
+                    builder,
+                    tz,
+                    |dt| as_micros_from_unix_epoch_utc(trunc_date_to_quarter(dt)),
+                ),
+                "MONTH" | "MON" | "MM" => as_timestamp_tz_with_op::<
+                    &PrimitiveArray<T>,
+                    T,
+                    _,
+                >(iter, builder, tz, |dt| {
+                    as_micros_from_unix_epoch_utc(trunc_date_to_month(dt))
+                }),
+                "WEEK" => as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(
+                    iter,
+                    builder,
+                    tz,
+                    |dt| as_micros_from_unix_epoch_utc(trunc_date_to_week(dt)),
+                ),
+                "DAY" | "DD" => as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(
+                    iter,
+                    builder,
+                    tz,
+                    |dt| as_micros_from_unix_epoch_utc(trunc_date_to_day(dt)),
+                ),
+                "HOUR" => as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(
+                    iter,
+                    builder,
+                    tz,
+                    |dt| as_micros_from_unix_epoch_utc(trunc_date_to_hour(dt)),
+                ),
+                "MINUTE" => as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(
+                    iter,
+                    builder,
+                    tz,
+                    |dt| as_micros_from_unix_epoch_utc(trunc_date_to_minute(dt)),
+                ),
+                "SECOND" => as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(
+                    iter,
+                    builder,
+                    tz,
+                    |dt| as_micros_from_unix_epoch_utc(trunc_date_to_second(dt)),
+                ),
+                "MILLISECOND" => as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(
+                    iter,
+                    builder,
+                    tz,
+                    |dt| as_micros_from_unix_epoch_utc(trunc_date_to_ms(dt)),
+                ),
+                "MICROSECOND" => as_timestamp_tz_with_op::<&PrimitiveArray<T>, T, _>(
+                    iter,
+                    builder,
+                    tz,
+                    |dt| as_micros_from_unix_epoch_utc(trunc_date_to_microsec(dt)),
+                ),
                 _ => Err(SparkError::Internal(format!(
                     "Unsupported format: {:?} for function 'timestamp_trunc'",
                     format
@@ -810,7 +831,8 @@ where
 #[cfg(test)]
 mod tests {
     use crate::kernels::temporal::{
-        date_trunc, date_trunc_array_fmt_dyn, timestamp_trunc, timestamp_trunc_array_fmt_dyn,
+        date_trunc, date_trunc_array_fmt_dyn, timestamp_trunc,
+        timestamp_trunc_array_fmt_dyn,
     };
     use arrow_array::{
         builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder},
@@ -867,7 +889,8 @@ mod tests {
         let fmt_array = StringArray::from(fmt_vec);
 
         // timestamp dictionary array
-        let mut date_dict_builder = PrimitiveDictionaryBuilder::<Int32Type, Date32Type>::new();
+        let mut date_dict_builder =
+            PrimitiveDictionaryBuilder::<Int32Type, Date32Type>::new();
         for v in array.iter() {
             date_dict_builder
                 .append(v.unwrap())
@@ -910,7 +933,8 @@ mod tests {
 
         // verify input format arrays
         let fmt_iter = ArrayIter::new(&fmt_array);
-        let mut fmt_dict_iter = fmt_dict.downcast_dict::<StringArray>().unwrap().into_iter();
+        let mut fmt_dict_iter =
+            fmt_dict.downcast_dict::<StringArray>().unwrap().into_iter();
         for val in fmt_iter {
             assert_eq!(
                 fmt_dict_iter
@@ -924,7 +948,8 @@ mod tests {
         if let Ok(a) = date_trunc_array_fmt_dyn(&array, &fmt_array) {
             for i in 0..array.len() {
                 assert!(
-                    array.value(i) >= a.as_any().downcast_ref::<Date32Array>().unwrap().value(i)
+                    array.value(i)
+                        >= a.as_any().downcast_ref::<Date32Array>().unwrap().value(i)
                 )
             }
         } else {
@@ -933,7 +958,8 @@ mod tests {
         if let Ok(a) = date_trunc_array_fmt_dyn(&array_dict, &fmt_array) {
             for i in 0..array.len() {
                 assert!(
-                    array.value(i) >= a.as_any().downcast_ref::<Date32Array>().unwrap().value(i)
+                    array.value(i)
+                        >= a.as_any().downcast_ref::<Date32Array>().unwrap().value(i)
                 )
             }
         } else {
@@ -942,7 +968,8 @@ mod tests {
         if let Ok(a) = date_trunc_array_fmt_dyn(&array, &fmt_dict) {
             for i in 0..array.len() {
                 assert!(
-                    array.value(i) >= a.as_any().downcast_ref::<Date32Array>().unwrap().value(i)
+                    array.value(i)
+                        >= a.as_any().downcast_ref::<Date32Array>().unwrap().value(i)
                 )
             }
         } else {
@@ -951,7 +978,8 @@ mod tests {
         if let Ok(a) = date_trunc_array_fmt_dyn(&array_dict, &fmt_dict) {
             for i in 0..array.len() {
                 assert!(
-                    array.value(i) >= a.as_any().downcast_ref::<Date32Array>().unwrap().value(i)
+                    array.value(i)
+                        >= a.as_any().downcast_ref::<Date32Array>().unwrap().value(i)
                 )
             }
         } else {
@@ -1081,7 +1109,8 @@ mod tests {
 
         // verify input format arrays
         let fmt_iter = ArrayIter::new(&fmt_array);
-        let mut fmt_dict_iter = fmt_dict.downcast_dict::<StringArray>().unwrap().into_iter();
+        let mut fmt_dict_iter =
+            fmt_dict.downcast_dict::<StringArray>().unwrap().into_iter();
         for val in fmt_iter {
             assert_eq!(
                 fmt_dict_iter

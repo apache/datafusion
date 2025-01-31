@@ -86,7 +86,10 @@ impl AggregateUDFImpl for Variance {
         )?))
     }
 
-    fn create_sliding_accumulator(&self, _args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+    fn create_sliding_accumulator(
+        &self,
+        _args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(VarianceAccumulator::try_new(
             self.stats_type,
             self.null_on_divide_by_zero,
@@ -205,9 +208,11 @@ impl Accumulator for VarianceAccumulator {
                 continue;
             }
             let new_count = self.count + c;
-            let new_mean = self.mean * self.count / new_count + means.value(i) * c / new_count;
+            let new_mean =
+                self.mean * self.count / new_count + means.value(i) * c / new_count;
             let delta = self.mean - means.value(i);
-            let new_m2 = self.m2 + m2s.value(i) + delta * delta * self.count * c / new_count;
+            let new_m2 =
+                self.m2 + m2s.value(i) + delta * delta * self.count * c / new_count;
 
             self.count = new_count;
             self.mean = new_mean;

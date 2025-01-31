@@ -20,7 +20,9 @@ use std::sync::Arc;
 use arrow_array::OffsetSizeTrait;
 use arrow_schema::DataType;
 use datafusion::logical_expr::ColumnarValue;
-use datafusion_common::{cast::as_generic_string_array, exec_err, DataFusionError, ScalarValue};
+use datafusion_common::{
+    cast::as_generic_string_array, exec_err, DataFusionError, ScalarValue,
+};
 
 /// Helper function to convert a hex digit to a binary value.
 fn unhex_digit(c: u8) -> Result<u8, DataFusionError> {
@@ -75,7 +77,9 @@ fn spark_unhex_inner<T: OffsetSizeTrait>(
                     if unhex(s, &mut encoded).is_ok() {
                         builder.append_value(encoded.as_slice());
                     } else if fail_on_error {
-                        return exec_err!("Input to unhex is not a valid hex string: {s}");
+                        return exec_err!(
+                            "Input to unhex is not a valid hex string: {s}"
+                        );
                     } else {
                         builder.append_null();
                     }
@@ -118,7 +122,9 @@ pub fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionEr
     let val_to_unhex = &args[0];
     let fail_on_error = if args.len() == 2 {
         match &args[1] {
-            ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error))) => *fail_on_error,
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(fail_on_error))) => {
+                *fail_on_error
+            }
             _ => {
                 return exec_err!(
                     "The second argument must be boolean scalar, but got: {:?}",

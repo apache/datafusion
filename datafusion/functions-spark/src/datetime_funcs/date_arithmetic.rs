@@ -30,7 +30,8 @@ use std::sync::Arc;
 macro_rules! scalar_date_arithmetic {
     ($start:expr, $days:expr, $op:expr) => {{
         let interval = IntervalDayTime::new(*$days as i32, 0);
-        let interval_cv = ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(interval)));
+        let interval_cv =
+            ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(interval)));
         datum::apply($start, &interval_cv, $op)
     }};
 }
@@ -38,7 +39,8 @@ macro_rules! array_date_arithmetic {
     ($days:expr, $interval_builder:expr, $intType:ty) => {{
         for day in $days.as_primitive::<$intType>().into_iter() {
             if let Some(non_null_day) = day {
-                $interval_builder.append_value(IntervalDayTime::new(non_null_day as i32, 0));
+                $interval_builder
+                    .append_value(IntervalDayTime::new(non_null_day as i32, 0));
             } else {
                 $interval_builder.append_null();
             }

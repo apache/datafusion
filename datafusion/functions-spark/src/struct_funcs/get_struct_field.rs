@@ -89,9 +89,9 @@ impl PhysicalExpr for GetStructField {
                     struct_array.column(self.ordinal),
                 )))
             }
-            ColumnarValue::Scalar(ScalarValue::Struct(struct_array)) => Ok(ColumnarValue::Array(
-                Arc::clone(struct_array.column(self.ordinal)),
-            )),
+            ColumnarValue::Scalar(ScalarValue::Struct(struct_array)) => Ok(
+                ColumnarValue::Array(Arc::clone(struct_array.column(self.ordinal))),
+            ),
             value => Err(DataFusionError::Execution(format!(
                 "Expected a struct array, got {:?}",
                 value

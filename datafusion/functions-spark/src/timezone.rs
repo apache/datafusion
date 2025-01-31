@@ -28,14 +28,14 @@ use std::str::FromStr;
 fn parse_fixed_offset(tz: &str) -> Result<FixedOffset, ArrowError> {
     let mut parsed = Parsed::new();
 
-    if let Ok(fixed_offset) =
-        parse(&mut parsed, tz, StrftimeItems::new("%:z")).and_then(|_| parsed.to_fixed_offset())
+    if let Ok(fixed_offset) = parse(&mut parsed, tz, StrftimeItems::new("%:z"))
+        .and_then(|_| parsed.to_fixed_offset())
     {
         return Ok(fixed_offset);
     }
 
-    if let Ok(fixed_offset) =
-        parse(&mut parsed, tz, StrftimeItems::new("%#z")).and_then(|_| parsed.to_fixed_offset())
+    if let Ok(fixed_offset) = parse(&mut parsed, tz, StrftimeItems::new("%#z"))
+        .and_then(|_| parsed.to_fixed_offset())
     {
         return Ok(fixed_offset);
     }
@@ -114,7 +114,10 @@ impl TimeZone for Tz {
         })
     }
 
-    fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<Self::Offset> {
+    fn offset_from_local_datetime(
+        &self,
+        local: &NaiveDateTime,
+    ) -> LocalResult<Self::Offset> {
         tz!(self, tz, {
             tz.offset_from_local_datetime(local).map(|x| TzOffset {
                 tz: *self,

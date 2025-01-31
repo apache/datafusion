@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::math_funcs::utils::{get_precision_scale, make_decimal_array, make_decimal_scalar};
+use crate::math_funcs::utils::{
+    get_precision_scale, make_decimal_array, make_decimal_scalar,
+};
 use arrow::array::{Int16Array, Int32Array, Int64Array, Int8Array};
 use arrow_array::{Array, ArrowNativeTypeOp};
 use arrow_schema::DataType;
@@ -76,10 +78,18 @@ pub fn spark_round(
     };
     match value {
         ColumnarValue::Array(array) => match array.data_type() {
-            DataType::Int64 if *point < 0 => round_integer_array!(array, point, Int64Array, i64),
-            DataType::Int32 if *point < 0 => round_integer_array!(array, point, Int32Array, i32),
-            DataType::Int16 if *point < 0 => round_integer_array!(array, point, Int16Array, i16),
-            DataType::Int8 if *point < 0 => round_integer_array!(array, point, Int8Array, i8),
+            DataType::Int64 if *point < 0 => {
+                round_integer_array!(array, point, Int64Array, i64)
+            }
+            DataType::Int32 if *point < 0 => {
+                round_integer_array!(array, point, Int32Array, i32)
+            }
+            DataType::Int16 if *point < 0 => {
+                round_integer_array!(array, point, Int16Array, i16)
+            }
+            DataType::Int8 if *point < 0 => {
+                round_integer_array!(array, point, Int8Array, i8)
+            }
             DataType::Decimal128(_, scale) if *scale >= 0 => {
                 let f = decimal_round_f(scale, point);
                 let (precision, scale) = get_precision_scale(data_type);
@@ -108,9 +118,12 @@ pub fn spark_round(
                 let (precision, scale) = get_precision_scale(data_type);
                 make_decimal_scalar(a, precision, scale, &f)
             }
-            ScalarValue::Float32(_) | ScalarValue::Float64(_) => Ok(ColumnarValue::Scalar(
-                ScalarValue::try_from_array(&round(&[a.to_array()?])?, 0)?,
-            )),
+            ScalarValue::Float32(_) | ScalarValue::Float64(_) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
+                    &round(&[a.to_array()?])?,
+                    0,
+                )?))
+            }
             dt => exec_err!("Not supported datatype for ROUND: {dt}"),
         },
     }
@@ -130,7 +143,8 @@ fn decimal_round_f(scale: &i8, point: &i64) -> Box<dyn Fn(i128) -> i128> {
             Box::new(move |_: i128| 0)
         }
     } else {
-        let div = 10_i128.pow_wrapping((*scale as u32) - min(*scale as u32, *point as u32));
+        let div =
+            10_i128.pow_wrapping((*scale as u32) - min(*scale as u32, *point as u32));
         let half = div / 2;
         Box::new(move |x: i128| (x + x.signum() * half) / div)
     }

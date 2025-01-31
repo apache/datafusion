@@ -262,12 +262,15 @@ impl Accumulator for CovarianceAccumulator {
                 continue;
             }
             let new_count = self.count + c;
-            let new_mean1 = self.mean1 * self.count / new_count + means1.value(i) * c / new_count;
-            let new_mean2 = self.mean2 * self.count / new_count + means2.value(i) * c / new_count;
+            let new_mean1 =
+                self.mean1 * self.count / new_count + means1.value(i) * c / new_count;
+            let new_mean2 =
+                self.mean2 * self.count / new_count + means2.value(i) * c / new_count;
             let delta1 = self.mean1 - means1.value(i);
             let delta2 = self.mean2 - means2.value(i);
-            let new_c =
-                self.algo_const + cs.value(i) + delta1 * delta2 * self.count * c / new_count;
+            let new_c = self.algo_const
+                + cs.value(i)
+                + delta1 * delta2 * self.count * c / new_count;
 
             self.count = new_count;
             self.mean1 = new_mean1;

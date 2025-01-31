@@ -122,7 +122,8 @@ mod test {
         let keys = Int32Array::from(vec![0, 1, 2]);
         let values = Int32Array::from(vec![0, 111, 233]);
         let dict = DictionaryArray::try_new(keys, Arc::new(values))?;
-        let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
+        let data_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
         let schema = Schema::new(vec![Field::new("a", data_type, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)])?;
         let field_names = vec!["a".to_string()];
@@ -137,9 +138,11 @@ mod test {
     #[test]
     fn test_create_struct_from_dict_encoded_string() -> Result<()> {
         let keys = Int32Array::from(vec![0, 1, 2]);
-        let values = StringArray::from(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        let values =
+            StringArray::from(vec!["a".to_string(), "b".to_string(), "c".to_string()]);
         let dict = DictionaryArray::try_new(keys, Arc::new(values))?;
-        let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let data_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
         let schema = Schema::new(vec![Field::new("a", data_type, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(dict)])?;
         let field_names = vec!["a".to_string()];

@@ -158,7 +158,8 @@ mod tests {
             Some(3455),
         ]);
 
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(input)])?;
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(input)])?;
 
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_int32_array(&result).expect("failed to downcast to In32Array");

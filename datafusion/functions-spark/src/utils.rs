@@ -28,7 +28,9 @@ use arrow::{
     temporal_conversions::as_datetime,
 };
 use arrow_array::types::TimestampMillisecondType;
-use arrow_data::decimal::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
+use arrow_data::decimal::{
+    MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
+};
 use chrono::{DateTime, Offset, TimeZone};
 
 /// Preprocesses input arrays to add timezone information from Spark to Arrow array datatype or
@@ -69,9 +71,11 @@ pub fn array_with_timezone(
             assert!(!timezone.is_empty());
             match to_type {
                 Some(DataType::Utf8) | Some(DataType::Date32) => Ok(array),
-                Some(DataType::Timestamp(_, Some(_))) => {
-                    timestamp_ntz_to_timestamp(array, timezone.as_str(), Some(timezone.as_str()))
-                }
+                Some(DataType::Timestamp(_, Some(_))) => timestamp_ntz_to_timestamp(
+                    array,
+                    timezone.as_str(),
+                    Some(timezone.as_str()),
+                ),
                 Some(DataType::Timestamp(_, None)) => {
                     timestamp_ntz_to_timestamp(array, timezone.as_str(), None)
                 }
@@ -114,8 +118,11 @@ pub fn array_with_timezone(
         {
             let dict = as_dictionary_array::<Int32Type>(&array);
             let array = as_primitive_array::<TimestampMicrosecondType>(dict.values());
-            let array_with_timezone =
-                array_with_timezone(Arc::new(array.clone()) as ArrayRef, timezone, to_type)?;
+            let array_with_timezone = array_with_timezone(
+                Arc::new(array.clone()) as ArrayRef,
+                timezone,
+                to_type,
+            )?;
             let dict = dict.with_values(array_with_timezone);
             Ok(Arc::new(dict))
         }
@@ -147,15 +154,16 @@ fn timestamp_ntz_to_timestamp(
         DataType::Timestamp(TimeUnit::Microsecond, None) => {
             let array = as_primitive_array::<TimestampMicrosecondType>(&array);
             let tz: Tz = tz.parse()?;
-            let array: PrimitiveArray<TimestampMicrosecondType> = array.try_unary(|value| {
-                as_datetime::<TimestampMicrosecondType>(value)
-                    .ok_or_else(|| datetime_cast_err(value))
-                    .map(|local_datetime| {
-                        let datetime: DateTime<Tz> =
-                            tz.from_local_datetime(&local_datetime).unwrap();
-                        datetime.timestamp_micros()
-                    })
-            })?;
+            let array: PrimitiveArray<TimestampMicrosecondType> =
+                array.try_unary(|value| {
+                    as_datetime::<TimestampMicrosecondType>(value)
+                        .ok_or_else(|| datetime_cast_err(value))
+                        .map(|local_datetime| {
+                            let datetime: DateTime<Tz> =
+                                tz.from_local_datetime(&local_datetime).unwrap();
+                            datetime.timestamp_micros()
+                        })
+                })?;
             let array_with_tz = if let Some(to_tz) = to_timezone {
                 array.with_timezone(to_tz)
             } else {
@@ -166,15 +174,16 @@ fn timestamp_ntz_to_timestamp(
         DataType::Timestamp(TimeUnit::Millisecond, None) => {
             let array = as_primitive_array::<TimestampMillisecondType>(&array);
             let tz: Tz = tz.parse()?;
-            let array: PrimitiveArray<TimestampMillisecondType> = array.try_unary(|value| {
-                as_datetime::<TimestampMillisecondType>(value)
-                    .ok_or_else(|| datetime_cast_err(value))
-                    .map(|local_datetime| {
-                        let datetime: DateTime<Tz> =
-                            tz.from_local_datetime(&local_datetime).unwrap();
-                        datetime.timestamp_millis()
-                    })
-            })?;
+            let array: PrimitiveArray<TimestampMillisecondType> =
+                array.try_unary(|value| {
+                    as_datetime::<TimestampMillisecondType>(value)
+                        .ok_or_else(|| datetime_cast_err(value))
+                        .map(|local_datetime| {
+                            let datetime: DateTime<Tz> =
+                                tz.from_local_datetime(&local_datetime).unwrap();
+                            datetime.timestamp_millis()
+                        })
+                })?;
             let array_with_tz = if let Some(to_tz) = to_timezone {
                 array.with_timezone(to_tz)
             } else {
@@ -197,15 +206,16 @@ fn pre_timestamp_cast(array: ArrayRef, timezone: String) -> Result<ArrayRef, Arr
             let array = as_primitive_array::<TimestampMicrosecondType>(&array);
 
             let tz: Tz = timezone.parse()?;
-            let array: PrimitiveArray<TimestampMicrosecondType> = array.try_unary(|value| {
-                as_datetime::<TimestampMicrosecondType>(value)
-                    .ok_or_else(|| datetime_cast_err(value))
-                    .map(|datetime| {
-                        let offset = tz.offset_from_utc_datetime(&datetime).fix();
-                        let datetime = datetime + offset;
-                        datetime.and_utc().timestamp_micros()
-                    })
-            })?;
+            let array: PrimitiveArray<TimestampMicrosecondType> =
+                array.try_unary(|value| {
+                    as_datetime::<TimestampMicrosecondType>(value)
+                        .ok_or_else(|| datetime_cast_err(value))
+                        .map(|datetime| {
+                            let offset = tz.offset_from_utc_datetime(&datetime).fix();
+                            let datetime = datetime + offset;
+                            datetime.and_utc().timestamp_micros()
+                        })
+                })?;
 
             Ok(Arc::new(array))
         }

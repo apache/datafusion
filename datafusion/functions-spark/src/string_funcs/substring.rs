@@ -47,7 +47,9 @@ impl Hash for SubstringExpr {
 
 impl PartialEq for SubstringExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.child.eq(&other.child) && self.start.eq(&other.start) && self.len.eq(&other.len)
+        self.child.eq(&other.child)
+            && self.start.eq(&other.start)
+            && self.len.eq(&other.len)
     }
 }
 

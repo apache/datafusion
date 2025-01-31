@@ -23,13 +23,13 @@ use arrow::{
         cast::AsArray,
         types::{Date32Type, Int16Type, Int32Type, Int8Type},
         Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array,
-        GenericStringArray, Int16Array, Int32Array, Int64Array, Int8Array, OffsetSizeTrait,
-        PrimitiveArray,
+        GenericStringArray, Int16Array, Int32Array, Int64Array, Int8Array,
+        OffsetSizeTrait, PrimitiveArray,
     },
     compute::{cast_with_options, take, unary, CastOptions},
     datatypes::{
-        ArrowPrimitiveType, Decimal128Type, DecimalType, Float32Type, Float64Type, Int64Type,
-        TimestampMicrosecondType,
+        ArrowPrimitiveType, Decimal128Type, DecimalType, Float32Type, Float64Type,
+        Int64Type, TimestampMicrosecondType,
     },
     error::ArrowError,
     record_batch::RecordBatch,
@@ -246,7 +246,9 @@ fn can_cast_from_string(to_type: &DataType, options: &SparkCastOptions) -> bool 
 fn can_cast_to_string(from_type: &DataType, options: &SparkCastOptions) -> bool {
     use DataType::*;
     match from_type {
-        Boolean | Int8 | Int16 | Int32 | Int64 | Date32 | Date64 | Timestamp(_, _) => true,
+        Boolean | Int8 | Int16 | Int32 | Int64 | Date32 | Date64 | Timestamp(_, _) => {
+            true
+        }
         Float32 | Float64 => {
             // There can be differences in precision.
             // For example, the input \"1.4E-45\" will produce 1.0E-45 " +
@@ -408,7 +410,8 @@ macro_rules! cast_utf8_to_int {
 macro_rules! cast_utf8_to_timestamp {
     ($array:expr, $eval_mode:expr, $array_type:ty, $cast_method:ident, $tz:expr) => {{
         let len = $array.len();
-        let mut cast_array = PrimitiveArray::<$array_type>::builder(len).with_timezone("UTC");
+        let mut cast_array =
+            PrimitiveArray::<$array_type>::builder(len).with_timezone("UTC");
         for i in 0..len {
             if $array.is_null(i) {
                 cast_array.append_null()
@@ -519,9 +522,9 @@ macro_rules! cast_int_to_int_macro {
             EvalMode::Legacy => cast_array
                 .iter()
                 .map(|value| match value {
-                    Some(value) => {
-                        Ok::<Option<$to_native_type>, SparkError>(Some(value as $to_native_type))
-                    }
+                    Some(value) => Ok::<Option<$to_native_type>, SparkError>(Some(
+                        value as $to_native_type,
+                    )),
                     _ => Ok(None),
                 })
                 .collect::<Result<PrimitiveArray<$to_arrow_primitive_type>, _>>(),
@@ -574,7 +577,8 @@ macro_rules! cast_float_to_int16_down {
                 .iter()
                 .map(|value| match value {
                     Some(value) => {
-                        let is_overflow = value.is_nan() || value.abs() as i32 == i32::MAX;
+                        let is_overflow =
+                            value.is_nan() || value.abs() as i32 == i32::MAX;
                         if is_overflow {
                             return Err(cast_overflow(
                                 &format!($format_str, value).replace("e", "E"),
@@ -636,8 +640,8 @@ macro_rules! cast_float_to_int32_up {
                 .iter()
                 .map(|value| match value {
                     Some(value) => {
-                        let is_overflow =
-                            value.is_nan() || value.abs() as $rust_dest_type == $max_dest_val;
+                        let is_overflow = value.is_nan()
+                            || value.abs() as $rust_dest_type == $max_dest_val;
                         if is_overflow {
                             return Err(cast_overflow(
                                 &format!($format_str, value).replace("e", "E"),
@@ -653,9 +657,9 @@ macro_rules! cast_float_to_int32_up {
             _ => cast_array
                 .iter()
                 .map(|value| match value {
-                    Some(value) => {
-                        Ok::<Option<$rust_dest_type>, SparkError>(Some(value as $rust_dest_type))
-                    }
+                    Some(value) => Ok::<Option<$rust_dest_type>, SparkError>(Some(
+                        value as $rust_dest_type,
+                    )),
                     None => Ok(None),
                 })
                 .collect::<Result<$dest_array_type, _>>()?,
@@ -688,7 +692,8 @@ macro_rules! cast_decimal_to_int16_down {
                 .map(|value| match value {
                     Some(value) => {
                         let divisor = 10_i128.pow($scale as u32);
-                        let (truncated, decimal) = (value / divisor, (value % divisor).abs());
+                        let (truncated, decimal) =
+                            (value / divisor, (value % divisor).abs());
                         let is_overflow = truncated.abs() > i32::MAX.into();
                         if is_overflow {
                             return Err(cast_overflow(
@@ -751,7 +756,8 @@ macro_rules! cast_decimal_to_int32_up {
                 .map(|value| match value {
                     Some(value) => {
                         let divisor = 10_i128.pow($scale as u32);
-                        let (truncated, decimal) = (value / divisor, (value % divisor).abs());
+                        let (truncated, decimal) =
+                            (value / divisor, (value % divisor).abs());
                         let is_overflow = truncated.abs() > $max_dest_val.into();
                         if is_overflow {
                             return Err(cast_overflow(
@@ -856,8 +862,10 @@ pub fn spark_cast(
             // some cases e.g., scalar subquery, Spark will not fold it, so we need to handle it
             // here.
             let array = scalar.to_array()?;
-            let scalar =
-                ScalarValue::try_from_array(&cast_array(array, data_type, cast_options)?, 0)?;
+            let scalar = ScalarValue::try_from_array(
+                &cast_array(array, data_type, cast_options)?,
+                0,
+            )?;
             Ok(ColumnarValue::Scalar(scalar))
         }
     }
@@ -875,7 +883,8 @@ fn cast_array(
     let array = match &from_type {
         Dictionary(key_type, value_type)
             if key_type.as_ref() == &Int32
-                && (value_type.as_ref() == &Utf8 || value_type.as_ref() == &LargeUtf8) =>
+                && (value_type.as_ref() == &Utf8
+                    || value_type.as_ref() == &LargeUtf8) =>
         {
             let dict_array = array
                 .as_any()
@@ -945,7 +954,9 @@ fn cast_array(
         | (Decimal128(_, _), Int64)
             if eval_mode != EvalMode::Try =>
         {
-            spark_cast_nonintegral_numeric_to_integral(&array, eval_mode, from_type, to_type)
+            spark_cast_nonintegral_numeric_to_integral(
+                &array, eval_mode, from_type, to_type,
+            )
         }
         (Struct(_), Utf8) => Ok(casts_struct_to_string(array.as_struct(), cast_options)?),
         (Struct(_), Struct(_)) => Ok(cast_struct_to_struct(
@@ -960,7 +971,11 @@ fn cast_array(
             Ok(cast_with_options(&array, to_type, &CAST_OPTIONS)?)
         }
         _ if cast_options.is_adapting_schema
-            || is_datafusion_spark_compatible(from_type, to_type, cast_options.allow_incompat) =>
+            || is_datafusion_spark_compatible(
+                from_type,
+                to_type,
+                cast_options.allow_incompat,
+            ) =>
         {
             // use DataFusion cast only when we know that it is compatible with Spark
             Ok(cast_with_options(&array, to_type, &CAST_OPTIONS)?)
@@ -1042,14 +1057,20 @@ fn is_datafusion_spark_compatible(
         ),
         DataType::Utf8 if allow_incompat => matches!(
             to_type,
-            DataType::Binary | DataType::Float32 | DataType::Float64 | DataType::Decimal128(_, _)
+            DataType::Binary
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Decimal128(_, _)
         ),
         DataType::Utf8 => matches!(to_type, DataType::Binary),
         DataType::Date32 => matches!(to_type, DataType::Utf8),
         DataType::Timestamp(_, _) => {
             matches!(
                 to_type,
-                DataType::Int64 | DataType::Date32 | DataType::Utf8 | DataType::Timestamp(_, _)
+                DataType::Int64
+                    | DataType::Date32
+                    | DataType::Utf8
+                    | DataType::Timestamp(_, _)
             )
         }
         DataType::Binary => {
@@ -1155,7 +1176,9 @@ fn cast_string_to_int<OffsetSize: OffsetSizeTrait>(
         .expect("cast_string_to_int expected a string array");
 
     let cast_array: ArrayRef = match to_type {
-        DataType::Int8 => cast_utf8_to_int!(string_array, eval_mode, Int8Type, cast_string_to_i8)?,
+        DataType::Int8 => {
+            cast_utf8_to_int!(string_array, eval_mode, Int8Type, cast_string_to_i8)?
+        }
         DataType::Int16 => {
             cast_utf8_to_int!(string_array, eval_mode, Int16Type, cast_string_to_i16)?
         }
@@ -1684,7 +1707,11 @@ fn do_cast_string_to_int<
 
 /// Either return Ok(None) or Err(SparkError::CastInvalidValue) depending on the evaluation mode
 #[inline]
-fn none_or_err<T>(eval_mode: EvalMode, type_name: &str, str: &str) -> SparkResult<Option<T>> {
+fn none_or_err<T>(
+    eval_mode: EvalMode,
+    type_name: &str,
+    str: &str,
+) -> SparkResult<Option<T>> {
     match eval_mode {
         EvalMode::Ansi => Err(invalid_value(str, "STRING", type_name)),
         _ => Ok(None),
@@ -1714,7 +1741,10 @@ impl Display for Cast {
         write!(
             f,
             "Cast [data_type: {}, timezone: {}, child: {}, eval_mode: {:?}]",
-            self.data_type, self.cast_options.timezone, self.child, &self.cast_options.eval_mode
+            self.data_type,
+            self.cast_options.timezone,
+            self.child,
+            &self.cast_options.eval_mode
         )
     }
 }
@@ -1929,27 +1959,45 @@ fn get_timestamp_values<T: TimeZone>(
     parse_timestamp_to_micros(timestamp_info, tz)
 }
 
-fn parse_str_to_year_timestamp<T: TimeZone>(value: &str, tz: &T) -> SparkResult<Option<i64>> {
+fn parse_str_to_year_timestamp<T: TimeZone>(
+    value: &str,
+    tz: &T,
+) -> SparkResult<Option<i64>> {
     get_timestamp_values(value, "year", tz)
 }
 
-fn parse_str_to_month_timestamp<T: TimeZone>(value: &str, tz: &T) -> SparkResult<Option<i64>> {
+fn parse_str_to_month_timestamp<T: TimeZone>(
+    value: &str,
+    tz: &T,
+) -> SparkResult<Option<i64>> {
     get_timestamp_values(value, "month", tz)
 }
 
-fn parse_str_to_day_timestamp<T: TimeZone>(value: &str, tz: &T) -> SparkResult<Option<i64>> {
+fn parse_str_to_day_timestamp<T: TimeZone>(
+    value: &str,
+    tz: &T,
+) -> SparkResult<Option<i64>> {
     get_timestamp_values(value, "day", tz)
 }
 
-fn parse_str_to_hour_timestamp<T: TimeZone>(value: &str, tz: &T) -> SparkResult<Option<i64>> {
+fn parse_str_to_hour_timestamp<T: TimeZone>(
+    value: &str,
+    tz: &T,
+) -> SparkResult<Option<i64>> {
     get_timestamp_values(value, "hour", tz)
 }
 
-fn parse_str_to_minute_timestamp<T: TimeZone>(value: &str, tz: &T) -> SparkResult<Option<i64>> {
+fn parse_str_to_minute_timestamp<T: TimeZone>(
+    value: &str,
+    tz: &T,
+) -> SparkResult<Option<i64>> {
     get_timestamp_values(value, "minute", tz)
 }
 
-fn parse_str_to_second_timestamp<T: TimeZone>(value: &str, tz: &T) -> SparkResult<Option<i64>> {
+fn parse_str_to_second_timestamp<T: TimeZone>(
+    value: &str,
+    tz: &T,
+) -> SparkResult<Option<i64>> {
     get_timestamp_values(value, "second", tz)
 }
 
@@ -1960,7 +2008,10 @@ fn parse_str_to_microsecond_timestamp<T: TimeZone>(
     get_timestamp_values(value, "microsecond", tz)
 }
 
-fn parse_str_to_time_only_timestamp<T: TimeZone>(value: &str, tz: &T) -> SparkResult<Option<i64>> {
+fn parse_str_to_time_only_timestamp<T: TimeZone>(
+    value: &str,
+    tz: &T,
+) -> SparkResult<Option<i64>> {
     let values: Vec<&str> = value.split('T').collect();
     let time_values: Vec<u32> = values[1]
         .split(':')
@@ -2052,7 +2103,9 @@ fn date_parser(date_str: &str, eval_mode: EvalMode) -> SparkResult<Option<i32>> 
 
     //loop to the end of string until we have processed 3 segments,
     //exit loop on encountering any space ' ' or 'T' after the 3rd segment
-    while j < str_end_trimmed && (current_segment < 3 && !(bytes[j] == b' ' || bytes[j] == b'T')) {
+    while j < str_end_trimmed
+        && (current_segment < 3 && !(bytes[j] == b' ' || bytes[j] == b'T'))
+    {
         let b = bytes[j];
         if current_segment < 2 && b == b'-' {
             //check for validity of year and month segments if current byte is separator
@@ -2107,17 +2160,23 @@ fn date_parser(date_str: &str, eval_mode: EvalMode) -> SparkResult<Option<i32>> 
 /// Dictionary arrays are already unpacked by the DataFusion cast() since Spark cannot specify
 /// Dictionary as to_type. The from_type is taken before the DataFusion cast() runs in
 /// expressions/cast.rs, so it can be still Dictionary.
-fn spark_cast_postprocess(array: ArrayRef, from_type: &DataType, to_type: &DataType) -> ArrayRef {
+fn spark_cast_postprocess(
+    array: ArrayRef,
+    from_type: &DataType,
+    to_type: &DataType,
+) -> ArrayRef {
     match (from_type, to_type) {
         (DataType::Timestamp(_, _), DataType::Int64) => {
             // See Spark's `Cast` expression
-            unary_dyn::<_, Int64Type>(&array, |v| div_floor(v, MICROS_PER_SECOND)).unwrap()
+            unary_dyn::<_, Int64Type>(&array, |v| div_floor(v, MICROS_PER_SECOND))
+                .unwrap()
         }
         (DataType::Dictionary(_, value_type), DataType::Int64)
             if matches!(value_type.as_ref(), &DataType::Timestamp(_, _)) =>
         {
             // See Spark's `Cast` expression
-            unary_dyn::<_, Int64Type>(&array, |v| div_floor(v, MICROS_PER_SECOND)).unwrap()
+            unary_dyn::<_, Int64Type>(&array, |v| div_floor(v, MICROS_PER_SECOND))
+                .unwrap()
         }
         (DataType::Timestamp(_, _), DataType::Utf8) => remove_trailing_zeroes(array),
         (DataType::Dictionary(_, value_type), DataType::Utf8)
@@ -2275,7 +2334,8 @@ mod tests {
             Some(253402346096000000)
         );
         assert_eq!(
-            timestamp_parser("10000-01-01T12:34:56.123456", EvalMode::Legacy, tz).unwrap(),
+            timestamp_parser("10000-01-01T12:34:56.123456", EvalMode::Legacy, tz)
+                .unwrap(),
             Some(253402346096123456)
         );
         // assert_eq!(
@@ -2415,7 +2475,8 @@ mod tests {
             Some("2020-01-01T"),
         ]));
 
-        let result = cast_string_to_date(&array, &DataType::Date32, EvalMode::Legacy).unwrap();
+        let result =
+            cast_string_to_date(&array, &DataType::Date32, EvalMode::Legacy).unwrap();
 
         let date32_array = result
             .as_any()
@@ -2440,9 +2501,12 @@ mod tests {
         ]));
 
         for eval_mode in &[EvalMode::Legacy, EvalMode::Try, EvalMode::Ansi] {
-            let result =
-                cast_string_to_date(&array_with_invalid_date, &DataType::Date32, *eval_mode)
-                    .unwrap();
+            let result = cast_string_to_date(
+                &array_with_invalid_date,
+                &DataType::Date32,
+                *eval_mode,
+            )
+            .unwrap();
 
             let date32_array = result
                 .as_any()
@@ -2472,9 +2536,12 @@ mod tests {
         ]));
 
         for eval_mode in &[EvalMode::Legacy, EvalMode::Try] {
-            let result =
-                cast_string_to_date(&array_with_invalid_date, &DataType::Date32, *eval_mode)
-                    .unwrap();
+            let result = cast_string_to_date(
+                &array_with_invalid_date,
+                &DataType::Date32,
+                *eval_mode,
+            )
+            .unwrap();
 
             let date32_array = result
                 .as_any()
@@ -2496,8 +2563,11 @@ mod tests {
             );
         }
 
-        let result =
-            cast_string_to_date(&array_with_invalid_date, &DataType::Date32, EvalMode::Ansi);
+        let result = cast_string_to_date(
+            &array_with_invalid_date,
+            &DataType::Date32,
+            EvalMode::Ansi,
+        );
         match result {
             Err(e) => assert!(
                 e.to_string().contains(
@@ -2549,7 +2619,8 @@ mod tests {
     #[test]
     fn test_cast_invalid_timezone() {
         let timestamps: PrimitiveArray<TimestampMicrosecondType> = vec![i64::MAX].into();
-        let cast_options = SparkCastOptions::new(EvalMode::Legacy, "Not a valid timezone", false);
+        let cast_options =
+            SparkCastOptions::new(EvalMode::Legacy, "Not a valid timezone", false);
         let result = cast_array(
             Arc::new(timestamps.with_timezone("Europe/Copenhagen")),
             &DataType::Date32,

@@ -46,7 +46,11 @@ pub struct Correlation {
 }
 
 impl Correlation {
-    pub fn new(name: impl Into<String>, data_type: DataType, null_on_divide_by_zero: bool) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        data_type: DataType,
+        null_on_divide_by_zero: bool,
+    ) -> Self {
         // the result of correlation just support FLOAT64 data type.
         assert!(matches!(data_type, DataType::Float64));
         Self {
@@ -133,9 +137,18 @@ impl CorrelationAccumulator {
     /// Creates a new `CorrelationAccumulator`
     pub fn try_new(null_on_divide_by_zero: bool) -> Result<Self> {
         Ok(Self {
-            covar: CovarianceAccumulator::try_new(StatsType::Population, null_on_divide_by_zero)?,
-            stddev1: StddevAccumulator::try_new(StatsType::Population, null_on_divide_by_zero)?,
-            stddev2: StddevAccumulator::try_new(StatsType::Population, null_on_divide_by_zero)?,
+            covar: CovarianceAccumulator::try_new(
+                StatsType::Population,
+                null_on_divide_by_zero,
+            )?,
+            stddev1: StddevAccumulator::try_new(
+                StatsType::Population,
+                null_on_divide_by_zero,
+            )?,
+            stddev2: StddevAccumulator::try_new(
+                StatsType::Population,
+                null_on_divide_by_zero,
+            )?,
             null_on_divide_by_zero,
         })
     }
@@ -238,7 +251,8 @@ impl Accumulator for CorrelationAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) - std::mem::size_of_val(&self.covar) + self.covar.size()
+        std::mem::size_of_val(self) - std::mem::size_of_val(&self.covar)
+            + self.covar.size()
             - std::mem::size_of_val(&self.stddev1)
             + self.stddev1.size()
             - std::mem::size_of_val(&self.stddev2)

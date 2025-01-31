@@ -30,7 +30,9 @@ use std::{any::Any, sync::Arc};
 
 use crate::utils::is_valid_decimal_precision;
 use arrow_array::ArrowNativeTypeOp;
-use arrow_data::decimal::{MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION};
+use arrow_data::decimal::{
+    MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
+};
 use datafusion::logical_expr::Volatility::Immutable;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::avg_return_type;
@@ -65,14 +67,15 @@ impl AggregateUDFImpl for AvgDecimal {
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         match (&self.sum_data_type, &self.result_data_type) {
-            (Decimal128(sum_precision, sum_scale), Decimal128(target_precision, target_scale)) => {
-                Ok(Box::new(AvgDecimalAccumulator::new(
-                    *sum_scale,
-                    *sum_precision,
-                    *target_precision,
-                    *target_scale,
-                )))
-            }
+            (
+                Decimal128(sum_precision, sum_scale),
+                Decimal128(target_precision, target_scale),
+            ) => Ok(Box::new(AvgDecimalAccumulator::new(
+                *sum_scale,
+                *sum_precision,
+                *target_precision,
+                *target_scale,
+            ))),
             _ => not_impl_err!(
                 "AvgDecimalAccumulator for ({} --> {})",
                 self.sum_data_type,
@@ -114,16 +117,17 @@ impl AggregateUDFImpl for AvgDecimal {
     ) -> Result<Box<dyn GroupsAccumulator>> {
         // instantiate specialized accumulator based for the type
         match (&self.sum_data_type, &self.result_data_type) {
-            (Decimal128(sum_precision, sum_scale), Decimal128(target_precision, target_scale)) => {
-                Ok(Box::new(AvgDecimalGroupsAccumulator::new(
-                    &self.result_data_type,
-                    &self.sum_data_type,
-                    *target_precision,
-                    *target_scale,
-                    *sum_precision,
-                    *sum_scale,
-                )))
-            }
+            (
+                Decimal128(sum_precision, sum_scale),
+                Decimal128(target_precision, target_scale),
+            ) => Ok(Box::new(AvgDecimalGroupsAccumulator::new(
+                &self.result_data_type,
+                &self.sum_data_type,
+                *target_precision,
+                *target_scale,
+                *sum_precision,
+                *sum_scale,
+            ))),
             _ => not_impl_err!(
                 "AvgDecimalGroupsAccumulator for ({} --> {})",
                 self.sum_data_type,
@@ -167,7 +171,12 @@ struct AvgDecimalAccumulator {
 }
 
 impl AvgDecimalAccumulator {
-    pub fn new(sum_scale: i8, sum_precision: u8, target_precision: u8, target_scale: i8) -> Self {
+    pub fn new(
+        sum_scale: i8,
+        sum_precision: u8,
+        target_precision: u8,
+        target_scale: i8,
+    ) -> Self {
         Self {
             sum: None,
             count: 0,
@@ -265,8 +274,10 @@ impl Accumulator for AvgDecimalAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let scaler = 10_i128.pow(self.target_scale.saturating_sub(self.sum_scale) as u32);
-        let target_min = MIN_DECIMAL_FOR_EACH_PRECISION[self.target_precision as usize - 1];
-        let target_max = MAX_DECIMAL_FOR_EACH_PRECISION[self.target_precision as usize - 1];
+        let target_min =
+            MIN_DECIMAL_FOR_EACH_PRECISION[self.target_precision as usize - 1];
+        let target_max =
+            MAX_DECIMAL_FOR_EACH_PRECISION[self.target_precision as usize - 1];
 
         let result = self
             .sum
@@ -445,8 +456,10 @@ impl GroupsAccumulator for AvgDecimalGroupsAccumulator {
         let iter = sums.into_iter().zip(counts);
 
         let scaler = 10_i128.pow(self.target_scale.saturating_sub(self.sum_scale) as u32);
-        let target_min = MIN_DECIMAL_FOR_EACH_PRECISION[self.target_precision as usize - 1];
-        let target_max = MAX_DECIMAL_FOR_EACH_PRECISION[self.target_precision as usize - 1];
+        let target_min =
+            MIN_DECIMAL_FOR_EACH_PRECISION[self.target_precision as usize - 1];
+        let target_max =
+            MAX_DECIMAL_FOR_EACH_PRECISION[self.target_precision as usize - 1];
 
         for (sum, count) in iter {
             if count != 0 {
@@ -476,8 +489,8 @@ impl GroupsAccumulator for AvgDecimalGroupsAccumulator {
         let counts = Int64Array::new(counts.into(), nulls.clone());
 
         let sums = emit_to.take_needed(&mut self.sums);
-        let sums =
-            Decimal128Array::new(sums.into(), nulls).with_data_type(self.sum_data_type.clone());
+        let sums = Decimal128Array::new(sums.into(), nulls)
+            .with_data_type(self.sum_data_type.clone());
 
         Ok(vec![
             Arc::new(sums) as ArrayRef,
@@ -500,7 +513,13 @@ impl GroupsAccumulator for AvgDecimalGroupsAccumulator {
 /// * target_max: The maximum output value possible to represent with the target precision
 /// * scaler: scale factor for avg
 #[inline(always)]
-fn avg(sum: i128, count: i128, target_min: i128, target_max: i128, scaler: i128) -> Option<i128> {
+fn avg(
+    sum: i128,
+    count: i128,
+    target_min: i128,
+    target_max: i128,
+    scaler: i128,
+) -> Option<i128> {
     if let Some(value) = sum.checked_mul(scaler) {
         // `sum / count` with ROUND_HALF_UP
         let (div, rem) = value.div_rem(&count);

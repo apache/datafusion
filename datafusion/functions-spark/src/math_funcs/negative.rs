@@ -118,16 +118,36 @@ impl PhysicalExpr for NegativeExpr {
                 if self.fail_on_error {
                     match array.data_type() {
                         DataType::Int8 => {
-                            check_overflow!(array, arrow::array::Int8Array, i8::MIN, "byte")
+                            check_overflow!(
+                                array,
+                                arrow::array::Int8Array,
+                                i8::MIN,
+                                "byte"
+                            )
                         }
                         DataType::Int16 => {
-                            check_overflow!(array, arrow::array::Int16Array, i16::MIN, "short")
+                            check_overflow!(
+                                array,
+                                arrow::array::Int16Array,
+                                i16::MIN,
+                                "short"
+                            )
                         }
                         DataType::Int32 => {
-                            check_overflow!(array, arrow::array::Int32Array, i32::MIN, "integer")
+                            check_overflow!(
+                                array,
+                                arrow::array::Int32Array,
+                                i32::MIN,
+                                "integer"
+                            )
                         }
                         DataType::Int64 => {
-                            check_overflow!(array, arrow::array::Int64Array, i64::MIN, "long")
+                            check_overflow!(
+                                array,
+                                arrow::array::Int64Array,
+                                i64::MIN,
+                                "long"
+                            )
                         }
                         DataType::Interval(value) => match value {
                             arrow::datatypes::IntervalUnit::YearMonth => check_overflow!(

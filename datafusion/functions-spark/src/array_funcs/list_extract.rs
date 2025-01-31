@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::{array::MutableArrayData, datatypes::ArrowNativeType, record_batch::RecordBatch};
+use arrow::{
+    array::MutableArrayData, datatypes::ArrowNativeType, record_batch::RecordBatch,
+};
 use arrow_array::{Array, GenericListArray, Int32Array, OffsetSizeTrait};
 use arrow_schema::{DataType, FieldRef, Schema};
 use datafusion::logical_expr::ColumnarValue;
@@ -111,7 +113,9 @@ impl PhysicalExpr for ListExtract {
             .map(|d| {
                 d.evaluate(batch).map(|value| match value {
                     ColumnarValue::Scalar(scalar)
-                        if !scalar.data_type().equals_datatype(child_value.data_type()) =>
+                        if !scalar
+                            .data_type()
+                            .equals_datatype(child_value.data_type()) =>
                     {
                         scalar.cast_to(child_value.data_type())
                     }
@@ -230,9 +234,12 @@ fn list_extract<O: OffsetSizeTrait>(
 
     let default_data = default_value.to_array()?.to_data();
 
-    let mut mutable = MutableArrayData::new(vec![&data, &default_data], true, index_array.len());
+    let mut mutable =
+        MutableArrayData::new(vec![&data, &default_data], true, index_array.len());
 
-    for (row, (offset_window, index)) in offsets.windows(2).zip(index_array.values()).enumerate() {
+    for (row, (offset_window, index)) in
+        offsets.windows(2).zip(index_array.values()).enumerate()
+    {
         let start = offset_window[0].as_usize();
         let len = offset_window[1].as_usize() - start;
 

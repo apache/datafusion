@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::downcast_compute_op;
-use crate::math_funcs::utils::{get_precision_scale, make_decimal_array, make_decimal_scalar};
+use crate::math_funcs::utils::{
+    get_precision_scale, make_decimal_array, make_decimal_scalar,
+};
 use arrow::array::{Float32Array, Float64Array, Int64Array};
 use arrow_array::{Array, ArrowNativeTypeOp};
 use arrow_schema::DataType;
@@ -34,11 +36,13 @@ pub fn spark_ceil(
     match value {
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Float32 => {
-                let result = downcast_compute_op!(array, "ceil", ceil, Float32Array, Int64Array);
+                let result =
+                    downcast_compute_op!(array, "ceil", ceil, Float32Array, Int64Array);
                 Ok(ColumnarValue::Array(result?))
             }
             DataType::Float64 => {
-                let result = downcast_compute_op!(array, "ceil", ceil, Float64Array, Int64Array);
+                let result =
+                    downcast_compute_op!(array, "ceil", ceil, Float64Array, Int64Array);
                 Ok(ColumnarValue::Array(result?))
             }
             DataType::Int64 => {
@@ -62,7 +66,9 @@ pub fn spark_ceil(
             ScalarValue::Float64(a) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(
                 a.map(|x| x.ceil() as i64),
             ))),
-            ScalarValue::Int64(a) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(a.map(|x| x)))),
+            ScalarValue::Int64(a) => {
+                Ok(ColumnarValue::Scalar(ScalarValue::Int64(a.map(|x| x))))
+            }
             ScalarValue::Decimal128(a, _, scale) if *scale > 0 => {
                 let f = decimal_ceil_f(scale);
                 let (precision, scale) = get_precision_scale(data_type);

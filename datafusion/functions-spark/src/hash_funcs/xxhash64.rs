@@ -141,9 +141,14 @@ mod tests {
 
     use super::create_xxhash64_hashes;
     use crate::test_hashes_with_nulls;
-    use datafusion::arrow::array::{ArrayRef, Int32Array, Int64Array, Int8Array, StringArray};
+    use datafusion::arrow::array::{
+        ArrayRef, Int32Array, Int64Array, Int8Array, StringArray,
+    };
 
-    fn test_xxhash64_hash<I: Clone, T: arrow_array::Array + From<Vec<Option<I>>> + 'static>(
+    fn test_xxhash64_hash<
+        I: Clone,
+        T: arrow_array::Array + From<Vec<Option<I>>> + 'static,
+    >(
         values: Vec<Option<I>>,
         expected: Vec<u64>,
     ) {

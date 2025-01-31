@@ -17,15 +17,16 @@
 
 use crate::hash_funcs::*;
 use crate::{
-    spark_ceil, spark_date_add, spark_date_sub, spark_decimal_div, spark_floor, spark_hex,
-    spark_isnan, spark_make_decimal, spark_read_side_padding, spark_round, spark_unhex,
-    spark_unscaled_value, SparkChrFunc,
+    spark_ceil, spark_date_add, spark_date_sub, spark_decimal_div, spark_floor,
+    spark_hex, spark_isnan, spark_make_decimal, spark_read_side_padding, spark_round,
+    spark_unhex, spark_unscaled_value, SparkChrFunc,
 };
 use arrow_schema::DataType;
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{
-    ColumnarValue, ScalarFunctionImplementation, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ScalarFunctionImplementation, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use std::any::Any;
 use std::fmt::Debug;

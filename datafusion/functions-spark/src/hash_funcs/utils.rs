@@ -41,13 +41,18 @@ macro_rules! hash_array_boolean {
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
         if array.null_count() == 0 {
             for (i, hash) in $hashes.iter_mut().enumerate() {
-                *hash = $hash_method($hash_input_type::from(array.value(i)).to_le_bytes(), *hash);
+                *hash = $hash_method(
+                    $hash_input_type::from(array.value(i)).to_le_bytes(),
+                    *hash,
+                );
             }
         } else {
             for (i, hash) in $hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        $hash_method($hash_input_type::from(array.value(i)).to_le_bytes(), *hash);
+                    *hash = $hash_method(
+                        $hash_input_type::from(array.value(i)).to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }
@@ -111,13 +116,18 @@ macro_rules! hash_array_small_decimal {
 
         if array.null_count() == 0 {
             for (i, hash) in $hashes.iter_mut().enumerate() {
-                *hash = $hash_method(i64::try_from(array.value(i)).unwrap().to_le_bytes(), *hash);
+                *hash = $hash_method(
+                    i64::try_from(array.value(i)).unwrap().to_le_bytes(),
+                    *hash,
+                );
             }
         } else {
             for (i, hash) in $hashes.iter_mut().enumerate() {
                 if !array.is_null(i) {
-                    *hash =
-                        $hash_method(i64::try_from(array.value(i)).unwrap().to_le_bytes(), *hash);
+                    *hash = $hash_method(
+                        i64::try_from(array.value(i)).unwrap().to_le_bytes(),
+                        *hash,
+                    );
                 }
             }
         }

@@ -59,7 +59,11 @@ impl PartialEq for CheckOverflow {
 }
 
 impl CheckOverflow {
-    pub fn new(child: Arc<dyn PhysicalExpr>, data_type: DataType, fail_on_error: bool) -> Self {
+    pub fn new(
+        child: Arc<dyn PhysicalExpr>,
+        data_type: DataType,
+        fail_on_error: bool,
+    ) -> Self {
         Self {
             child,
             data_type,

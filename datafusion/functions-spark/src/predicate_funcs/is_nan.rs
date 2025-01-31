@@ -55,12 +55,12 @@ pub fn spark_isnan(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionEr
             ))),
         },
         ColumnarValue::Scalar(a) => match a {
-            ScalarValue::Float64(a) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
-                a.map(|x| x.is_nan()).unwrap_or(false),
-            )))),
-            ScalarValue::Float32(a) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
-                a.map(|x| x.is_nan()).unwrap_or(false),
-            )))),
+            ScalarValue::Float64(a) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
+                Some(a.map(|x| x.is_nan()).unwrap_or(false)),
+            ))),
+            ScalarValue::Float32(a) => Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
+                Some(a.map(|x| x.is_nan()).unwrap_or(false)),
+            ))),
             _ => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function isnan",
                 value.data_type(),

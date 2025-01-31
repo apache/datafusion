@@ -57,9 +57,9 @@ impl Stddev {
             name: name.into(),
             signature: Signature::coercible(
                 vec![
-                    datafusion_expr_common::signature::TypeSignatureClass::Native(Arc::new(
-                        NativeType::Float64,
-                    )),
+                    datafusion_expr_common::signature::TypeSignatureClass::Native(
+                        Arc::new(NativeType::Float64),
+                    ),
                 ],
                 Volatility::Immutable,
             ),
@@ -175,6 +175,7 @@ impl Accumulator for StddevAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::align_of_val(self) - std::mem::align_of_val(&self.variance) + self.variance.size()
+        std::mem::align_of_val(self) - std::mem::align_of_val(&self.variance)
+            + self.variance.size()
     }
 }

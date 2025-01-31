@@ -150,7 +150,12 @@ fn get_array_struct_fields<O: OffsetSizeTrait>(
     let field = Arc::clone(&values.fields()[ordinal]);
 
     let offsets = list_array.offsets();
-    let array = GenericListArray::new(field, offsets.clone(), column, list_array.nulls().cloned());
+    let array = GenericListArray::new(
+        field,
+        offsets.clone(),
+        column,
+        list_array.nulls().cloned(),
+    );
 
     Ok(ColumnarValue::Array(Arc::new(array)))
 }

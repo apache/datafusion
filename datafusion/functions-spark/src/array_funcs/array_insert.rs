@@ -21,7 +21,9 @@ use arrow::{
     datatypes::ArrowNativeType,
     record_batch::RecordBatch,
 };
-use arrow_array::{make_array, Array, ArrayRef, GenericListArray, Int32Array, OffsetSizeTrait};
+use arrow_array::{
+    make_array, Array, ArrayRef, GenericListArray, Int32Array, OffsetSizeTrait,
+};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion_common::{
@@ -207,8 +209,11 @@ fn array_insert<O: OffsetSizeTrait>(
     let item_data = items_array.to_data();
     let new_capacity = Capacities::Array(values_data.len() + item_data.len());
 
-    let mut mutable_values =
-        MutableArrayData::with_capacities(vec![&values_data, &item_data], true, new_capacity);
+    let mut mutable_values = MutableArrayData::with_capacities(
+        vec![&values_data, &item_data],
+        true,
+        new_capacity,
+    );
 
     let mut new_offsets = vec![O::usize_as(0)];
     let mut new_nulls = Vec::<bool>::with_capacity(list_array.len());
@@ -231,7 +236,8 @@ fn array_insert<O: OffsetSizeTrait>(
 
         if pos == 0 {
             return Err(DataFusionError::Internal(
-                "Position for array_insert should be greter or less than zero".to_string(),
+                "Position for array_insert should be greter or less than zero"
+                    .to_string(),
             ));
         }
 
@@ -260,7 +266,8 @@ fn array_insert<O: OffsetSizeTrait>(
                 mutable_values.extend(1, row_index, row_index + 1);
                 // In that case spark actualy makes array longer than expected;
                 // For example, if pos is equal to 5, len is eq to 3, than resulted len will be 5
-                new_offsets.push(new_offsets[row_index] + O::usize_as(new_array_len) + O::one());
+                new_offsets
+                    .push(new_offsets[row_index] + O::usize_as(new_array_len) + O::one());
             }
         } else {
             // This comment is takes from the Apache Spark source code as is:

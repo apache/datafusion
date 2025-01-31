@@ -19,8 +19,8 @@
 
 use arrow::{
     compute::{
-        contains_dyn, contains_utf8_scalar_dyn, ends_with_dyn, ends_with_utf8_scalar_dyn, like_dyn,
-        like_utf8_scalar_dyn, starts_with_dyn, starts_with_utf8_scalar_dyn,
+        contains_dyn, contains_utf8_scalar_dyn, ends_with_dyn, ends_with_utf8_scalar_dyn,
+        like_dyn, like_utf8_scalar_dyn, starts_with_dyn, starts_with_utf8_scalar_dyn,
     },
     record_batch::RecordBatch,
 };
@@ -44,7 +44,10 @@ macro_rules! make_predicate_function {
         }
 
         impl $name {
-            pub fn new(left: Arc<dyn PhysicalExpr>, right: Arc<dyn PhysicalExpr>) -> Self {
+            pub fn new(
+                left: Arc<dyn PhysicalExpr>,
+                right: Arc<dyn PhysicalExpr>,
+            ) -> Self {
                 Self { left, right }
             }
         }
@@ -81,15 +84,19 @@ macro_rules! make_predicate_function {
                 Ok(true)
             }
 
-            fn evaluate(&self, batch: &RecordBatch) -> datafusion_common::Result<ColumnarValue> {
+            fn evaluate(
+                &self,
+                batch: &RecordBatch,
+            ) -> datafusion_common::Result<ColumnarValue> {
                 let left_arg = self.left.evaluate(batch)?;
                 let right_arg = self.right.evaluate(batch)?;
 
                 let array = match (left_arg, right_arg) {
                     // array (op) scalar
-                    (ColumnarValue::Array(array), ColumnarValue::Scalar(Utf8(Some(string)))) => {
-                        $str_scalar_kernel(&array, string.as_str())
-                    }
+                    (
+                        ColumnarValue::Array(array),
+                        ColumnarValue::Scalar(Utf8(Some(string))),
+                    ) => $str_scalar_kernel(&array, string.as_str()),
                     (ColumnarValue::Array(_), ColumnarValue::Scalar(other)) => {
                         return Err(DataFusionError::Execution(format!(
                             "Should be String but got: {:?}",
@@ -103,7 +110,8 @@ macro_rules! make_predicate_function {
                     // scalar (op) scalar should be folded at Spark optimizer
                     _ => {
                         return Err(DataFusionError::Execution(
-                            "Predicate on two literals should be folded at Spark".to_string(),
+                            "Predicate on two literals should be folded at Spark"
+                                .to_string(),
                         ))
                     }
                 }?;

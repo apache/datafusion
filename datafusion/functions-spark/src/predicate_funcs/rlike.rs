@@ -69,7 +69,10 @@ impl RLike {
             child,
             pattern_str: pattern.to_string(),
             pattern: Regex::new(pattern).map_err(|e| {
-                SparkError::Internal(format!("Failed to compile pattern {}: {}", pattern, e))
+                SparkError::Internal(format!(
+                    "Failed to compile pattern {}: {}",
+                    pattern, e
+                ))
             })?,
         })
     }
@@ -118,7 +121,9 @@ impl PhysicalExpr for RLike {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         match self.child.evaluate(batch)? {
-            ColumnarValue::Array(array) if array.as_any().is::<DictionaryArray<Int32Type>>() => {
+            ColumnarValue::Array(array)
+                if array.as_any().is::<DictionaryArray<Int32Type>>() =>
+            {
                 let dict_array = array
                     .as_any()
                     .downcast_ref::<DictionaryArray<Int32Type>>()

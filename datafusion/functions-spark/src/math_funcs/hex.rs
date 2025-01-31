@@ -75,7 +75,8 @@ pub fn spark_hex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErro
             DataType::Int64 => {
                 let array = as_int64_array(array)?;
 
-                let hexed_array: StringArray = array.iter().map(|v| v.map(hex_int64)).collect();
+                let hexed_array: StringArray =
+                    array.iter().map(|v| v.map(hex_int64)).collect();
 
                 Ok(ColumnarValue::Array(Arc::new(hexed_array)))
             }
@@ -166,8 +167,8 @@ mod test {
 
     use arrow::{
         array::{
-            as_string_array, BinaryDictionaryBuilder, PrimitiveDictionaryBuilder, StringBuilder,
-            StringDictionaryBuilder,
+            as_string_array, BinaryDictionaryBuilder, PrimitiveDictionaryBuilder,
+            StringBuilder, StringDictionaryBuilder,
         },
         datatypes::{Int32Type, Int64Type},
     };

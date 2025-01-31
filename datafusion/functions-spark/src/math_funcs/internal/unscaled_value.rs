@@ -27,9 +27,9 @@ use std::sync::Arc;
 pub fn spark_unscaled_value(args: &[ColumnarValue]) -> DataFusionResult<ColumnarValue> {
     match &args[0] {
         ColumnarValue::Scalar(v) => match v {
-            ScalarValue::Decimal128(d, _, _) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(
-                d.map(|n| n as i64),
-            ))),
+            ScalarValue::Decimal128(d, _, _) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Int64(d.map(|n| n as i64)),
+            )),
             dt => internal_err!("Expected Decimal128 but found {dt:}"),
         },
         ColumnarValue::Array(a) => {

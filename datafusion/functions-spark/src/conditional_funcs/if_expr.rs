@@ -75,7 +75,8 @@ impl IfExpr {
             true_expr: Arc::clone(&true_expr),
             false_expr: Arc::clone(&false_expr),
             case_expr: Arc::new(
-                CaseExpr::try_new(None, vec![(if_expr, true_expr)], Some(false_expr)).unwrap(),
+                CaseExpr::try_new(None, vec![(if_expr, true_expr)], Some(false_expr))
+                    .unwrap(),
             ),
         }
     }
@@ -93,7 +94,9 @@ impl PhysicalExpr for IfExpr {
     }
 
     fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        if self.true_expr.nullable(_input_schema)? || self.true_expr.nullable(_input_schema)? {
+        if self.true_expr.nullable(_input_schema)?
+            || self.true_expr.nullable(_input_schema)?
+        {
             Ok(true)
         } else {
             Ok(false)
@@ -160,7 +163,8 @@ mod tests {
         let result = expr?.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_int32_array(&result)?;
 
-        let expected = &Int32Array::from(vec![Some(123), Some(999), Some(999), Some(999)]);
+        let expected =
+            &Int32Array::from(vec![Some(123), Some(999), Some(999), Some(999)]);
 
         assert_eq!(expected, result);
 
@@ -175,7 +179,8 @@ mod tests {
         let schema_ref = batch.schema();
 
         // if a >=1 123 else 999
-        let if_expr = binary(col("a", &schema_ref)?, Operator::GtEq, lit(1), &schema_ref)?;
+        let if_expr =
+            binary(col("a", &schema_ref)?, Operator::GtEq, lit(1), &schema_ref)?;
         let true_expr = lit(123i32);
         let false_expr = lit(999i32);
 
@@ -183,7 +188,8 @@ mod tests {
         let result = expr?.evaluate(&batch)?.into_array(batch.num_rows())?;
         let result = as_int32_array(&result)?;
 
-        let expected = &Int32Array::from(vec![Some(123), Some(999), Some(999), Some(123)]);
+        let expected =
+            &Int32Array::from(vec![Some(123), Some(999), Some(999), Some(123)]);
         assert_eq!(expected, result);
 
         Ok(())

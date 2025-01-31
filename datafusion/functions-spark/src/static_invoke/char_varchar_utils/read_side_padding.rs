@@ -25,12 +25,17 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 /// Similar to DataFusion `rpad`, but not to truncate when the string is already longer than length
-pub fn spark_read_side_padding(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
+pub fn spark_read_side_padding(
+    args: &[ColumnarValue],
+) -> Result<ColumnarValue, DataFusionError> {
     match args {
-        [ColumnarValue::Array(array), ColumnarValue::Scalar(ScalarValue::Int32(Some(length)))] => {
+        [ColumnarValue::Array(array), ColumnarValue::Scalar(ScalarValue::Int32(Some(length)))] =>
+        {
             match array.data_type() {
                 DataType::Utf8 => spark_read_side_padding_internal::<i32>(array, *length),
-                DataType::LargeUtf8 => spark_read_side_padding_internal::<i64>(array, *length),
+                DataType::LargeUtf8 => {
+                    spark_read_side_padding_internal::<i64>(array, *length)
+                }
                 // TODO: handle Dictionary types
                 other => Err(DataFusionError::Internal(format!(
                     "Unsupported data type {other:?} for function read_side_padding",
@@ -51,8 +56,10 @@ fn spark_read_side_padding_internal<T: OffsetSizeTrait>(
     let length = 0.max(length) as usize;
     let space_string = " ".repeat(length);
 
-    let mut builder =
-        GenericStringBuilder::<T>::with_capacity(string_array.len(), string_array.len() * length);
+    let mut builder = GenericStringBuilder::<T>::with_capacity(
+        string_array.len(),
+        string_array.len() * length,
+    );
 
     for string in string_array.iter() {
         match string {
