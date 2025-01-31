@@ -32,6 +32,7 @@ members = [
     "datafusion/functions-aggregate-common",
     "datafusion/functions-table",
     "datafusion/functions-nested",
+    "datafusion/functions-spark",
     "datafusion/functions-window",
     "datafusion/functions-window-common",
     "datafusion/optimizer",
@@ -84,6 +85,7 @@ arrow-array = { version = "54.0.0", default-features = false, features = [
     "chrono-tz",
 ] }
 arrow-buffer = { version = "54.0.0", default-features = false }
+arrow-data = { version = "54.0.0", default-features = false }
 arrow-flight = { version = "54.0.0", features = [
     "flight-sql-experimental",
 ] }
