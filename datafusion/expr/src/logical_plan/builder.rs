@@ -54,10 +54,7 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
-    FieldExt, FunctionalDependencies, Result, Result, ScalarValue, ScalarValue,
-    TableReference, TableReference, ToDFSchema, ToDFSchema, UnnestOptions, UnnestOptions,
-    FunctionalDependencies, Result, ScalarValue, TableReference, ToDFSchema,
-    UnnestOptions,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
