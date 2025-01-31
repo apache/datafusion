@@ -830,6 +830,19 @@ pub fn exprlist_to_fields<'a>(
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
+        .collect::<Vec<_>>();
+    // // Deduplicate system columns and non system columns by preferring non system columns
+    // let mut non_system_columns = HashSet::new();
+    // for (_, f) in result.iter() {
+    //     if f.is_system_column() {
+    //         non_system_columns.insert(f.name().to_string());
+    //     }
+    // }
+    let result = result
+        .into_iter()
+        // .filter(|(_, f)| !(f.is_system_column() && non_system_columns.contains(f.name())))
+        // And any system columns that are included in the result cease to be system columns
+        .map(|(q, f)| (q, f.to_non_system_column()))
         .collect();
     Ok(result)
 }

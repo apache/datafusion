@@ -54,7 +54,8 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
+    FieldExt, FunctionalDependencies, Result, Result, ScalarValue, ScalarValue,
+    TableReference, TableReference, ToDFSchema, ToDFSchema, UnnestOptions, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -1443,6 +1444,13 @@ pub fn build_join_schema(
         .into_iter()
         .chain(right.metadata().clone())
         .collect();
+    let qualified_fields = match join_type {
+        JoinType::LeftMark => qualified_fields
+            .into_iter()
+            .map(|(q, f)| (q, f.to_non_system_column()))
+            .collect(),
+        _ => qualified_fields,
+    };
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
     dfschema.with_functional_dependencies(func_dependencies)
 }

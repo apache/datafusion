@@ -1100,6 +1100,11 @@ pub trait FieldExt {
     ///
     /// See [`FieldExt::is_system_column`] for more information on what a system column is.
     fn to_system_column(self) -> Self;
+
+    /// Mark this field as a non system column by removing the `datafusion.system_column` key from the field's metadata.
+    ///
+    /// See [`FieldExt::is_system_column`] for more information on what a system column is.
+    fn to_non_system_column(self) -> Self;
 }
 
 /// See [`FieldExt`].
@@ -1120,6 +1125,35 @@ impl FieldExt for Field {
         metadata.insert("datafusion.system_column".to_string(), "true".to_string());
         self.set_metadata(metadata);
         self
+    }
+
+    /// Mark this field as a non system column by removing the `datafusion.system_column` key from the field's metadata.
+    /// See [`FieldExt::to_non_system_column`] for more information on what a system column is.
+    fn to_non_system_column(mut self) -> Self {
+        let mut metadata = self.metadata().clone();
+        metadata.remove("datafusion.system_column");
+        self.set_metadata(metadata);
+        self
+    }
+}
+
+impl FieldExt for Arc<Field> {
+    /// Check if this field is a system column.
+    /// See [`FieldExt::is_system_column`] for more information on what a system column is.
+    fn is_system_column(&self) -> bool {
+        FieldExt::is_system_column(self.as_ref())
+    }
+
+    /// Mark this field as a system column.
+    /// See [`FieldExt::to_system_column`] for more information on what a system column is.
+    fn to_system_column(self) -> Self {
+        Arc::new(FieldExt::to_system_column(Arc::unwrap_or_clone(self)))
+    }
+
+    /// Mark this field as a non system column by removing the `datafusion.system_column` key from the field's metadata.
+    /// See [`FieldExt::to_non_system_column`] for more information on what a system column is.
+    fn to_non_system_column(self) -> Self {
+        Arc::new(FieldExt::to_non_system_column(Arc::unwrap_or_clone(self)))
     }
 }
 
