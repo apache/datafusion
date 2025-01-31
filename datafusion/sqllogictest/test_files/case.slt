@@ -432,7 +432,7 @@ create or replace table t as values
 );
 
 # This case forces all branches to be coerced to the same type
-query error
+query ?
 SELECT
   case
     when column1 > 0 then column2
@@ -441,13 +441,10 @@ SELECT
   end
 FROM t;
 ----
-DataFusion error: type_coercion
-caused by
-Error during planning: Failed to coerce then ([List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })]) and else (Some(List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }))) to common types in CASE WHEN expression
-
+[{foo: baz}]
 
 # different orders of the branches
-query error
+query ?
 SELECT
   case
     when column1 > 0 then column3 -- NB different order
@@ -456,10 +453,7 @@ SELECT
   end
 FROM t;
 ----
-DataFusion error: type_coercion
-caused by
-Error during planning: Failed to coerce then ([List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })]) and else (Some(List(Field { name: "item", data_type: Struct([Field { name: "foo", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }))) to common types in CASE WHEN expression
-
+[{foo: bar}]
 
 # different orders of the branches
 query ?
@@ -471,7 +465,7 @@ SELECT
   end
 FROM t;
 ----
-[{c0: blarg}]
+[{foo: blarg}]
 
 
 
