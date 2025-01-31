@@ -2702,7 +2702,7 @@ impl Union {
                             if acc != field.data_type() {
                                 return plan_err!(
                                     "UNION field {i} have different type in inputs: \
-                                left has {} whereas right has {}",
+                                    left has {} whereas right has {}",
                                     first_field.data_type(),
                                     field.data_type()
                                 );
