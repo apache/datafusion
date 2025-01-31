@@ -25,7 +25,7 @@ This script is designed to regenerate the .slt files in datafusion-testing/data/
 from source files obtained from a git repository. To do that the following steps are
 performed:
 
-- Verify required commands are installed
+- Verify required commands are installed and the PG_URI environment variable is set
 - Clone the remote git repository into /tmp/sqlitetesting
 - Delete all existing .slt files in datafusion-testing/data/sqlite/ folder
 - Copy the .test files from the cloned git repo into datafusion-testing
@@ -38,8 +38,8 @@ performed:
 - Replace the sqllogictest-rs dependency in the Cargo.toml with a version to
   a git repository that has been custom written to properly complete the files
   with comparison of datafusion results with postgresql
-- Replace the sqllogictest.rs file with a customized version from a github gist
-  that will work with the customized sqllogictest-rs dependency
+- Replace the sqllogictest.rs file with a customized version that will work with
+  the customized sqllogictest-rs dependency
 - Run the sqlite test with completion (takes > 1 hr)
 - Update a few results to ignore known issues
 - Run sqlite test to verify results
@@ -61,7 +61,30 @@ else
   echo "sd command is installed, proceeding..."
 fi
 
-DF_HOME=$(realpath "../../")
+if [ ! -x "$(command -v rename)" ]; then
+  echo "This script required 'rename' to be installed. Install using your local package manager"
+  exit 0
+else
+  echo "rename command is installed, proceeding..."
+fi
+
+if [ ! -x "$(command -v dos2unix)" ]; then
+  echo "This script required 'dos2unix' to be installed. Install using your local package manager"
+  exit 0
+else
+  echo "dos2unix command is installed, proceeding..."
+fi
+
+if [ -z "${PG_URI}" ]; then
+  echo "A postgresql database is required for running the sqlite regeneration script.
+Please set the PG_URI environment variable to point to an empty postgresql database and retry."
+  exit 0
+else
+  echo "PG_URI was set, proceeding"
+fi
+
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DF_HOME="$SCRIPT_PATH/../../"
 
 # location where we'll clone sql-logic-test repos
 if [ ! -d "/tmp/sqlitetesting" ]; then
@@ -97,9 +120,9 @@ rm ./index/view/10/slt_good_0.test
 echo "Renaming .test files to .slt and cleansing the files ..."
 
 # add hash-threshold lines into these 3 files as they were missing
-sed -i '1s/^/hash-threshold 8\n\n/' ./select1.test
-sed -i '1s/^/hash-threshold 8\n\n/' ./select4.test
-sed -i '1s/^/hash-threshold 8\n\n/' ./select5.test
+sed -i '1s/^/hash-threshold 8\n\n/' select1.test
+sed -i '1s/^/hash-threshold 8\n\n/' select4.test
+sed -i '1s/^/hash-threshold 8\n\n/' select5.test
 # rename
 find ./ -type f -name "*.test" -exec rename -f 's/\.test/\.slt/' {} \;
 # gotta love windows :/
@@ -144,7 +167,7 @@ sed -i -e 's~^sqllogictest.*~sqllogictest = { git = "https://github.com/Omega359
 echo "Replacing the datafusion/sqllogictest/bin/sqllogictests.rs file with a custom version required for running completion"
 
 # replace the sqllogictest.rs with a customized version. This is tied to a specific version of the gist
-curl --silent https://gist.githubusercontent.com/Omega359/5e6548a096fbe0c36ce14c547776db56/raw/3ccd0ee8049657c496d5068f56baa8408c1f00a3/sqllogictest.rs > datafusion/sqllogictest/bin/sqllogictests.rs
+cp datafusion/sqllogictest/regenerate/sqllogictests.rs datafusion/sqllogictest/bin/sqllogictests.rs
 
 echo "Running the sqllogictests with sqlite completion. This will take approximately an hour to run"
 
