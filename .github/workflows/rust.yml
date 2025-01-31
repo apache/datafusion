@@ -253,7 +253,7 @@ jobs:
           rust-version: stable
       - name: Run doctests
         run: |
-          cargo test --profile ci --doc --features avro,json,integration-tests --exclude ffi_example_table_provider
+          cargo test --profile ci --doc --features avro,json,integration-tests
           cd datafusion-cli
           cargo test --profile ci --doc --all-features
       - name: Verify Working Directory Clean
