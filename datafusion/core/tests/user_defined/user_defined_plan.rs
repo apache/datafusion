@@ -94,7 +94,7 @@ use datafusion::{
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::ScalarValue;
-use datafusion_expr::{FetchType, Invariant, InvariantLevel, Projection, SortExpr};
+use datafusion_expr::{FetchType, InvariantLevel, Projection, SortExpr};
 use datafusion_optimizer::optimizer::ApplyOrder;
 use datafusion_optimizer::AnalyzerRule;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -576,14 +576,6 @@ struct InvariantMock {
     kind: InvariantLevel,
 }
 
-fn invariant_helper_mock_ok(_: &LogicalPlan) -> Result<()> {
-    Ok(())
-}
-
-fn invariant_helper_mock_fails(_: &LogicalPlan) -> Result<()> {
-    internal_err!("node fails check, such as improper inputs")
-}
-
 impl UserDefinedLogicalNodeCore for TopKPlanNode {
     fn name(&self) -> &str {
         "TopK"
@@ -598,24 +590,17 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
         self.input.schema()
     }
 
-    fn invariants(&self) -> Vec<Invariant> {
+    fn check_invariants(&self, check: InvariantLevel, _plan: &LogicalPlan) -> Result<()> {
         if let Some(InvariantMock {
             should_fail_invariant,
             kind,
         }) = self.invariant_mock.clone()
         {
-            if should_fail_invariant {
-                return vec![Invariant {
-                    kind,
-                    fun: Arc::new(invariant_helper_mock_fails),
-                }];
+            if should_fail_invariant && check == kind {
+                return internal_err!("node fails check, such as improper inputs");
             }
-            return vec![Invariant {
-                kind,
-                fun: Arc::new(invariant_helper_mock_ok),
-            }];
         }
-        vec![] // same as default impl
+        Ok(())
     }
 
     fn expressions(&self) -> Vec<Expr> {

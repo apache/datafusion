@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use datafusion_common::{
     internal_err, plan_err,
     tree_node::{TreeNode, TreeNodeRecursion},
@@ -31,21 +29,6 @@ use crate::{
 };
 
 use super::Extension;
-
-pub type InvariantFn = Arc<dyn Fn(&LogicalPlan) -> Result<()> + Send + Sync>;
-
-#[derive(Clone)]
-pub struct Invariant {
-    pub kind: InvariantLevel,
-    pub fun: InvariantFn,
-}
-
-impl Invariant {
-    /// Return an error if invariant does not hold true.
-    pub fn check(&self, plan: &LogicalPlan) -> Result<()> {
-        (self.fun)(plan)
-    }
-}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum InvariantLevel {

@@ -22,7 +22,6 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::{any::Any, collections::HashSet, fmt, sync::Arc};
 
-use super::invariants::Invariant;
 use super::InvariantLevel;
 
 /// This defines the interface for [`LogicalPlan`] nodes that can be
@@ -57,21 +56,8 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     /// Return the output schema of this logical plan node.
     fn schema(&self) -> &DFSchemaRef;
 
-    /// Return the list of invariants.
-    ///
-    /// Implementing this function enables the user to define the
-    /// invariants for a given logical plan extension.
-    fn invariants(&self) -> Vec<Invariant> {
-        vec![]
-    }
-
     /// Perform check of invariants for the extension node.
-    fn check_invariants(&self, check: InvariantLevel, plan: &LogicalPlan) -> Result<()> {
-        self.invariants()
-            .into_iter()
-            .filter(|inv| check == inv.kind)
-            .try_for_each(|inv| inv.check(plan))
-    }
+    fn check_invariants(&self, check: InvariantLevel, plan: &LogicalPlan) -> Result<()>;
 
     /// Returns all expressions in the current logical plan node. This should
     /// not include expressions of any inputs (aka non-recursively).
@@ -263,12 +249,15 @@ pub trait UserDefinedLogicalNodeCore:
     /// Return the output schema of this logical plan node.
     fn schema(&self) -> &DFSchemaRef;
 
-    /// Return the list of invariants.
+    /// Perform check of invariants for the extension node.
     ///
-    /// Implementing this function enables the user to define the
-    /// invariants for a given logical plan extension.
-    fn invariants(&self) -> Vec<Invariant> {
-        vec![]
+    /// This is the default implementation for extension nodes.
+    fn check_invariants(
+        &self,
+        _check: InvariantLevel,
+        _plan: &LogicalPlan,
+    ) -> Result<()> {
+        Ok(())
     }
 
     /// Returns all expressions in the current logical plan node. This
@@ -363,8 +352,8 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
         self.schema()
     }
 
-    fn invariants(&self) -> Vec<Invariant> {
-        self.invariants()
+    fn check_invariants(&self, check: InvariantLevel, plan: &LogicalPlan) -> Result<()> {
+        self.check_invariants(check, plan)
     }
 
     fn expressions(&self) -> Vec<Expr> {
