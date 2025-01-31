@@ -62,6 +62,8 @@ pub enum InvariantLevel {
 }
 
 /// Apply the [`InvariantLevel::Always`] check at the current plan node only.
+///
+/// This does not recurs to any child nodes.
 pub fn assert_always_invariants_at_current_node(plan: &LogicalPlan) -> Result<()> {
     // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#relation-name-tuples-in-logical-fields-and-logical-columns-are-unique>
     assert_unique_field_names(plan)?;
