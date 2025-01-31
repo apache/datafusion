@@ -885,6 +885,7 @@ mod tests {
     use super::*;
     use sqlparser::ast::Expr::Identifier;
     use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident};
+    use sqlparser::dialect::{dialect_from_str, SnowflakeDialect};
     use sqlparser::tokenizer::Span;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
@@ -1410,6 +1411,23 @@ mod tests {
         assert_eq!(verified_stmt(sql), expected);
         Ok(())
     }
+
+
+    #[test]
+    fn skip_copy_into_snowflake() -> Result<(), ParserError> {
+        let sql = "COPY INTO foo FROM @~/staged FILE_FORMAT = (FORMAT_NAME = 'mycsv');";
+        let dialect = Box::new(SnowflakeDialect);
+        let statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
+       
+        assert_eq!( statements.len(), 1, "Expected to parse exactly one statement");
+        if let Statement::CopyTo(_) = &statements[0] {
+            panic!(
+                "Expected non COPY TO statement, but was successful: {statements:?}"
+            );
+        }
+        Ok(())
+    }
+
 
     #[test]
     fn explain_copy_to_table_to_table() -> Result<(), ParserError> {
