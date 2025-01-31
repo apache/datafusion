@@ -22,7 +22,9 @@
 [![Crates.io][crates-badge]][crates-url]
 [![Apache licensed][license-badge]][license-url]
 [![Build Status][actions-badge]][actions-url]
+![Commit Activity][commit-activity-badge]
 [![Discord chat][discord-badge]][discord-url]
+
 
 [crates-badge]: https://img.shields.io/crates/v/datafusion.svg
 [crates-url]: https://crates.io/crates/datafusion
@@ -32,6 +34,8 @@
 [actions-url]: https://github.com/apache/datafusion/actions?query=branch%3Amain
 [discord-badge]: https://img.shields.io/discord/885562378132000778.svg?logo=discord&style=flat-square
 [discord-url]: https://discord.com/invite/Qw5gKqHxUM
+[commit-activity-badge]: https://img.shields.io/github/commit-activity/m/apache/datafusion
+
 
 [Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
