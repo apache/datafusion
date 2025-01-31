@@ -339,7 +339,7 @@ SELECT
   end
 FROM t;
 ----
-{c0: bar}
+{xxx: bar}
 
 query ?
 SELECT
@@ -350,7 +350,7 @@ SELECT
   end
 FROM t;
 ----
-{c0: baz}
+{foo: baz}
 
 query ?
 SELECT
@@ -361,4 +361,5 @@ SELECT
   end
 FROM t;
 ----
-{c0: blarg}
+{foo: blarg}
+
