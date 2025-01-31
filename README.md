@@ -23,6 +23,7 @@
 [![Apache licensed][license-badge]][license-url]
 [![Build Status][actions-badge]][actions-url]
 ![Commit Activity][commit-activity-badge]
+[![Open Issues][open-issues-badge]][open-issues-url]
 [![Discord chat][discord-badge]][discord-url]
 
 
@@ -35,7 +36,8 @@
 [discord-badge]: https://img.shields.io/discord/885562378132000778.svg?logo=discord&style=flat-square
 [discord-url]: https://discord.com/invite/Qw5gKqHxUM
 [commit-activity-badge]: https://img.shields.io/github/commit-activity/m/apache/datafusion
-
+[open-issues-badge]: https://img.shields.io/github/issues-raw/apache/datafusion
+[open-issues-url]: https://github.com/apache/datafusion/issues
 
 [Website](https://datafusion.apache.org/) |
 [API Docs](https://docs.rs/datafusion/latest/datafusion/) |
