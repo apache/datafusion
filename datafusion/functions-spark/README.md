@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+
 <!---
   Licensed to the Apache Software Foundation (ASF) under one
   or more contributor license agreements.  See the NOTICE file
@@ -175,8 +176,9 @@ compatible versions of all dependencies. If you encounter either of these
 problems, please open an issue or PR.
 
 [cargo book]: https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
-[cargo ci guide]: https://doc.rust-lang.org/cargo/guide/continuous-integration.html#verifying-latest-dependencies
-=======
+
+# [cargo ci guide]: https://doc.rust-lang.org/cargo/guide/continuous-integration.html#verifying-latest-dependencies
+
 <!--
 Licensed to the Apache Software Foundation (ASF) under one
 or more contributor license agreements.  See the NOTICE file
@@ -198,6 +200,7 @@ under the License.
 
 # datafusion-comet-spark-expr: Spark-compatible Expressions
 
-This crate provides Apache Spark-compatible expressions for use with DataFusion and is maintained as part of the 
+This crate provides Apache Spark-compatible expressions for use with DataFusion and is maintained as part of the
 [Apache DataFusion Comet](https://github.com/apache/datafusion-comet/) subproject.
->>>>>>> comet/main
+
+> > > > > > > comet/main
