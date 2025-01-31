@@ -836,3 +836,18 @@ physical_plan
 # Clean up after the test
 statement ok
 drop table aggregate_test_100;
+
+# test for https://github.com/apache/datafusion/issues/14352
+query TB rowsort
+SELECT
+    a,
+    a IS NOT NULL
+FROM (
+    -- second column, even though it's not selected, was necessary to reproduce the bug linked above
+    SELECT 'foo' AS a, 3 AS b
+    UNION ALL
+    SELECT NULL AS a, 4 AS b
+)
+----
+NULL false
+foo true
