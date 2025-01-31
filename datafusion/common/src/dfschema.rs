@@ -141,25 +141,46 @@ pub struct DFSchema {
 
 /// The starting point of the metadata column index.
 /// If an index is less than this value, then this index is for an ordinary column.
-/// If it is greater than this value, then this index is for a metadata column.
+/// If it is greater than or equal to this value, then this index is for a metadata column.
 const METADATA_OFFSET: usize = usize::MAX >> 1;
 
-pub enum FieldIndex {
-    MetadataIndex(usize),
-    NormalIndex(usize),
+/// Represents a field identifier in a schema that can be either a normal field or a metadata field.
+///
+/// DataFusion schemas can contain both normal data columns and metadata columns. This enum
+/// helps distinguish between the two types when referencing fields by index.
+///
+/// # Examples
+/// ```rust
+/// use datafusion_common::FieldId;
+///
+/// // Create a normal field ID
+/// let normal = FieldId::Normal(5);
+///
+/// // Create a metadata field ID
+/// let metadata = FieldId::Metadata(2);
+/// ```
+///
+pub enum FieldId {
+    Metadata(usize),
+    Normal(usize),
 }
 
-/// There are two types of fields, one is normal field, the other is metadata field.
-/// Extract the real field index.
-///
-/// Returns:
-/// - `FieldIndex::MetadataIndex` if the index is metadata field index
-/// - `FieldIndex::NormalIndex` if the index is normal field index
-pub fn extract_field_index(index: usize) -> FieldIndex {
-    if index >= METADATA_OFFSET {
-        FieldIndex::MetadataIndex(index - METADATA_OFFSET)
-    } else {
-        FieldIndex::NormalIndex(index)
+impl From<usize> for FieldId {
+    fn from(index: usize) -> Self {
+        if index >= METADATA_OFFSET {
+            FieldId::Metadata(index - METADATA_OFFSET)
+        } else {
+            FieldId::Normal(index)
+        }
+    }
+}
+
+impl From<FieldId> for usize {
+    fn from(value: FieldId) -> Self {
+        match value {
+            FieldId::Metadata(id) => id + METADATA_OFFSET,
+            FieldId::Normal(id) => id,
+        }
     }
 }
 

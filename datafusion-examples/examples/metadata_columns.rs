@@ -39,7 +39,7 @@ use datafusion::physical_plan::{
 use datafusion::prelude::*;
 
 use datafusion::catalog::Session;
-use datafusion_common::{extract_field_index, FieldIndex};
+use datafusion_common::FieldId;
 use itertools::Itertools;
 use tokio::time::timeout;
 
@@ -206,9 +206,9 @@ impl CustomExec {
             Some(projection) => {
                 let projection = projection
                     .iter()
-                    .map(|idx| match extract_field_index(*idx) {
-                        FieldIndex::NormalIndex(i) => Arc::new(schema.field(i).clone()),
-                        FieldIndex::MetadataIndex(i) => {
+                    .map(|idx| match FieldId::from(*idx) {
+                        FieldId::Normal(i) => Arc::new(schema.field(i).clone()),
+                        FieldId::Metadata(i) => {
                             Arc::new(metadata_schema.as_ref().unwrap().field(i).clone())
                         }
                     })

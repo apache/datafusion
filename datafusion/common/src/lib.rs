@@ -52,8 +52,8 @@ pub mod utils;
 pub use arrow;
 pub use column::Column;
 pub use dfschema::{
-    extract_field_index, qualified_name, DFSchema, DFSchemaRef, ExprSchema, FieldIndex,
-    QualifiedSchema, SchemaExt, ToDFSchema,
+    qualified_name, DFSchema, DFSchemaRef, ExprSchema, FieldId, QualifiedSchema,
+    SchemaExt, ToDFSchema,
 };
 pub use error::{
     field_not_found, unqualified_field_not_found, DataFusionError, Result, SchemaError,

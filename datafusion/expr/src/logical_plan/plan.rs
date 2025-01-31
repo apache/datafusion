@@ -53,10 +53,10 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    aggregate_functional_dependencies, extract_field_index, internal_err, plan_err,
-    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency, FieldIndex,
-    FunctionalDependence, FunctionalDependencies, ParamValues, QualifiedSchema, Result,
-    ScalarValue, TableReference, UnnestOptions,
+    aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
+    DFSchema, DFSchemaRef, DataFusionError, Dependency, FieldId, FunctionalDependence,
+    FunctionalDependencies, ParamValues, QualifiedSchema, Result, ScalarValue,
+    TableReference, UnnestOptions,
 };
 use indexmap::IndexSet;
 
@@ -2621,8 +2621,8 @@ impl TableScan {
                     func_dependencies.project_functional_dependencies(p, p.len());
                 let qualified_fields: Result<Vec<_>, _> = p
                     .iter()
-                    .map(|i| match extract_field_index(*i) {
-                        FieldIndex::MetadataIndex(i) => {
+                    .map(|i| match FieldId::from(*i) {
+                        FieldId::Metadata(i) => {
                             if let Some(metadata) = &metadata {
                                 Ok((
                                     Some(table_name.clone()),
@@ -2632,7 +2632,7 @@ impl TableScan {
                                 plan_err!("table doesn't support metadata column")
                             }
                         }
-                        FieldIndex::NormalIndex(i) => Ok((
+                        FieldId::Normal(i) => Ok((
                             Some(table_name.clone()),
                             Arc::new(schema.field(i).clone()),
                         )),
