@@ -27,6 +27,7 @@ use arrow::array::MutableArrayData;
 use arrow::array::OffsetSizeTrait;
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
+use arrow_buffer::NullBufferBuilder;
 use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
@@ -475,7 +476,7 @@ where
 
     // use_nulls: false, we don't need nulls but empty array for array_slice, so we don't need explicit nulls but adjust offset to indicate nulls.
     let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
     // We have the slice syntax compatible with DuckDB v0.8.1.
     // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
@@ -538,30 +539,33 @@ where
     }
 
     let mut offsets = vec![O::usize_as(0)];
+    let mut null_builder = NullBufferBuilder::new(array.len());
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let start = offset_window[0];
         let end = offset_window[1];
         let len = end - start;
 
-        // len 0 indicate array is null, return empty array in this row.
+        // If any input is null, return null.
+        if array.is_null(row_index)
+            || from_array.is_null(row_index)
+            || to_array.is_null(row_index)
+        {
+            mutable.extend_nulls(1);
+            offsets.push(offsets[row_index] + O::usize_as(1));
+            null_builder.append_null();
+            continue;
+        }
+        null_builder.append_non_null();
+
+        // Empty arrays always return an empty array.
         if len == O::usize_as(0) {
             offsets.push(offsets[row_index]);
             continue;
         }
 
-        // If index is null, we consider it as the minimum / maximum index of the array.
-        let from_index = if from_array.is_null(row_index) {
-            Some(O::usize_as(0))
-        } else {
-            adjusted_from_index::<O>(from_array.value(row_index), len)?
-        };
-
-        let to_index = if to_array.is_null(row_index) {
-            Some(len - O::usize_as(1))
-        } else {
-            adjusted_to_index::<O>(to_array.value(row_index), len)?
-        };
+        let from_index = adjusted_from_index::<O>(from_array.value(row_index), len)?;
+        let to_index = adjusted_to_index::<O>(to_array.value(row_index), len)?;
 
         if let (Some(from), Some(to)) = (from_index, to_index) {
             let stride = stride.map(|s| s.value(row_index));
@@ -635,7 +639,7 @@ where
         Arc::new(Field::new_list_field(array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
-        None,
+        null_builder.finish(),
     )?))
 }
 
