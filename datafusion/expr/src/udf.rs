@@ -205,7 +205,6 @@ impl ScalarUDF {
         self.inner.null_handling()
     }
 
-
     /// Do the function rewrite
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
