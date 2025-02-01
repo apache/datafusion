@@ -39,6 +39,7 @@ use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,
 };
+use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, row_number};
 use object_store::local::LocalFileSystem;
 use sqlparser::ast::NullTreatment;
@@ -70,13 +71,13 @@ use datafusion_common::{
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_expr::expr::{GroupingSet, Sort, WindowFunction};
+use datafusion_expr::expr::{GroupingSet, ScalarFunction, Sort, WindowFunction};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
     scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
-    ScalarFunctionImplementation, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    LogicalPlanBuilder, ScalarFunctionImplementation, WindowFrame, WindowFrameBound,
+    WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::Partitioning;
@@ -3322,6 +3323,74 @@ async fn unnest_columns() -> Result<()> {
         .await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_dict_encoded_columns() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let str1 = lit(ScalarValue::Dictionary(
+        Box::new(DataType::Int32),
+        Box::new(ScalarValue::new_utf8("x")),
+    ));
+    let str2 = lit(ScalarValue::Dictionary(
+        Box::new(DataType::Int32),
+        Box::new(ScalarValue::new_utf8("y")),
+    ));
+
+    let make_array_udf_expr1 = Expr::ScalarFunction(ScalarFunction::new_udf(
+        make_array_udf(),
+        vec![col("column1")],
+    ));
+    let plan1 = LogicalPlanBuilder::values(vec![vec![str1.clone()], vec![str2.clone()]])
+        .unwrap()
+        .project([
+            make_array_udf_expr1.alias("make_array_expr"),
+            col("column1"),
+        ])?
+        .unnest_column("make_array_expr")?
+        .build()?;
+
+    let df = ctx.execute_logical_plan(plan1).await.unwrap();
+    let results = df.collect().await.unwrap();
+    let expected = [
+        "+-----------------+---------+",
+        "| make_array_expr | column1 |",
+        "+-----------------+---------+",
+        "| x               | x       |",
+        "| y               | y       |",
+        "+-----------------+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // make_array(dict_encoded_string,literal string)
+    let make_array_udf_expr2 = Expr::ScalarFunction(ScalarFunction::new_udf(
+        make_array_udf(),
+        vec![col("column1"), lit(ScalarValue::new_utf8("fixed_string"))],
+    ));
+    let plan2 = LogicalPlanBuilder::values(vec![vec![str1.clone()], vec![str2.clone()]])
+        .unwrap()
+        .project([
+            make_array_udf_expr2.alias("make_array_expr"),
+            col("column1"),
+        ])?
+        .unnest_column("make_array_expr")?
+        .build()?;
+
+    let df = ctx.execute_logical_plan(plan2).await.unwrap();
+    let results = df.collect().await.unwrap();
+    let expected = [
+        "+-----------------+---------+",
+        "| make_array_expr | column1 |",
+        "+-----------------+---------+",
+        "| x               | x       |",
+        "| fixed_string    | x       |",
+        "| y               | y       |",
+        "| fixed_string    | y       |",
+        "+-----------------+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
     Ok(())
 }
 
