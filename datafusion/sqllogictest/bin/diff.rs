@@ -37,11 +37,11 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let path2 = Path::new(&args[2]);
 
     let result = diff(path1, path2);
-    assert!(result.is_ok(), "Expected no error, but got {:?}", result);
+    println!("{:?}", result);
     Ok(())
 }
 
-pub fn diff(path1: &Path, path2: &Path) -> Result<(), Box<dyn Error>> {
+pub fn diff(path1: &Path, path2: &Path) -> Result<String, Box<dyn Error>> {
     println!("Needles: {:?}", path1);
     println!("Haystack: {:?}", path2);
 
@@ -57,7 +57,7 @@ pub fn diff(path1: &Path, path2: &Path) -> Result<(), Box<dyn Error>> {
         // If the second path is a file, just parse that file
         parse_file(path2)?
     };
-    let mut errors = Vec::new();
+    let mut diffs = Vec::new();
 
     // Check if each record in file 1 is contained in any record in file 2
     for record1 in &records1 {
@@ -70,18 +70,18 @@ pub fn diff(path1: &Path, path2: &Path) -> Result<(), Box<dyn Error>> {
                 .any(|record2| check_equality(record1, record2))
         };
         if check_equality(record1, record1) && !found {
-            errors.push(format!(
+            diffs.push(format!(
                 "Record from Needles not found in Haystack: {:?}",
                 get_sql(record1)
             ));
         }
     }
-    // If we have collected any errors, return them all at once
-    if !errors.is_empty() {
-        return Err(errors.join("\n").into());
+    // If we have collected any differences, return them all at once
+    if !diffs.is_empty() {
+        Ok(diffs.join("\n"))
+    } else {
+        Ok("All records from Needles are present in Haystack.".to_string())
     }
-    println!("All records from Needles are present in Haystack.");
-    Ok(())
 }
 
 fn get_sql(record: &Record<DefaultColumnType>) -> String {
@@ -172,9 +172,10 @@ mod tests {
         let path1 = Path::new("./archive/complete_aggregate.slt");
         let path2 = Path::new("./test_files/aggregate");
         let result = diff(path1, path2);
-        if result.is_err() {
-            panic!("Expected no error, but got {:?}", result.err());
-        }
+        assert_eq!(
+            result.unwrap(),
+            format!("All records from Needles are present in Haystack.")
+        )
     }
     #[test]
     fn test_files_aggregate_diff_base() {
@@ -182,8 +183,9 @@ mod tests {
         let path1 = Path::new("./test_files/aggregate/base_aggregate.slt");
         let path2 = Path::new("./archive/complete_aggregate.slt");
         let result = diff(path1, path2);
-        if result.is_err() {
-            panic!("Expected no error, but got {:?}", result.err());
-        }
+        assert_eq!(
+            result.unwrap(),
+            format!("All records from Needles are present in Haystack.")
+        )
     }
 }
