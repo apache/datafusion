@@ -923,6 +923,10 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>true</p></td>
 <td><p>If true, permit lengths for <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> such as <code class="docutils literal notranslate"><span class="pre">VARCHAR(20)</span></code>, but ignore the length. If false, error if a <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.</p></td>
 </tr>
+<tr class="row-odd"><td><p>datafusion.sql_parser.collect_spans</p></td>
+<td><p>false</p></td>
+<td><p>When set to true, the source locations relative to the original SQL query (i.e. <a class="reference internal" href="#sqlparser::tokenizer::Span"><span class="xref myst"><code class="docutils literal notranslate"><span class="pre">Span</span></code></span></a>) will be collected and recorded in the logical plan nodes.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
