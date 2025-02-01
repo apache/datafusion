@@ -41,7 +41,7 @@ use datafusion::{
 };
 use futures::Stream;
 use tokio::{
-    runtime::Runtime,
+    runtime::Handle,
     sync::{broadcast, mpsc},
 };
 
@@ -59,7 +59,7 @@ fn async_table_provider_thread(
     mut shutdown: mpsc::Receiver<bool>,
     mut batch_request: mpsc::Receiver<bool>,
     batch_sender: broadcast::Sender<Option<RecordBatch>>,
-    tokio_rt: mpsc::Sender<Arc<Runtime>>,
+    tokio_rt: mpsc::Sender<Handle>,
 ) {
     let runtime = Arc::new(
         tokio::runtime::Builder::new_current_thread()
@@ -68,7 +68,7 @@ fn async_table_provider_thread(
     );
     let _runtime_guard = runtime.enter();
     tokio_rt
-        .blocking_send(Arc::clone(&runtime))
+        .blocking_send(runtime.handle().clone())
         .expect("Unable to send tokio runtime back to main thread");
 
     runtime.block_on(async move {
@@ -91,7 +91,7 @@ fn async_table_provider_thread(
     let _ = shutdown.blocking_recv();
 }
 
-pub fn start_async_provider() -> (AsyncTableProvider, Arc<Runtime>) {
+pub fn start_async_provider() -> (AsyncTableProvider, Handle) {
     let (batch_request_tx, batch_request_rx) = mpsc::channel(10);
     let (record_batch_tx, record_batch_rx) = broadcast::channel(10);
     let (tokio_rt_tx, mut tokio_rt_rx) = mpsc::channel(10);
