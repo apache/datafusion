@@ -474,7 +474,6 @@ where
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
 
-    // use_nulls: false, we don't need nulls but empty array for array_slice, so we don't need explicit nulls but adjust offset to indicate nulls.
     let mut mutable =
         MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
