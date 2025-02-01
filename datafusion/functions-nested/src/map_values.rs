@@ -129,6 +129,33 @@ fn map_values_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         Arc::new(Field::new_list_field(map_array.value_type().clone(), true)),
         map_array.offsets().clone(),
         Arc::clone(map_array.values()),
-        None,
+        map_array.nulls().cloned(),
     )))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use arrow::array::{as_list_array, Int32Builder, MapBuilder, StringBuilder};
+
+    #[test]
+    fn test_map_null() -> Result<()> {
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::with_capacity(1);
+        let mut builder = MapBuilder::new(None, string_builder, int_builder);
+        builder.append(false).unwrap();
+        let map_array = builder.finish();
+
+        let result = MapValuesFunc::new()
+            .invoke_batch(&[ColumnarValue::Array(Arc::new(map_array))], 1)
+            .unwrap();
+        match result {
+            ColumnarValue::Array(array) => {
+                let array = as_list_array(&array);
+                assert!(array.is_null(0));
+            }
+            _ => panic!("Expected an array value"),
+        }
+        Ok(())
+    }
 }
