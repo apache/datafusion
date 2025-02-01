@@ -44,10 +44,7 @@ use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
-use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, Expr, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
-};
-use datafusion_expr_common::signature::NullHandling;
+use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, NullHandling, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF};
 
 /// Physical expression of a scalar function
 #[derive(Eq, PartialEq, Hash)]
@@ -187,7 +184,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
 
-        if self.fun.signature().null_handling == NullHandling::Propagate
+        if self.fun.null_handling() == NullHandling::Propagate
             && args.iter().any(
                 |arg| matches!(arg, ColumnarValue::Scalar(scalar) if scalar.is_null()),
             )

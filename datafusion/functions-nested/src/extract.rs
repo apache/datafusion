@@ -350,8 +350,7 @@ impl ArraySlice {
                     ),
                 ],
                 Volatility::Immutable,
-            )
-            .with_null_handling(NullHandling::Propagate),
+            ),
             aliases: vec![String::from("list_slice")],
         }
     }
@@ -393,6 +392,10 @@ impl ScalarUDFImpl for ArraySlice {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
+    }
+
+    fn null_handling(&self) -> NullHandling {
+        NullHandling::Propagate
     }
 
     fn invoke_batch(

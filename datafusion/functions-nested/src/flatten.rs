@@ -27,7 +27,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, Documentation, NullHandling, ScalarUDFImpl,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl,
     Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
@@ -80,7 +80,6 @@ impl Flatten {
                     ArrayFunctionSignature::RecursiveArray,
                 ),
                 volatility: Volatility::Immutable,
-                null_handling: NullHandling::PassThrough,
             },
             aliases: vec![],
         }

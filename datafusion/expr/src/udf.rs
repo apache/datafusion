@@ -200,6 +200,12 @@ impl ScalarUDF {
         self.inner.return_type_from_args(args)
     }
 
+    /// Retruns the behavior that this function has when any of the inputs are Null.
+    pub fn null_handling(&self) -> NullHandling {
+        self.inner.null_handling()
+    }
+
+
     /// Do the function rewrite
     ///
     /// See [`ScalarUDFImpl::simplify`] for more details.
@@ -417,6 +423,15 @@ impl ReturnInfo {
     }
 }
 
+/// A function's behavior when the input is Null.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+pub enum NullHandling {
+    /// Null inputs are passed into the function implementation.
+    PassThrough,
+    /// Any Null input causes the function to return Null.
+    Propagate,
+}
+
 /// Trait for implementing user defined scalar functions.
 ///
 /// This trait exposes the full API for implementing user defined functions and
@@ -587,6 +602,11 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     )]
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
         true
+    }
+
+    /// Retruns the behavior that this function has when any of the inputs are Null.
+    fn null_handling(&self) -> NullHandling {
+        NullHandling::PassThrough
     }
 
     /// Invoke the function on `args`, returning the appropriate result

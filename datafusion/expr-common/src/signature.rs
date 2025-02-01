@@ -460,15 +460,6 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
     }
 }
 
-/// A function's behavior when the input is Null.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub enum NullHandling {
-    /// Null inputs are passed into the function implementation.
-    PassThrough,
-    /// Any Null input causes the function to return Null.
-    Propagate,
-}
-
 /// Defines the supported argument types ([`TypeSignature`]) and [`Volatility`] for a function.
 ///
 /// DataFusion will automatically coerce (cast) argument types to one of the supported
@@ -479,8 +470,6 @@ pub struct Signature {
     pub type_signature: TypeSignature,
     /// The volatility of the function. See [Volatility] for more information.
     pub volatility: Volatility,
-    /// The Null handling of the function. See [NullHandling] for more information.
-    pub null_handling: NullHandling,
 }
 
 impl Signature {
@@ -489,7 +478,6 @@ impl Signature {
         Signature {
             type_signature,
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// An arbitrary number of arguments with the same type, from those listed in `common_types`.
@@ -497,7 +485,6 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Variadic(common_types),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// User-defined coercion rules for the function.
@@ -505,7 +492,6 @@ impl Signature {
         Self {
             type_signature: TypeSignature::UserDefined,
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
 
@@ -514,7 +500,6 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Numeric(arg_count),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
 
@@ -523,7 +508,6 @@ impl Signature {
         Self {
             type_signature: TypeSignature::String(arg_count),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
 
@@ -532,7 +516,6 @@ impl Signature {
         Self {
             type_signature: TypeSignature::VariadicAny,
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// A fixed number of arguments of the same type, from those listed in `valid_types`.
@@ -544,7 +527,6 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Uniform(arg_count, valid_types),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// Exactly matches the types in `exact_types`, in order.
@@ -552,7 +534,6 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::Exact(exact_types),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// Target coerce types in order
@@ -563,7 +544,6 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
 
@@ -572,7 +552,6 @@ impl Signature {
         Self {
             type_signature: TypeSignature::Comparable(arg_count),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
 
@@ -580,7 +559,6 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::Nullary,
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
 
@@ -589,7 +567,6 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::Any(arg_count),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// Any one of a list of [TypeSignature]s.
@@ -597,7 +574,6 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::OneOf(type_signatures),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// Specialized Signature for ArrayAppend and similar functions
@@ -607,7 +583,6 @@ impl Signature {
                 ArrayFunctionSignature::ArrayAndElement,
             ),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// Specialized Signature for Array functions with an optional index
@@ -617,7 +592,6 @@ impl Signature {
                 ArrayFunctionSignature::ArrayAndElementAndOptionalIndex,
             ),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// Specialized Signature for ArrayPrepend and similar functions
@@ -627,7 +601,6 @@ impl Signature {
                 ArrayFunctionSignature::ElementAndArray,
             ),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// Specialized Signature for ArrayElement and similar functions
@@ -641,7 +614,6 @@ impl Signature {
                 ArrayFunctionSignature::ArrayAndIndexes(count),
             ),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
     }
     /// Specialized Signature for ArrayEmpty and similar functions
@@ -649,14 +621,7 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
             volatility,
-            null_handling: NullHandling::PassThrough,
         }
-    }
-
-    /// Returns an equivalent Signature, with null_handling set to the input.
-    pub fn with_null_handling(mut self, null_handling: NullHandling) -> Self {
-        self.null_handling = null_handling;
-        self
     }
 }
 
