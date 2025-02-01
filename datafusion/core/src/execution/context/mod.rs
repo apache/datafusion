@@ -17,6 +17,8 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
+use datafusion_catalog::memory::MemorySchemaProvider;
+use datafusion_catalog::MemoryCatalogProvider;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -27,8 +29,6 @@ use crate::{
         CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
     },
     catalog_common::listing_schema::ListingSchemaProvider,
-    catalog_common::memory::MemorySchemaProvider,
-    catalog_common::MemoryCatalogProvider,
     dataframe::DataFrame,
     datasource::listing::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,

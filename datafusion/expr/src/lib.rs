@@ -91,7 +91,8 @@ pub use partition_evaluator::PartitionEvaluator;
 pub use sqlparser;
 pub use table_source::{TableProviderFilterPushDown, TableSource, TableType};
 pub use udaf::{
-    aggregate_doc_sections, AggregateUDF, AggregateUDFImpl, ReversedUDAF, StatisticsArgs,
+    aggregate_doc_sections, AggregateUDF, AggregateUDFImpl, ReversedUDAF,
+    SetMonotonicity, StatisticsArgs,
 };
 pub use udf::{
     scalar_doc_sections, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,

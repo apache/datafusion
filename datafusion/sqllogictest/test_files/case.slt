@@ -289,12 +289,132 @@ query B
 select case when a=1 then false end from foo;
 ----
 false
-false
-false
-false
-false
-false
+NULL
+NULL
+NULL
+NULL
+NULL
 
+query IBB
+SELECT c,
+    CASE WHEN c > 0 THEN true END AS c1,
+    CASE WHEN c > 0 THEN true ELSE false END AS c2
+FROM (VALUES (1), (0), (-1), (NULL)) AS t(c)
+----
+1 true true
+0 NULL false
+-1 NULL false
+NULL NULL false
 
 statement ok
 drop table foo
+
+
+# Test coercion of inner struct field names
+# Reproducer for https://github.com/apache/datafusion/issues/14383
+statement ok
+create table t as values
+(
+ 100,                                       -- column1 int (so the case isn't constant folded)
+ { 'foo': 'bar' },                          -- column2 has List of Struct w/ Utf8
+ { 'foo': arrow_cast('baz', 'Utf8View') },  -- column3 has List of Struct w/ Utf8View
+ { 'foo': arrow_cast('blarg', 'Utf8View') } -- column4 has List of Struct w/ Utf8View
+);
+
+
+# Note field name is foo
+query ???
+SELECT column2, column3, column4  FROM t;
+----
+{foo: bar} {foo: baz} {foo: blarg}
+
+# Coerce fields, expect the field name to be the name of the first arg to case
+# the field should not be named 'c0'
+query ?
+SELECT
+  case
+    when column1 > 0 then column2
+    when column1 < 0 then column3
+    else column4
+  end
+FROM t;
+----
+{foo: bar}
+
+query ?
+SELECT
+  case
+    when column1 > 0 then column3 -- different arg order shouldn't affect name
+    when column1 < 0 then column4
+    else column2
+  end
+FROM t;
+----
+{foo: baz}
+
+query ?
+SELECT
+  case
+    when column1 > 0 then column4 -- different arg order shouldn't affect name
+    when column1 < 0 then column2
+    else column3
+  end
+FROM t;
+----
+{foo: blarg}
+
+statement ok
+drop table t
+
+
+# Test coercion of inner struct field names with different orders / missing fields
+statement ok
+create table t as values
+(
+ 100,                        -- column1 int (so the case isn't constant folded)
+ { 'foo': 'a', 'xxx': 'b' }, -- column2: Struct with fields foo, xxx
+ { 'xxx': 'c', 'foo': 'd' }, -- column3: Struct with fields xxx, foo
+ { 'xxx': 'e'             }  -- column4: Struct with field xxx (no second field)
+);
+
+# Note field names are in different orders
+query ???
+SELECT column2, column3, column4  FROM t;
+----
+{foo: a, xxx: b} {xxx: c, foo: d} {xxx: e}
+
+# coerce structs with different field orders,
+# (note the *value*s are from column2 but the field name is 'xxx', as the coerced
+# type takes the field name from the last argument (column3)
+query ?
+SELECT
+  case
+    when column1 > 0 then column2 -- always true
+    else column3
+  end
+FROM t;
+----
+{xxx: a, foo: b}
+
+# coerce structs with different field orders
+query ?
+SELECT
+  case
+    when column1 < 0 then column2 -- always false
+    else column3
+  end
+FROM t;
+----
+{xxx: c, foo: d}
+
+# coerce structs with subset of fields
+query error Failed to coerce then
+SELECT
+  case
+    when column1 > 0 then column3
+    else column4
+  end
+FROM t;
+
+statement ok
+drop table t

@@ -24,16 +24,16 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
-use crate::catalog_common::information_schema::{
-    InformationSchemaProvider, INFORMATION_SCHEMA,
-};
-use crate::catalog_common::MemoryCatalogProviderList;
 use crate::datasource::cte_worktable::CteWorkTable;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
+use datafusion_catalog::information_schema::{
+    InformationSchemaProvider, INFORMATION_SCHEMA,
+};
+use datafusion_catalog::MemoryCatalogProviderList;
 
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_catalog::{Session, TableFunction, TableFunctionImpl};
@@ -529,16 +529,16 @@ impl SessionState {
 
     /// Resolve all table references in the SQL statement. Does not include CTE references.
     ///
-    /// See [`catalog::resolve_table_references`] for more information.
+    /// See [`datafusion_catalog::resolve_table_references`] for more information.
     ///
-    /// [`catalog::resolve_table_references`]: crate::catalog_common::resolve_table_references
+    /// [`datafusion_catalog::resolve_table_references`]: datafusion_catalog::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        let (table_refs, _) = crate::catalog_common::resolve_table_references(
+        let (table_refs, _) = datafusion_catalog::resolve_table_references(
             statement,
             enable_ident_normalization,
         )?;
@@ -1988,11 +1988,11 @@ pub(crate) struct PreparedPlan {
 #[cfg(test)]
 mod tests {
     use super::{SessionContextProvider, SessionStateBuilder};
-    use crate::catalog_common::MemoryCatalogProviderList;
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
     use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
+    use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
     use datafusion_execution::config::SessionConfig;

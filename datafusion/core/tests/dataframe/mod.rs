@@ -2217,11 +2217,6 @@ async fn write_parquet_with_order() -> Result<()> {
     let df = ctx.sql("SELECT * FROM data").await?;
     let results = df.collect().await?;
 
-    let df_explain = ctx.sql("explain SELECT a FROM data").await?;
-    let explain_result = df_explain.collect().await?;
-
-    println!("explain_result {:?}", explain_result);
-
     assert_batches_eq!(
         &[
             "+---+---+",

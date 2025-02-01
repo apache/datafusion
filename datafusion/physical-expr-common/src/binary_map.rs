@@ -22,11 +22,11 @@ use ahash::RandomState;
 use arrow::array::cast::AsArray;
 use arrow::array::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use arrow::array::{
-    Array, ArrayRef, BooleanBufferBuilder, BufferBuilder, GenericBinaryArray,
-    GenericStringArray, OffsetSizeTrait,
+    Array, ArrayRef, BufferBuilder, GenericBinaryArray, GenericStringArray,
+    OffsetSizeTrait,
 };
-use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
+use arrow_buffer::{NullBuffer, NullBufferBuilder, OffsetBuffer, ScalarBuffer};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::any::type_name;
@@ -553,10 +553,12 @@ where
 
 /// Returns a `NullBuffer` with a single null value at the given index
 fn single_null_buffer(num_values: usize, null_index: usize) -> NullBuffer {
-    let mut bool_builder = BooleanBufferBuilder::new(num_values);
-    bool_builder.append_n(num_values, true);
-    bool_builder.set_bit(null_index, false);
-    NullBuffer::from(bool_builder.finish())
+    let mut null_builder = NullBufferBuilder::new(num_values);
+    null_builder.append_n_non_nulls(null_index);
+    null_builder.append_null();
+    null_builder.append_n_non_nulls(num_values - null_index - 1);
+    // SAFETY: inner builder must be constructed
+    null_builder.finish().unwrap()
 }
 
 impl<O: OffsetSizeTrait, V> Debug for ArrowBytesMap<O, V>

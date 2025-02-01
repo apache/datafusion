@@ -67,6 +67,62 @@ statement ok
 CREATE TABLE test (c1 BIGINT,c2 BIGINT) as values
 (0,null), (1,1), (null,1), (3,2), (3,2)
 
+statement ok
+CREATE TABLE group_median_table_non_nullable (
+    col_group STRING NOT NULL,
+    col_i8 TINYINT NOT NULL,
+    col_i16 SMALLINT NOT NULL,
+    col_i32 INT NOT NULL,
+    col_i64 BIGINT NOT NULL,
+    col_u8 TINYINT UNSIGNED NOT NULL,
+    col_u16 SMALLINT UNSIGNED NOT NULL,
+    col_u32 INT UNSIGNED NOT NULL,
+    col_u64 BIGINT UNSIGNED NOT NULL,
+    col_f32 FLOAT NOT NULL,
+    col_f64 DOUBLE NOT NULL,
+    col_f64_nan DOUBLE NOT NULL,
+    col_decimal128 DECIMAL(10, 4) NOT NULL,
+    col_decimal256 NUMERIC(10, 4) NOT NULL
+) as VALUES
+( 'group0', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   1.1, 1.1, 1.1,                         0.0001, 0.0001 ),
+( 'group0', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   4.4, 4.4, 1.1,                         0.0002, 0.0002 ),
+( 'group0', 100,  100,    100,         arrow_cast(100,'Int64'),                  100, 100,   100,        arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64'), 0.0003, 0.0003 ),
+( 'group0', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255, 65535, 4294967295, 18446744073709551615,     2.2, 2.2, arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
+( 'group1', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   1.1, 1.1, 1.1,                         0.0001, 0.0001 ),
+( 'group1', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   4.4, 4.4, arrow_cast('NAN','Float64'), 0.0002, 0.0002 ),
+( 'group1', 100,  100,    100,         arrow_cast(100,'Int64'),                  101, 100,   100,        arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64'), 0.0003, 0.0003 ),
+( 'group1', 125,  32766,  2147483646,  arrow_cast(9223372036854775806,'Int64'),  100, 101,   4294967294, arrow_cast(100,'UInt64'), 3.2, 5.5, arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
+( 'group1', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255, 65535, 4294967295, 18446744073709551615,     2.2, 2.2, arrow_cast('NAN','Float64'), 0.0005, 0.0005 )
+
+statement ok
+CREATE TABLE group_median_table_nullable (
+    col_group STRING NOT NULL,
+    col_i8 TINYINT,
+    col_i16 SMALLINT,
+    col_i32 INT,
+    col_i64 BIGINT,
+    col_u8 TINYINT UNSIGNED,
+    col_u16 SMALLINT UNSIGNED,
+    col_u32 INT UNSIGNED,
+    col_u64 BIGINT UNSIGNED,
+    col_f32 FLOAT,
+    col_f64 DOUBLE,
+    col_f64_nan DOUBLE,
+    col_decimal128 DECIMAL(10, 4),
+    col_decimal256 NUMERIC(10, 4)
+) as VALUES
+( 'group0', NULL, NULL,   NULL,        NULL,                                     NULL, NULL,  NULL,       NULL,                     NULL, NULL, NULL,                         NULL,   NULL   ),
+( 'group0', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,    0,     0,          arrow_cast(0,'UInt64'),   1.1,  1.1,  1.1,                          0.0001, 0.0001 ),
+( 'group0', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,    0,     0,          arrow_cast(0,'UInt64'),   4.4,  4.4,   1.1,                         0.0002, 0.0002 ),
+( 'group0', 100,  100,    100,         arrow_cast(100,'Int64'),                  100,  100,   100,        arrow_cast(100,'UInt64'), 3.3,  3.3,   arrow_cast('NAN','Float64'), 0.0003, 0.0003 ),
+( 'group0', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255,  65535, 4294967295, 18446744073709551615,     2.2,  2.2,   arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
+( 'group1', NULL, NULL,   NULL,        NULL,                                     NULL, NULL,  NULL,       NULL,                     NULL, NULL, NULL,                         NULL,   NULL   ),
+( 'group1', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,    0,     0,          arrow_cast(0,'UInt64'),   1.1,  1.1,   1.1,                         0.0001, 0.0001 ),
+( 'group1', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,    0,     0,          arrow_cast(0,'UInt64'),   4.4,  4.4,   arrow_cast('NAN','Float64'), 0.0002, 0.0002 ),
+( 'group1', 100,  100,    100,         arrow_cast(100,'Int64'),                  101,  100,   100,        arrow_cast(100,'UInt64'), 3.3,  3.3,   arrow_cast('NAN','Float64'), 0.0003, 0.0003 ),
+( 'group1', 125,  32766,  2147483646,  arrow_cast(9223372036854775806,'Int64'),  100,  101,   4294967294, arrow_cast(100,'UInt64'), 3.2,  5.5,   arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
+( 'group1', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255,  65535, 4294967295, 18446744073709551615,     2.2,  2.2,   arrow_cast('NAN','Float64'), 0.0005, 0.0005 )
+
 #######
 # Error tests
 #######
@@ -6203,3 +6259,225 @@ physical_plan
 14)--------------PlaceholderRowExec
 15)------------ProjectionExec: expr=[1 as id, 2 as foo]
 16)--------------PlaceholderRowExec
+
+# SortExec is removed if it is coming after one-row producing AggregateExec's having an empty group by expression
+query TT
+EXPLAIN SELECT COUNT(c5) as count_c5 FROM aggregate_test_100 ORDER BY count_c5;
+----
+logical_plan
+01)Sort: count_c5 ASC NULLS LAST
+02)--Projection: count(aggregate_test_100.c5) AS count_c5
+03)----Aggregate: groupBy=[[]], aggr=[[count(aggregate_test_100.c5)]]
+04)------TableScan: aggregate_test_100 projection=[c5]
+physical_plan
+01)ProjectionExec: expr=[count(aggregate_test_100.c5)@0 as count_c5]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(aggregate_test_100.c5)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(aggregate_test_100.c5)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], has_header=true
+
+#######
+# Group median test
+#######
+
+# group median i8 non-nullable
+query TI rowsort
+SELECT col_group, median(col_i8) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 -14
+group1 100
+
+# group median i16 non-nullable
+query TI
+SELECT col_group, median(col_i16) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 -16334
+group1 100
+
+# group median i32 non-nullable
+query TI
+SELECT col_group, median(col_i32) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 -1073741774
+group1 100
+
+# group median i64 non-nullable
+query TI
+SELECT col_group, median(col_i64) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 -4611686018427387854
+group1 100
+
+# group median u8 non-nullable
+query TI rowsort
+SELECT col_group, median(col_u8) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u16 non-nullable
+query TI
+SELECT col_group, median(col_u16) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u32 non-nullable
+query TI
+SELECT col_group, median(col_u32) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u64 non-nullable
+query TI
+SELECT col_group, median(col_u64) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median f32 non-nullable
+query TR
+SELECT col_group, median(col_f32) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 2.75
+group1 3.2
+
+# group median f64 non-nullable
+query TR
+SELECT col_group, median(col_f64) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 2.75
+group1 3.3
+
+# group median f64_nan non-nullable
+query TR
+SELECT col_group, median(col_f64_nan) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 NaN
+group1 NaN
+
+# group median decimal128 non-nullable
+query TR
+SELECT col_group, median(col_decimal128) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 0.0002
+group1 0.0003
+
+# group median decimal256 non-nullable
+query TR
+SELECT col_group, median(col_decimal256) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 0.0002
+group1 0.0003
+
+# group median i8 nullable
+query TI rowsort
+SELECT col_group, median(col_i8) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 -14
+group1 100
+
+# group median i16 nullable
+query TI rowsort
+SELECT col_group, median(col_i16) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 -16334
+group1 100
+
+# group median i32 nullable
+query TI rowsort
+SELECT col_group, median(col_i32) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 -1073741774
+group1 100
+
+# group median i64 nullable
+query TI rowsort
+SELECT col_group, median(col_i64) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 -4611686018427387854
+group1 100
+
+# group median u8 nullable
+query TI rowsort
+SELECT col_group, median(col_u8) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u16 nullable
+query TI rowsort
+SELECT col_group, median(col_u16) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u32 nullable
+query TI rowsort
+SELECT col_group, median(col_u32) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u64 nullable
+query TI rowsort
+SELECT col_group, median(col_u64) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median f32 nullable
+query TR rowsort
+SELECT col_group, median(col_f32) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 2.75
+group1 3.2
+
+# group median f64 nullable
+query TR rowsort
+SELECT col_group, median(col_f64) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 2.75
+group1 3.3
+
+# group median f64_nan nullable
+query TR rowsort
+SELECT col_group, median(col_f64_nan) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 NaN
+group1 NaN
+
+# group median decimal128 nullable
+query TR rowsort
+SELECT col_group, median(col_decimal128) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 0.0002
+group1 0.0003
+
+# group median decimal256 nullable
+query TR rowsort
+SELECT col_group, median(col_decimal256) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 0.0002
+group1 0.0003
+
+# median with all nulls
+statement ok
+create table group_median_all_nulls(
+  a STRING NOT NULL, 
+  b INT
+) AS VALUES
+( 'group0', NULL),
+( 'group0', NULL),
+( 'group0', NULL),
+( 'group1', NULL),
+( 'group1', NULL),
+( 'group1', NULL)
+
+query TIT rowsort
+SELECT a, median(b), arrow_typeof(median(b)) FROM group_median_all_nulls GROUP BY a
+----
+group0 NULL Int32
+group1 NULL Int32

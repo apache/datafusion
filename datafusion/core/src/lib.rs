@@ -309,7 +309,7 @@
 //!
 //! [`ListingTable`]: crate::datasource::listing::ListingTable
 //! [`MemTable`]: crate::datasource::memory::MemTable
-//! [`StreamingTable`]: crate::datasource::streaming::StreamingTable
+//! [`StreamingTable`]: datafusion_catalog::streaming::StreamingTable
 //!
 //! ## Plan Representations
 //!
