@@ -162,7 +162,7 @@ impl StatisticsV2 {
                         return internal_err!("Variance argument of Unknown Distribution cannot be ScalarValue::Null");
                     }
                     let zero = ScalarValue::new_zero(&v.data_type())?;
-                    if !v.ge(&zero) {
+                    if v.lt(&zero) {
                         return Ok(false);
                     }
                 }
