@@ -20,7 +20,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DFSchema, Result};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
+use datafusion_execution::{TaskContext, TaskContextFunctionParams};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
@@ -135,10 +135,12 @@ impl From<&dyn Session> for TaskContext {
             task_id,
             state.session_id().to_string(),
             state.config().clone(),
-            state.scalar_functions().clone(),
-            state.aggregate_functions().clone(),
-            state.ordered_set_aggregate_functions().clone(),
-            state.window_functions().clone(),
+            TaskContextFunctionParams::new(
+                state.scalar_functions().clone(),
+                state.aggregate_functions().clone(),
+                state.ordered_set_aggregate_functions().clone(),
+                state.window_functions().clone(),
+            ),
             state.runtime_env().clone(),
         )
     }

@@ -48,7 +48,7 @@ use datafusion_common::{
 };
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
-use datafusion_execution::TaskContext;
+use datafusion_execution::{TaskContext, TaskContextFunctionParams};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::{ExprPlanner, TypePlanner};
@@ -2013,10 +2013,12 @@ impl From<&SessionState> for TaskContext {
             task_id,
             state.session_id.clone(),
             state.config.clone(),
-            state.scalar_functions.clone(),
-            state.aggregate_functions.clone(),
-            state.ordered_set_aggregate_functions.clone(),
-            state.window_functions.clone(),
+            TaskContextFunctionParams::new(
+                state.scalar_functions.clone(),
+                state.aggregate_functions.clone(),
+                state.ordered_set_aggregate_functions.clone(),
+                state.window_functions.clone(),
+            ),
             Arc::clone(&state.runtime_env),
         )
     }

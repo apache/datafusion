@@ -82,20 +82,17 @@ impl TaskContext {
         task_id: Option<String>,
         session_id: String,
         session_config: SessionConfig,
-        scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-        aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
-        ordered_set_aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
-        window_functions: HashMap<String, Arc<WindowUDF>>,
+        function_params: TaskContextFunctionParams,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         Self {
             task_id,
             session_id,
             session_config,
-            scalar_functions,
-            aggregate_functions,
-            ordered_set_aggregate_functions,
-            window_functions,
+            scalar_functions: function_params.scalar_functions,
+            aggregate_functions: function_params.aggregate_functions,
+            ordered_set_aggregate_functions: function_params.ordered_set_aggregate_functions,
+            window_functions: function_params.window_functions,
             runtime,
         }
     }
@@ -151,6 +148,29 @@ impl TaskContext {
     pub fn with_runtime(mut self, runtime: Arc<RuntimeEnv>) -> Self {
         self.runtime = runtime;
         self
+    }
+}
+
+pub struct TaskContextFunctionParams {
+    scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    ordered_set_aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+    window_functions: HashMap<String, Arc<WindowUDF>>,
+}
+
+impl TaskContextFunctionParams {
+    pub fn new(
+        scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+        aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+        ordered_set_aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+        window_functions: HashMap<String, Arc<WindowUDF>>,
+    ) -> Self {
+        Self {
+            scalar_functions,
+            aggregate_functions,
+            ordered_set_aggregate_functions,
+            window_functions,
+        }
     }
 }
 
@@ -266,10 +286,12 @@ mod tests {
             Some("task_id".to_string()),
             "session_id".to_string(),
             session_config,
-            HashMap::default(),
-            HashMap::default(),
-            HashMap::default(),
-            HashMap::default(),
+            TaskContextFunctionParams::new(
+                HashMap::default(),
+                HashMap::default(),
+                HashMap::default(),
+                HashMap::default(),
+            ),
             runtime,
         );
 
