@@ -1076,7 +1076,7 @@ impl<T: 'static> OnceFut<T> {
             OnceFutState::Ready(r) => Poll::Ready(
                 r.as_ref()
                     .map(|r| r.as_ref())
-                    .map_err(|e| DataFusionError::External(Box::new(Arc::clone(e)))),
+                    .map_err(|e| DataFusionError::WrappedError(Arc::clone(e))),
             ),
         }
     }
@@ -1090,10 +1090,9 @@ impl<T: 'static> OnceFut<T> {
 
         match &self.state {
             OnceFutState::Pending(_) => unreachable!(),
-            OnceFutState::Ready(r) => Poll::Ready(
-                r.clone()
-                    .map_err(|e| DataFusionError::External(Box::new(e))),
-            ),
+            OnceFutState::Ready(r) => {
+                Poll::Ready(r.clone().map_err(DataFusionError::WrappedError))
+            }
         }
     }
 }
