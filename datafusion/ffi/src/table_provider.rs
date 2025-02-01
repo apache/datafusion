@@ -40,7 +40,7 @@ use datafusion_proto::{
     protobuf::LogicalExprList,
 };
 use prost::Message;
-use tokio::runtime::Runtime;
+use tokio::runtime::Handle;
 
 use crate::{
     arrow_wrappers::WrappedSchema,
@@ -162,7 +162,7 @@ unsafe impl Sync for FFI_TableProvider {}
 
 struct ProviderPrivateData {
     provider: Arc<dyn TableProvider + Send>,
-    runtime: Option<Arc<Runtime>>,
+    runtime: Option<Handle>,
 }
 
 unsafe extern "C" fn schema_fn_wrapper(provider: &FFI_TableProvider) -> WrappedSchema {
@@ -295,6 +295,7 @@ unsafe extern "C" fn insert_into_fn_wrapper(
     let internal_provider = &(*private_data).provider;
     let session_config = session_config.clone();
     let input = input.clone();
+    let runtime = &(*private_data).runtime;
 
     async move {
         let config = match ForeignSessionConfig::try_from(&session_config) {
@@ -322,7 +323,11 @@ unsafe extern "C" fn insert_into_fn_wrapper(
             Err(e) => return RResult::RErr(e.to_string().into()),
         };
 
-        RResult::ROk(FFI_ExecutionPlan::new(plan, ctx.task_ctx()))
+        RResult::ROk(FFI_ExecutionPlan::new(
+            plan,
+            ctx.task_ctx(),
+            runtime.clone(),
+        ))
     }
     .into_ffi()
 }
@@ -365,7 +370,7 @@ impl FFI_TableProvider {
     pub fn new(
         provider: Arc<dyn TableProvider + Send>,
         can_support_pushdown_filters: bool,
-        runtime: Option<Arc<Runtime>>,
+        runtime: Option<Handle>,
     ) -> Self {
         let private_data = Box::new(ProviderPrivateData { provider, runtime });
 
@@ -504,7 +509,10 @@ impl TableProvider for ForeignTableProvider {
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let session_config: FFI_SessionConfig = session.config().into();
-        let input = FFI_ExecutionPlan::new(input, Arc::new(TaskContext::from(session)));
+
+        let rc = Handle::try_current().ok();
+        let input =
+            FFI_ExecutionPlan::new(input, Arc::new(TaskContext::from(session)), rc);
         let insert_op: FFI_InsertOp = insert_op.into();
 
         let plan = unsafe {
@@ -601,7 +609,7 @@ mod tests {
         let provider =
             Arc::new(MemTable::try_new(schema, vec![vec![batch1], vec![batch2]])?);
 
-        let ffi_provider = FFI_TableProvider::new(provider, true);
+        let ffi_provider = FFI_TableProvider::new(provider, true, None);
 
         let foreign_table_provider: ForeignTableProvider = (&ffi_provider).into();
 

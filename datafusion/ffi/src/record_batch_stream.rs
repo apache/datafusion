@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, sync::Arc, task::Poll};
+use std::{ffi::c_void, task::Poll};
 
 use abi_stable::{
     std_types::{ROption, RResult, RString},
@@ -33,7 +33,7 @@ use datafusion::{
     execution::{RecordBatchStream, SendableRecordBatchStream},
 };
 use futures::{Stream, TryStreamExt};
-use tokio::runtime::Runtime;
+use tokio::runtime::Handle;
 
 use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
 
@@ -61,7 +61,7 @@ pub struct FFI_RecordBatchStream {
 
 pub struct RecordBatchStreamPrivateData {
     pub rbs: SendableRecordBatchStream,
-    pub runtime: Option<Arc<Runtime>>,
+    pub runtime: Option<Handle>,
 }
 
 impl From<SendableRecordBatchStream> for FFI_RecordBatchStream {
@@ -71,7 +71,7 @@ impl From<SendableRecordBatchStream> for FFI_RecordBatchStream {
 }
 
 impl FFI_RecordBatchStream {
-    pub fn new(stream: SendableRecordBatchStream, runtime: Option<Arc<Runtime>>) -> Self {
+    pub fn new(stream: SendableRecordBatchStream, runtime: Option<Handle>) -> Self {
         let private_data = Box::into_raw(Box::new(RecordBatchStreamPrivateData {
             rbs: stream,
             runtime,
