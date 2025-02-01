@@ -543,9 +543,7 @@ fn get_valid_types(
                         let target_type = native_type.native();
                         target_type.default_cast_for(current_type)
                     }
-                    TypeSignatureClass::Integer(native_type)
-                        if logical_type.is_integer() =>
-                    {
+                    TypeSignatureClass::Integer(native_type) => {
                         let target_type = native_type.native();
                         if target_type.is_integer() && logical_type.is_integer() {
                             target_type.default_cast_for(current_type)
