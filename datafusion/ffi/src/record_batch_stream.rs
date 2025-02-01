@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, task::Poll};
+use std::{ffi::c_void, sync::Arc, task::Poll};
 
 use abi_stable::{
     std_types::{ROption, RResult, RString},
@@ -33,6 +33,7 @@ use datafusion::{
     execution::{RecordBatchStream, SendableRecordBatchStream},
 };
 use futures::{Stream, TryStreamExt};
+use tokio::runtime::Runtime;
 
 use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
 
@@ -58,12 +59,27 @@ pub struct FFI_RecordBatchStream {
     pub private_data: *mut c_void,
 }
 
+pub struct RecordBatchStreamPrivateData {
+    pub rbs: SendableRecordBatchStream,
+    pub runtime: Option<Arc<Runtime>>,
+}
+
 impl From<SendableRecordBatchStream> for FFI_RecordBatchStream {
     fn from(stream: SendableRecordBatchStream) -> Self {
+        Self::new(stream, None)
+    }
+}
+
+impl FFI_RecordBatchStream {
+    pub fn new(stream: SendableRecordBatchStream, runtime: Option<Arc<Runtime>>) -> Self {
+        let private_data = Box::into_raw(Box::new(RecordBatchStreamPrivateData {
+            rbs: stream,
+            runtime,
+        })) as *mut c_void;
         FFI_RecordBatchStream {
             poll_next: poll_next_fn_wrapper,
             schema: schema_fn_wrapper,
-            private_data: Box::into_raw(Box::new(stream)) as *mut c_void,
+            private_data,
         }
     }
 }
@@ -71,7 +87,8 @@ impl From<SendableRecordBatchStream> for FFI_RecordBatchStream {
 unsafe impl Send for FFI_RecordBatchStream {}
 
 unsafe extern "C" fn schema_fn_wrapper(stream: &FFI_RecordBatchStream) -> WrappedSchema {
-    let stream = stream.private_data as *const SendableRecordBatchStream;
+    let private_data = stream.private_data as *const RecordBatchStreamPrivateData;
+    let stream = &(*private_data).rbs;
 
     (*stream).schema().into()
 }
@@ -106,7 +123,10 @@ unsafe extern "C" fn poll_next_fn_wrapper(
     stream: &FFI_RecordBatchStream,
     cx: &mut FfiContext,
 ) -> FfiPoll<ROption<RResult<WrappedArray, RString>>> {
-    let stream = stream.private_data as *mut SendableRecordBatchStream;
+    let private_data = stream.private_data as *mut RecordBatchStreamPrivateData;
+    let stream = &mut (*private_data).rbs;
+
+    let _guard = (*private_data).runtime.as_ref().map(|rt| rt.enter());
 
     let poll_result = cx.with_context(|std_cx| {
         (*stream)
