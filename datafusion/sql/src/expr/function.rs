@@ -185,7 +185,9 @@ impl FunctionArgs {
         }
 
         if within_group.len() > 1 {
-            return not_impl_err!("Multiple column ordering in WITHIN GROUP clause is not supported");
+            return not_impl_err!(
+                "Multiple column ordering in WITHIN GROUP clause is not supported"
+            );
         }
 
         let order_by = order_by.unwrap_or_default();
@@ -342,15 +344,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
-                if let Some(fm) = self.context_provider.get_ordered_set_aggregate_meta(&name) {
+                if let Some(fm) =
+                    self.context_provider.get_ordered_set_aggregate_meta(&name)
+                {
                     if within_group.is_empty() {
                         return plan_err!("WITHIN GROUP clause is required when calling ordered set aggregate function({})", fm.name());
                     }
                 }
 
-                if null_treatment.is_some() &&
-                    !fm.supports_null_handling_clause().unwrap_or(true) {
-                    return plan_err!("[IGNORE | RESPECT] NULLS are not permitted for {}", fm.name());
+                if null_treatment.is_some()
+                    && !fm.supports_null_handling_clause().unwrap_or(true)
+                {
+                    return plan_err!(
+                        "[IGNORE | RESPECT] NULLS are not permitted for {}",
+                        fm.name()
+                    );
                 }
 
                 let order_by = self.order_by_to_sort_expr(
@@ -361,7 +369,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None,
                 )?;
                 let order_by = (!order_by.is_empty()).then_some(order_by);
-                let mut args = self.function_args_to_expr(args, schema, planner_context)?;
+                let mut args =
+                    self.function_args_to_expr(args, schema, planner_context)?;
 
                 let within_group = self.order_by_to_sort_expr(
                     within_group,

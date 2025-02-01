@@ -283,7 +283,7 @@ impl TreeNode for Expr {
                         },
                     )?
                 }
-            },
+            }
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => exprs
                     .map_elements(f)?

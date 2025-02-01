@@ -208,7 +208,10 @@ impl Debug for SessionState {
             .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
-            .field("ordered_set_aggregate_functions", &self.ordered_set_aggregate_functions)
+            .field(
+                "ordered_set_aggregate_functions",
+                &self.ordered_set_aggregate_functions,
+            )
             .field("window_functions", &self.window_functions)
             .field("prepared_plans", &self.prepared_plans)
             .finish()
@@ -1080,7 +1083,10 @@ impl SessionStateBuilder {
                 existing.aggregate_functions.into_values().collect_vec(),
             ),
             ordered_set_aggregate_functions: Some(
-                existing.ordered_set_aggregate_functions.into_values().collect_vec(),
+                existing
+                    .ordered_set_aggregate_functions
+                    .into_values()
+                    .collect_vec(),
             ),
             window_functions: Some(existing.window_functions.into_values().collect_vec()),
             serializer_registry: Some(existing.serializer_registry),
@@ -1107,7 +1113,9 @@ impl SessionStateBuilder {
             .with_expr_planners(SessionStateDefaults::default_expr_planners())
             .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
             .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
-            .with_ordered_set_aggregate_functions(SessionStateDefaults::default_ordered_set_aggregate_functions())
+            .with_ordered_set_aggregate_functions(
+                SessionStateDefaults::default_ordered_set_aggregate_functions(),
+            )
             .with_window_functions(SessionStateDefaults::default_window_functions())
             .with_table_function_list(SessionStateDefaults::default_table_functions())
     }
@@ -1686,7 +1694,10 @@ impl Debug for SessionStateBuilder {
             .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
-            .field("ordered_set_aggregate_functions", &self.ordered_set_aggregate_functions)
+            .field(
+                "ordered_set_aggregate_functions",
+                &self.ordered_set_aggregate_functions,
+            )
             .field("window_functions", &self.window_functions)
             .finish()
     }
@@ -1857,7 +1868,9 @@ impl FunctionRegistry for SessionState {
         let result = self.ordered_set_aggregate_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no ordered set UDAF named \"{name}\" in the registry")
+            plan_datafusion_err!(
+                "There is no ordered set UDAF named \"{name}\" in the registry"
+            )
         })
     }
 
@@ -1899,7 +1912,8 @@ impl FunctionRegistry for SessionState {
             self.ordered_set_aggregate_functions
                 .insert(alias.clone(), Arc::clone(&ordered_set_udaf));
         });
-        Ok(self.ordered_set_aggregate_functions
+        Ok(self
+            .ordered_set_aggregate_functions
             .insert(ordered_set_udaf.name().into(), ordered_set_udaf))
     }
 

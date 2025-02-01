@@ -91,7 +91,8 @@ impl TaskContext {
             session_config,
             scalar_functions: function_params.scalar_functions,
             aggregate_functions: function_params.aggregate_functions,
-            ordered_set_aggregate_functions: function_params.ordered_set_aggregate_functions,
+            ordered_set_aggregate_functions: function_params
+                .ordered_set_aggregate_functions,
             window_functions: function_params.window_functions,
             runtime,
         }
@@ -199,7 +200,9 @@ impl FunctionRegistry for TaskContext {
         let result = self.ordered_set_aggregate_functions.get(name);
 
         result.cloned().ok_or_else(|| {
-            plan_datafusion_err!("There is no ordered set UDAF named \"{name}\" in the TaskContext")
+            plan_datafusion_err!(
+                "There is no ordered set UDAF named \"{name}\" in the TaskContext"
+            )
         })
     }
 

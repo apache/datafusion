@@ -217,10 +217,9 @@ impl FunctionRegistry for MemoryFunctionRegistry {
     }
 
     fn ordered_set_udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
-        self.ordered_set_udafs
-            .get(name)
-            .cloned()
-            .ok_or_else(|| plan_datafusion_err!("Ordered Set Aggregate Function {name} not found"))
+        self.ordered_set_udafs.get(name).cloned().ok_or_else(|| {
+            plan_datafusion_err!("Ordered Set Aggregate Function {name} not found")
+        })
     }
 
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
@@ -243,7 +242,8 @@ impl FunctionRegistry for MemoryFunctionRegistry {
         &mut self,
         ordered_set_udaf: Arc<AggregateUDF>,
     ) -> Result<Option<Arc<AggregateUDF>>> {
-        Ok(self.ordered_set_udafs
+        Ok(self
+            .ordered_set_udafs
             .insert(ordered_set_udaf.name().into(), ordered_set_udaf))
     }
     fn register_udwf(&mut self, udaf: Arc<WindowUDF>) -> Result<Option<Arc<WindowUDF>>> {

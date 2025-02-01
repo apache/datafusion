@@ -1903,17 +1903,18 @@ impl NormalizeEq for Expr {
                         _ => false,
                     }
                     && match (self_within_group, other_within_group) {
-                        (Some(self_within_group), Some(other_within_group)) => self_within_group
-                            .iter()
-                            .zip(other_within_group.iter())
-                            .all(|(a, b)| {
-                                a.asc == b.asc
-                                    && a.nulls_first == b.nulls_first
-                                    && a.expr.normalize_eq(&b.expr)
-                            }),
+                        (Some(self_within_group), Some(other_within_group)) => {
+                            self_within_group.iter().zip(other_within_group.iter()).all(
+                                |(a, b)| {
+                                    a.asc == b.asc
+                                        && a.nulls_first == b.nulls_first
+                                        && a.expr.normalize_eq(&b.expr)
+                                },
+                            )
+                        }
                         (None, None) => true,
                         _ => false,
-                }
+                    }
             }
             (
                 Expr::WindowFunction(WindowFunction {
@@ -2303,7 +2304,11 @@ impl Display for SchemaDisplay<'_> {
                 };
 
                 if let Some(within_group) = within_group {
-                    write!(f, " WITHIN GROUP [{}]", schema_name_from_sorts(within_group)?)?;
+                    write!(
+                        f,
+                        " WITHIN GROUP [{}]",
+                        schema_name_from_sorts(within_group)?
+                    )?;
                 };
 
                 Ok(())

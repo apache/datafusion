@@ -1125,7 +1125,10 @@ mod tests {
             }
         }
 
-        fn get_ordered_set_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
+        fn get_ordered_set_aggregate_meta(
+            &self,
+            _name: &str,
+        ) -> Option<Arc<AggregateUDF>> {
             None
         }
 

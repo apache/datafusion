@@ -1952,13 +1952,22 @@ pub async fn from_substrait_agg_func(
         args
     };
 
-    let (within_group, order_by) = match consumer.get_function_registry().ordered_set_udaf(fn_name) {
-        Ok(_) => (sorts, None),
-        Err(_) => (None, sorts),
-    };
+    let (within_group, order_by) =
+        match consumer.get_function_registry().ordered_set_udaf(fn_name) {
+            Ok(_) => (sorts, None),
+            Err(_) => (None, sorts),
+        };
 
     Ok(Arc::new(Expr::AggregateFunction(
-        expr::AggregateFunction::new_udf(udaf, args, distinct, filter, order_by, None, within_group),
+        expr::AggregateFunction::new_udf(
+            udaf,
+            args,
+            distinct,
+            filter,
+            order_by,
+            None,
+            within_group,
+        ),
     )))
 }
 

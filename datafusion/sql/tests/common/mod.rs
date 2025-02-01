@@ -238,7 +238,10 @@ impl ContextProvider for MockContextProvider {
     }
 
     fn get_ordered_set_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.state.ordered_set_aggregate_functions.get(name).cloned()
+        self.state
+            .ordered_set_aggregate_functions
+            .get(name)
+            .cloned()
     }
 
     fn get_variable_type(&self, _: &[String]) -> Option<DataType> {

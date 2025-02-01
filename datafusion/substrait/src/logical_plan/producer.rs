@@ -1217,18 +1217,14 @@ pub fn from_aggregate_function(
     } = agg_fn;
 
     let sorts = match (within_group, order_by) {
-        (Some(within_group), _) => {
-            within_group
-                .iter()
-                .map(|expr| to_substrait_sort_field(producer, expr, schema))
-                .collect::<Result<Vec<_>>>()?
-        }
-        (None, Some(order_by)) => {
-            order_by
-                .iter()
-                .map(|expr| to_substrait_sort_field(producer, expr, schema))
-                .collect::<Result<Vec<_>>>()?
-        }
+        (Some(within_group), _) => within_group
+            .iter()
+            .map(|expr| to_substrait_sort_field(producer, expr, schema))
+            .collect::<Result<Vec<_>>>()?,
+        (None, Some(order_by)) => order_by
+            .iter()
+            .map(|expr| to_substrait_sort_field(producer, expr, schema))
+            .collect::<Result<Vec<_>>>()?,
         (None, None) => vec![],
     };
 

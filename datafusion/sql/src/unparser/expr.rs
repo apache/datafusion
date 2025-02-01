@@ -279,7 +279,8 @@ impl Unparser<'_> {
                     None => None,
                 };
 
-                let within_group = agg.within_group
+                let within_group = agg
+                    .within_group
                     .as_ref()
                     .unwrap_or(&Vec::new())
                     .iter()
