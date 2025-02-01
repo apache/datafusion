@@ -601,10 +601,13 @@ select repeat('-1.2', arrow_cast(3, 'Int32'));
 ----
 -1.2-1.2-1.2
 
-query T
+query error
 select repeat('-1.2', 3.2);
 ----
--1.2-1.2-1.2
+DataFusion error: Error during planning: This feature is not implemented: Got logical_type: NativeType::Float64 with target_type_class: TypeSignatureClass::Integer(LogicalType(Native(Int64), Int64)) No function matches the given name and argument types 'repeat(Utf8, Float64)'. You might need to add explicit type casts.
+	Candidate functions:
+	repeat(TypeSignatureClass::Native(LogicalType(Native(String), String)), TypeSignatureClass::Integer(LogicalType(Native(Int64), Int64)))
+
 
 query T
 SELECT replace('abcdefabcdef', 'cd', 'XX')

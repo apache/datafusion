@@ -68,7 +68,7 @@ impl RepeatFunc {
             signature: Signature::coercible(
                 vec![
                     TypeSignatureClass::Native(logical_string()),
-                    TypeSignatureClass::Native(logical_int64()),
+                    TypeSignatureClass::Integer(logical_int64()),
                 ],
                 Volatility::Immutable,
             ),

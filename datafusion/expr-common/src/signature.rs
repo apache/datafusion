@@ -126,9 +126,18 @@ pub enum TypeSignature {
     Exact(Vec<DataType>),
     /// One or more arguments belonging to the [`TypeSignatureClass`], in order.
     ///
-    /// For example, `Coercible(vec![logical_float64()])` accepts
-    /// arguments like `vec![Int32]` or `vec![Float32]`
-    /// since i32 and f32 can be cast to f64
+    /// `Coercible(vec![TypeSignatureClass::Native(...)])` accepts any type castable to the
+    /// target `NativeType` through the explicit set of type conversion rules defined in
+    /// `NativeType::default_cast_for`
+    ///
+    /// For example, `Coercible(vec![TypeSignatureClass::Native(logical_float64())])` accepts
+    /// arguments like `vec![Int32]` or `vec![Float32]` since i32 and f32 can be cast to f64.
+    ///
+    /// Coercible(vec![TypeSignatureClass::Integer(...)])` accepts any
+    /// integer type (`NativeType::is_integer`) castable to the target integer `NativeType`.
+    ///
+    /// For example, `Coercible(vec![TypeSignatureClass::Integer(logical_int64())])` accepts
+    /// arguments like `vec![Int32]` since i32 can be cast to i64.
     ///
     /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`].
     Coercible(Vec<TypeSignatureClass>),
@@ -213,9 +222,9 @@ pub enum TypeSignatureClass {
     Interval,
     Duration,
     Native(LogicalTypeRef),
+    Integer(LogicalTypeRef),
     // TODO:
     // Numeric
-    // Integer
 }
 
 impl Display for TypeSignatureClass {
@@ -376,7 +385,9 @@ impl TypeSignature {
             TypeSignature::Coercible(types) => types
                 .iter()
                 .map(|logical_type| match logical_type {
-                    TypeSignatureClass::Native(l) => get_data_types(l.native()),
+                    TypeSignatureClass::Native(l) | TypeSignatureClass::Integer(l) => {
+                        get_data_types(l.native())
+                    }
                     TypeSignatureClass::Timestamp => {
                         vec![
                             DataType::Timestamp(TimeUnit::Nanosecond, None),
