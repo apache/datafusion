@@ -200,7 +200,7 @@ impl ScalarUDF {
         self.inner.return_type_from_args(args)
     }
 
-    /// Retruns the behavior that this function has when any of the inputs are Null.
+    /// Returns the behavior that this function has when any of the inputs are Null.
     pub fn null_handling(&self) -> NullHandling {
         self.inner.null_handling()
     }
@@ -603,7 +603,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
         true
     }
 
-    /// Retruns the behavior that this function has when any of the inputs are Null.
+    /// Returns the behavior that this function has when any of the inputs are Null.
     fn null_handling(&self) -> NullHandling {
         NullHandling::PassThrough
     }
