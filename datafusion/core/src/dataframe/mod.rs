@@ -994,6 +994,39 @@ impl DataFrame {
         })
     }
 
+    /// Rename this DataFrame with a new name.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::assert_batches_sorted_eq;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// // Rename the DataFrame to "my_table"
+    /// let df = df.alias("my_table")?;
+    /// let expected = vec![
+    ///     "+---+---+---+",
+    ///     "| a | b | c |",
+    ///     "+---+---+---+",
+    ///     "| 1 | 2 | 3 |",
+    ///     "+---+---+---+",
+    /// ];
+    /// assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn alias(self, alias: &str) -> Result<DataFrame> {
+        let plan = LogicalPlanBuilder::from(self.plan).alias(alias)?.build()?;
+        Ok(DataFrame {
+            session_state: self.session_state,
+            plan,
+        })
+    }
+
     /// Join this `DataFrame` with another `DataFrame` using explicitly specified
     /// columns and an optional filter expression.
     ///
