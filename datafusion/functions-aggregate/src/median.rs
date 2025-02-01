@@ -249,9 +249,11 @@ impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
             OffsetBuffer::new(ScalarBuffer::from(vec![0, self.all_values.len() as i32]));
 
         // Build inner array
-        let values_array =
-            PrimitiveArray::<T>::new(ScalarBuffer::from(self.all_values.clone()), None)
-                .with_data_type(self.data_type.clone());
+        let values_array = PrimitiveArray::<T>::new(
+            ScalarBuffer::from(std::mem::take(&mut self.all_values)),
+            None,
+        )
+        .with_data_type(self.data_type.clone());
 
         // Build the result list array
         let list_array = ListArray::new(
