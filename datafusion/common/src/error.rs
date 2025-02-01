@@ -131,6 +131,10 @@ pub enum DataFusionError {
     /// Errors from either mapping LogicalPlans to/from Substrait plans
     /// or serializing/deserializing protobytes to Substrait plans
     Substrait(String),
+
+    /// Errors for wrapping other errors.
+    /// This is useful when we need to share DatafusionError.
+    WrappedError(Arc<DataFusionError>),
 }
 
 #[macro_export]
@@ -337,6 +341,7 @@ impl Error for DataFusionError {
             DataFusionError::External(e) => Some(e.as_ref()),
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
+            DataFusionError::WrappedError(e) => Some(e.as_ref()),
         }
     }
 }
@@ -450,6 +455,7 @@ impl DataFusionError {
             DataFusionError::External(_) => "External error: ",
             DataFusionError::Context(_, _) => "",
             DataFusionError::Substrait(_) => "Substrait error: ",
+            DataFusionError::WrappedError(_) => "",
         }
     }
 
@@ -490,6 +496,7 @@ impl DataFusionError {
                 Cow::Owned(format!("{desc}\ncaused by\n{}", *err))
             }
             DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::WrappedError(ref desc) => Cow::Owned(desc.to_string()),
         }
     }
 }
