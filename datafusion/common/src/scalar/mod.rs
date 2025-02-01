@@ -3963,7 +3963,7 @@ mod tests {
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use arrow_array::types::Float64Type;
-    use arrow_buffer::{Buffer, NullBuffer};
+    use arrow_buffer::{Buffer, NullBufferBuilder};
     use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;
@@ -6912,12 +6912,11 @@ mod tests {
         let array_b = Arc::new(Int32Array::from_iter_values([2]));
         let arrays: Vec<ArrayRef> = vec![array_a, array_b];
 
-        let mut not_nulls = BooleanBufferBuilder::new(1);
-        not_nulls.append(true);
-        let not_nulls = not_nulls.finish();
-        let not_nulls = Some(NullBuffer::new(not_nulls));
+        let mut not_nulls = NullBufferBuilder::new(1);
 
-        let ar = StructArray::new(fields, arrays, not_nulls);
+        not_nulls.append_non_null();
+
+        let ar = StructArray::new(fields, arrays, not_nulls.finish());
         let s = ScalarValue::Struct(Arc::new(ar));
 
         assert_eq!(s.to_string(), "{a:1,b:2}");
