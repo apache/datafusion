@@ -242,14 +242,26 @@ impl<T: ArrowNumericType> Debug for MedianAccumulator<T> {
 
 impl<T: ArrowNumericType> Accumulator for MedianAccumulator<T> {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let all_values = self
-            .all_values
-            .iter()
-            .map(|x| ScalarValue::new_primitive::<T>(Some(*x), &self.data_type))
-            .collect::<Result<Vec<_>>>()?;
+        // Convert `all_values` to `ListArray` and return a single List ScalarValue
 
-        let arr = ScalarValue::new_list_nullable(&all_values, &self.data_type);
-        Ok(vec![ScalarValue::List(arr)])
+        // Build offsets
+        let offsets =
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, self.all_values.len() as i32]));
+
+        // Build inner array
+        let values_array =
+            PrimitiveArray::<T>::new(ScalarBuffer::from(self.all_values.clone()), None)
+                .with_data_type(self.data_type.clone());
+
+        // Build the result list array
+        let list_array = ListArray::new(
+            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
+            offsets,
+            Arc::new(values_array),
+            None,
+        );
+
+        Ok(vec![ScalarValue::List(Arc::new(list_array))])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
