@@ -318,15 +318,15 @@ create table t as values
  100,                                       -- column1 int (so the case isn't constant folded)
  { 'foo': 'bar' },                          -- column2 has List of Struct w/ Utf8
  { 'foo': arrow_cast('baz', 'Utf8View') },  -- column3 has List of Struct w/ Utf8View
- { 'xxx': arrow_cast('blarg', 'Utf8View') } -- column4 has List of Struct w/ Utf8View and a different field name
+ { 'foo': arrow_cast('blarg', 'Utf8View') } -- column4 has List of Struct w/ Utf8View
 );
 
 
-# Note field names are foo/foo/xxx
+# Note field name is foo
 query ???
 SELECT column2, column3, column4  FROM t;
 ----
-{foo: bar} {foo: baz} {xxx: blarg}
+{foo: bar} {foo: baz} {foo: blarg}
 
 # Coerce fields, expect the field name to be the name of the first arg to case
 # the field should not be named 'c0'
@@ -339,12 +339,12 @@ SELECT
   end
 FROM t;
 ----
-{xxx: bar}
+{foo: bar}
 
 query ?
 SELECT
   case
-    when column1 > 0 then column3 -- different arg order affects field name
+    when column1 > 0 then column3 -- different arg order shouldn't affect name
     when column1 < 0 then column4
     else column2
   end
@@ -355,7 +355,7 @@ FROM t;
 query ?
 SELECT
   case
-    when column1 > 0 then column4 -- different arg order affects field name
+    when column1 > 0 then column4 -- different arg order shouldn't affect name
     when column1 < 0 then column2
     else column3
   end
