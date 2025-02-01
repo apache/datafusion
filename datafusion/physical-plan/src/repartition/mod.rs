@@ -916,7 +916,7 @@ impl RepartitionExec {
 
                 for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
-                    let err = Err(DataFusionError::External(Box::new(Arc::clone(&e))));
+                    let err = Err(DataFusionError::WrappedError(Arc::clone(&e)));
                     tx.send(Some(err)).await.ok();
                 }
             }
