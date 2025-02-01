@@ -2194,6 +2194,7 @@ mod tests {
                         Column {
                             relation: Some(TableReference::Bare { table }),
                             name,
+                            spans: _,
                         },
                 },
                 _,
