@@ -690,6 +690,10 @@ impl ScalarUDFImpl for ArrayPopFront {
         Ok(arg_types[0].clone())
     }
 
+    fn null_handling(&self) -> NullHandling {
+        NullHandling::Propagate
+    }
+
     fn invoke_batch(
         &self,
         args: &[ColumnarValue],
@@ -788,6 +792,10 @@ impl ScalarUDFImpl for ArrayPopBack {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
+    }
+
+    fn null_handling(&self) -> NullHandling {
+        NullHandling::Propagate
     }
 
     fn invoke_batch(
