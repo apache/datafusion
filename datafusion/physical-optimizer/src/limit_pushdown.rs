@@ -300,6 +300,9 @@ pub(crate) fn pushdown_limits(
 /// [`GlobalLimitExec`] or a [`LocalLimitExec`].
 fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
     if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
+        if global_limit.input().as_any().is::<CoalescePartitionsExec>() {
+            return None;
+        }
         Some(LimitExec::Global(GlobalLimitExec::new(
             Arc::clone(global_limit.input()),
             global_limit.skip(),
