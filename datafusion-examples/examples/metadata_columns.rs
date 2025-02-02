@@ -39,7 +39,7 @@ use datafusion::physical_plan::{
 use datafusion::prelude::*;
 
 use datafusion::catalog::Session;
-use datafusion_common::FieldId;
+use datafusion::common::FieldId;
 use itertools::Itertools;
 use tokio::time::timeout;
 

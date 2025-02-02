@@ -597,10 +597,10 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 let input_expr = match FieldId::from(idx) {
                     FieldId::Metadata(_) => {
                         let (relation, field) = input.schema.qualified_field(idx);
-                        Expr::Column(Column {
-                            relation: relation.cloned(),
-                            name: field.name().clone(),
-                        })
+                        Expr::Column(Column::new(
+                            relation.cloned(),
+                            field.name().clone(),
+                        ))
                     }
                     FieldId::Normal(idx) => input.expr[idx].clone().unalias_nested().data,
                 };
@@ -781,10 +781,10 @@ fn rewrite_projection_given_requirements(
         .map(|&idx| match FieldId::from(idx) {
             FieldId::Metadata(_) => {
                 let (relation, field) = schema.qualified_field(idx);
-                Expr::Column(Column {
-                    relation: relation.cloned(),
-                    name: field.name().clone(),
-                })
+                Expr::Column(Column::new(
+                    relation.cloned(),
+                    field.name().clone(),
+                ))
             }
             FieldId::Normal(idx) => expr[idx].clone(),
         })
