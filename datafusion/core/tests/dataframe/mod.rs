@@ -1122,7 +1122,7 @@ async fn join() -> Result<()> {
 }
 
 #[tokio::test]
-async fn join_coercion_unnnamed() -> Result<()> {
+async fn join_coercion_unnamed() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Test that join will coerce column types when necessary
