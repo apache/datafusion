@@ -193,7 +193,7 @@ impl StatisticsV2 {
                         return Ok(false);
                     }
                 }
-                Ok(false)
+                Ok(true)
             }
             _ => Ok(true),
         }
