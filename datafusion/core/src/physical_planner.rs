@@ -68,7 +68,7 @@ use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
-    ScalarValue,
+    FieldId, ScalarValue,
 };
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
@@ -1973,7 +1973,12 @@ impl DefaultPhysicalPlanner {
                     match input_schema.index_of_column(col) {
                         Ok(idx) => {
                             // index physical field using logical field index
-                            Ok(input_exec.schema().field(idx).name().to_string())
+                            match FieldId::from(idx) {
+                                FieldId::Normal(idx) => {
+                                    Ok(input_exec.schema().field(idx).name().to_string())
+                                }
+                                FieldId::Metadata(_) => Ok(String::from(col.name())),
+                            }
                         }
                         // logical column is not a derived column, safe to pass along to
                         // physical_name

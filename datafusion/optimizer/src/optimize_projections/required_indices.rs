@@ -19,7 +19,7 @@
 
 use crate::optimize_projections::outer_columns;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{Column, DFSchemaRef, Result};
+use datafusion_common::{Column, DFSchemaRef, FieldId, Result};
 use datafusion_expr::{Expr, LogicalPlan};
 
 /// Represents columns in a schema which are required (used) by a plan node
@@ -150,13 +150,30 @@ impl RequiredIndices {
         self.indices.extend_from_slice(indices);
         self.compact()
     }
-
     /// Splits this instance into a tuple with two instances:
     /// * The first `n` indices
     /// * The remaining indices, adjusted down by n
     pub fn split_off(self, n: usize) -> (Self, Self) {
         let (l, r) = self.partition(|idx| idx < n);
         (l, r.map_indices(|idx| idx - n))
+    }
+
+    /// Splits this instance into a tuple with two instances:
+    /// * The first `n` normal indices
+    /// * The second `metadata_n` metadata indices
+    /// * The remaining indices
+    pub fn split_off_with_metadata(self, n: usize, metadata_n: usize) -> (Self, Self) {
+        let (l, r) = self.partition(|idx| match FieldId::from(idx) {
+            FieldId::Normal(idx) => idx < n,
+            FieldId::Metadata(idx) => idx < metadata_n,
+        });
+        (
+            l,
+            r.map_indices(|idx| match FieldId::from(idx) {
+                FieldId::Normal(idx) => idx - n,
+                FieldId::Metadata(idx) => idx - metadata_n,
+            }),
+        )
     }
 
     /// Partitions the indices in this instance into two groups based on the

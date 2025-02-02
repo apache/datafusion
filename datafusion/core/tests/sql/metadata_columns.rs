@@ -37,7 +37,7 @@ use datafusion::physical_plan::{
 use datafusion::{assert_batches_sorted_eq, prelude::*};
 
 use datafusion::catalog::Session;
-use datafusion_common::{FieldId, record_batch};
+use datafusion_common::{record_batch, FieldId};
 use itertools::Itertools;
 
 /// A User, with an id and a bank account
@@ -298,12 +298,58 @@ impl ExecutionPlan for CustomExec {
 #[derive(Debug)]
 struct MetadataColumnTableProvider {
     inner: MemTable,
+    schema: SchemaRef,
+    metadata_schema: Option<SchemaRef>,
+    schema_indices: Vec<usize>,
+    metadata_indices: Vec<usize>,
 }
 
 impl MetadataColumnTableProvider {
+    fn get_schema(
+        batch_schema: &SchemaRef,
+        system_column: bool,
+    ) -> (Option<SchemaRef>, Vec<usize>) {
+        let columns = batch_schema
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| {
+                if let Some(v) = f.metadata().get("datafusion.system_column") {
+                    system_column ^ (!v.to_lowercase().starts_with("t"))
+                } else {
+                    system_column ^ true
+                }
+            })
+            .collect::<Vec<_>>();
+        if columns.is_empty() {
+            (None, vec![])
+        } else {
+            (
+                Some(Arc::new(Schema::new(
+                    columns
+                        .iter()
+                        .map(|(_, f)| f)
+                        .cloned()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ))),
+                columns.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+            )
+        }
+    }
     fn new(batch: RecordBatch) -> Self {
+        let batch_schema = batch.schema();
+        let (schema, schema_indices) = Self::get_schema(&batch_schema, false);
+        let schema = schema.unwrap();
+        let (metadata_schema, metadata_indices) = Self::get_schema(&batch_schema, true);
         let inner = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
-        Self { inner }
+        Self {
+            inner,
+            schema,
+            metadata_schema,
+            schema_indices,
+            metadata_indices,
+        }
     }
 }
 
@@ -314,33 +360,11 @@ impl TableProvider for MetadataColumnTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.inner.schema()
+        self.schema.clone()
     }
 
     fn metadata_columns(&self) -> Option<SchemaRef> {
-        let schema = self.schema();
-        let metadata_columns = schema
-            .fields()
-            .iter()
-            .filter(|f| {
-                if let Some(v) = f.metadata().get("datafusion.system_column") {
-                    v.to_lowercase().starts_with("t")
-                } else {
-                    false
-                }
-            })
-            .collect::<Vec<_>>();
-        if metadata_columns.is_empty() {
-            None
-        } else {
-            Some(Arc::new(Schema::new(
-                metadata_columns
-                    .iter()
-                    .cloned()
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )))
-        }
+        self.metadata_schema.clone()
     }
 
     fn table_type(&self) -> TableType {
@@ -354,7 +378,17 @@ impl TableProvider for MetadataColumnTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.inner.scan(state, projection, filters, limit).await
+        let indices = match projection {
+            Some(projection) => projection
+                .iter()
+                .map(|idx| match FieldId::from(*idx) {
+                    FieldId::Normal(i) => self.schema_indices[i],
+                    FieldId::Metadata(i) => self.metadata_indices[i],
+                })
+                .collect::<Vec<_>>(),
+            None => self.schema_indices.clone(),
+        };
+        self.inner.scan(state, Some(&indices), filters, limit).await
     }
 }
 
@@ -403,7 +437,6 @@ async fn select_conflict_name() {
         "+-------+",
     ];
     assert_batches_sorted_eq!(expected, &batchs);
-
 }
 
 #[tokio::test]
@@ -583,7 +616,7 @@ async fn select_metadata_column() {
         .register_table("test3", Arc::new(MetadataColumnTableProvider::new(batch)))
         .unwrap();
 
-    let select8 = "SELECT id, other_id, _rowid FROM test JOIN test3 ON test._rowid = test3._rowid";
+    let select8 = "SELECT id, other_id, test._rowid FROM test JOIN test3 ON test._rowid = test3._rowid";
     let df = ctx.sql(select8).await.unwrap();
     let batches = df.collect().await.unwrap();
     #[rustfmt::skip]
@@ -591,7 +624,7 @@ async fn select_metadata_column() {
         "+----+----------+--------+",
         "| id | other_id | _rowid |",
         "+----+----------+--------+",
-        "| 2  | 2        | 2      |",
+        "| 3  | 2        | 2      |",
         "+----+----------+--------+",
     ];
     assert_batches_sorted_eq!(expected, &batches);
@@ -605,13 +638,16 @@ async fn select_metadata_column() {
     let batches = df.collect().await.unwrap();
     #[rustfmt::skip]
     let expected = [
-        "+----+----------+---------+",
-        "| id | other_id | _rowid |",
-        "+----+----------+---------+",
-        "| 2  | 2        | 2       |",
-        "+----+----------+---------+",
+        "+----+--------------+",
+        "| id | bank_account |",
+        "+----+--------------+",
+        "| 1  | 9000         |",
+        "| 2  | 100          |",
+        "| 3  | 1000         |",
+        "+----+--------------+",
     ];
     assert_batches_sorted_eq!(expected, &batches);
+
     let select10 = r"
         WITH cte AS (SELECT * FROM test)
         SELECT _rowid FROM cte
@@ -620,35 +656,79 @@ async fn select_metadata_column() {
     let batches = df.collect().await.unwrap();
     #[rustfmt::skip]
     let expected = [
-        "+----+----------+---------+",
-        "| id | other_id | _rowid |",
-        "+----+----------+---------+",
-        "| 2  | 2        | 2       |",
-        "+----+----------+---------+",
+        "+--------+",
+        "| _rowid |",
+        "+--------+",
+        "| 0      |",
+        "| 1      |",
+        "| 2      |",
+        "+--------+",
     ];
     assert_batches_sorted_eq!(expected, &batches);
 
-    // And if passed explicitly selected and passed through a projection
-    // they are no longer system columns.
     let select11 = r"
-        WITH cte AS (SELECT id, _rowid FROM test)
-        SELECT * FROM cte
+    WITH cte AS (SELECT id FROM test)
+    SELECT _rowid, id FROM cte
     ";
     let df = ctx.sql(select11).await.unwrap();
     let batches = df.collect().await.unwrap();
     #[rustfmt::skip]
     let expected = [
-        "+----+---------+",
-        "| id | _rowid  |",
-        "+----+---------+",
-        "| 2  | 2       |",
-        "+----+---------+",
+        "+--------+----+",
+        "| _rowid | id |",
+        "+--------+----+",
+        "| 0      | 1  |",
+        "| 1      | 2  |",
+        "| 2      | 3  |",
+        "+--------+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &batches);
+
+    let select12 = r"
+    WITH cte AS (SELECT id FROM test)
+    SELECT id, _rowid FROM cte
+    ";
+    let df = ctx.sql(select12).await.unwrap();
+    let batches = df.collect().await.unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+--------+",
+        "| id | _rowid |",
+        "+----+--------+",
+        "| 1  | 0      |",
+        "| 2  | 1      |",
+        "| 3  | 2      |",
+        "+----+--------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batches);
+
+    // And if passed explicitly selected and passed through a projection
+    // they are no longer system columns.
+    let select13 = r"
+        WITH cte AS (SELECT id, _rowid FROM test)
+        SELECT * FROM cte
+    ";
+    let df = ctx.sql(select13).await.unwrap();
+    let batches = df.collect().await.unwrap();
+    #[rustfmt::skip]
+    let expected = [
+        "+----+--------+",
+        "| id | _rowid |",
+        "+----+--------+",
+        "| 1  | 0      |",
+        "| 2  | 1      |",
+        "| 3  | 2      |",
+        "+----+--------+",
     ];
     assert_batches_sorted_eq!(expected, &batches);
 
     // test dataframe api
     let tb = ctx.table("test").await.unwrap();
-    let df = tb.select(vec![col("_rowid")]).unwrap().sort_by(vec![col("_rowid")]).unwrap();
+    let df = tb
+        .select(vec![col("_rowid")])
+        .unwrap()
+        .sort_by(vec![col("_rowid")])
+        .unwrap();
     let batchs = df.collect().await.unwrap();
     let expected = [
         "+--------+",
@@ -663,23 +743,34 @@ async fn select_metadata_column() {
 
     // propagate metadata columns through Project
     let tb = ctx.table("test").await.unwrap();
-    let df = tb.select(vec![col("id")]).unwrap().select(vec![col("_rowid")]).unwrap().sort_by(vec![col("_rowid")]).unwrap();
+    let df = tb
+        .select(vec![col("id")])
+        .unwrap()
+        .select(vec![col("_rowid")])
+        .unwrap()
+        .sort_by(vec![col("_rowid")])
+        .unwrap();
     let batchs = df.collect().await.unwrap();
     let expected = [
-        "+--------+----+",
-        "| _rowid | id |",
-        "+--------+----+",
-        "| 0      | 1  |",
-        "| 1      | 2  |",
-        "| 2      | 3  |",
-        "+--------+----+",
+        "+--------+",
+        "| _rowid |",
+        "+--------+",
+        "| 0      |",
+        "| 1      |",
+        "| 2      |",
+        "+--------+",
     ];
     assert_batches_sorted_eq!(expected, &batchs);
 
     // propagate metadata columns through Filter
+    let select14 = "select _rowid, id from test where id = 2";
     let tb = ctx.table("test").await.unwrap();
-    let df = tb.filter(col("id").eq(lit(2))).unwrap().select(vec![col("_rowid"), col("id")]).unwrap();
-    let df2 = ctx.sql("select _rowid, id from test where id = 2").await.unwrap();
+    let df = tb
+        .filter(col("id").eq(lit(2)))
+        .unwrap()
+        .select(vec![col("_rowid"), col("id")])
+        .unwrap();
+    let df2 = ctx.sql(select14).await.unwrap();
     let batchs = df.collect().await.unwrap();
     let batchs2 = df2.collect().await.unwrap();
     let expected = [
@@ -693,11 +784,16 @@ async fn select_metadata_column() {
     assert_batches_sorted_eq!(expected, &batchs2);
 
     // propagate metadata columns through Sort
+    let select15 = "select _rowid, id from test order by id";
     let tb = ctx.table("test").await.unwrap();
-    let df = tb.sort_by(vec![col("id")]).unwrap().select(vec![col("_rowid"), col("id")]).unwrap();
-    let df2 = ctx.sql("select _rowid, id from test order by id").await.unwrap();
+    let df = tb
+        .sort_by(vec![col("id")])
+        .unwrap()
+        .select(vec![col("_rowid"), col("id")])
+        .unwrap();
+    let df2 = ctx.sql(select15).await.unwrap();
     let batchs = df.collect().await.unwrap();
-    let batchs2= df2.collect().await.unwrap();
+    let batchs2 = df2.collect().await.unwrap();
     let expected = [
         "+--------+----+",
         "| _rowid | id |",
@@ -712,9 +808,15 @@ async fn select_metadata_column() {
 
     // propagate metadata columns through SubqueryAlias if child is leaf node
     let tb = ctx.table("test").await.unwrap();
-    let select7 = "SELECT _rowid FROM test sbq order by id";
-    let df = tb.alias("sbq").unwrap().select(vec![col("_rowid")]).unwrap().sort_by(vec![col("id")]).unwrap();
-    let df2 = ctx.sql_with_options(select7, options).await.unwrap();
+    let select16 = "SELECT _rowid FROM test sbq order by id";
+    let df = tb
+        .alias("sbq")
+        .unwrap()
+        .select(vec![col("_rowid")])
+        .unwrap()
+        .sort_by(vec![col("id")])
+        .unwrap();
+    let df2 = ctx.sql_with_options(select16, options).await.unwrap();
     let batchs = df.collect().await.unwrap();
     let batchs2 = df2.collect().await.unwrap();
     let expected = [

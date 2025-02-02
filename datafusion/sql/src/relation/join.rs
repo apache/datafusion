@@ -116,7 +116,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         match constraint {
             JoinConstraint::On(sql_expr) => {
-                let join_schema = left.schema().join(right.schema())?;
+                let join_schema =
+                    left.schema().join_with_type(right.schema(), &join_type)?;
                 // parse ON expression
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
                 LogicalPlanBuilder::from(left)

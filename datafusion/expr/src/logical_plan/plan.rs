@@ -370,26 +370,6 @@ impl LogicalPlan {
         }
     }
 
-    /// Gather the schema representating the metadata columns that this plan outputs.
-    /// This is done by recursively traversing the plan and collecting the metadata columns that are output
-    /// from inner nodes.
-    /// See [TableProvider](../catalog/trait.TableProvider.html#method.metadata_columns) for more information on metadata columns in general.
-    pub fn metadata_schema(&self) -> &Option<QualifiedSchema> {
-        match self {
-            LogicalPlan::TableScan(TableScan {
-                projected_schema, ..
-            }) => projected_schema.metadata_schema(),
-            LogicalPlan::Join(Join { schema, .. }) => schema.metadata_schema(),
-            LogicalPlan::Projection(Projection { schema, .. }) => {
-                schema.metadata_schema()
-            }
-            LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => {
-                schema.metadata_schema()
-            }
-            _ => &None,
-        }
-    }
-
     /// Returns the (fixed) output schema for explain plans
     pub fn explain_schema() -> SchemaRef {
         SchemaRef::new(Schema::new(vec![
@@ -2195,7 +2175,8 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
         DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
             .with_functional_dependencies(calc_func_dependencies_for_project(
                 exprs, input,
-            )?)?;
+            )?)?
+            .with_metadata_schema(input.schema().metadata_schema().clone());
 
     Ok(Arc::new(schema))
 }
@@ -2226,12 +2207,16 @@ impl SubqueryAlias {
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
-
-        let schema = DFSchemaRef::new(
-            DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
-                .with_functional_dependencies(func_dependencies)?
-                .with_metadata_schema(plan.metadata_schema().clone()),
-        );
+        let mut schema = DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
+            .with_functional_dependencies(func_dependencies)?
+            .with_metadata_schema(plan.schema().metadata_schema().clone());
+        if let Some(metadata) = plan.schema().metadata_schema() {
+            schema = schema.with_metadata_schema(Some(QualifiedSchema::new_with_table(
+                metadata.schema(),
+                &alias.clone(),
+            )));
+        }
+        let schema = DFSchemaRef::new(schema);
         Ok(SubqueryAlias {
             input: plan,
             alias,

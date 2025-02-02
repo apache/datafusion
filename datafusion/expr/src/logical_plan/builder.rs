@@ -1444,14 +1444,12 @@ pub fn build_join_schema(
         .into_iter()
         .chain(right.metadata().clone())
         .collect();
-    let metadata_schema = match join_type {
-        JoinType::LeftMark => left.metadata_schema(),
-        _ => &None,
-    };
     let mut dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
-    if let Some(metadata_schema) = metadata_schema {
-        dfschema = dfschema.with_metadata_schema(Some(metadata_schema.clone()));
-    }
+    dfschema = dfschema.with_metadata_schema(DFSchema::join_metadata_schema(
+        left.metadata_schema(),
+        right.metadata_schema(),
+        join_type,
+    )?);
     dfschema.with_functional_dependencies(func_dependencies)
 }
 

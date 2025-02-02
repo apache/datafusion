@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use datafusion_common::{
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err, Column,
-    HashMap, JoinType, Result,
+    FieldId, HashMap, JoinType, Result,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::Unnest;
@@ -251,11 +251,15 @@ fn optimize_projections(
                 fetch,
                 projected_schema: _,
             } = table_scan;
-
             // Get indices referred to in the original (schema with all fields)
             // given projected indices.
             let projection = match &projection {
-                Some(projection) => indices.into_mapped_indices(|idx| projection[idx]),
+                Some(projection) => {
+                    indices.into_mapped_indices(|idx| match FieldId::from(idx) {
+                        FieldId::Normal(idx) => projection[idx],
+                        FieldId::Metadata(_) => idx,
+                    })
+                }
                 None => indices.into_inner(),
             };
             return TableScan::try_new(
@@ -354,8 +358,16 @@ fn optimize_projections(
         }
         LogicalPlan::Join(join) => {
             let left_len = join.left.schema().fields().len();
-            let (left_req_indices, right_req_indices) =
-                split_join_requirements(left_len, indices, &join.join_type);
+            let left_metadata_column_len = match join.left.schema().metadata_schema() {
+                Some(schema) => schema.len(),
+                None => 0,
+            };
+            let (left_req_indices, right_req_indices) = split_join_requirements(
+                left_len,
+                left_metadata_column_len,
+                indices,
+                &join.join_type,
+            );
             let left_indices =
                 left_req_indices.with_plan_exprs(&plan, join.left.schema())?;
             let right_indices =
@@ -582,7 +594,16 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 // * the current column is an expression "f"
                 //
                 // return the expression `d + e` (not `d + e` as f)
-                let input_expr = input.expr[idx].clone().unalias_nested().data;
+                let input_expr = match FieldId::from(idx) {
+                    FieldId::Metadata(_) => {
+                        let (relation, field) = input.schema.qualified_field(idx);
+                        Expr::Column(Column {
+                            relation: relation.cloned(),
+                            name: field.name().clone(),
+                        })
+                    }
+                    FieldId::Normal(idx) => input.expr[idx].clone().unalias_nested().data,
+                };
                 Ok(Transformed::yes(input_expr))
             }
             // Unsupported type for consecutive projection merge analysis.
@@ -672,6 +693,7 @@ fn outer_columns_helper_multi<'a, 'b>(
 /// adjusted based on the join type.
 fn split_join_requirements(
     left_len: usize,
+    left_metadata_column_len: usize,
     indices: RequiredIndices,
     join_type: &JoinType,
 ) -> (RequiredIndices, RequiredIndices) {
@@ -684,7 +706,7 @@ fn split_join_requirements(
         | JoinType::LeftMark => {
             // Decrease right side indices by `left_len` so that they point to valid
             // positions within the right child:
-            indices.split_off(left_len)
+            indices.split_off_with_metadata(left_len, left_metadata_column_len)
         }
         // All requirements can be re-routed to left child directly.
         JoinType::LeftAnti | JoinType::LeftSemi => (indices, RequiredIndices::new()),
@@ -747,9 +769,26 @@ fn rewrite_projection_given_requirements(
     config: &dyn OptimizerConfig,
     indices: &RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
-    let Projection { expr, input, .. } = proj;
-
-    let exprs_used = indices.get_at_indices(&expr);
+    let Projection {
+        expr,
+        input,
+        schema,
+        ..
+    } = proj;
+    let exprs_used = indices
+        .indices()
+        .iter()
+        .map(|&idx| match FieldId::from(idx) {
+            FieldId::Metadata(_) => {
+                let (relation, field) = schema.qualified_field(idx);
+                Expr::Column(Column {
+                    relation: relation.cloned(),
+                    name: field.name().clone(),
+                })
+            }
+            FieldId::Normal(idx) => expr[idx].clone(),
+        })
+        .collect::<Vec<_>>();
 
     let required_indices =
         RequiredIndices::new().with_exprs(input.schema(), exprs_used.iter());
