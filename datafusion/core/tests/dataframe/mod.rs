@@ -3328,31 +3328,27 @@ async fn unnest_columns() -> Result<()> {
 
 #[tokio::test]
 async fn unnest_dict_encoded_columns() -> Result<()> {
+    let strings = vec!["x", "y", "z"];
+    let keys = Int32Array::from_iter(0..strings.len() as i32);
+
+    let utf8_values = StringArray::from(strings.clone());
+    let utf8_dict = DictionaryArray::new(keys.clone(), Arc::new(utf8_values));
+
+    let make_array_udf_expr1 = make_array_udf().call(vec![col("column1")]);
+    let batch =
+        RecordBatch::try_from_iter(vec![("column1", Arc::new(utf8_dict) as ArrayRef)])?;
+
     let ctx = SessionContext::new();
-
-    let str1 = lit(ScalarValue::Dictionary(
-        Box::new(DataType::Int32),
-        Box::new(ScalarValue::new_utf8("x")),
-    ));
-    let str2 = lit(ScalarValue::Dictionary(
-        Box::new(DataType::Int32),
-        Box::new(ScalarValue::new_utf8("y")),
-    ));
-
-    let make_array_udf_expr1 = Expr::ScalarFunction(ScalarFunction::new_udf(
-        make_array_udf(),
-        vec![col("column1")],
-    ));
-    let plan1 = LogicalPlanBuilder::values(vec![vec![str1.clone()], vec![str2.clone()]])
-        .unwrap()
-        .project([
+    ctx.register_batch("test", batch)?;
+    let df = ctx
+        .table("test")
+        .await?
+        .select(vec![
             make_array_udf_expr1.alias("make_array_expr"),
             col("column1"),
         ])?
-        .unnest_column("make_array_expr")?
-        .build()?;
+        .unnest_columns(&["make_array_expr"])?;
 
-    let df = ctx.execute_logical_plan(plan1).await.unwrap();
     let results = df.collect().await.unwrap();
     let expected = [
         "+-----------------+---------+",
@@ -3360,25 +3356,25 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
         "+-----------------+---------+",
         "| x               | x       |",
         "| y               | y       |",
+        "| z               | z       |",
         "+-----------------+---------+",
     ];
     assert_batches_eq!(expected, &results);
 
     // make_array(dict_encoded_string,literal string)
-    let make_array_udf_expr2 = Expr::ScalarFunction(ScalarFunction::new_udf(
-        make_array_udf(),
-        vec![col("column1"), lit(ScalarValue::new_utf8("fixed_string"))],
-    ));
-    let plan2 = LogicalPlanBuilder::values(vec![vec![str1.clone()], vec![str2.clone()]])
-        .unwrap()
-        .project([
+    let make_array_udf_expr2 = make_array_udf().call(vec![
+        col("column1"),
+        lit(ScalarValue::new_utf8("fixed_string")),
+    ]);
+    let df = ctx
+        .table("test")
+        .await?
+        .select(vec![
             make_array_udf_expr2.alias("make_array_expr"),
             col("column1"),
         ])?
-        .unnest_column("make_array_expr")?
-        .build()?;
+        .unnest_columns(&["make_array_expr"])?;
 
-    let df = ctx.execute_logical_plan(plan2).await.unwrap();
     let results = df.collect().await.unwrap();
     let expected = [
         "+-----------------+---------+",
@@ -3388,6 +3384,8 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
         "| fixed_string    | x       |",
         "| y               | y       |",
         "| fixed_string    | y       |",
+        "| z               | z       |",
+        "| fixed_string    | z       |",
         "+-----------------+---------+",
     ];
     assert_batches_eq!(expected, &results);
