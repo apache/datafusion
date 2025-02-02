@@ -17,8 +17,7 @@
 
 #[cfg(test)]
 pub mod test {
-    use datafusion::catalog_common::TableReference;
-    use datafusion::common::{substrait_datafusion_err, substrait_err};
+    use datafusion::common::{substrait_datafusion_err, substrait_err, TableReference};
     use datafusion::datasource::empty::EmptyTable;
     use datafusion::datasource::TableProvider;
     use datafusion::error::Result;
@@ -174,6 +173,7 @@ pub mod test {
                         ReadType::LocalFiles(_) => todo!(),
                         ReadType::NamedTable(nt) => self.collect_named_table(r, nt)?,
                         ReadType::ExtensionTable(_) => todo!(),
+                        ReadType::IcebergTable(_) => todo!(),
                     }
                     if let Some(expr) = r.filter.as_ref() {
                         self.collect_schemas_from_expr(expr)?

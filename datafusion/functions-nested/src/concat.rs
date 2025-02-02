@@ -22,7 +22,7 @@ use std::{any::Any, cmp::Ordering};
 
 use arrow::array::{Capacities, MutableArrayData};
 use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
 use arrow_schema::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_common::{
@@ -354,7 +354,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut array_lengths = vec![];
     let mut arrays = vec![];
-    let mut valid = BooleanBufferBuilder::new(row_count);
+    let mut valid = NullBufferBuilder::new(row_count);
     for i in 0..row_count {
         let nulls = list_arrays
             .iter()
@@ -365,7 +365,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         let is_null = nulls.iter().all(|&x| x);
         if is_null {
             array_lengths.push(0);
-            valid.append(false);
+            valid.append_null();
         } else {
             // Get all the arrays on i-th row
             let values = list_arrays
@@ -382,12 +382,11 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let concatenated_array = arrow::compute::concat(elements.as_slice())?;
             array_lengths.push(concatenated_array.len());
             arrays.push(concatenated_array);
-            valid.append(true);
+            valid.append_non_null();
         }
     }
     // Assume all arrays have the same data type
     let data_type = list_arrays[0].value_type();
-    let buffer = valid.finish();
 
     let elements = arrays
         .iter()
@@ -398,7 +397,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
         Arc::new(arrow::compute::concat(elements.as_slice())?),
-        Some(NullBuffer::new(buffer)),
+        valid.finish(),
     );
 
     Ok(Arc::new(list_arr))

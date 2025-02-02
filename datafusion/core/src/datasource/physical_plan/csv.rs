@@ -40,10 +40,14 @@ use crate::physical_plan::{
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::Constraints;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+};
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
@@ -209,11 +213,16 @@ impl CsvExecBuilder {
             newlines_in_values,
         } = self;
 
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
         let cache = CsvExec::compute_properties(
             projected_schema,
             &projected_output_ordering,
+            projected_constraints,
             &base_config,
         );
 
@@ -320,10 +329,12 @@ impl CsvExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {
         // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
+            .with_constraints(constraints);
 
         PlanProperties::new(
             eq_properties,
@@ -469,6 +480,36 @@ impl ExecutionPlan for CsvExec {
             metrics: self.metrics.clone(),
             file_compression_type: self.file_compression_type,
             cache: self.cache.clone(),
+        }))
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If there is any non-column or alias-carrier expression, Projection should not be removed.
+        // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
+        Ok(all_alias_free_columns(projection.expr()).then(|| {
+            let mut file_scan = self.base_config().clone();
+            let new_projections = new_projections_for_columns(
+                projection,
+                &file_scan
+                    .projection
+                    .unwrap_or((0..self.schema().fields().len()).collect()),
+            );
+            file_scan.projection = Some(new_projections);
+
+            Arc::new(
+                CsvExec::builder(file_scan)
+                    .with_has_header(self.has_header())
+                    .with_delimeter(self.delimiter())
+                    .with_quote(self.quote())
+                    .with_escape(self.escape())
+                    .with_comment(self.comment())
+                    .with_newlines_in_values(self.newlines_in_values())
+                    .with_file_compression_type(self.file_compression_type)
+                    .build(),
+            ) as _
         }))
     }
 }

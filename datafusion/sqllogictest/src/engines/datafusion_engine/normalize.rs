@@ -20,7 +20,7 @@ use arrow::array::{Array, AsArray};
 use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
+use datafusion_common::format::DEFAULT_CLI_FORMAT_OPTIONS;
 use datafusion_common::DataFusionError;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -29,7 +29,7 @@ use super::super::conversion::*;
 use super::error::{DFSqlLogicTestError, Result};
 
 /// Converts `batches` to a result as expected by sqllogictest.
-pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
+pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
     if batches.is_empty() {
         Ok(vec![])
     } else {
@@ -240,7 +240,8 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
                 Ok(cell_to_string(dict.values(), key)?)
             }
             _ => {
-                let f = ArrayFormatter::try_new(col.as_ref(), &DEFAULT_FORMAT_OPTIONS);
+                let f =
+                    ArrayFormatter::try_new(col.as_ref(), &DEFAULT_CLI_FORMAT_OPTIONS);
                 Ok(f.unwrap().value(row).to_string())
             }
         }
@@ -249,7 +250,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
 }
 
 /// Converts columns to a result as expected by sqllogicteset.
-pub(crate) fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
+pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
     columns
         .iter()
         .map(|f| f.data_type())

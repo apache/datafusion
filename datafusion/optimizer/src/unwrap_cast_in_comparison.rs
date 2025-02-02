@@ -475,12 +475,7 @@ fn try_cast_string_literal(
     lit_value: &ScalarValue,
     target_type: &DataType,
 ) -> Option<ScalarValue> {
-    let string_value = match lit_value {
-        ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s) => {
-            s.clone()
-        }
-        _ => return None,
-    };
+    let string_value = lit_value.try_as_str()?.map(|s| s.to_string());
     let scalar_value = match target_type {
         DataType::Utf8 => ScalarValue::Utf8(string_value),
         DataType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),

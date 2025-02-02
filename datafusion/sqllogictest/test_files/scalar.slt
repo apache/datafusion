@@ -1729,7 +1729,7 @@ SELECT make_array(c1, cast(c2 as varchar)) FROM test
 ----
 [, 0]
 [a, 1]
-[aa, ]
+[aa, NULL]
 [aaa, 3]
 
 statement ok

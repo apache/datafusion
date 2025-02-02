@@ -27,7 +27,9 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, and_not, is_null, not, nullif, or, prep_null_mask_filter};
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::ColumnarValue;
 
 use super::{Column, Literal};
@@ -249,10 +251,9 @@ impl CaseExpr {
             remainder = and_not(&remainder, &when_match)?;
         }
 
-        if let Some(e) = &self.else_expr {
+        if let Some(e) = self.else_expr() {
             // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
-                .unwrap_or_else(|_| Arc::clone(e));
+            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             // null and unmatched tuples should be assigned else value
             remainder = or(&base_nulls, &remainder)?;
             let else_ = expr
@@ -282,11 +283,8 @@ impl CaseExpr {
                 .0
                 .evaluate_selection(batch, &remainder)?;
             let when_value = when_value.into_array(batch.num_rows())?;
-            let when_value = as_boolean_array(&when_value).map_err(|e| {
-                DataFusionError::Context(
-                    "WHEN expression did not return a BooleanArray".to_string(),
-                    Box::new(e),
-                )
+            let when_value = as_boolean_array(&when_value).map_err(|_| {
+                internal_datafusion_err!("WHEN expression did not return a BooleanArray")
             })?;
             // Treat 'NULL' as false value
             let when_value = match when_value.null_count() {
@@ -322,10 +320,9 @@ impl CaseExpr {
             remainder = and_not(&remainder, &when_value)?;
         }
 
-        if let Some(e) = &self.else_expr {
+        if let Some(e) = self.else_expr() {
             // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())
-                .unwrap_or_else(|_| Arc::clone(e));
+            let expr = try_cast(Arc::clone(e), &batch.schema(), return_type.clone())?;
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
                 .into_array(batch.num_rows())?;
@@ -347,26 +344,38 @@ impl CaseExpr {
     fn case_column_or_null(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let when_expr = &self.when_then_expr[0].0;
         let then_expr = &self.when_then_expr[0].1;
-        if let ColumnarValue::Array(bit_mask) = when_expr.evaluate(batch)? {
-            let bit_mask = bit_mask
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .expect("predicate should evaluate to a boolean array");
-            // invert the bitmask
-            let bit_mask = match bit_mask.null_count() {
-                0 => not(bit_mask)?,
-                _ => not(&prep_null_mask_filter(bit_mask))?,
-            };
-            match then_expr.evaluate(batch)? {
-                ColumnarValue::Array(array) => {
-                    Ok(ColumnarValue::Array(nullif(&array, &bit_mask)?))
-                }
-                ColumnarValue::Scalar(_) => {
-                    internal_err!("expression did not evaluate to an array")
+
+        match when_expr.evaluate(batch)? {
+            // WHEN true --> column
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {
+                then_expr.evaluate(batch)
+            }
+            // WHEN [false | null] --> NULL
+            ColumnarValue::Scalar(_) => {
+                // return scalar NULL value
+                ScalarValue::try_from(self.data_type(&batch.schema())?)
+                    .map(ColumnarValue::Scalar)
+            }
+            // WHEN column --> column
+            ColumnarValue::Array(bit_mask) => {
+                let bit_mask = bit_mask
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .expect("predicate should evaluate to a boolean array");
+                // invert the bitmask
+                let bit_mask = match bit_mask.null_count() {
+                    0 => not(bit_mask)?,
+                    _ => not(&prep_null_mask_filter(bit_mask))?,
+                };
+                match then_expr.evaluate(batch)? {
+                    ColumnarValue::Array(array) => {
+                        Ok(ColumnarValue::Array(nullif(&array, &bit_mask)?))
+                    }
+                    ColumnarValue::Scalar(_) => {
+                        internal_err!("expression did not evaluate to an array")
+                    }
                 }
             }
-        } else {
-            internal_err!("predicate did not evaluate to an array")
         }
     }
 
@@ -376,11 +385,8 @@ impl CaseExpr {
         // evaluate when expression
         let when_value = self.when_then_expr[0].0.evaluate(batch)?;
         let when_value = when_value.into_array(batch.num_rows())?;
-        let when_value = as_boolean_array(&when_value).map_err(|e| {
-            DataFusionError::Context(
-                "WHEN expression did not return a BooleanArray".to_string(),
-                Box::new(e),
-            )
+        let when_value = as_boolean_array(&when_value).map_err(|_| {
+            internal_datafusion_err!("WHEN expression did not return a BooleanArray")
         })?;
 
         // Treat 'NULL' as false value
@@ -393,12 +399,12 @@ impl CaseExpr {
         let then_value = self.when_then_expr[0].1.evaluate(batch)?;
         let then_value = Scalar::new(then_value.into_array(1)?);
 
+        let Some(e) = self.else_expr() else {
+            return internal_err!("expression did not evaluate to an array");
+        };
         // keep `else_expr`'s data type and return type consistent
-        let e = self.else_expr.as_ref().unwrap();
-        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type)
-            .unwrap_or_else(|_| Arc::clone(e));
+        let expr = try_cast(Arc::clone(e), &batch.schema(), return_type)?;
         let else_ = Scalar::new(expr.evaluate(batch)?.into_array(1)?);
-
         Ok(ColumnarValue::Array(zip(&when_value, &then_value, &else_)?))
     }
 
@@ -898,6 +904,53 @@ mod tests {
             &Float64Array::from(vec![Some(1.77), None, None, None, None, Some(1.77)]);
 
         assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_scalar_predicate() -> Result<()> {
+        let batch = case_test_batch_nulls()?;
+        let schema = batch.schema();
+
+        // SELECT CASE WHEN TRUE THEN load4 END
+        let when = lit(true);
+        let then = col("load4", &schema)?;
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when, then)],
+            None,
+            schema.as_ref(),
+        )?;
+
+        // many rows
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
+        let expected = &Float64Array::from(vec![
+            Some(1.77),
+            None,
+            None,
+            Some(1.78),
+            None,
+            Some(1.77),
+        ]);
+        assert_eq!(expected, result);
+
+        // one row
+        let expected = Float64Array::from(vec![Some(1.1)]);
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(expected.clone())])?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
+        assert_eq!(&expected, result);
 
         Ok(())
     }

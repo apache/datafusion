@@ -80,6 +80,7 @@ unicode_expressions = [
     "datafusion-sql/unicode_expressions",
     "datafusion-functions/unicode_expressions",
 ]
+extended_tests = []
 
 [dependencies]
 apache-avro = { version = "0.17", optional = true }
@@ -98,7 +99,6 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { version = "0.5.0", optional = true }
 chrono = { workspace = true }
-dashmap = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
@@ -141,6 +141,7 @@ async-trait = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
 ctor = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
+datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
 paste = "^1.0"
@@ -149,6 +150,7 @@ rand_distr = "0.4.3"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
+sysinfo = "0.33.1"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
 
@@ -178,6 +180,10 @@ name = "math_query_sql"
 [[bench]]
 harness = false
 name = "filter_query_sql"
+
+[[bench]]
+harness = false
+name = "struct_query_sql"
 
 [[bench]]
 harness = false

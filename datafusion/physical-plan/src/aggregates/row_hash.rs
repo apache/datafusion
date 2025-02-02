@@ -24,8 +24,8 @@ use std::vec;
 use crate::aggregates::group_values::{new_group_values, GroupValues};
 use crate::aggregates::order::GroupOrderingFull;
 use crate::aggregates::{
-    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, group_schema,
-    AggregateMode, PhysicalGroupBy,
+    create_schema, evaluate_group_by, evaluate_many, evaluate_optional, AggregateMode,
+    PhysicalGroupBy,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use crate::sorts::sort::sort_batch;
@@ -489,7 +489,7 @@ impl GroupedHashAggregateStream {
             .map(create_group_accumulator)
             .collect::<Result<_>>()?;
 
-        let group_schema = group_schema(&agg.input().schema(), &agg_group_by)?;
+        let group_schema = agg_group_by.group_schema(&agg.input().schema())?;
 
         // fix https://github.com/apache/datafusion/issues/13949
         // Builds a **partial aggregation** schema by combining the group columns and

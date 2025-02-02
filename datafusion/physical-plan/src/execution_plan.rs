@@ -15,41 +15,44 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::sync::Arc;
+pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+pub use crate::metrics::Metric;
+pub use crate::ordering::InputOrderMode;
+pub use crate::stream::EmptyRecordBatchStream;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
-use futures::stream::{StreamExt, TryStreamExt};
-use tokio::task::JoinSet;
-
-use datafusion_common::config::ConfigOptions;
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-use datafusion_common::{exec_err, Result};
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
-use datafusion_execution::TaskContext;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     expressions, udf, Distribution, Partitioning, PhysicalExpr,
 };
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
-pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-pub use crate::metrics::Metric;
 use crate::metrics::MetricsSet;
-pub use crate::ordering::InputOrderMode;
+use crate::projection::ProjectionExec;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
-pub use crate::stream::EmptyRecordBatchStream;
 use crate::stream::RecordBatchStreamAdapter;
+
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use arrow_array::Array;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
+
+use futures::stream::{StreamExt, TryStreamExt};
+use tokio::task::JoinSet;
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -109,6 +112,15 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// This information is available via methods on [`ExecutionPlanProperties`]
     /// trait, which is implemented for all `ExecutionPlan`s.
     fn properties(&self) -> &PlanProperties;
+
+    /// Returns an error if this individual node does not conform to its invariants.
+    /// These invariants are typically only checked in debug mode.
+    ///
+    /// A default set of invariants is provided in the default implementation.
+    /// Extension nodes can provide their own invariants.
+    fn check_invariants(&self, _check: InvariantLevel) -> Result<()> {
+        Ok(())
+    }
 
     /// Specifies the data distribution requirements for all the
     /// children for this `ExecutionPlan`, By default it's [[Distribution::UnspecifiedDistribution]] for each child,
@@ -422,6 +434,37 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown
     }
+
+    /// Attempts to push down the given projection into the input of this `ExecutionPlan`.
+    ///
+    /// If the operator supports this optimization, the resulting plan will be:
+    /// `self_new <- projection <- source`, starting from `projection <- self <- source`.
+    /// Otherwise, it returns the current `ExecutionPlan` as-is.
+    ///
+    /// Returns `Ok(Some(...))` if pushdown is applied, `Ok(None)` if it is not supported
+    /// or not possible, or `Err` on failure.
+    fn try_swapping_with_projection(
+        &self,
+        _projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
+}
+
+/// [`ExecutionPlan`] Invariant Level
+///
+/// What set of assertions ([Invariant]s)  holds for a particular `ExecutionPlan`
+///
+/// [Invariant]: https://en.wikipedia.org/wiki/Invariant_(mathematics)#Invariants_in_computer_science
+#[derive(Clone, Copy)]
+pub enum InvariantLevel {
+    /// Invariants that are always true for the [`ExecutionPlan`] node
+    /// such as the number of expected children.
+    Always,
+    /// Invariants that must hold true for the [`ExecutionPlan`] node
+    /// to be "executable", such as ordering and/or distribution requirements
+    /// being fulfilled.
+    Executable,
 }
 
 /// Extension trait provides an easy API to fetch various properties of
@@ -713,6 +756,12 @@ impl PlanProperties {
     /// Overwrite emission type with its new value.
     pub fn with_emission_type(mut self, emission_type: EmissionType) -> Self {
         self.emission_type = emission_type;
+        self
+    }
+
+    /// Overwrite constraints with its new value.
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.eq_properties = self.eq_properties.with_constraints(constraints);
         self
     }
 

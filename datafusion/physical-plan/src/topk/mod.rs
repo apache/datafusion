@@ -108,7 +108,7 @@ impl TopK {
         let reservation = MemoryConsumer::new(format!("TopK[{partition_id}]"))
             .register(&runtime.memory_pool);
 
-        let expr: Arc<[PhysicalSortExpr]> = expr.inner.into();
+        let expr: Arc<[PhysicalSortExpr]> = expr.into();
 
         let sort_fields: Vec<_> = expr
             .iter()
