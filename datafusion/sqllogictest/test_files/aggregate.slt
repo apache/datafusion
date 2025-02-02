@@ -5548,6 +5548,11 @@ SELECT STRING_AGG(column1, '|') FROM (values (''), (null), (''));
 ----
 |
 
+query T
+SELECT STRING_AGG(DISTINCT column1, '|') FROM (values (''), (null), (''));
+----
+(empty)
+
 statement ok
 CREATE TABLE strings(g INTEGER, x VARCHAR, y VARCHAR)
 
@@ -5569,6 +5574,16 @@ SELECT STRING_AGG(x,',') FROM strings WHERE g > 100
 ----
 NULL
 
+query T
+SELECT STRING_AGG(DISTINCT x,',') FROM strings WHERE g > 100
+----
+NULL
+
+query T
+SELECT STRING_AGG(DISTINCT x,'|' ORDER BY x) FROM strings
+----
+a|b|i|j|p|x|y|z
+
 statement ok
 drop table strings
 
@@ -5585,6 +5600,17 @@ text1, text1, text1
 
 query T
 WITH my_data as (
+SELECT 'text1'::varchar(1000) as my_column union all
+SELECT 'text1'::varchar(1000) as my_column union all
+SELECT 'text1'::varchar(1000) as my_column
+)
+SELECT string_agg(DISTINCT my_column,', ') as my_string_agg
+FROM my_data
+----
+text1
+
+query T
+WITH my_data as (
 SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
 SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
 SELECT 1 as dummy,  'text1'::varchar(1000) as my_column
@@ -5594,6 +5620,18 @@ FROM my_data
 GROUP BY dummy
 ----
 text1, text1, text1
+
+query T
+WITH my_data as (
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column union all
+SELECT 1 as dummy,  'text1'::varchar(1000) as my_column
+)
+SELECT string_agg(DISTINCT my_column,', ') as my_string_agg
+FROM my_data
+GROUP BY dummy
+----
+text1
 
 # Tests for aggregating with NaN values
 statement ok

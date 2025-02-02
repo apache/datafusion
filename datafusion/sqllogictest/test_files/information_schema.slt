@@ -707,6 +707,15 @@ datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 1
 datafusion public string_agg 1 IN expression LargeUtf8 NULL false 2
 datafusion public string_agg 2 IN delimiter Null NULL false 2
 datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 2
+datafusion public string_agg 1 IN expression Utf8 NULL false 3
+datafusion public string_agg 2 IN delimiter Utf8 NULL false 3
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 3
+datafusion public string_agg 1 IN expression Utf8 NULL false 4
+datafusion public string_agg 2 IN delimiter LargeUtf8 NULL false 4
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 4
+datafusion public string_agg 1 IN expression Utf8 NULL false 5
+datafusion public string_agg 2 IN delimiter Null NULL false 5
+datafusion public string_agg 1 OUT NULL LargeUtf8 NULL false 5
 
 # test variable length arguments
 query TTTBI rowsort
