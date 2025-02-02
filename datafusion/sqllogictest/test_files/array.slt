@@ -1433,6 +1433,66 @@ NULL 23
 NULL 43
 5 NULL
 
+## array_min
+# array_min scalar function #1 (with positive index)
+query I
+select array_min(make_array(5, 3, 4, 6));
+----
+3
+
+query I
+select array_min(make_array(5, 3, 4, NULL, 6, NULL));
+----
+3
+
+query I
+select array_min(make_array(NULL, NULL));
+----
+NULL
+
+query T
+select array_min(make_array('h', 'e', 'l', 'l', 'o'));
+----
+e
+
+query T
+select array_min(make_array('h', 'e', 'l', NULL, 'l', 'o', NULL));
+----
+e
+
+query B
+select array_min(make_array(true, true, false, true));
+----
+false
+
+query B
+select array_min(make_array(true, true, NULL, false, true));
+----
+false
+
+query D
+select array_min(make_array(DATE '1992-09-01', DATE '1993-03-01', DATE '1985-11-01', DATE '1999-05-01'));
+----
+1985-11-01
+
+query D
+select array_min(make_array(DATE '1995-09-01', DATE '1993-03-01', NULL, DATE '1999-05-01'));
+----
+1993-03-01
+
+query P
+select array_min(make_array(TIMESTAMP '1992-09-01', TIMESTAMP '1984-10-01', TIMESTAMP '1995-06-01'));
+----
+1984-10-01T00:00:00
+
+query P
+select array_min(make_array(NULL, TIMESTAMP '1996-10-01', TIMESTAMP '1995-06-01'));
+----
+1995-06-01T00:00:00
+
+query error Execution error: array_min needs one argument as non-empty array
+select array_min(make_array());
+
 ## array_pop_back (aliases: `list_pop_back`)
 
 # array_pop_back scalar function with null
