@@ -16,19 +16,20 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::{plan_err, Result};
-use datafusion_expr::{
+use datafusion::common::plan_err;
+use datafusion::config::ConfigOptions;
+use datafusion::error::Result;
+use datafusion::logical_expr::{
     AggregateUDF, Expr, LogicalPlan, ScalarUDF, TableProviderFilterPushDown, TableSource,
     WindowUDF,
 };
-use datafusion_optimizer::{
+use datafusion::optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
 };
-use datafusion_sql::planner::{ContextProvider, SqlToRel};
-use datafusion_sql::sqlparser::dialect::PostgreSqlDialect;
-use datafusion_sql::sqlparser::parser::Parser;
-use datafusion_sql::TableReference;
+use datafusion::sql::planner::{ContextProvider, SqlToRel};
+use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
+use datafusion::sql::sqlparser::parser::Parser;
+use datafusion::sql::TableReference;
 use std::any::Any;
 use std::sync::Arc;
 

@@ -53,7 +53,9 @@ apache-avro = { version = "0.17", default-features = false, features = [
 arrow = { workspace = true }
 arrow-array = { workspace = true }
 arrow-buffer = { workspace = true }
+arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
+base64 = "0.22.1"
 half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }
@@ -62,7 +64,7 @@ log = { workspace = true }
 object_store = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true, default-features = true }
 paste = "1.0.15"
-pyo3 = { version = "0.22.0", optional = true }
+pyo3 = { version = "0.23.3", optional = true }
 recursive = { workspace = true, optional = true }
 sqlparser = { workspace = true }
 tokio = { workspace = true }

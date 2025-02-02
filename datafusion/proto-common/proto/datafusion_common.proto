@@ -497,6 +497,7 @@ message ParquetOptions {
   bool bloom_filter_on_write = 27; // default = false
   bool schema_force_view_types = 28; // default = false
   bool binary_as_string = 29; // default = false
+  bool skip_arrow_metadata = 30; // default = false
 
   oneof metadata_size_hint_opt {
     uint64 metadata_size_hint = 4;
@@ -569,6 +570,7 @@ message Statistics {
 message ColumnStats {
   Precision min_value = 1;
   Precision max_value = 2;
+  Precision sum_value = 5;
   Precision null_count = 3;
   Precision distinct_count = 4;
 }

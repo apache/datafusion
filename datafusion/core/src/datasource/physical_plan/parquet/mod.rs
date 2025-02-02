@@ -17,6 +17,15 @@
 
 //! [`ParquetExec`] Execution plan for reading Parquet files
 
+mod access_plan;
+mod metrics;
+mod opener;
+mod page_filter;
+mod reader;
+mod row_filter;
+mod row_group_filter;
+mod writer;
+
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -27,11 +36,13 @@ use crate::datasource::physical_plan::{
     parquet::page_filter::PagePruningAccessPlanFilter, DisplayAs, FileGroupPartitioner,
     FileScanConfig,
 };
+use crate::datasource::schema_adapter::{
+    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
+};
 use crate::{
     config::{ConfigOptions, TableParquetOptions},
     error::Result,
     execution::context::TaskContext,
-    physical_optimizer::pruning::PruningPredicate,
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
@@ -39,31 +50,20 @@ use crate::{
     },
 };
 
-use arrow::datatypes::SchemaRef;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-
-use itertools::Itertools;
-use log::debug;
-
-mod access_plan;
-mod metrics;
-mod opener;
-mod page_filter;
-mod reader;
-mod row_filter;
-mod row_group_filter;
-mod writer;
-
-use crate::datasource::schema_adapter::{
-    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
-};
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
+use arrow::datatypes::SchemaRef;
+use datafusion_common::Constraints;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
+use datafusion_physical_optimizer::pruning::PruningPredicate;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use writer::plan_to_parquet;
+
+use itertools::Itertools;
+use log::debug;
 
 /// Execution plan for reading one or more Parquet files.
 ///
@@ -444,12 +444,17 @@ impl ParquetExecBuilder {
             })
             .map(Arc::new);
 
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
 
         let cache = ParquetExec::compute_properties(
             projected_schema,
             &projected_output_ordering,
+            projected_constraints,
             &base_config,
         );
         ParquetExec {
@@ -653,10 +658,12 @@ impl ParquetExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: Constraints,
         file_config: &FileScanConfig,
     ) -> PlanProperties {
         PlanProperties::new(
-            EquivalenceProperties::new_with_orderings(schema, orderings),
+            EquivalenceProperties::new_with_orderings(schema, orderings)
+                .with_constraints(constraints),
             Self::output_partitioning_helper(file_config), // Output Partitioning
             EmissionType::Incremental,
             Boundedness::Bounded,

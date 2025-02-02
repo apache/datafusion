@@ -985,6 +985,9 @@ impl serde::Serialize for ColumnStats {
         if self.max_value.is_some() {
             len += 1;
         }
+        if self.sum_value.is_some() {
+            len += 1;
+        }
         if self.null_count.is_some() {
             len += 1;
         }
@@ -997,6 +1000,9 @@ impl serde::Serialize for ColumnStats {
         }
         if let Some(v) = self.max_value.as_ref() {
             struct_ser.serialize_field("maxValue", v)?;
+        }
+        if let Some(v) = self.sum_value.as_ref() {
+            struct_ser.serialize_field("sumValue", v)?;
         }
         if let Some(v) = self.null_count.as_ref() {
             struct_ser.serialize_field("nullCount", v)?;
@@ -1018,6 +1024,8 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             "minValue",
             "max_value",
             "maxValue",
+            "sum_value",
+            "sumValue",
             "null_count",
             "nullCount",
             "distinct_count",
@@ -1028,6 +1036,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
         enum GeneratedField {
             MinValue,
             MaxValue,
+            SumValue,
             NullCount,
             DistinctCount,
         }
@@ -1053,6 +1062,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                         match value {
                             "minValue" | "min_value" => Ok(GeneratedField::MinValue),
                             "maxValue" | "max_value" => Ok(GeneratedField::MaxValue),
+                            "sumValue" | "sum_value" => Ok(GeneratedField::SumValue),
                             "nullCount" | "null_count" => Ok(GeneratedField::NullCount),
                             "distinctCount" | "distinct_count" => Ok(GeneratedField::DistinctCount),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -1076,6 +1086,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
             {
                 let mut min_value__ = None;
                 let mut max_value__ = None;
+                let mut sum_value__ = None;
                 let mut null_count__ = None;
                 let mut distinct_count__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -1091,6 +1102,12 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                                 return Err(serde::de::Error::duplicate_field("maxValue"));
                             }
                             max_value__ = map_.next_value()?;
+                        }
+                        GeneratedField::SumValue => {
+                            if sum_value__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sumValue"));
+                            }
+                            sum_value__ = map_.next_value()?;
                         }
                         GeneratedField::NullCount => {
                             if null_count__.is_some() {
@@ -1109,6 +1126,7 @@ impl<'de> serde::Deserialize<'de> for ColumnStats {
                 Ok(ColumnStats {
                     min_value: min_value__,
                     max_value: max_value__,
+                    sum_value: sum_value__,
                     null_count: null_count__,
                     distinct_count: distinct_count__,
                 })
@@ -4940,6 +4958,9 @@ impl serde::Serialize for ParquetOptions {
         if self.binary_as_string {
             len += 1;
         }
+        if self.skip_arrow_metadata {
+            len += 1;
+        }
         if self.dictionary_page_size_limit != 0 {
             len += 1;
         }
@@ -5032,6 +5053,9 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.binary_as_string {
             struct_ser.serialize_field("binaryAsString", &self.binary_as_string)?;
+        }
+        if self.skip_arrow_metadata {
+            struct_ser.serialize_field("skipArrowMetadata", &self.skip_arrow_metadata)?;
         }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
@@ -5161,6 +5185,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "schemaForceViewTypes",
             "binary_as_string",
             "binaryAsString",
+            "skip_arrow_metadata",
+            "skipArrowMetadata",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -5204,6 +5230,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             BloomFilterOnWrite,
             SchemaForceViewTypes,
             BinaryAsString,
+            SkipArrowMetadata,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -5253,6 +5280,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "bloomFilterOnWrite" | "bloom_filter_on_write" => Ok(GeneratedField::BloomFilterOnWrite),
                             "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::SchemaForceViewTypes),
                             "binaryAsString" | "binary_as_string" => Ok(GeneratedField::BinaryAsString),
+                            "skipArrowMetadata" | "skip_arrow_metadata" => Ok(GeneratedField::SkipArrowMetadata),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -5300,6 +5328,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut bloom_filter_on_write__ = None;
                 let mut schema_force_view_types__ = None;
                 let mut binary_as_string__ = None;
+                let mut skip_arrow_metadata__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -5413,6 +5442,12 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             binary_as_string__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::SkipArrowMetadata => {
+                            if skip_arrow_metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("skipArrowMetadata"));
+                            }
+                            skip_arrow_metadata__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("dictionaryPageSizeLimit"));
@@ -5515,6 +5550,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     bloom_filter_on_write: bloom_filter_on_write__.unwrap_or_default(),
                     schema_force_view_types: schema_force_view_types__.unwrap_or_default(),
                     binary_as_string: binary_as_string__.unwrap_or_default(),
+                    skip_arrow_metadata: skip_arrow_metadata__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),

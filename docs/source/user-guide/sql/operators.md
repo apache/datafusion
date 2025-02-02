@@ -110,6 +110,7 @@ Modulo (remainder)
 - [<= (less than or equal to)](#op_le)
 - [> (greater than)](#op_gt)
 - [>= (greater than or equal to)](#op_ge)
+- [<=> (three-way comparison, alias for IS NOT DISTINCT FROM)](#op_spaceship)
 - [IS DISTINCT FROM](#is-distinct-from)
 - [IS NOT DISTINCT FROM](#is-not-distinct-from)
 - [~ (regex match)](#op_re_match)
@@ -205,6 +206,48 @@ Greater Than or Equal To
 +----------------------+
 | true                 |
 +----------------------+
+```
+
+(op_spaceship)=
+
+### `<=>`
+
+Three-way comparison operator. A NULL-safe operator that returns true if both operands are equal or both are NULL, false otherwise.
+
+```sql
+> SELECT NULL <=> NULL;
++--------------------------------+
+| NULL IS NOT DISTINCT FROM NULL |
++--------------------------------+
+| true                           |
++--------------------------------+
+```
+
+```sql
+> SELECT 1 <=> NULL;
++------------------------------------+
+| Int64(1) IS NOT DISTINCT FROM NULL |
++------------------------------------+
+| false                              |
++------------------------------------+
+```
+
+```sql
+> SELECT 1 <=> 2;
++----------------------------------------+
+| Int64(1) IS NOT DISTINCT FROM Int64(2) |
++----------------------------------------+
+| false                                  |
++----------------------------------------+
+```
+
+```sql
+> SELECT 1 <=> 1;
++----------------------------------------+
+| Int64(1) IS NOT DISTINCT FROM Int64(1) |
++----------------------------------------+
+| true                                   |
++----------------------------------------+
 ```
 
 ### `IS DISTINCT FROM`

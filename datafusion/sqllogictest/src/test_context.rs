@@ -31,11 +31,11 @@ use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volat
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionConfig;
 use datafusion::{
-    catalog::CatalogProvider,
-    catalog_common::{memory::MemoryCatalogProvider, memory::MemorySchemaProvider},
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
+use datafusion_catalog::CatalogProvider;
+use datafusion_catalog::{memory::MemoryCatalogProvider, memory::MemorySchemaProvider};
 use datafusion_common::cast::as_float64_array;
 use datafusion_common::DataFusionError;
 

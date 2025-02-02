@@ -18,7 +18,7 @@
 use arrow_array::Int64Array;
 use arrow_schema::{DataType, Field};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion_common::{Column, DFSchema, Result, ScalarValue};
+use datafusion_common::{Column, DFSchema, Result, ScalarValue, Spans};
 use datafusion_execution::TaskContext;
 use datafusion_expr::expr::AggregateFunction;
 use datafusion_expr::logical_plan::{LogicalPlan, Values};
@@ -51,6 +51,7 @@ async fn count_only_nulls() -> Result<()> {
     let input_col_ref = Expr::Column(Column {
         relation: None,
         name: "col".to_string(),
+        spans: Spans::new(),
     });
 
     // Aggregation: count(col) AS count

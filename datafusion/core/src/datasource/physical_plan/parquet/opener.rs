@@ -17,6 +17,8 @@
 
 //! [`ParquetOpener`] for opening Parquet files
 
+use std::sync::Arc;
+
 use crate::datasource::file_format::{
     coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
 };
@@ -29,17 +31,18 @@ use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, ParquetFileMetrics, ParquetFileReaderFactory,
 };
 use crate::datasource::schema_adapter::SchemaAdapterFactory;
-use crate::physical_optimizer::pruning::PruningPredicate;
+
 use arrow_schema::{ArrowError, SchemaRef};
 use datafusion_common::{exec_err, Result};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
-use std::sync::Arc;
 
 /// Implements [`FileOpener`] for a parquet file
 pub(super) struct ParquetOpener {

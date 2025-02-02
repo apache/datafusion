@@ -763,6 +763,9 @@ pub struct ParquetOptions {
     /// default = false
     #[prost(bool, tag = "29")]
     pub binary_as_string: bool,
+    /// default = false
+    #[prost(bool, tag = "30")]
+    pub skip_arrow_metadata: bool,
     #[prost(uint64, tag = "12")]
     pub dictionary_page_size_limit: u64,
     #[prost(uint64, tag = "18")]
@@ -870,6 +873,8 @@ pub struct ColumnStats {
     pub min_value: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "2")]
     pub max_value: ::core::option::Option<Precision>,
+    #[prost(message, optional, tag = "5")]
+    pub sum_value: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "3")]
     pub null_count: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "4")]

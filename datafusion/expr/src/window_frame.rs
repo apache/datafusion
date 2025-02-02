@@ -291,6 +291,13 @@ impl WindowFrame {
             && (self.end_bound.is_unbounded()
                 || self.end_bound == WindowFrameBound::CurrentRow)
     }
+
+    /// Is the window frame ever-expanding (it always grows in the superset sense).
+    /// Useful when understanding if set-monotonicity properties of functions can
+    /// be exploited.
+    pub fn is_ever_expanding(&self) -> bool {
+        self.start_bound.is_unbounded()
+    }
 }
 
 /// There are five ways to describe starting and ending frame boundaries:

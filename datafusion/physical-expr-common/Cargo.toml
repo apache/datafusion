@@ -38,6 +38,7 @@ path = "src/lib.rs"
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
+arrow-buffer = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr-common = { workspace = true }
 hashbrown = { workspace = true }

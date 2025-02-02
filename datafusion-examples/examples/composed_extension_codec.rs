@@ -36,11 +36,11 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use datafusion::common::Result;
+use datafusion::common::{internal_err, DataFusionError};
+use datafusion::logical_expr::registry::FunctionRegistry;
+use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{internal_err, DataFusionError};
-use datafusion_expr::registry::FunctionRegistry;
-use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_proto::physical_plan::{AsExecutionPlan, PhysicalExtensionCodec};
 use datafusion_proto::protobuf;
 

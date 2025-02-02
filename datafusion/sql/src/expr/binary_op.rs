@@ -53,6 +53,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             BinaryOperator::StringConcat => Ok(Operator::StringConcat),
             BinaryOperator::ArrowAt => Ok(Operator::ArrowAt),
             BinaryOperator::AtArrow => Ok(Operator::AtArrow),
+            BinaryOperator::Spaceship => Ok(Operator::IsNotDistinctFrom),
             _ => not_impl_err!("Unsupported SQL binary operator {op:?}"),
         }
     }

@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::DataType::{Float32, Float64};
@@ -24,10 +24,16 @@ use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Returns the cotangent of a number.",
+    syntax_example = r#"cot(numeric_expression)"#,
+    standard_argument(name = "numeric_expression", prefix = "Numeric")
+)]
 #[derive(Debug)]
 pub struct CotFunc {
     signature: Signature,
@@ -37,20 +43,6 @@ impl Default for CotFunc {
     fn default() -> Self {
         CotFunc::new()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_cot_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-            "Returns the cotangent of a number.",
-            r#"cot(numeric_expression)"#,
-        )
-        .with_standard_argument("numeric_expression", Some("Numeric"))
-        .build()
-    })
 }
 
 impl CotFunc {
@@ -92,7 +84,7 @@ impl ScalarUDFImpl for CotFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_cot_doc())
+        self.doc()
     }
 
     fn invoke_batch(

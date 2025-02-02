@@ -389,7 +389,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Whether the aggregate function is nullable.
     ///
-    /// Nullable means that that the function could return `null` for any inputs.
+    /// Nullable means that the function could return `null` for any inputs.
     /// For example, aggregate functions like `COUNT` always return a non null value
     /// but others like `MIN` will return `NULL` if there is nullable input.
     /// Note that if the function is declared as *not* nullable, make sure the [`AggregateUDFImpl::default_value`] is `non-null`
@@ -635,6 +635,12 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     fn documentation(&self) -> Option<&Documentation> {
         None
     }
+
+    /// Indicates whether the aggregation function is monotonic as a set
+    /// function. See [`SetMonotonicity`] for details.
+    fn set_monotonicity(&self, _data_type: &DataType) -> SetMonotonicity {
+        SetMonotonicity::NotMonotonic
+    }
 }
 
 impl PartialEq for dyn AggregateUDFImpl {
@@ -816,6 +822,27 @@ pub mod aggregate_doc_sections {
         label: "Approximate Functions",
         description: None,
     };
+}
+
+/// Indicates whether an aggregation function is monotonic as a set
+/// function. A set function is monotonically increasing if its value
+/// increases as its argument grows (as a set). Formally, `f` is a
+/// monotonically increasing set function if `f(S) >= f(T)` whenever `S`
+/// is a superset of `T`.
+///
+/// For example `COUNT` and `MAX` are monotonically increasing as their
+/// values always increase (or stay the same) as new values are seen. On
+/// the other hand, `MIN` is monotonically decreasing as its value always
+/// decreases or stays the same as new values are seen.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetMonotonicity {
+    /// Aggregate value increases or stays the same as the input set grows.
+    Increasing,
+    /// Aggregate value decreases or stays the same as the input set grows.
+    Decreasing,
+    /// Aggregate value may increase, decrease, or stay the same as the input
+    /// set grows.
+    NotMonotonic,
 }
 
 #[cfg(test)]

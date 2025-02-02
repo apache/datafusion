@@ -18,22 +18,24 @@
 use datafusion::{arrow::datatypes::DataType, logical_expr::Volatility};
 use std::any::Any;
 
+use arrow::datatypes::Field;
 use arrow::{
     array::{ArrayRef, AsArray, Float64Array},
     datatypes::Float64Type,
 };
-use arrow_schema::Field;
+use datafusion::common::ScalarValue;
 use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg_udaf;
-use datafusion::prelude::*;
-use datafusion_common::ScalarValue;
-use datafusion_expr::expr::WindowFunction;
-use datafusion_expr::function::{WindowFunctionSimplification, WindowUDFFieldArgs};
-use datafusion_expr::simplify::SimplifyInfo;
-use datafusion_expr::{
-    Expr, PartitionEvaluator, Signature, WindowFrame, WindowUDF, WindowUDFImpl,
+use datafusion::logical_expr::expr::WindowFunction;
+use datafusion::logical_expr::function::{
+    PartitionEvaluatorArgs, WindowFunctionSimplification, WindowUDFFieldArgs,
 };
-use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use datafusion::logical_expr::simplify::SimplifyInfo;
+use datafusion::logical_expr::{
+    Expr, PartitionEvaluator, Signature, WindowFrame, WindowFunctionDefinition,
+    WindowUDF, WindowUDFImpl,
+};
+use datafusion::prelude::*;
 
 /// This example shows how to use the full WindowUDFImpl API to implement a user
 /// defined window function. As in the `simple_udwf.rs` example, this struct implements
@@ -189,7 +191,7 @@ impl WindowUDFImpl for SimplifySmoothItUdf {
     fn simplify(&self) -> Option<WindowFunctionSimplification> {
         let simplify = |window_function: WindowFunction, _: &dyn SimplifyInfo| {
             Ok(Expr::WindowFunction(WindowFunction {
-                fun: datafusion_expr::WindowFunctionDefinition::AggregateUDF(avg_udaf()),
+                fun: WindowFunctionDefinition::AggregateUDF(avg_udaf()),
                 args: window_function.args,
                 partition_by: window_function.partition_by,
                 order_by: window_function.order_by,

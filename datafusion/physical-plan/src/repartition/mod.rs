@@ -32,6 +32,7 @@ use super::{
 use crate::execution_plan::CardinalityEffect;
 use crate::hash_utils::create_hashes;
 use crate::metrics::BaselineMetrics;
+use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
 use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
 };
@@ -44,6 +45,7 @@ use arrow::datatypes::{SchemaRef, UInt32Type};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{PrimitiveArray, RecordBatchOptions};
 use datafusion_common::utils::transpose;
+use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
@@ -51,7 +53,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use datafusion_common::HashMap;
 use futures::stream::Stream;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::trace;
@@ -671,6 +672,46 @@ impl ExecutionPlan for RepartitionExec {
 
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection does not narrow the schema, we should not try to push it down.
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        // If pushdown is not beneficial or applicable, break it.
+        if projection.benefits_from_input_partitioning()[0]
+            || !all_columns(projection.expr())
+        {
+            return Ok(None);
+        }
+
+        let new_projection = make_with_child(projection, self.input())?;
+
+        let new_partitioning = match self.partitioning() {
+            Partitioning::Hash(partitions, size) => {
+                let mut new_partitions = vec![];
+                for partition in partitions {
+                    let Some(new_partition) =
+                        update_expr(partition, projection.expr(), false)?
+                    else {
+                        return Ok(None);
+                    };
+                    new_partitions.push(new_partition);
+                }
+                Partitioning::Hash(new_partitions, *size)
+            }
+            others => others.clone(),
+        };
+
+        Ok(Some(Arc::new(RepartitionExec::try_new(
+            new_projection,
+            new_partitioning,
+        )?)))
     }
 }
 

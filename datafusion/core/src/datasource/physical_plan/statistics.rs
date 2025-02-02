@@ -119,8 +119,8 @@ impl MinMaxStatistics {
             projected_schema
                 .project(&(sort_columns.iter().map(|c| c.index()).collect::<Vec<_>>()))?,
         );
-        let min_max_sort_order = LexOrdering {
-            inner: sort_columns
+        let min_max_sort_order = LexOrdering::from(
+            sort_columns
                 .iter()
                 .zip(projected_sort_order.iter())
                 .enumerate()
@@ -129,7 +129,7 @@ impl MinMaxStatistics {
                     options: sort.options,
                 })
                 .collect::<Vec<_>>(),
-        };
+        );
 
         let (min_values, max_values): (Vec<_>, Vec<_>) = sort_columns
             .iter()

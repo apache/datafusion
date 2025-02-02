@@ -18,6 +18,8 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
+use std::{any::Any, sync::Arc, task::Poll};
+
 use super::utils::{
     adjust_right_output_partitioning, reorder_output_after_swap, BatchSplitter,
     BatchTransformer, BuildProbeJoinMetrics, NoopBatchTransformer, OnceAsync, OnceFut,
@@ -26,14 +28,17 @@ use super::utils::{
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::projection::{
+    join_allows_pushdown, join_table_borders, new_join_children,
+    physical_to_column_exprs, ProjectionExec,
+};
 use crate::{
     handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use arrow::compute::concat_batches;
-use std::{any::Any, sync::Arc, task::Poll};
 
+use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::RecordBatchOptions;
@@ -335,6 +340,47 @@ impl ExecutionPlan for CrossJoinExec {
             self.right.statistics()?,
         ))
     }
+
+    /// Tries to swap the projection with its input [`CrossJoinExec`]. If it can be done,
+    /// it returns the new swapped version having the [`CrossJoinExec`] as the top plan.
+    /// Otherwise, it returns None.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // Convert projected PhysicalExpr's to columns. If not possible, we cannot proceed.
+        let Some(projection_as_columns) = physical_to_column_exprs(projection.expr())
+        else {
+            return Ok(None);
+        };
+
+        let (far_right_left_col_ind, far_left_right_col_ind) = join_table_borders(
+            self.left().schema().fields().len(),
+            &projection_as_columns,
+        );
+
+        if !join_allows_pushdown(
+            &projection_as_columns,
+            &self.schema(),
+            far_right_left_col_ind,
+            far_left_right_col_ind,
+        ) {
+            return Ok(None);
+        }
+
+        let (new_left, new_right) = new_join_children(
+            &projection_as_columns,
+            far_right_left_col_ind,
+            far_left_right_col_ind,
+            self.left(),
+            self.right(),
+        )?;
+
+        Ok(Some(Arc::new(CrossJoinExec::new(
+            Arc::new(new_left),
+            Arc::new(new_right),
+        ))))
+    }
 }
 
 /// [left/right]_col_count are required in case the column statistics are None
@@ -365,12 +411,36 @@ fn stats_cartesian_product(
             distinct_count: s.distinct_count,
             min_value: s.min_value,
             max_value: s.max_value,
+            sum_value: s
+                .sum_value
+                .get_value()
+                // Cast the row count into the same type as any existing sum value
+                .and_then(|v| {
+                    Precision::<ScalarValue>::from(right_row_count)
+                        .cast_to(&v.data_type())
+                        .ok()
+                })
+                .map(|row_count| s.sum_value.multiply(&row_count))
+                .unwrap_or(Precision::Absent),
         })
-        .chain(right_col_stats.into_iter().map(|s| ColumnStatistics {
-            null_count: s.null_count.multiply(&left_row_count),
-            distinct_count: s.distinct_count,
-            min_value: s.min_value,
-            max_value: s.max_value,
+        .chain(right_col_stats.into_iter().map(|s| {
+            ColumnStatistics {
+                null_count: s.null_count.multiply(&left_row_count),
+                distinct_count: s.distinct_count,
+                min_value: s.min_value,
+                max_value: s.max_value,
+                sum_value: s
+                    .sum_value
+                    .get_value()
+                    // Cast the row count into the same type as any existing sum value
+                    .and_then(|v| {
+                        Precision::<ScalarValue>::from(left_row_count)
+                            .cast_to(&v.data_type())
+                            .ok()
+                    })
+                    .map(|row_count| s.sum_value.multiply(&row_count))
+                    .unwrap_or(Precision::Absent),
+            }
         }))
         .collect();
 
@@ -604,12 +674,14 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                 },
             ],
@@ -622,6 +694,7 @@ mod tests {
                 distinct_count: Precision::Exact(3),
                 max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
             }],
         };
@@ -636,18 +709,25 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(
+                        42 * right_row_count as i64,
+                    ))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3 * right_row_count),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(
+                        20 * left_row_count as i64,
+                    ))),
                     null_count: Precision::Exact(2 * left_row_count),
                 },
             ],
@@ -668,12 +748,14 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                 },
             ],
@@ -686,6 +768,7 @@ mod tests {
                 distinct_count: Precision::Exact(3),
                 max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
             }],
         };
@@ -700,18 +783,23 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Absent, // we don't know the row count on the right
                     null_count: Precision::Absent, // we don't know the row count on the right
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent, // we don't know the row count on the right
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(
+                        20 * left_row_count as i64,
+                    ))),
                     null_count: Precision::Exact(2 * left_row_count),
                 },
             ],

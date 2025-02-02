@@ -19,11 +19,12 @@ use std::{any::Any, sync::Arc};
 
 use arrow::{
     array::{AsArray, RecordBatch, StringArray, UInt8Array},
-    datatypes::UInt64Type,
+    datatypes::{DataType, Field, Schema, SchemaRef, UInt64Type},
 };
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion::common::{GetExt, Statistics};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_expr::LexRequirement;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::{
     datasource::{
         file_format::{
@@ -38,8 +39,6 @@ use datafusion::{
     physical_plan::ExecutionPlan,
     prelude::SessionContext,
 };
-use datafusion_common::{GetExt, Statistics};
-use datafusion_physical_expr::PhysicalExpr;
 use object_store::{ObjectMeta, ObjectStore};
 use tempfile::tempdir;
 

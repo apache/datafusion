@@ -19,15 +19,24 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use std::any::Any;
-use std::sync::OnceLock;
 
-use datafusion_common::{internal_err, ExprSchema, Result, ScalarValue};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Time and Date Functions"),
+    description = r#"
+Returns the current UTC timestamp.
+
+The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
+"#,
+    syntax_example = "now()"
+)]
 #[derive(Debug)]
 pub struct NowFunc {
     signature: Signature,
@@ -68,8 +77,15 @@ impl ScalarUDFImpl for NowFunc {
         &self.signature
     }
 
+    fn return_type_from_args(&self, _args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        Ok(ReturnInfo::new_non_nullable(Timestamp(
+            Nanosecond,
+            Some("+00:00".into()),
+        )))
+    }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, Some("+00:00".into())))
+        internal_err!("return_type_from_args should be called instead")
     }
 
     fn invoke_batch(
@@ -93,31 +109,12 @@ impl ScalarUDFImpl for NowFunc {
             ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
         )))
     }
-    fn documentation(&self) -> Option<&Documentation> {
-        Some(get_to_unixtime_doc())
-    }
 
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
 
-    fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
-        false
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_to_unixtime_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_DATETIME,
-            r#"
-Returns the current UTC timestamp.
-
-The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
-"#,
-            "now()")
-            .build()
-    })
 }

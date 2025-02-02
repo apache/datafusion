@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
@@ -26,10 +26,33 @@ use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Returns the string which is replaced by another string from the specified position and specified count length.",
+    syntax_example = "overlay(str PLACING substr FROM pos [FOR count])",
+    sql_example = r#"```sql
+> select overlay('Txxxxas' placing 'hom' from 2 for 4);
++--------------------------------------------------------+
+| overlay(Utf8("Txxxxas"),Utf8("hom"),Int64(2),Int64(4)) |
++--------------------------------------------------------+
+| Thomas                                                 |
++--------------------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "substr", description = "Substring to replace in str."),
+    argument(
+        name = "pos",
+        description = "The start position to start the replace in str."
+    ),
+    argument(
+        name = "count",
+        description = "The count of characters to be replaced from start position of str. If not specified, will use substr length instead."
+    )
+)]
 #[derive(Debug)]
 pub struct OverlayFunc {
     signature: Signature,
@@ -92,32 +115,8 @@ impl ScalarUDFImpl for OverlayFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_overlay_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_overlay_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Returns the string which is replaced by another string from the specified position and specified count length.",
-            "overlay(str PLACING substr FROM pos [FOR count])")
-            .with_sql_example(r#"```sql
-> select overlay('Txxxxas' placing 'hom' from 2 for 4);
-+--------------------------------------------------------+
-| overlay(Utf8("Txxxxas"),Utf8("hom"),Int64(2),Int64(4)) |
-+--------------------------------------------------------+
-| Thomas                                                 |
-+--------------------------------------------------------+
-```"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("substr", "Substring to replace in str.")
-            .with_argument("pos", "The start position to start the replace in str.")
-            .with_argument("count", "The count of characters to be replaced from start position of str. If not specified, will use substr length instead.")
-            .build()
-    })
 }
 
 macro_rules! process_overlay {

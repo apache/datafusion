@@ -23,11 +23,10 @@ use arrow::datatypes::DataType;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_doc::Documentation;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
 const SORT_OPTIONS: SortOptions = SortOptions {
     // Having the smallest result first
@@ -37,6 +36,23 @@ const SORT_OPTIONS: SortOptions = SortOptions {
     nulls_first: false,
 };
 
+#[user_doc(
+    doc_section(label = "Conditional Functions"),
+    description = "Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_.",
+    syntax_example = "least(expression1[, ..., expression_n])",
+    sql_example = r#"```sql
+> select least(4, 7, 5);
++---------------------------+
+| least(4,7,5)              |
++---------------------------+
+| 4                         |
++---------------------------+
+```"#,
+    argument(
+        name = "expression1, expression_n",
+        description = "Expressions to compare and return the smallest value. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+    )
+)]
 #[derive(Debug)]
 pub struct LeastFunc {
     signature: Signature,
@@ -152,32 +168,8 @@ impl ScalarUDFImpl for LeastFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_smallest_doc())
+        self.doc()
     }
-}
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_smallest_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_CONDITIONAL,
-            "Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_.",
-            "least(expression1[, ..., expression_n])")
-            .with_sql_example(r#"```sql
-> select least(4, 7, 5);
-+---------------------------+
-| least(4,7,5)              |
-+---------------------------+
-| 4                         |
-+---------------------------+
-```"#,
-            )
-            .with_argument(
-                "expression1, expression_n",
-                "Expressions to compare and return the smallest value. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
-            )
-            .build()
-    })
 }
 
 #[cfg(test)]

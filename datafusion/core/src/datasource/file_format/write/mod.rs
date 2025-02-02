@@ -22,10 +22,11 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::physical_plan::FileSinkConfig;
 use crate::error::Result;
 
 use arrow_array::RecordBatch;
-
+use arrow_schema::Schema;
 use bytes::Bytes;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
@@ -85,4 +86,26 @@ pub(crate) async fn create_writer(
 ) -> Result<Box<dyn AsyncWrite + Send + Unpin>> {
     let buf_writer = BufWriter::new(object_store, location.clone());
     file_compression_type.convert_async_writer(buf_writer)
+}
+
+/// Converts table schema to writer schema, which may differ in the case
+/// of hive style partitioning where some columns are removed from the
+/// underlying files.
+pub(crate) fn get_writer_schema(config: &FileSinkConfig) -> Arc<Schema> {
+    if !config.table_partition_cols.is_empty() && !config.keep_partition_by_columns {
+        let schema = config.output_schema();
+        let partition_names: Vec<_> =
+            config.table_partition_cols.iter().map(|(s, _)| s).collect();
+        Arc::new(Schema::new_with_metadata(
+            schema
+                .fields()
+                .iter()
+                .filter(|f| !partition_names.contains(&f.name()))
+                .map(|f| (**f).clone())
+                .collect::<Vec<_>>(),
+            schema.metadata().clone(),
+        ))
+    } else {
+        Arc::clone(config.output_schema())
+    }
 }

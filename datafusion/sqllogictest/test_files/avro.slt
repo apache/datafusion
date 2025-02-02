@@ -219,8 +219,8 @@ SELECT id, CAST(string_col AS varchar) FROM alltypes_plain_multi_files
 query ????
 SELECT f1, f2, f3, f4 FROM nested_records
 ----
-{f1_1: aaa, f1_2: 10, f1_3: {f1_3_1: 3.14}} [{f2_1: true, f2_2: 1.2}, {f2_1: true, f2_2: 2.2}] {f3_1: xyz} [{f4_1: 200}, ]
-{f1_1: bbb, f1_2: 20, f1_3: {f1_3_1: 3.14}} [{f2_1: false, f2_2: 10.2}] NULL [, {f4_1: 300}]
+{f1_1: aaa, f1_2: 10, f1_3: {f1_3_1: 3.14}} [{f2_1: true, f2_2: 1.2}, {f2_1: true, f2_2: 2.2}] {f3_1: xyz} [{f4_1: 200}, NULL]
+{f1_1: bbb, f1_2: 20, f1_3: {f1_3_1: 3.14}} [{f2_1: false, f2_2: 10.2}] NULL [NULL, {f4_1: 300}]
 
 # test avro enum
 query TTT

@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
 
@@ -25,13 +25,27 @@ use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type, Int64Type};
 use datafusion_common::ScalarValue::Int64;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Truncates a number to a whole number or truncated to the specified decimal places.",
+    syntax_example = "trunc(numeric_expression[, decimal_places])",
+    standard_argument(name = "numeric_expression", prefix = "Numeric"),
+    argument(
+        name = "decimal_places",
+        description = r#"Optional. The number of decimal places to
+  truncate to. Defaults to 0 (truncate to a whole number). If
+  `decimal_places` is a positive integer, truncates digits to the
+  right of the decimal point. If `decimal_places` is a negative
+  integer, replaces digits to the left of the decimal point with `0`."#
+    )
+)]
 #[derive(Debug)]
 pub struct TruncFunc {
     signature: Signature,
@@ -109,27 +123,8 @@ impl ScalarUDFImpl for TruncFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_trunc_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_trunc_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_MATH,
-                "Truncates a number to a whole number or truncated to the specified decimal places.",
-
-            "trunc(numeric_expression[, decimal_places])")
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .with_argument("decimal_places", r#"Optional. The number of decimal places to
-  truncate to. Defaults to 0 (truncate to a whole number). If
-  `decimal_places` is a positive integer, truncates digits to the
-  right of the decimal point. If `decimal_places` is a negative
-  integer, replaces digits to the left of the decimal point with `0`."#)
-            .build()
-    })
 }
 
 /// Truncate(numeric, decimalPrecision) and trunc(numeric) SQL function

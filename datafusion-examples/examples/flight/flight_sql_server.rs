@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::array::{ArrayRef, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::record_batch::RecordBatch;
 use arrow_flight::encode::FlightDataEncoderBuilder;
@@ -32,7 +33,6 @@ use arrow_flight::{
     Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
     HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
 };
-use arrow_schema::{DataType, Field, Schema};
 use dashmap::DashMap;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::prelude::{DataFrame, ParquetReadOptions, SessionConfig, SessionContext};

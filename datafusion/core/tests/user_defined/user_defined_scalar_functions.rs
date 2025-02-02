@@ -34,13 +34,12 @@ use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
-    not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, HashMap, Result,
-    ScalarValue,
+    not_impl_err, plan_err, DFSchema, DataFusionError, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, ExprSchemable,
-    LogicalPlanBuilder, OperateFunctionArg, ScalarUDF, ScalarUDFImpl, Signature,
+    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
+    OperateFunctionArg, ReturnInfo, ReturnTypeArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
@@ -819,32 +818,36 @@ impl ScalarUDFImpl for TakeUDF {
     ///
     /// 1. If the third argument is '0', return the type of the first argument
     /// 2. If the third argument is '1', return the type of the second argument
-    fn return_type_from_exprs(
-        &self,
-        arg_exprs: &[Expr],
-        schema: &dyn ExprSchema,
-        _arg_data_types: &[DataType],
-    ) -> Result<DataType> {
-        if arg_exprs.len() != 3 {
-            return plan_err!("Expected 3 arguments, got {}.", arg_exprs.len());
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        if args.arg_types.len() != 3 {
+            return plan_err!("Expected 3 arguments, got {}.", args.arg_types.len());
         }
 
-        let take_idx = if let Some(Expr::Literal(ScalarValue::Int64(Some(idx)))) =
-            arg_exprs.get(2)
-        {
-            if *idx == 0 || *idx == 1 {
-                *idx as usize
+        let take_idx = if let Some(take_idx) = args.scalar_arguments.get(2) {
+            // This is for test only, safe to unwrap
+            let take_idx = take_idx
+                .unwrap()
+                .try_as_str()
+                .unwrap()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap();
+
+            if take_idx == 0 || take_idx == 1 {
+                take_idx
             } else {
-                return plan_err!("The third argument must be 0 or 1, got: {idx}");
+                return plan_err!("The third argument must be 0 or 1, got: {take_idx}");
             }
         } else {
             return plan_err!(
                 "The third argument must be a literal of type int64, but got {:?}",
-                arg_exprs.get(2)
+                args.scalar_arguments.get(2)
             );
         };
 
-        arg_exprs.get(take_idx).unwrap().get_type(schema)
+        Ok(ReturnInfo::new_nullable(
+            args.arg_types[take_idx].to_owned(),
+        ))
     }
 
     // The actual implementation
@@ -854,7 +857,8 @@ impl ScalarUDFImpl for TakeUDF {
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
         let take_idx = match &args[2] {
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) if v < &2 => *v as usize,
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "0" => 0,
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "1" => 1,
             _ => unreachable!(),
         };
         match &args[take_idx] {
@@ -874,9 +878,9 @@ async fn verify_udf_return_type() -> Result<()> {
     //   take(smallint_col, double_col, 1) as take1
     // FROM alltypes_plain;
     let exprs = vec![
-        take.call(vec![col("smallint_col"), col("double_col"), lit(0_i64)])
+        take.call(vec![col("smallint_col"), col("double_col"), lit("0")])
             .alias("take0"),
-        take.call(vec![col("smallint_col"), col("double_col"), lit(1_i64)])
+        take.call(vec![col("smallint_col"), col("double_col"), lit("1")])
             .alias("take1"),
     ];
 

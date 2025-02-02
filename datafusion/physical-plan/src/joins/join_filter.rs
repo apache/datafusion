@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::joins::utils::ColumnIndex;
-use arrow_schema::Schema;
+use arrow_schema::SchemaRef;
 use datafusion_common::JoinSide;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ pub struct JoinFilter {
     /// Column indices required to construct intermediate batch for filtering
     pub(crate) column_indices: Vec<ColumnIndex>,
     /// Physical schema of intermediate batch
-    pub(crate) schema: Schema,
+    pub(crate) schema: SchemaRef,
 }
 
 impl JoinFilter {
@@ -38,7 +38,7 @@ impl JoinFilter {
     pub fn new(
         expression: Arc<dyn PhysicalExpr>,
         column_indices: Vec<ColumnIndex>,
-        schema: Schema,
+        schema: SchemaRef,
     ) -> JoinFilter {
         JoinFilter {
             expression,
@@ -76,7 +76,7 @@ impl JoinFilter {
     }
 
     /// Intermediate batch schema
-    pub fn schema(&self) -> &Schema {
+    pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
@@ -94,7 +94,7 @@ impl JoinFilter {
         JoinFilter::new(
             Arc::clone(self.expression()),
             column_indices,
-            self.schema().clone(),
+            Arc::clone(self.schema()),
         )
     }
 }

@@ -15,20 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::result::Result as RResult;
-use std::sync::Arc;
-
+use arrow::datatypes::DataType;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{exec_err, internal_err, DataFusionError};
 use datafusion::error::Result;
 use datafusion::execution::context::{
     FunctionFactory, RegisterFunction, SessionContext, SessionState,
 };
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{exec_err, internal_err, DataFusionError};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::{
-    CreateFunction, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+use datafusion::logical_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion::logical_expr::sort_properties::{ExprProperties, SortProperties};
+use datafusion::logical_expr::{
+    ColumnarValue, CreateFunction, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
+    Signature, Volatility,
 };
+use std::result::Result as RResult;
+use std::sync::Arc;
 
 /// This example shows how to utilize [FunctionFactory] to implement simple
 /// SQL-macro like functions using a `CREATE FUNCTION` statement. The same
@@ -111,7 +112,7 @@ struct ScalarFunctionWrapper {
     name: String,
     expr: Expr,
     signature: Signature,
-    return_type: arrow_schema::DataType,
+    return_type: DataType,
 }
 
 impl ScalarUDFImpl for ScalarFunctionWrapper {
@@ -127,17 +128,11 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         &self.signature
     }
 
-    fn return_type(
-        &self,
-        _arg_types: &[arrow_schema::DataType],
-    ) -> Result<arrow_schema::DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
     }
 
-    fn invoke_with_args(
-        &self,
-        _args: ScalarFunctionArgs,
-    ) -> Result<datafusion_expr::ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // Since this function is always simplified to another expression, it
         // should never actually be invoked
         internal_err!("This function should not get invoked!")
@@ -226,10 +221,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                     .into_iter()
                     .map(|a| a.data_type)
                     .collect(),
-                definition
-                    .params
-                    .behavior
-                    .unwrap_or(datafusion_expr::Volatility::Volatile),
+                definition.params.behavior.unwrap_or(Volatility::Volatile),
             ),
         })
     }

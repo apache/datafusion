@@ -19,10 +19,18 @@
 
 mod engines;
 
+pub use engines::convert_batches;
+pub use engines::convert_schema_to_types;
+pub use engines::DFColumnType;
+pub use engines::DFOutput;
+pub use engines::DFSqlLogicTestError;
 pub use engines::DataFusion;
 
 #[cfg(feature = "postgres")]
 pub use engines::Postgres;
 
 mod test_context;
+mod util;
+
 pub use test_context::TestContext;
+pub use util::*;

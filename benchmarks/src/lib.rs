@@ -17,6 +17,7 @@
 
 //! DataFusion benchmark runner
 pub mod clickbench;
+pub mod h2o;
 pub mod imdb;
 pub mod parquet_filter;
 pub mod sort;

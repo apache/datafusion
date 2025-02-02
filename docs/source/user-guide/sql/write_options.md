@@ -38,11 +38,11 @@ CREATE EXTERNAL TABLE
   my_table(a bigint, b bigint)
   STORED AS csv
   COMPRESSION TYPE gzip
-  DELIMITER ';'
   LOCATION '/test/location/my_csv_table/'
   OPTIONS(
     NULL_VALUE 'NAN',
-    'has_header' 'true'
+    'has_header' 'true',
+    'format.delimiter' ';'
   )
 ```
 

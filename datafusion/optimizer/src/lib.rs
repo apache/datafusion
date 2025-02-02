@@ -62,7 +62,9 @@ pub mod utils;
 pub mod test;
 
 pub use analyzer::{Analyzer, AnalyzerRule};
-pub use optimizer::{Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule};
+pub use optimizer::{
+    ApplyOrder, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
+};
 #[allow(deprecated)]
 pub use utils::optimize_children;
 

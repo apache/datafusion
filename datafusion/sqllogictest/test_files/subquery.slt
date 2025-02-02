@@ -1306,7 +1306,6 @@ select struct(1, 'b')
 ----
 {c0: 1, c1: b}
 
-
 query T
 select (select struct(1, 'b')['c1']);
 ----
@@ -1330,7 +1329,6 @@ WHERE 1+2 = 3 AND column1  IN (SELECT struct(1, 'b')['c0']);
 ----
 1
 
-
 query I
 SELECT  * FROM foo
 WHERE EXISTS (SELECT * FROM (values (1)) WHERE column1 = foo.x AND struct(1, 'b')['c0'] = 1);
@@ -1344,6 +1342,47 @@ WHERE 1+2 = 3 AND EXISTS (SELECT * FROM (values (1)) WHERE column1 = foo.x AND s
 ----
 1
 
-
 statement ok
 drop table foo;
+
+
+# Test for window alias in subquery
+
+# Setup source table
+statement ok
+CREATE TABLE source_table (
+    column1 TEXT,
+    column2 TIMESTAMP,
+    column3 FLOAT
+);
+
+statement ok
+INSERT INTO source_table VALUES
+    ('item1', TIMESTAMP '1970-01-01 00:00:01', 50.0),
+    ('item2', TIMESTAMP '1970-01-01 00:00:02', 30.0),
+    ('item1', TIMESTAMP '1970-01-01 00:00:03', 25.0);
+
+# Execute the query
+query TPR
+WITH SubQuery AS (
+    SELECT
+        a.column1,
+        a.column2 AS ts_column,
+        a.column3,
+        SUM(a.column3) OVER (
+            PARTITION BY a.column1
+            ORDER BY a.column2 RANGE BETWEEN INTERVAL '10 minutes' PRECEDING AND CURRENT ROW
+        ) AS moving_sum
+    FROM source_table a
+)
+SELECT
+    column1,
+    ts_column,
+    moving_sum
+FROM SubQuery
+WHERE moving_sum > 60;
+----
+item1 1970-01-01T00:00:03 75
+
+statement ok
+drop table source_table;

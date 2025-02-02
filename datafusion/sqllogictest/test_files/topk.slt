@@ -49,7 +49,12 @@ select * from topk order by x desc limit 3;
 8
 5
 
-
+query I
+select * from (select * from topk limit 8) order by x limit 3;
+----
+0
+1
+2
 
 
 statement ok

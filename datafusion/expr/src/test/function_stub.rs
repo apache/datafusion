@@ -252,6 +252,10 @@ impl AggregateUDFImpl for Count {
         Ok(DataType::Int64)
     }
 
+    fn is_nullable(&self) -> bool {
+        false
+    }
+
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Field>> {
         not_impl_err!("no impl for stub")
     }

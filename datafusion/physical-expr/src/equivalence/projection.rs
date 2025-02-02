@@ -143,8 +143,8 @@ mod tests {
     };
     use crate::equivalence::EquivalenceProperties;
     use crate::expressions::{col, BinaryExpr};
-    use crate::udf::create_physical_expr;
     use crate::utils::tests::TestScalarUDF;
+    use crate::{PhysicalExprRef, ScalarFunctionExpr};
 
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_schema::{SortOptions, TimeUnit};
@@ -637,7 +637,7 @@ mod tests {
 
             let err_msg = format!(
                 "test_idx: {:?}, actual: {:?}, expected: {:?}, projection_mapping: {:?}",
-                idx, orderings.orderings, expected, projection_mapping
+                idx, orderings, expected, projection_mapping
             );
 
             assert_eq!(orderings.len(), expected.len(), "{}", err_msg);
@@ -668,15 +668,14 @@ mod tests {
             Arc::clone(col_b),
         )) as Arc<dyn PhysicalExpr>;
 
-        let test_fun = ScalarUDF::new_from_impl(TestScalarUDF::new());
-        let round_c = &create_physical_expr(
-            &test_fun,
-            &[Arc::clone(col_c)],
+        let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
+
+        let round_c = Arc::new(ScalarFunctionExpr::try_new(
+            test_fun,
+            vec![Arc::clone(col_c)],
             &schema,
-            &[],
-            &DFSchema::empty(),
             &ConfigOptions::default(),
-        )?;
+        )?) as PhysicalExprRef;
 
         let option_asc = SortOptions {
             descending: false,
@@ -687,7 +686,7 @@ mod tests {
             (col_b, "b_new".to_string()),
             (col_a, "a_new".to_string()),
             (col_c, "c_new".to_string()),
-            (round_c, "round_c_res".to_string()),
+            (&round_c, "round_c_res".to_string()),
         ];
         let proj_exprs = proj_exprs
             .into_iter()
@@ -827,7 +826,7 @@ mod tests {
 
             let err_msg = format!(
                 "test idx: {:?}, actual: {:?}, expected: {:?}, projection_mapping: {:?}",
-                idx, orderings.orderings, expected, projection_mapping
+                idx, orderings, expected, projection_mapping
             );
 
             assert_eq!(orderings.len(), expected.len(), "{}", err_msg);
@@ -973,7 +972,7 @@ mod tests {
 
             let err_msg = format!(
                 "actual: {:?}, expected: {:?}, projection_mapping: {:?}",
-                orderings.orderings, expected, projection_mapping
+                orderings, expected, projection_mapping
             );
 
             assert_eq!(orderings.len(), expected.len(), "{}", err_msg);

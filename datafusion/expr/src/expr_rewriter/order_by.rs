@@ -98,10 +98,7 @@ fn rewrite_in_terms_of_projection(
         // for a column with the same "MIN(C2)", so translate there
         let name = normalized_expr.schema_name().to_string();
 
-        let search_col = Expr::Column(Column {
-            relation: None,
-            name,
-        });
+        let search_col = Expr::Column(Column::new_unqualified(name));
 
         // look for the column named the same as this expr
         if let Some(found) = proj_exprs.iter().find(|a| expr_match(&search_col, a)) {

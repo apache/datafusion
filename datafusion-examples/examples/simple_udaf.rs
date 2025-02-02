@@ -20,9 +20,9 @@
 use datafusion::arrow::{
     array::ArrayRef, array::Float32Array, datatypes::DataType, record_batch::RecordBatch,
 };
+use datafusion::common::cast::as_float64_array;
 use datafusion::{error::Result, physical_plan::Accumulator};
 use datafusion::{logical_expr::Volatility, prelude::*, scalar::ScalarValue};
-use datafusion_common::cast::as_float64_array;
 use std::sync::Arc;
 
 // create local session context with an in-memory table

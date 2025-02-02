@@ -217,6 +217,21 @@ impl Unparser<'_> {
 
                 let start_bound = self.convert_bound(&window_frame.start_bound)?;
                 let end_bound = self.convert_bound(&window_frame.end_bound)?;
+
+                let window_frame = if self.dialect.window_func_support_window_frame(
+                    func_name,
+                    &start_bound,
+                    &end_bound,
+                ) {
+                    Some(ast::WindowFrame {
+                        units,
+                        start_bound,
+                        end_bound: Some(end_bound),
+                    })
+                } else {
+                    None
+                };
+
                 let over = Some(ast::WindowType::WindowSpec(ast::WindowSpec {
                     window_name: None,
                     partition_by: partition_by
@@ -224,11 +239,7 @@ impl Unparser<'_> {
                         .map(|e| self.expr_to_sql_inner(e))
                         .collect::<Result<Vec<_>>>()?,
                     order_by,
-                    window_frame: Some(ast::WindowFrame {
-                        units,
-                        start_bound,
-                        end_bound: Option::from(end_bound),
-                    }),
+                    window_frame,
                 }));
 
                 Ok(ast::Expr::Function(Function {
@@ -1618,7 +1629,7 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use arrow_schema::DataType::Int8;
     use ast::ObjectName;
-    use datafusion_common::TableReference;
+    use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
         case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
@@ -1632,11 +1643,12 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::sum;
     use datafusion_functions_nested::expr_fn::{array_element, make_array};
     use datafusion_functions_nested::map::map;
+    use datafusion_functions_window::rank::rank_udwf;
     use datafusion_functions_window::row_number::row_number_udwf;
 
     use crate::unparser::dialect::{
         CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
-        Dialect, PostgreSqlDialect,
+        Dialect, DuckDBDialect, PostgreSqlDialect, ScalarFnToSqlHandler,
     };
 
     use super::*;
@@ -1699,6 +1711,7 @@ mod tests {
                 Expr::Column(Column {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
+                    spans: Spans::new(),
                 })
                 .gt(lit(4)),
                 r#"(b.c > 4)"#,
@@ -2030,6 +2043,7 @@ mod tests {
                     expr: Box::new(Expr::Column(Column {
                         relation: Some(TableReference::partial("schema", "table")),
                         name: "array_col".to_string(),
+                        spans: Spans::new(),
                     })),
                 }),
                 r#"UNNEST("table".array_col)"#,
@@ -2678,6 +2692,39 @@ mod tests {
     }
 
     #[test]
+    fn test_window_func_support_window_frame() -> Result<()> {
+        let default_dialect: Arc<dyn Dialect> =
+            Arc::new(CustomDialectBuilder::new().build());
+
+        let test_dialect: Arc<dyn Dialect> = Arc::new(
+            CustomDialectBuilder::new()
+                .with_window_func_support_window_frame(false)
+                .build(),
+        );
+
+        for (dialect, expected) in [
+            (
+                default_dialect,
+                "rank() OVER (ORDER BY a ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+            ),
+            (test_dialect, "rank() OVER (ORDER BY a ASC NULLS FIRST)"),
+        ] {
+            let unparser = Unparser::new(dialect.as_ref());
+            let func = WindowFunctionDefinition::WindowUDF(rank_udwf());
+            let mut window_func = WindowFunction::new(func, vec![]);
+            window_func.order_by = vec![Sort::new(col("a"), true, true)];
+            let expr = Expr::WindowFunction(window_func);
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = ast.to_string();
+            let expected = expected.to_string();
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_utf8_view_to_sql() -> Result<()> {
         let dialect = CustomDialectBuilder::new()
             .with_utf8_cast_dtype(ast::DataType::Char(None))
@@ -2719,6 +2766,30 @@ mod tests {
         let expected = r#"a IS NULL"#.to_string();
 
         assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_custom_scalar_overrides_duckdb() -> Result<()> {
+        let duckdb_default = DuckDBDialect::new();
+        let duckdb_extended = DuckDBDialect::new().with_custom_scalar_overrides(vec![(
+            "dummy_udf",
+            Box::new(|unparser: &Unparser, args: &[Expr]| {
+                unparser.scalar_function_to_sql("smart_udf", args).map(Some)
+            }) as ScalarFnToSqlHandler,
+        )]);
+
+        for (dialect, expected) in [
+            (duckdb_default, r#"dummy_udf("a", "b")"#),
+            (duckdb_extended, r#"smart_udf("a", "b")"#),
+        ] {
+            let unparser = Unparser::new(&dialect);
+            let expr =
+                ScalarUDF::new_from_impl(DummyUDF::new()).call(vec![col("a"), col("b")]);
+            let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+            assert_eq!(actual, expected);
+        }
 
         Ok(())
     }

@@ -20,11 +20,13 @@ use std::sync::Arc;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{not_impl_err, plan_err, DFSchema, Result, TableReference};
+use datafusion_common::{
+    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, TableReference,
+};
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::{Subquery, SubqueryAlias};
-use sqlparser::ast::{FunctionArg, FunctionArgExpr, TableFactor};
+use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
 mod join;
 
@@ -35,6 +37,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         relation: TableFactor,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        let relation_span = relation.span();
         let (plan, alias) = match relation {
             TableFactor::Table {
                 name, alias, args, ..
@@ -80,11 +83,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             self.context_provider.get_table_source(table_ref.clone()),
                         ) {
                             (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                            (_, Ok(provider)) => {
-                                LogicalPlanBuilder::scan(table_ref, provider, None)?
-                                    .build()
+                            (_, Ok(provider)) => LogicalPlanBuilder::scan(
+                                table_ref.clone(),
+                                provider,
+                                None,
+                            )?
+                            .build(),
+                            (None, Err(e)) => {
+                                let e = e.with_diagnostic(Diagnostic::new_error(
+                                    format!("table '{}' not found", table_ref),
+                                    Span::try_from_sqlparser_span(relation_span),
+                                ));
+                                Err(e)
                             }
-                            (None, Err(e)) => Err(e),
                         }?,
                         alias,
                     )

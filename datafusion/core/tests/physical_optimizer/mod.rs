@@ -15,7 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Physical Optimizer integration tests
+
+mod aggregate_statistics;
 mod combine_partial_final_agg;
+mod enforce_distribution;
+mod enforce_sorting;
+mod join_selection;
 mod limit_pushdown;
 mod limited_distinct_aggregation;
-mod test_util;
+mod projection_pushdown;
+mod replace_with_order_preserving_variants;
+mod sanity_checker;
+mod test_utils;

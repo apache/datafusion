@@ -157,10 +157,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
     expr.transform(|expr| {
         Ok({
             if let Expr::Column(c) = expr {
-                let col = Column {
-                    relation: None,
-                    name: c.name,
-                };
+                let col = Column::new_unqualified(c.name);
                 Transformed::yes(Expr::Column(col))
             } else {
                 Transformed::no(expr)
@@ -181,10 +178,7 @@ pub fn create_col_from_scalar_expr(
             Some::<TableReference>(subqry_alias.into()),
             name,
         )),
-        Expr::Column(Column { relation: _, name }) => Ok(Column::new(
-            Some::<TableReference>(subqry_alias.into()),
-            name,
-        )),
+        Expr::Column(col) => Ok(col.with_relation(subqry_alias.into())),
         _ => {
             let scalar_column = scalar_expr.schema_name().to_string();
             Ok(Column::new(
@@ -462,10 +456,9 @@ mod test {
             normalize_col_with_schemas_and_ambiguity_check(expr, &[&schemas], &[])
                 .unwrap_err()
                 .strip_backtrace();
-        assert_eq!(
-            error,
-            r#"Schema error: No field named b. Valid fields are "tableA".a."#
-        );
+        let expected = "Schema error: No field named b. \
+            Valid fields are \"tableA\".a.";
+        assert_eq!(error, expected);
     }
 
     #[test]

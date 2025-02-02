@@ -18,19 +18,19 @@
 //! [`ArrowCastFunc`]: Implementation of the `arrow_cast`
 
 use arrow::datatypes::DataType;
+use arrow::error::ArrowError;
 use datafusion_common::{
-    arrow_datafusion_err, internal_err, plan_datafusion_err, plan_err, DataFusionError,
-    ExprSchema, Result, ScalarValue,
+    arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
 };
+use datafusion_common::{exec_datafusion_err, DataFusionError};
 use std::any::Any;
-use std::sync::OnceLock;
 
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ExprSchemable, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 
 /// Implements casting to arbitrary arrow types (rather than SQL types)
 ///
@@ -53,6 +53,31 @@ use datafusion_expr::{
 /// ```sql
 /// select arrow_cast(column_x, 'Float64')
 /// ```
+#[user_doc(
+    doc_section(label = "Other Functions"),
+    description = "Casts a value to a specific Arrow data type.",
+    syntax_example = "arrow_cast(expression, datatype)",
+    sql_example = r#"```sql
+> select arrow_cast(-5, 'Int8') as a,
+  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
+  arrow_cast('bar', 'LargeUtf8') as c,
+  arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
+  ;
++----+-----+-----+---------------------------+
+| a  | b   | c   | d                         |
++----+-----+-----+---------------------------+
+| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
++----+-----+-----+---------------------------+
+```"#,
+    argument(
+        name = "expression",
+        description = "Expression to cast. The expression can be a constant, column, or function, and any combination of operators."
+    ),
+    argument(
+        name = "datatype",
+        description = "[Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]"
+    )
+)]
 #[derive(Debug)]
 pub struct ArrowCastFunc {
     signature: Signature,
@@ -86,22 +111,30 @@ impl ScalarUDFImpl for ArrowCastFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        // should be using return_type_from_exprs and not calling the default
-        // implementation
-        internal_err!("arrow_cast should return type from exprs")
+        internal_err!("return_type_from_args should be called instead")
     }
 
-    fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
-        args.iter().any(|e| e.nullable(schema).ok().unwrap_or(true))
-    }
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        let nullable = args.nullables.iter().any(|&nullable| nullable);
 
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        _schema: &dyn ExprSchema,
-        _arg_types: &[DataType],
-    ) -> Result<DataType> {
-        data_type_from_args(args)
+        // Length check handled in the signature
+        debug_assert_eq!(args.scalar_arguments.len(), 2);
+
+        args.scalar_arguments[1]
+            .and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
+            .map_or_else(
+                || {
+                    exec_err!(
+                        "{} requires its second argument to be a non-empty constant string",
+                        self.name()
+                    )
+                },
+                |casted_type| match casted_type.parse::<DataType>() {
+                    Ok(data_type) => Ok(ReturnInfo::new(data_type, nullable)),
+                    Err(ArrowError::ParseError(e)) => Err(exec_datafusion_err!("{e}")),
+                    Err(e) => Err(arrow_datafusion_err!(e)),
+                },
+            )
     }
 
     fn invoke_batch(
@@ -139,45 +172,17 @@ impl ScalarUDFImpl for ArrowCastFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_arrow_cast_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_arrow_cast_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_OTHER,
-            "Casts a value to a specific Arrow data type.",
-            "arrow_cast(expression, datatype)")
-            .with_sql_example(
-                r#"```sql
-> select arrow_cast(-5, 'Int8') as a,
-  arrow_cast('foo', 'Dictionary(Int32, Utf8)') as b,
-  arrow_cast('bar', 'LargeUtf8') as c,
-  arrow_cast('2023-01-02T12:53:02', 'Timestamp(Microsecond, Some("+08:00"))') as d
-  ;
-+----+-----+-----+---------------------------+
-| a  | b   | c   | d                         |
-+----+-----+-----+---------------------------+
-| -5 | foo | bar | 2023-01-02T12:53:02+08:00 |
-+----+-----+-----+---------------------------+
-```"#,
-            )
-            .with_argument("expression", "Expression to cast. The expression can be a constant, column, or function, and any combination of operators.")
-            .with_argument("datatype", "[Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]")
-            .build()
-    })
 }
 
 /// Returns the requested type from the arguments
 fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     if args.len() != 2 {
-        return plan_err!("arrow_cast needs 2 arguments, {} provided", args.len());
+        return exec_err!("arrow_cast needs 2 arguments, {} provided", args.len());
     }
     let Expr::Literal(ScalarValue::Utf8(Some(val))) = &args[1] else {
-        return plan_err!(
+        return exec_err!(
             "arrow_cast requires its second argument to be a constant string, got {:?}",
             &args[1]
         );
@@ -186,7 +191,7 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     val.parse().map_err(|e| match e {
         // If the data type cannot be parsed, return a Plan error to signal an
         // error in the input rather than a more general ArrowError
-        arrow::error::ArrowError::ParseError(e) => plan_datafusion_err!("{e}"),
+        ArrowError::ParseError(e) => exec_datafusion_err!("{e}"),
         e => arrow_datafusion_err!(e),
     })
 }

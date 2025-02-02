@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
 use crate::protobuf::{
-    ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
-    CustomTableScanNode, SortExprNodeCollection,
+    dml_node, ColumnUnnestListItem, ColumnUnnestListRecursion, CteWorkTableScanNode,
+    CustomTableScanNode, DmlNode, SortExprNodeCollection,
 };
 use crate::{
     convert_required, into_required,
@@ -70,7 +70,8 @@ use datafusion_expr::{
     Statement, WindowUDF,
 };
 use datafusion_expr::{
-    AggregateUDF, ColumnUnnestList, FetchType, RecursiveQuery, SkipType, Unnest,
+    AggregateUDF, ColumnUnnestList, DmlStatement, FetchType, RecursiveQuery, SkipType,
+    Unnest,
 };
 
 use self::to_proto::{serialize_expr, serialize_exprs};
@@ -938,6 +939,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )?
                 .build()
             }
+            LogicalPlanType::Dml(dml_node) => Ok(LogicalPlan::Dml(
+                datafusion::logical_expr::DmlStatement::new(
+                    from_table_reference(dml_node.table_name.as_ref(), "DML ")?,
+                    Arc::new(convert_required!(dml_node.schema)?),
+                    dml_node.dml_type().into(),
+                    Arc::new(into_logical_plan!(dml_node.input, ctx, extension_codec)?),
+                ),
+            )),
         }
     }
 
@@ -1647,9 +1656,25 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Statement(_) => Err(proto_error(
                 "LogicalPlan serde is not yet implemented for Statement",
             )),
-            LogicalPlan::Dml(_) => Err(proto_error(
-                "LogicalPlan serde is not yet implemented for Dml",
-            )),
+            LogicalPlan::Dml(DmlStatement {
+                table_name,
+                table_schema,
+                op,
+                input,
+                ..
+            }) => {
+                let input =
+                    LogicalPlanNode::try_from_logical_plan(input, extension_codec)?;
+                let dml_type: dml_node::Type = op.into();
+                Ok(LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Dml(Box::new(DmlNode {
+                        input: Some(Box::new(input)),
+                        schema: Some(table_schema.try_into()?),
+                        table_name: Some(table_name.clone().into()),
+                        dml_type: dml_type.into(),
+                    }))),
+                })
+            }
             LogicalPlan::Copy(dml::CopyTo {
                 input,
                 output_url,

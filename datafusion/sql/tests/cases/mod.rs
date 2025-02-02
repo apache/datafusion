@@ -15,4 +15,5 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod diagnostic;
 mod plan_to_sql;
