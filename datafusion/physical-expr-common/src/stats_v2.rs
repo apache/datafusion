@@ -1,4 +1,5 @@
 use crate::stats_v2::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
+
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
@@ -316,6 +317,7 @@ impl StatisticsV2 {
 #[cfg(test)]
 mod tests {
     use crate::stats_v2::StatisticsV2;
+
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_expr_common::interval_arithmetic::Interval;
@@ -724,7 +726,6 @@ mod tests {
                 Some(ScalarValue::Float64(Some(0.02))),
             ),
         ];
-
         //endregion
 
         for case in stats {

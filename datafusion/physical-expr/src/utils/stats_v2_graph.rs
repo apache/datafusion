@@ -13,7 +13,7 @@ use datafusion_expr_common::interval_arithmetic::{
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-    Exponential, Uniform, Unknown,
+    Exponential, Gaussian, Uniform, Unknown,
 };
 
 use log::debug;
@@ -22,7 +22,6 @@ use petgraph::prelude::Bfs;
 use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::visit::DfsPostOrder;
 use petgraph::Outgoing;
-use StatisticsV2::Gaussian;
 
 #[derive(Clone, Debug)]
 pub struct ExprStatisticGraphNode {

@@ -156,6 +156,11 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Updates children statistic, having a known parent statistic for this expression.
     /// This is used to propagate constraints down through an expression tree.
     ///
+    /// If statistics propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children intervals change as a result of propagation,
+    /// may return an empty vector instead of cloning `children`. This is the default
+    /// (and conservative) return value.
+    ///
     /// The part of [`StatisticsV2`] framework, work in progress.
     fn propagate_statistics(
         &self,

@@ -120,24 +120,6 @@ impl BinaryExpr {
     pub fn op(&self) -> &Operator {
         &self.op
     }
-
-    fn evaluate_gaussian(
-        &self,
-        left_stat: &StatisticsV2,
-        right_stat: &StatisticsV2,
-        left_mean: &ScalarValue,
-        left_v: &ScalarValue,
-        right_mean: &ScalarValue,
-        right_v: &ScalarValue,
-    ) -> Result<StatisticsV2> {
-        if self.op.eq(&Operator::Plus) {
-            StatisticsV2::new_gaussian(left_mean.add(right_mean)?, left_v.add(right_v)?)
-        } else if self.op.eq(&Operator::Minus) {
-            StatisticsV2::new_gaussian(left_mean.sub(right_mean)?, left_v.add(right_v)?)
-        } else {
-            new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
-        }
-    }
 }
 
 impl std::fmt::Display for BinaryExpr {
@@ -525,44 +507,18 @@ impl PhysicalExpr for BinaryExpr {
     ) -> Result<StatisticsV2> {
         let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
 
-        // TODO, to think: maybe, we can separate also Unknown + Unknown
-        // just for clarity and better reader understanding.
-        match &self.op {
-            Operator::Plus | Operator::Minus | Operator::Multiply => {
-                match (left_stat, right_stat) {
-                    (
-                        Gaussian {
-                            mean: l_mean,
-                            variance: l_var,
-                            ..
-                        },
-                        Gaussian {
-                            mean: r_mean,
-                            variance: r_var,
-                        },
-                    ) => self.evaluate_gaussian(
-                        left_stat, right_stat, l_mean, l_var, r_mean, r_var,
-                    ),
-                    (_, _) => {
-                        new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
-                    }
-                }
-            }
-            Operator::Divide => {
+        if self.op.is_numerical_operators() {
+            if let Some(stats) = add_sub_on_gaussians(&self.op, left_stat, right_stat)? {
+                Ok(stats)
+            } else {
                 new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
             }
-            Operator::Eq
-            | Operator::NotEq
-            | Operator::LtEq
-            | Operator::GtEq
-            | Operator::Lt
-            | Operator::Gt => {
-                new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat)
-            }
-            Operator::And | Operator::Or => {
-                handle_and_or_evaluation(&self.op, left_stat, right_stat)
-            }
-            _ => new_unknown_from_binary_expr(&self.op, left_stat, right_stat),
+        } else if self.op.supports_propagation() {
+            new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat)
+        } else if self.op.is_logic_operator() {
+            handle_and_or_evaluation(&self.op, left_stat, right_stat)
+        } else {
+            new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
         }
     }
 
@@ -860,6 +816,33 @@ pub fn similar_to(
         (true, true) => Operator::RegexNotIMatch,
     };
     Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
+}
+
+fn add_sub_on_gaussians(
+    op: &Operator,
+    left_stat: &StatisticsV2,
+    right_stat: &StatisticsV2,
+) -> Result<Option<StatisticsV2>> {
+    if let (
+        Gaussian {
+            mean: l_mean,
+            variance: l_var,
+        },
+        Gaussian {
+            mean: r_mean,
+            variance: r_var,
+        },
+    ) = (left_stat, right_stat)
+    {
+        if op.eq(&Operator::Plus) {
+            return StatisticsV2::new_gaussian(l_mean.add(r_mean)?, l_var.add(r_var)?)
+                .map(Some);
+        } else if op.eq(&Operator::Minus) {
+            return StatisticsV2::new_gaussian(l_mean.sub(r_mean)?, l_var.add(r_var)?)
+                .map(Some);
+        }
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
