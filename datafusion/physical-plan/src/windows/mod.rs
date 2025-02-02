@@ -133,7 +133,7 @@ fn window_expr_from_aggregate_expr(
     aggregate: Arc<AggregateFunctionExpr>,
 ) -> Arc<dyn WindowExpr> {
     // Is there a potentially unlimited sized window frame?
-    let unbounded_window = window_frame.start_bound.is_unbounded();
+    let unbounded_window = window_frame.is_ever_expanding();
 
     if !unbounded_window {
         Arc::new(SlidingAggregateWindowExpr::new(
@@ -336,18 +336,32 @@ pub(crate) fn get_partition_by_sort_exprs(
 pub(crate) fn window_equivalence_properties(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,
-    window_expr: &[Arc<dyn WindowExpr>],
+    window_exprs: &[Arc<dyn WindowExpr>],
 ) -> EquivalenceProperties {
     // We need to update the schema, so we can not directly use
     // `input.equivalence_properties()`.
     let mut window_eq_properties = EquivalenceProperties::new(Arc::clone(schema))
         .extend(input.equivalence_properties().clone());
 
-    for expr in window_expr {
+    let schema_len = schema.fields.len();
+    let window_expr_indices =
+        ((schema_len - window_exprs.len())..schema_len).collect::<Vec<_>>();
+    for (i, expr) in window_exprs.iter().enumerate() {
         if let Some(udf_window_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
         {
             udf_window_expr.add_equal_orderings(&mut window_eq_properties);
+        } else if let Some(aggregate_udf_window_expr) =
+            expr.as_any().downcast_ref::<PlainAggregateWindowExpr>()
+        {
+            let window_expr_index = window_expr_indices[i];
+            aggregate_udf_window_expr
+                .add_equal_orderings(&mut window_eq_properties, window_expr_index);
         }
+        // TODO: SlidingAggregateWindowExpr cannot introduce a new ordering yet
+        //       because we cannot determine whether the window's incoming elements
+        //       are greater than its outgoing elements. However, we do have
+        //       the necessary tools to support this, and we can extend support
+        //       for these cases in the future.
     }
     window_eq_properties
 }

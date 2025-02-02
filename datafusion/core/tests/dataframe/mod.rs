@@ -30,8 +30,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_array::{
-    Array, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int8Array,
-    UnionArray,
+    record_batch, Array, BooleanArray, DictionaryArray, Float32Array, Float64Array,
+    Int8Array, UnionArray,
 };
 use arrow_buffer::ScalarBuffer;
 use arrow_schema::{ArrowError, SchemaRef, UnionFields, UnionMode};
@@ -1118,6 +1118,39 @@ async fn join() -> Result<()> {
     assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
     assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());
     assert_eq!(2008, join_rows.iter().map(|x| x.num_rows()).sum::<usize>());
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_coercion_unnnamed() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Test that join will coerce column types when necessary
+    // even when the relations don't have unique names
+    let left = ctx.read_batch(record_batch!(
+        ("id", Int32, [1, 2, 3]),
+        ("name", Utf8, ["a", "b", "c"])
+    )?)?;
+    let right = ctx.read_batch(record_batch!(
+        ("id", Int32, [10, 3]),
+        ("name", Utf8View, ["d", "c"]) // Utf8View is a different type
+    )?)?;
+    let cols = vec!["name", "id"];
+
+    let filter = None;
+    let join = right.join(left, JoinType::LeftAnti, &cols, &cols, filter)?;
+    let results = join.collect().await?;
+
+    assert_batches_sorted_eq!(
+        [
+            "+----+------+",
+            "| id | name |",
+            "+----+------+",
+            "| 10 | d    |",
+            "+----+------+",
+        ],
+        &results
+    );
     Ok(())
 }
 
@@ -2216,11 +2249,6 @@ async fn write_parquet_with_order() -> Result<()> {
 
     let df = ctx.sql("SELECT * FROM data").await?;
     let results = df.collect().await?;
-
-    let df_explain = ctx.sql("explain SELECT a FROM data").await?;
-    let explain_result = df_explain.collect().await?;
-
-    println!("explain_result {:?}", explain_result);
 
     assert_batches_eq!(
         &[
