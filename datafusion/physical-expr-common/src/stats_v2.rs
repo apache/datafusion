@@ -1,8 +1,34 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::sync::OnceLock;
 use crate::stats_v2::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
+
+static LN_TWO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
+
+/// Returns a ln(2) as a [`ScalarValue`]
+fn get_ln_two() -> &'static ScalarValue {
+    LN_TWO_LOCK.get_or_init(|| ScalarValue::Float64(Some(2_f64.ln())))
+}
+
 
 /// New, enhanced `Statistics` definition, represents five core definitions
 #[derive(Clone, Debug, PartialEq)]
@@ -10,7 +36,7 @@ pub enum StatisticsV2 {
     Uniform {
         interval: Interval,
     },
-    /// f(x, λ, offset) = (λe)^-λx, if x >= offset
+    /// f(x, λ, offset) = (λe)^(-λ(x - offset)), if x >= offset
     Exponential {
         rate: ScalarValue,
         offset: ScalarValue,
@@ -42,17 +68,6 @@ impl StatisticsV2 {
         }
     }
 
-    /// Constructs a new [`StatisticsV2`] with [`Bernoulli`] distribution from given probability,
-    /// and checks newly created statistic on validness.
-    pub fn new_bernoulli(p: ScalarValue) -> Result<Self> {
-        let stat = Bernoulli { p };
-        if stat.is_valid()? {
-            Ok(stat)
-        } else {
-            internal_err!("Tried to construct invalid Bernoulli statistic")
-        }
-    }
-
     /// Constructs a new [`StatisticsV2`] with [`Exponential`] distribution from given
     /// rate and offset and checks newly created statistic on validness.
     pub fn new_exponential(rate: ScalarValue, offset: ScalarValue) -> Result<Self> {
@@ -72,6 +87,17 @@ impl StatisticsV2 {
             Ok(stat)
         } else {
             internal_err!("Tried to construct invalid Gaussian statistic")
+        }
+    }
+
+    /// Constructs a new [`StatisticsV2`] with [`Bernoulli`] distribution from given probability,
+    /// and checks newly created statistic on validness.
+    pub fn new_bernoulli(p: ScalarValue) -> Result<Self> {
+        let stat = Bernoulli { p };
+        if stat.is_valid()? {
+            Ok(stat)
+        } else {
+            internal_err!("Tried to construct invalid Bernoulli statistic")
         }
     }
 
@@ -167,19 +193,7 @@ impl StatisticsV2 {
                         return Ok(false);
                     }
                 }
-
-                if range.lower().is_null() && range.upper().is_null()
-                    || !range.lower().is_null() && !range.upper().is_null()
-                {
-                    // To represent unbounded intervals with not supported datatypes,
-                    // [ScalarValue::Null, ScalarValue::Null] can be used, and it is valid.
-                    // We may have tried our best to evaluate and propagate distributions
-                    // through the expression tree, but didn't manage to infer the precise
-                    // distribution for the given expression.
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
+                Ok(false)
             }
             _ => Ok(true),
         }
@@ -215,6 +229,7 @@ impl StatisticsV2 {
     /// - [`Uniform`] distribution median is equals to mean: (a + b) / 2
     /// - [`Exponential`] distribution median is calculable by formula: ln2/λ. λ must be non-negative.
     /// - [`Gaussian`] distribution median is equals to mean, which is present explicitly.
+    /// - [`Bernoulli`] median is `1`, of `p > 0.5`, `0` otherwise.
     /// - [`Unknown`] distribution median _may_ be present explicitly.
     pub fn median(&self) -> Result<Option<ScalarValue>> {
         match &self {
@@ -226,10 +241,7 @@ impl StatisticsV2 {
                 agg.div(ScalarValue::Float64(Some(2.))).map(Some)
             }
             Exponential { rate, .. } => {
-                // Note: better to move it to constant with lazy_static! { ... },
-                // but it does not present in the project.
-                let ln_two = ScalarValue::Float64(Some(2_f64.ln()));
-                ln_two.div(rate).map(Some)
+                get_ln_two().div(rate).map(Some)
             }
             Gaussian { mean, .. } => Ok(Some(mean.clone())),
             Bernoulli { p } => {
@@ -247,6 +259,7 @@ impl StatisticsV2 {
     /// - [`Uniform`]'s variance is equal to (upper-lower)^2 / 12
     /// - [`Exponential`]'s variance is equal to mean value and calculable as 1/λ^2
     /// - [`Gaussian`]'s variance is available explicitly
+    /// - [`Bernoulli`]'s variance is `p*(1-p)`
     /// - [`Unknown`]'s distribution variance _may_ be present explicitly.
     pub fn variance(&self) -> Result<Option<ScalarValue>> {
         match &self {
@@ -271,33 +284,33 @@ impl StatisticsV2 {
 
     /// Extract the range of given statistic distribution:
     /// - [`Uniform`]'s range is its interval
+    /// - [`Exponential`]'s range is [offset, +inf)
     /// - [`Bernoulli`]'s returns [`Interval::UNCERTAIN`], if p != 0 and p != 1.
     ///   Otherwise, returns [`Interval::CERTAINLY_FALSE`] and [`Interval::CERTAINLY_TRUE`],
     ///   respectfully.
-    /// - [`Exponential`]'s range is [offset, +inf)
     /// - [`Unknown`]'s range is unbounded by default, but
-    pub fn range(&self) -> Result<Option<Interval>> {
+    pub fn range(&self) -> Result<Interval> {
         match &self {
-            Uniform { interval, .. } => Ok(Some(interval.clone())),
-            Bernoulli { p } => {
-                if p.eq(&ScalarValue::new_zero(&DataType::Float64)?) {
-                    Ok(Some(Interval::CERTAINLY_FALSE))
-                } else if p.eq(&ScalarValue::new_one(&DataType::Float64)?) {
-                    Ok(Some(Interval::CERTAINLY_TRUE))
-                } else {
-                    Ok(Some(Interval::UNCERTAIN))
-                }
-            }
+            Uniform { interval, .. } => Ok(interval.clone()),
             Exponential { offset, .. } => {
                 let offset_data_type = offset.data_type();
                 let interval = Interval::try_new(
                     offset.clone(),
                     ScalarValue::try_from(offset_data_type)?,
                 )?;
-                Ok(Some(interval))
-            }
-            Unknown { range, .. } => Ok(Some(range.clone())),
-            _ => Ok(None),
+                Ok(interval)
+            },
+            Gaussian {..} => Ok(Interval::make_unbounded(&DataType::Float64)?),
+            Bernoulli { p } => {
+                if p.eq(&ScalarValue::new_zero(&DataType::Float64)?) {
+                    Ok(Interval::CERTAINLY_FALSE)
+                } else if p.eq(&ScalarValue::new_one(&DataType::Float64)?) {
+                    Ok(Interval::CERTAINLY_TRUE)
+                } else {
+                    Ok(Interval::UNCERTAIN)
+                }
+            },
+            Unknown { range, .. } => Ok(range.clone()),
         }
     }
 
@@ -306,8 +319,8 @@ impl StatisticsV2 {
     pub fn data_type(&self) -> Option<DataType> {
         match &self {
             Uniform { interval, .. } => Some(interval.data_type()),
-            Bernoulli { p } => Some(p.data_type()),
             Exponential { offset, .. } => Some(offset.data_type()),
+            Bernoulli { .. } => Some(DataType::Boolean),
             Unknown { range, .. } => Some(range.data_type()),
             _ => None,
         }

@@ -147,8 +147,6 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
 
     /// Finds the final statistic of the expression by combining the input statistics
     /// in a post-order bottom-up manner (post-order DFS in statistics graph).
-    ///
-    /// The part of [`StatisticsV2`] framework, work in progress.
     fn evaluate_statistics(&self, _stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
         not_impl_err!("Not implemented for {self}")
     }
@@ -160,8 +158,6 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// [`None`]. If none of the children intervals change as a result of propagation,
     /// may return an empty vector instead of cloning `children`. This is the default
     /// (and conservative) return value.
-    ///
-    /// The part of [`StatisticsV2`] framework, work in progress.
     fn propagate_statistics(
         &self,
         _parent_stat: &StatisticsV2,
