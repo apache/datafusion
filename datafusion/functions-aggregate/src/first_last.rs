@@ -261,11 +261,16 @@ impl FirstValueAccumulator {
             .collect::<Vec<_>>();
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
-        let best = (0..value.len())
-            .filter(|&index| !(self.ignore_nulls && value.is_null(index)))
-            .min_by(|&a, &b| comparator.compare(a, b));
 
-        Ok(best)
+        let min_index = if self.ignore_nulls {
+            (0..value.len())
+                .filter(|&index| !value.is_null(index))
+                .min_by(|&a, &b| comparator.compare(a, b))
+        } else {
+            (0..value.len()).min_by(|&a, &b| comparator.compare(a, b))
+        };
+
+        Ok(min_index)
     }
 }
 
@@ -557,11 +562,15 @@ impl LastValueAccumulator {
             .collect::<Vec<_>>();
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
-        let best = (0..value.len())
-            .filter(|&index| !(self.ignore_nulls && value.is_null(index)))
-            .max_by(|&a, &b| comparator.compare(a, b));
+        let max_ind = if self.ignore_nulls {
+            (0..value.len())
+                .filter(|&index| !(value.is_null(index)))
+                .max_by(|&a, &b| comparator.compare(a, b))
+        } else {
+            (0..value.len()).max_by(|&a, &b| comparator.compare(a, b))
+        };
 
-        Ok(best)
+        Ok(max_ind)
     }
 
     fn with_requirement_satisfied(mut self, requirement_satisfied: bool) -> Self {
