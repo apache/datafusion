@@ -19,6 +19,10 @@
 # with standard values, but different types in string columns
 # (String, StringView, etc.)
 
+# --------------------------------------
+# Show the input data
+# --------------------------------------
+
 # select
 query TTTT
 SELECT ascii_1, ascii_2, unicode_1, unicode_2 FROM test_basic_operator
@@ -34,6 +38,49 @@ percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt
 _ \_ (empty) (empty)
 NULL % NULL NULL
 NULL R NULL 🔥
+
+# --------------------------------------
+# test type coercion (compare to int)
+# queries should not error
+# --------------------------------------
+
+query BB
+select ascii_1 = 1 as col1, 1 = ascii_1 as col2 from test_basic_operator;
+----
+false false
+false false
+false false
+false false
+false false
+false false
+false false
+false false
+false false
+NULL NULL
+NULL NULL
+
+query BB
+select ascii_1 <> 1 as col1, 1 <> ascii_1 as col2 from test_basic_operator;
+----
+true true
+true true
+true true
+true true
+true true
+true true
+true true
+true true
+true true
+NULL NULL
+NULL NULL
+
+# Coercion to date/time
+query BBB
+select ts = '2024-08-09T12:13:14'::timestamp, d = '2024-08-08'::date, t = '12:13:14'::time from test_datetime;
+----
+true false true
+false false false
+NULL NULL NULL
 
 # --------------------------------------
 # column comparison as filters
