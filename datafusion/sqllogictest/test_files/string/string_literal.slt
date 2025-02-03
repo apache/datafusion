@@ -839,6 +839,28 @@ SELECT
 ----
 NULL true true
 
+# Literals with different arrow types
+query BBBB
+select
+  arrow_cast('foobar', 'Utf8')                    LIKE arrow_cast('foo%', 'Utf8'),
+  arrow_cast('foobar', 'LargeUtf8')               LIKE arrow_cast('foo%', 'LargeUtf8'),
+  arrow_cast('foobar', 'Utf8View')                LIKE arrow_cast('foo%', 'Utf8View'),
+  arrow_cast('foobar', 'Dictionary(Int32, Utf8)') LIKE arrow_cast('foo%', 'Dictionary(Int32, Utf8)')
+----
+true true true true
+
+# Literal with UTF8 string and different arrow types for pattern
+query BBBB
+select
+  'foobar' LIKE arrow_cast('foo%', 'Utf8'),
+  'foobar' LIKE arrow_cast('foo%', 'LargeUtf8'),
+  'foobar' LIKE arrow_cast('foo%', 'Utf8View'),
+  'foobar' LIKE arrow_cast('foo%', 'Dictionary(Int32, Utf8)')
+----
+true true true true
+
+# Escapes
+
 # \ is an implicit escape character
 query BBBB
 SELECT
