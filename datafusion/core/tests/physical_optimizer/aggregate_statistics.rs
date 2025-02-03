@@ -29,7 +29,6 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast};
 use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
-use datafusion_physical_optimizer::test_utils::TestAggregate;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::AggregateExec;
 use datafusion_physical_plan::aggregates::AggregateMode;

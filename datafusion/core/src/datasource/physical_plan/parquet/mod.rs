@@ -31,6 +31,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::datasource::data_source::{FileSource, FileType};
+use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{
     parquet::page_filter::PagePruningAccessPlanFilter, FileGroupPartitioner, FileOpener,
     FileScanConfig, FileStream,
@@ -50,20 +51,22 @@ use crate::{
 };
 
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::Constraints;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::DisplayAs;
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use writer::plan_to_parquet;
 
-
 use itertools::Itertools;
 use log::debug;
+use object_store::ObjectStore;
 
 #[derive(Debug, Clone)]
 #[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]

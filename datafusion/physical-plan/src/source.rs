@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::projection::ProjectionExec;
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use datafusion_common::config::ConfigOptions;
@@ -61,6 +62,10 @@ pub trait DataSource: Send + Sync {
     fn metrics(&self) -> ExecutionPlanMetricsSet {
         ExecutionPlanMetricsSet::new()
     }
+    fn try_swapping_with_projection(
+        &self,
+        _projection: &ProjectionExec,
+    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>>;
 }
 
 impl Debug for dyn DataSource {
@@ -157,6 +162,13 @@ impl ExecutionPlan for DataSourceExec {
 
     fn fetch(&self) -> Option<usize> {
         self.source.fetch()
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
+        self.source.try_swapping_with_projection(projection)
     }
 }
 

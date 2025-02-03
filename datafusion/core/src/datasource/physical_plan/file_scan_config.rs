@@ -47,8 +47,11 @@ use crate::datasource::data_source::FileSource;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::display::{display_orderings, ProjectSchemaDisplay};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+};
 use datafusion_physical_plan::source::{DataSource, DataSourceExec};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use log::warn;
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
@@ -249,6 +252,26 @@ impl DataSource for FileScanConfig {
 
     fn metrics(&self) -> ExecutionPlanMetricsSet {
         self.source.metrics().clone()
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If there is any non-column or alias-carrier expression, Projection should not be removed.
+        // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
+        Ok(all_alias_free_columns(projection.expr()).then(|| {
+            let mut file_scan = self.clone();
+            let new_projections = new_projections_for_columns(
+                projection,
+                &file_scan
+                    .projection
+                    .unwrap_or((0..self.file_schema.fields().len()).collect()),
+            );
+            file_scan.projection = Some(new_projections);
+
+            file_scan.new_exec() as _
+        }))
     }
 }
 

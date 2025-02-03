@@ -46,7 +46,6 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
-use datafusion_physical_optimizer::test_utils::{check_integrity,bounded_window_exec, coalesce_partitions_exec, create_test_schema, create_test_schema2, create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec, local_limit_exec, memory_exec, repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec, spr_repartition_exec, stream_exec_ordered, union_exec, coalesce_batches_exec, aggregate_exec, RequirementsTestExec};
 use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion::datasource::listing::PartitionedFile;
@@ -256,11 +255,11 @@ async fn test_bounded_window_set_monotonic_no_partition() -> Result<()> {
         "SortExec: expr=[count@2 ASC NULLS LAST], preserve_partitioning=[false]",
         "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
-        "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     ];
     let expected_optimized = [
         "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
-        "  ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -307,13 +306,13 @@ async fn test_bounded_plain_window_set_monotonic_with_partitions() -> Result<()>
         "SortExec: expr=[count@2 ASC NULLS LAST], preserve_partitioning=[false]",
         "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
-        "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     ];
     let expected_optimized = [
         "SortExec: expr=[count@2 ASC NULLS LAST], preserve_partitioning=[false]",
         "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "    SortExec: expr=[nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
-        "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -370,12 +369,12 @@ async fn test_bounded_plain_window_set_monotonic_with_partitions_partial() -> Re
         "SortExec: expr=[nullable_col@0 DESC NULLS LAST, count@2 ASC NULLS LAST], preserve_partitioning=[false]",
         "  BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "    SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
-        "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     ];
     let expected_optimized = [
         "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "  SortExec: expr=[nullable_col@0 DESC NULLS LAST, count@2 ASC NULLS LAST], preserve_partitioning=[false]",
-        "    ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], file_type=parquet",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -413,12 +412,12 @@ async fn test_bounded_window_non_set_monotonic_sort() -> Result<()> {
         "SortExec: expr=[avg@5 ASC NULLS LAST], preserve_partitioning=[false]",
         "  BoundedWindowAggExec: wdw=[avg: Ok(Field { name: \"avg\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
         "    SortExec: expr=[a@0 DESC NULLS LAST], preserve_partitioning=[false]",
-        "      ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST]",
+        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST], file_type=parquet",
     ];
     let expected_optimized = [
         "SortExec: expr=[avg@5 ASC NULLS LAST], preserve_partitioning=[false]",
         "  BoundedWindowAggExec: wdw=[avg: Ok(Field { name: \"avg\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
-        "    ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST]",
+        "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 DESC NULLS LAST], file_type=parquet",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 

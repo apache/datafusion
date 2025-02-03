@@ -28,10 +28,10 @@ use super::{
     Statistics,
 };
 use crate::execution_plan::{Boundedness, EmissionType};
-use crate::source::{DataSource, DataSourceExec};
 use crate::projection::{
     all_alias_free_columns, new_projections_for_columns, ProjectionExec,
 };
+use crate::source::{DataSource, DataSourceExec};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -147,18 +147,18 @@ impl DataSource for MemorySourceConfig {
         // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
         all_alias_free_columns(projection.expr())
             .then(|| {
-                let all_projections = (0..self.schema().fields().len()).collect();
+                let all_projections = (0..self.schema.fields().len()).collect();
                 let new_projections = new_projections_for_columns(
                     projection,
                     self.projection().as_ref().unwrap_or(&all_projections),
                 );
 
-                MemoryExec::try_new(
+                MemorySourceConfig::try_new_exec(
                     self.partitions(),
                     self.original_schema(),
                     Some(new_projections),
                 )
-                .map(|e| Arc::new(e) as _)
+                .map(|e| e as _)
             })
             .transpose()
     }

@@ -47,9 +47,9 @@ use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use test_utils::AccessLogGenerator;
 
 use async_trait::async_trait;

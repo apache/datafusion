@@ -740,9 +740,9 @@ physical_plan
 02)--GlobalLimitExec: skip=0, fetch=10
 03)----CrossJoinExec
 04)------GlobalLimitExec: skip=0, fetch=1
-05)--------MemoryExec: partitions=1, partition_sizes=[1]
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 06)------GlobalLimitExec: skip=0, fetch=10
-07)--------MemoryExec: partitions=1, partition_sizes=[1]
+07)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query IIII
@@ -766,9 +766,9 @@ physical_plan
 01)GlobalLimitExec: skip=0, fetch=2
 02)--CrossJoinExec
 03)----GlobalLimitExec: skip=0, fetch=2
-04)------MemoryExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
 05)----GlobalLimitExec: skip=0, fetch=2
-06)------MemoryExec: partitions=1, partition_sizes=[1]
+06)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table testSubQueryLimit;

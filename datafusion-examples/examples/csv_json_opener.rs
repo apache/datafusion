@@ -18,20 +18,20 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::datasource::physical_plan::JsonSource;
 use datafusion::{
     assert_batches_eq,
     datasource::{
+        data_source::FileSource,
         file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
         physical_plan::{CsvSource, FileScanConfig, FileStream, JsonOpener},
-        data_source::FileSource
     },
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,
     test_util::aggr_test_schema,
 };
-use datafusion::datasource::physical_plan::JsonSource;
 
 use futures::StreamExt;
 use object_store::{local::LocalFileSystem, memory::InMemory, ObjectStore};

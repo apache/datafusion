@@ -44,10 +44,10 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 use datafusion_physical_plan::projection::{
     all_alias_free_columns, new_projections_for_columns, ProjectionExec,
 };
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
@@ -465,10 +465,10 @@ impl ExecutionPlan for CsvExec {
             Arc::new(
                 CsvExec::builder(file_scan)
                     .with_has_header(self.has_header())
-                    .with_delimeter(self.delimiter())
-                    .with_quote(self.quote())
-                    .with_escape(self.escape())
-                    .with_comment(self.comment())
+                    .with_delimeter(self.delimiter)
+                    .with_quote(self.quote)
+                    .with_escape(self.escape)
+                    .with_comment(self.comment)
                     .with_newlines_in_values(self.newlines_in_values())
                     .with_file_compression_type(self.file_compression_type)
                     .build(),

@@ -25,7 +25,7 @@ use arrow::array::Int32Array;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
@@ -67,24 +67,28 @@ use datafusion_physical_plan::{
 use datafusion_physical_plan::{InputOrderMode, Partitioning};
 
 /// Create a non sorted parquet exec
-pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
-            .with_file(PartitionedFile::new("x".to_string(), 100)),
+pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
+    FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        schema.clone(),
+        Arc::new(ParquetSource::default()),
     )
-    .build_arc()
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .new_exec()
 }
 
 /// Create a single parquet file that is sorted
 pub(crate) fn parquet_exec_with_sort(
     output_ordering: Vec<LexOrdering>,
-) -> Arc<ParquetExec> {
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(output_ordering),
+) -> Arc<DataSourceExec> {
+    FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        schema(),
+        Arc::new(ParquetSource::default()),
     )
-    .build_arc()
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .with_output_ordering(output_ordering)
+    .new_exec()
 }
 
 pub fn schema() -> SchemaRef {

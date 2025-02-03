@@ -6275,7 +6275,7 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[count(aggregate_test_100.c5)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], file_type=csv, has_header=true
 
 #######
 # Group median test
