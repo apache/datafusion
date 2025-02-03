@@ -1073,10 +1073,9 @@ mod tests {
     use sqlparser::parser::Parser;
 
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::TableReference;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
-
-    use crate::TableReference;
 
     use super::*;
 
