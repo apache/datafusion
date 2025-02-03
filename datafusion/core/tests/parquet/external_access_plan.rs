@@ -346,7 +346,7 @@ impl TestFull {
             let df_schema = DFSchema::try_from(schema.clone())?;
             let predicate = ctx.create_physical_expr(predicate, &df_schema)?;
             Arc::new(ParquetSource::new(
-                Arc::clone(&schema),
+                Arc::clone(schema),
                 Some(predicate),
                 None,
                 TableParquetOptions::default(),

@@ -262,7 +262,7 @@ impl DataSource for FileScanConfig {
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
         Ok(all_alias_free_columns(projection.expr()).then(|| {
             let mut file_scan = self.clone();
-            let source = file_scan.source.clone();
+            let source = Arc::clone(&file_scan.source);
             let new_projections = new_projections_for_columns(
                 projection,
                 &file_scan
