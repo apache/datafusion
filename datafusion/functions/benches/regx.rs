@@ -219,8 +219,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
         // flags are not allowed to be utf8view according to the function
         let flags = Arc::new(flags(&mut rng)) as ArrayRef;
-        let replacement =
-            Arc::new(StringViewArray::from_iter_values(iter::repeat("XX").take(1000)));
+        let replacement = Arc::new(StringViewArray::from_iter_values(
+            iter::repeat("XX").take(1000),
+        ));
 
         b.iter(|| {
             black_box(
