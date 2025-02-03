@@ -873,6 +873,8 @@ pub struct ColumnStats {
     pub min_value: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "2")]
     pub max_value: ::core::option::Option<Precision>,
+    #[prost(message, optional, tag = "5")]
+    pub sum_value: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "3")]
     pub null_count: ::core::option::Option<Precision>,
     #[prost(message, optional, tag = "4")]

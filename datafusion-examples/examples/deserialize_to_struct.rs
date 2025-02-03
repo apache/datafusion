@@ -17,9 +17,9 @@
 
 use arrow::array::{AsArray, PrimitiveArray};
 use arrow::datatypes::{Float64Type, Int32Type};
+use datafusion::common::assert_batches_eq;
 use datafusion::error::Result;
 use datafusion::prelude::*;
-use datafusion_common::assert_batches_eq;
 use futures::StreamExt;
 
 /// This example shows how to convert query results into Rust structs by using

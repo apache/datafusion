@@ -22,20 +22,20 @@ use arrow::array::{BooleanArray, Int32Array, Int8Array};
 use arrow::record_batch::RecordBatch;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::DFSchema;
+use datafusion::common::{ScalarValue, ToDFSchema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::first_last::first_value_udaf;
+use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::expr::BinaryExpr;
+use datafusion::logical_expr::interval_arithmetic::Interval;
+use datafusion::logical_expr::simplify::SimplifyContext;
+use datafusion::logical_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
+use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
 use datafusion::prelude::*;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{ScalarValue, ToDFSchema};
-use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::BinaryExpr;
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
-use datafusion_optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 
 /// This example demonstrates the DataFusion [`Expr`] API.
 ///
@@ -270,7 +270,7 @@ fn range_analysis_demo() -> Result<()> {
     // In this case, we can see that, as expected, `analyze` has figured out
     // that in this case,  `date` must be in the range `['2020-09-01', '2020-10-01']`
     let expected_range = Interval::try_new(september_1, october_1)?;
-    assert_eq!(analysis_result.boundaries[0].interval, expected_range);
+    assert_eq!(analysis_result.boundaries[0].interval, Some(expected_range));
 
     Ok(())
 }
@@ -357,7 +357,7 @@ fn type_coercion_demo() -> Result<()> {
     // Evaluation with an expression that has not been type coerced cannot succeed.
     let props = ExecutionProps::default();
     let physical_expr =
-        datafusion_physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
+        datafusion::physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
     let e = physical_expr.evaluate(&batch).unwrap_err();
     assert!(e
         .find_root()
@@ -373,7 +373,7 @@ fn type_coercion_demo() -> Result<()> {
     let context = SimplifyContext::new(&props).with_schema(Arc::new(df_schema.clone()));
     let simplifier = ExprSimplifier::new(context);
     let coerced_expr = simplifier.coerce(expr.clone(), &df_schema)?;
-    let physical_expr = datafusion_physical_expr::create_physical_expr(
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
         &coerced_expr,
         &df_schema,
         &props,
@@ -385,7 +385,7 @@ fn type_coercion_demo() -> Result<()> {
         .clone()
         .rewrite(&mut TypeCoercionRewriter::new(&df_schema))?
         .data;
-    let physical_expr = datafusion_physical_expr::create_physical_expr(
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
         &coerced_expr,
         &df_schema,
         &props,
@@ -413,7 +413,7 @@ fn type_coercion_demo() -> Result<()> {
             }
         })?
         .data;
-    let physical_expr = datafusion_physical_expr::create_physical_expr(
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
         &coerced_expr,
         &df_schema,
         &props,

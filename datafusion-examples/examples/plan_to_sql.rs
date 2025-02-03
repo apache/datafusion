@@ -15,24 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::common::DFSchemaRef;
 use datafusion::error::Result;
 use datafusion::logical_expr::sqlparser::ast::Statement;
-use datafusion::prelude::*;
-use datafusion::sql::unparser::expr_to_sql;
-use datafusion_common::DFSchemaRef;
-use datafusion_expr::{
+use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
     UserDefinedLogicalNodeCore,
 };
-use datafusion_sql::unparser::ast::{
+use datafusion::prelude::*;
+use datafusion::sql::unparser::ast::{
     DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
 };
-use datafusion_sql::unparser::dialect::CustomDialectBuilder;
-use datafusion_sql::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
-use datafusion_sql::unparser::extension_unparser::{
+use datafusion::sql::unparser::dialect::CustomDialectBuilder;
+use datafusion::sql::unparser::expr_to_sql;
+use datafusion::sql::unparser::extension_unparser::UserDefinedLogicalNodeUnparser;
+use datafusion::sql::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
 };
-use datafusion_sql::unparser::{plan_to_sql, Unparser};
+use datafusion::sql::unparser::{plan_to_sql, Unparser};
 use std::fmt;
 use std::sync::Arc;
 

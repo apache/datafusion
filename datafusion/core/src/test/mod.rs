@@ -34,7 +34,6 @@ use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::logical_expr::LogicalPlan;
-use crate::physical_plan::ExecutionPlan;
 use crate::test::object_store::local_unpartitioned_file;
 use crate::test_util::{aggr_test_schema, arrow_test_data};
 
@@ -42,9 +41,6 @@ use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::DataFusionError;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -288,97 +284,6 @@ fn make_decimal() -> RecordBatch {
         .unwrap();
     let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
-}
-
-/// Created a sorted Csv exec
-pub fn csv_exec_sorted(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    Arc::new(
-        CsvExec::builder(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
-            )
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(vec![sort_exprs]),
-        )
-        .with_has_header(false)
-        .with_delimeter(0)
-        .with_quote(0)
-        .with_escape(None)
-        .with_comment(None)
-        .with_newlines_in_values(false)
-        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-        .build(),
-    )
-}
-
-// construct a stream partition for test purposes
-#[derive(Debug)]
-pub(crate) struct TestStreamPartition {
-    pub schema: SchemaRef,
-}
-
-impl PartitionStream for TestStreamPartition {
-    fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        unreachable!()
-    }
-}
-
-/// Create an unbounded stream exec
-pub fn stream_exec_ordered(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    Arc::new(
-        StreamingTableExec::try_new(
-            schema.clone(),
-            vec![Arc::new(TestStreamPartition {
-                schema: schema.clone(),
-            }) as _],
-            None,
-            vec![sort_exprs],
-            true,
-            None,
-        )
-        .unwrap(),
-    )
-}
-
-/// Create a csv exec for tests
-pub fn csv_exec_ordered(
-    schema: &SchemaRef,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-
-    Arc::new(
-        CsvExec::builder(
-            FileScanConfig::new(
-                ObjectStoreUrl::parse("test:///").unwrap(),
-                schema.clone(),
-            )
-            .with_file(PartitionedFile::new("file_path".to_string(), 100))
-            .with_output_ordering(vec![sort_exprs]),
-        )
-        .with_has_header(true)
-        .with_delimeter(0)
-        .with_quote(b'"')
-        .with_escape(None)
-        .with_comment(None)
-        .with_newlines_in_values(false)
-        .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-        .build(),
-    )
 }
 
 pub mod object_store;

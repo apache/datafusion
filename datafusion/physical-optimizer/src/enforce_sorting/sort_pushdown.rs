@@ -18,18 +18,11 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use super::utils::{add_sort_above, is_sort};
-use crate::physical_optimizer::utils::{is_sort_preserving_merge, is_union, is_window};
-use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::joins::utils::calculate_join_output_ordering;
-use crate::physical_plan::joins::SortMergeJoinExec;
-use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::tree_node::PlanContext;
-use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use arrow_schema::SchemaRef;
+use crate::utils::{
+    add_sort_above, is_sort, is_sort_preserving_merge, is_union, is_window,
+};
 
+use arrow_schema::SchemaRef;
 use datafusion_common::tree_node::{
     ConcreteTreeNode, Transformed, TreeNode, TreeNodeRecursion,
 };
@@ -39,8 +32,16 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
-use datafusion_physical_plan::joins::utils::ColumnIndex;
-use datafusion_physical_plan::joins::HashJoinExec;
+use datafusion_physical_plan::filter::FilterExec;
+use datafusion_physical_plan::joins::utils::{
+    calculate_join_output_ordering, ColumnIndex,
+};
+use datafusion_physical_plan::joins::{HashJoinExec, SortMergeJoinExec};
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::tree_node::PlanContext;
+use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 /// This is a "data class" we use within the [`EnforceSorting`] rule to push
 /// down [`SortExec`] in the plan. In some cases, we can reduce the total
@@ -48,7 +49,7 @@ use datafusion_physical_plan::joins::HashJoinExec;
 /// object carries the parent required ordering and the (optional) `fetch` value
 /// of the parent node as its data.
 ///
-/// [`EnforceSorting`]: crate::physical_optimizer::enforce_sorting::EnforceSorting
+/// [`EnforceSorting`]: crate::enforce_sorting::EnforceSorting
 #[derive(Default, Clone)]
 pub struct ParentRequirements {
     ordering_requirement: Option<LexRequirement>,
@@ -70,7 +71,7 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
     }
 }
 
-pub(crate) fn pushdown_sorts(sort_pushdown: SortPushDown) -> Result<SortPushDown> {
+pub fn pushdown_sorts(sort_pushdown: SortPushDown) -> Result<SortPushDown> {
     let mut new_node = pushdown_sorts_helper(sort_pushdown)?;
     while new_node.tnr == TreeNodeRecursion::Stop {
         new_node = pushdown_sorts_helper(new_node.data)?;
@@ -107,6 +108,12 @@ fn pushdown_sorts_helper(
             // Make sure this `SortExec` satisfies parent requirements:
             let sort_reqs = requirements.data.ordering_requirement.unwrap_or_default();
             // It's possible current plan (`SortExec`) has a fetch value.
+            // And if both of them have fetch values, we should use the minimum one.
+            if let Some(fetch) = sort_fetch {
+                if let Some(requirement_fetch) = requirements.data.fetch {
+                    requirements.data.fetch = Some(fetch.min(requirement_fetch));
+                }
+            }
             let fetch = requirements.data.fetch.or(sort_fetch);
             requirements = requirements.children.swap_remove(0);
             requirements = add_sort_above(requirements, sort_reqs, fetch);

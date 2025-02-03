@@ -953,7 +953,7 @@ mod tests {
     use super::*;
     use arrow::datatypes::{Field, Int32Type};
     use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
-    use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+    use arrow_buffer::{NullBuffer, NullBufferBuilder, OffsetBuffer};
     use datafusion_common::assert_batches_eq;
 
     // Create a GenericListArray with the following list values:
@@ -964,43 +964,43 @@ mod tests {
     {
         let mut values = vec![];
         let mut offsets: Vec<OffsetSize> = vec![OffsetSize::zero()];
-        let mut valid = BooleanBufferBuilder::new(6);
+        let mut valid = NullBufferBuilder::new(6);
 
         // [A, B, C]
         values.extend_from_slice(&[Some("A"), Some("B"), Some("C")]);
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(true);
+        valid.append_non_null();
 
         // []
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(true);
+        valid.append_non_null();
 
         // NULL with non-zero value length
         // Issue https://github.com/apache/datafusion/issues/9932
         values.push(Some("?"));
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(false);
+        valid.append_null();
 
         // [D]
         values.push(Some("D"));
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(true);
+        valid.append_non_null();
 
         // Another NULL with zero value length
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(false);
+        valid.append_null();
 
         // [NULL, F]
         values.extend_from_slice(&[None, Some("F")]);
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
-        valid.append(true);
+        valid.append_non_null();
 
         let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
         GenericListArray::<OffsetSize>::new(
             field,
             OffsetBuffer::new(offsets.into()),
             Arc::new(StringArray::from(values)),
-            Some(NullBuffer::new(valid.finish())),
+            valid.finish(),
         )
     }
 
@@ -1055,10 +1055,10 @@ mod tests {
 
         let list_arr1_ref = Arc::new(list_arr1) as ArrayRef;
         let offsets = OffsetBuffer::from_lengths([3, 3, 0]);
-        let mut nulls = BooleanBufferBuilder::new(3);
-        nulls.append(true);
-        nulls.append(true);
-        nulls.append(false);
+        let mut nulls = NullBufferBuilder::new(3);
+        nulls.append_non_null();
+        nulls.append_non_null();
+        nulls.append_null();
         // list<list<int32>>
         let col1_field = Field::new_list_field(
             DataType::List(Arc::new(Field::new_list_field(
@@ -1074,7 +1074,7 @@ mod tests {
             )),
             offsets,
             list_arr1_ref,
-            Some(NullBuffer::new(nulls.finish())),
+            nulls.finish(),
         );
 
         let list_arr2 = StringArray::from(vec![
@@ -1086,8 +1086,8 @@ mod tests {
         ]);
 
         let offsets = OffsetBuffer::from_lengths([2, 2, 1]);
-        let mut nulls = BooleanBufferBuilder::new(3);
-        nulls.append_n(3, true);
+        let mut nulls = NullBufferBuilder::new(3);
+        nulls.append_n_non_nulls(3);
         let col2_field = Field::new(
             "col2",
             DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
@@ -1097,7 +1097,7 @@ mod tests {
             Arc::new(Field::new_list_field(DataType::Utf8, true)),
             OffsetBuffer::new(offsets.into()),
             Arc::new(list_arr2),
-            Some(NullBuffer::new(nulls.finish())),
+            nulls.finish(),
         );
         // convert col1 and col2 to a record batch
         let schema = Arc::new(Schema::new(vec![col1_field, col2_field]));
