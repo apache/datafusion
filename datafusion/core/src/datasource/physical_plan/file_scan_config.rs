@@ -262,6 +262,7 @@ impl DataSource for FileScanConfig {
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
         Ok(all_alias_free_columns(projection.expr()).then(|| {
             let mut file_scan = self.clone();
+            let source = file_scan.source.clone();
             let new_projections = new_projections_for_columns(
                 projection,
                 &file_scan
@@ -269,6 +270,8 @@ impl DataSource for FileScanConfig {
                     .unwrap_or((0..self.file_schema.fields().len()).collect()),
             );
             file_scan.projection = Some(new_projections);
+            // Assign projected statistics to source
+            file_scan = file_scan.with_source(source);
 
             file_scan.new_exec() as _
         }))
