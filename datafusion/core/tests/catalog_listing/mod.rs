@@ -15,9 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A table that uses the `ObjectStore` listing capability
-//! to get the list of files to process.
-
-mod table;
-pub use datafusion_catalog_listing::*;
-pub use table::{ListingOptions, ListingTable, ListingTableConfig};
+mod helpers;

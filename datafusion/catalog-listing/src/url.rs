@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::execution::context::SessionState;
+use datafusion_catalog::Session;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_optimizer::OptimizerConfig;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use glob::Pattern;
@@ -194,7 +193,7 @@ impl ListingTableUrl {
     ///
     /// Examples:
     /// ```rust
-    /// use datafusion::datasource::listing::ListingTableUrl;
+    /// use datafusion_catalog_listing::ListingTableUrl;
     /// let url = ListingTableUrl::parse("file:///foo/bar.csv").unwrap();
     /// assert_eq!(url.file_extension(), Some("csv"));
     /// let url = ListingTableUrl::parse("file:///foo/bar").unwrap();
@@ -216,7 +215,7 @@ impl ListingTableUrl {
 
     /// Strips the prefix of this [`ListingTableUrl`] from the provided path, returning
     /// an iterator of the remaining path segments
-    pub(crate) fn strip_prefix<'a, 'b: 'a>(
+    pub fn strip_prefix<'a, 'b: 'a>(
         &'a self,
         path: &'b Path,
     ) -> Option<impl Iterator<Item = &'b str> + 'a> {
@@ -230,11 +229,11 @@ impl ListingTableUrl {
     /// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
     pub async fn list_all_files<'a>(
         &'a self,
-        ctx: &'a SessionState,
+        ctx: &'a dyn Session,
         store: &'a dyn ObjectStore,
         file_extension: &'a str,
     ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
-        let exec_options = &ctx.options().execution;
+        let exec_options = &ctx.config_options().execution;
         let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
         // If the prefix is a file, use a head request, otherwise list
         let list = match self.is_collection() {
