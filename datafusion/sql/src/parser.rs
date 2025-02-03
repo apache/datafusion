@@ -1411,18 +1411,20 @@ mod tests {
         assert_eq!(verified_stmt(sql), expected);
         Ok(())
     }
-    
+
     #[test]
     fn skip_copy_into_snowflake() -> Result<(), ParserError> {
         let sql = "COPY INTO foo FROM @~/staged FILE_FORMAT = (FORMAT_NAME = 'mycsv');";
         let dialect = Box::new(SnowflakeDialect);
         let statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
-       
-        assert_eq!(statements.len(), 1, "Expected to parse exactly one statement");
+
+        assert_eq!(
+            statements.len(),
+            1,
+            "Expected to parse exactly one statement"
+        );
         if let Statement::CopyTo(_) = &statements[0] {
-            panic!(
-                "Expected non COPY TO statement, but was successful: {statements:?}"
-            );
+            panic!("Expected non COPY TO statement, but was successful: {statements:?}");
         }
         Ok(())
     }
