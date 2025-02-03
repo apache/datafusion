@@ -209,31 +209,26 @@ pub fn check_subquery_expr(
 
 // Recursively check the unsupported outer references in the sub query plan.
 fn check_correlations_in_subquery(inner_plan: &LogicalPlan) -> Result<()> {
-    check_inner_plan(inner_plan, true)
+    check_inner_plan(inner_plan)
 }
 
 // Recursively check the unsupported outer references in the sub query plan.
 #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
-fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Result<()> {
-    if !can_contain_outer_ref && inner_plan.contains_outer_reference() {
-        return plan_err!("Accessing outer reference columns is not allowed in the plan");
-    }
+fn check_inner_plan(inner_plan: &LogicalPlan) -> Result<()> {
     // We want to support as many operators as possible inside the correlated subquery
     match inner_plan {
         LogicalPlan::Aggregate(_) => {
             inner_plan.apply_children(|plan| {
-                check_inner_plan(plan, can_contain_outer_ref)?;
+                check_inner_plan(plan)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
         }
-        LogicalPlan::Filter(Filter { input, .. }) => {
-            check_inner_plan(input, can_contain_outer_ref)
-        }
+        LogicalPlan::Filter(Filter { input, .. }) => check_inner_plan(input),
         LogicalPlan::Window(window) => {
             check_mixed_out_refer_in_window(window)?;
             inner_plan.apply_children(|plan| {
-                check_inner_plan(plan, can_contain_outer_ref)?;
+                check_inner_plan(plan)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
@@ -250,7 +245,7 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Unnest(_) => {
             inner_plan.apply_children(|plan| {
-                check_inner_plan(plan, can_contain_outer_ref)?;
+                check_inner_plan(plan)?;
                 Ok(TreeNodeRecursion::Continue)
             })?;
             Ok(())
@@ -263,7 +258,7 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
         }) => match join_type {
             JoinType::Inner => {
                 inner_plan.apply_children(|plan| {
-                    check_inner_plan(plan, can_contain_outer_ref)?;
+                    check_inner_plan(plan)?;
                     Ok(TreeNodeRecursion::Continue)
                 })?;
                 Ok(())
@@ -272,26 +267,34 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::LeftMark => {
-                check_inner_plan(left, can_contain_outer_ref)?;
-                check_inner_plan(right, false)
+                check_inner_plan(left)?;
+                check_no_outer_references(right)
             }
             JoinType::Right | JoinType::RightSemi | JoinType::RightAnti => {
-                check_inner_plan(left, false)?;
-                check_inner_plan(right, can_contain_outer_ref)
+                check_no_outer_references(left)?;
+                check_inner_plan(right)
             }
             JoinType::Full => {
                 inner_plan.apply_children(|plan| {
-                    check_inner_plan(plan, false)?;
+                    check_no_outer_references(plan)?;
                     Ok(TreeNodeRecursion::Continue)
                 })?;
                 Ok(())
             }
         },
         LogicalPlan::Extension(_) => Ok(()),
-        _ => plan_err!(
-            "Unsupported operator in the subquery plan: {}",
+        plan => check_no_outer_references(plan),
+    }
+}
+
+fn check_no_outer_references(inner_plan: &LogicalPlan) -> Result<()> {
+    if inner_plan.contains_outer_reference() {
+        plan_err!(
+            "Accessing outer reference columns is not allowed in the plan: {}",
             inner_plan.display()
-        ),
+        )
+    } else {
+        Ok(())
     }
 }
 
@@ -433,6 +436,6 @@ mod test {
             }),
         });
 
-        check_inner_plan(&plan, true).unwrap();
+        check_inner_plan(&plan).unwrap();
     }
 }
