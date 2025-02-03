@@ -27,6 +27,7 @@ use arrow::array::MutableArrayData;
 use arrow::array::OffsetSizeTrait;
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
+use arrow_buffer::NullBufferBuilder;
 use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
@@ -35,12 +36,13 @@ use datafusion_common::cast::as_list_array;
 use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, DataFusionError, Result,
 };
-use datafusion_expr::Expr;
+use datafusion_expr::{ArrayFunctionSignature, Expr, TypeSignature};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, NullHandling, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -330,7 +332,26 @@ pub(super) struct ArraySlice {
 impl ArraySlice {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::ArraySignature(
+                        ArrayFunctionSignature::ArrayAndIndexes(
+                            NonZeroUsize::new(1).expect("1 is non-zero"),
+                        ),
+                    ),
+                    TypeSignature::ArraySignature(
+                        ArrayFunctionSignature::ArrayAndIndexes(
+                            NonZeroUsize::new(2).expect("2 is non-zero"),
+                        ),
+                    ),
+                    TypeSignature::ArraySignature(
+                        ArrayFunctionSignature::ArrayAndIndexes(
+                            NonZeroUsize::new(3).expect("3 is non-zero"),
+                        ),
+                    ),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("list_slice")],
         }
     }
@@ -372,6 +393,10 @@ impl ScalarUDFImpl for ArraySlice {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
+    }
+
+    fn null_handling(&self) -> NullHandling {
+        NullHandling::Propagate
     }
 
     fn invoke_batch(
@@ -430,8 +455,6 @@ fn array_slice_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         LargeList(_) => {
             let array = as_large_list_array(&args[0])?;
-            let from_array = as_int64_array(&args[1])?;
-            let to_array = as_int64_array(&args[2])?;
             general_array_slice::<i64>(array, from_array, to_array, stride)
         }
         _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
@@ -451,9 +474,8 @@ where
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
 
-    // use_nulls: false, we don't need nulls but empty array for array_slice, so we don't need explicit nulls but adjust offset to indicate nulls.
     let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
     // We have the slice syntax compatible with DuckDB v0.8.1.
     // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
@@ -516,30 +538,33 @@ where
     }
 
     let mut offsets = vec![O::usize_as(0)];
+    let mut null_builder = NullBufferBuilder::new(array.len());
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let start = offset_window[0];
         let end = offset_window[1];
         let len = end - start;
 
-        // len 0 indicate array is null, return empty array in this row.
+        // If any input is null, return null.
+        if array.is_null(row_index)
+            || from_array.is_null(row_index)
+            || to_array.is_null(row_index)
+        {
+            mutable.extend_nulls(1);
+            offsets.push(offsets[row_index] + O::usize_as(1));
+            null_builder.append_null();
+            continue;
+        }
+        null_builder.append_non_null();
+
+        // Empty arrays always return an empty array.
         if len == O::usize_as(0) {
             offsets.push(offsets[row_index]);
             continue;
         }
 
-        // If index is null, we consider it as the minimum / maximum index of the array.
-        let from_index = if from_array.is_null(row_index) {
-            Some(O::usize_as(0))
-        } else {
-            adjusted_from_index::<O>(from_array.value(row_index), len)?
-        };
-
-        let to_index = if to_array.is_null(row_index) {
-            Some(len - O::usize_as(1))
-        } else {
-            adjusted_to_index::<O>(to_array.value(row_index), len)?
-        };
+        let from_index = adjusted_from_index::<O>(from_array.value(row_index), len)?;
+        let to_index = adjusted_to_index::<O>(to_array.value(row_index), len)?;
 
         if let (Some(from), Some(to)) = (from_index, to_index) {
             let stride = stride.map(|s| s.value(row_index));
@@ -613,7 +638,7 @@ where
         Arc::new(Field::new_list_field(array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow_array::make_array(data),
-        None,
+        null_builder.finish(),
     )?))
 }
 
@@ -663,6 +688,10 @@ impl ScalarUDFImpl for ArrayPopFront {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
+    }
+
+    fn null_handling(&self) -> NullHandling {
+        NullHandling::Propagate
     }
 
     fn invoke_batch(
@@ -763,6 +792,10 @@ impl ScalarUDFImpl for ArrayPopBack {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
+    }
+
+    fn null_handling(&self) -> NullHandling {
+        NullHandling::Propagate
     }
 
     fn invoke_batch(
