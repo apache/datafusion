@@ -463,6 +463,8 @@ mod tests {
         ($test_name:ident, $args:expr, $expected:expr) => {
             #[test]
             fn $test_name() -> Result<()> {
+                use datafusion_common::config::ConfigOptions;
+
                 let fis = crate::unicode::find_in_set();
 
                 let args = $args;
@@ -481,6 +483,7 @@ mod tests {
                     args,
                     number_rows: cardinality,
                     return_type: &return_type,
+                    config_options: Arc::new(ConfigOptions::default()),
                 });
                 assert!(result.is_ok());
 

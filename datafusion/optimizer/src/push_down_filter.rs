@@ -1095,7 +1095,9 @@ impl OptimizerRule for PushDownFilter {
                         }
                     })
             }
-            LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
+            LogicalPlan::Join(join) => {
+                push_down_join(join, Some(&filter.predicate), config.options())
+            }
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
 

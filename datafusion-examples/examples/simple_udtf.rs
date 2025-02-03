@@ -23,6 +23,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::common::{plan_err, ScalarValue};
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionProps;

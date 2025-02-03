@@ -97,6 +97,7 @@ impl ScalarFunctionExpr {
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         schema: &Schema,
+        config_options: &ConfigOptions,
     ) -> Result<Self> {
         let name = fun.name().to_string();
         let arg_types = args
@@ -132,6 +133,7 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             nullable,
+            config_options: Arc::new(config_options.clone()),
         })
     }
 
@@ -173,7 +175,7 @@ impl fmt::Display for ScalarFunctionExpr {
 
 impl DynEq for ScalarFunctionExpr {
     fn dyn_eq(&self, other: &dyn Any) -> bool {
-        other.downcast_ref::<Self>().map_or(false, |o| {
+        other.downcast_ref::<Self>().is_some_and(|o| {
             let eq = self.fun.eq(&o.fun);
             let eq = eq && self.name.eq(&o.name);
             let eq = eq && self.args.eq(&o.args);

@@ -23,6 +23,7 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use rand::distributions::Alphanumeric;
@@ -159,6 +160,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     number_rows: n_rows,
                     return_type: &DataType::Int32,
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });
@@ -170,6 +172,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     number_rows: n_rows,
                     return_type: &DataType::Int32,
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });
@@ -185,6 +188,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     number_rows: n_rows,
                     return_type: &DataType::Int32,
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });
@@ -196,6 +200,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args.clone(),
                     number_rows: n_rows,
                     return_type: &DataType::Int32,
+                    config_options: Arc::new(ConfigOptions::default()),
                 }))
             })
         });

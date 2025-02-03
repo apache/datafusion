@@ -25,6 +25,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::DFSchema;
 use datafusion::common::{ScalarValue, ToDFSchema};
+use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::logical_expr::execution_props::ExecutionProps;
@@ -34,7 +35,9 @@ use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
 use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
+use datafusion::physical_expr::{
+    analyze, create_physical_expr, AnalysisContext, ExprBoundaries,
+};
 use datafusion::prelude::*;
 
 /// This example demonstrates the DataFusion [`Expr`] API.
@@ -359,12 +362,7 @@ fn type_coercion_demo() -> Result<()> {
     // Evaluation with an expression that has not been type coerced cannot succeed.
     let props = ExecutionProps::default();
     let config_options = ConfigOptions::default();
-    let physical_expr = datafusion_physical_expr::create_physical_expr(
-        &expr,
-        &df_schema,
-        &props,
-        &config_options,
-    )?;
+    let physical_expr = create_physical_expr(&expr, &df_schema, &props, &config_options)?;
     let e = physical_expr.evaluate(&batch).unwrap_err();
     assert!(e
         .find_root()
@@ -381,12 +379,8 @@ fn type_coercion_demo() -> Result<()> {
         .with_schema(Arc::new(df_schema.clone()));
     let simplifier = ExprSimplifier::new(context);
     let coerced_expr = simplifier.coerce(expr.clone(), &df_schema)?;
-    let physical_expr = datafusion::physical_expr::create_physical_expr(
-        &coerced_expr,
-        &df_schema,
-        &props,
-        &config_options,
-    )?;
+    let physical_expr =
+        create_physical_expr(&coerced_expr, &df_schema, &props, &config_options)?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
     // 3. Type coercion with `TypeCoercionRewriter`.
@@ -394,12 +388,8 @@ fn type_coercion_demo() -> Result<()> {
         .clone()
         .rewrite(&mut TypeCoercionRewriter::new(&df_schema))?
         .data;
-    let physical_expr = datafusion::physical_expr::create_physical_expr(
-        &coerced_expr,
-        &df_schema,
-        &props,
-        &config_options,
-    )?;
+    let physical_expr =
+        create_physical_expr(&coerced_expr, &df_schema, &props, &config_options)?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
     // 4. Apply explicit type coercion by manually rewriting the expression
@@ -423,12 +413,8 @@ fn type_coercion_demo() -> Result<()> {
             }
         })?
         .data;
-    let physical_expr = datafusion::physical_expr::create_physical_expr(
-        &coerced_expr,
-        &df_schema,
-        &props,
-        &config_options,
-    )?;
+    let physical_expr =
+        create_physical_expr(&coerced_expr, &df_schema, &props, &config_options)?;
     assert!(physical_expr.evaluate(&batch).is_ok());
 
     Ok(())
