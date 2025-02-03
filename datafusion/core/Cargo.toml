@@ -124,7 +124,7 @@ num-traits = { version = "0.2", optional = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
-rand = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
 regex = { workspace = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
@@ -145,7 +145,7 @@ datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
 paste = "^1.0"
-rand = { workspace = true, features = ["small_rng"] }
+rand = { workspace = true, features = ["small_rng", "thread_rng"] }
 rand_distr = "0.5.0"
 regex = { workspace = true }
 rstest = { workspace = true }

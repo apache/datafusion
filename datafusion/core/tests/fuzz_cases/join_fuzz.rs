@@ -737,13 +737,13 @@ impl JoinFuzzTestCase {
 /// two sorted int32 columns 'a', 'b' ranged from 0..99 as join columns
 /// two random int32 columns 'x', 'y' as other columns
 fn make_staggered_batches(len: usize) -> Vec<RecordBatch> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut input12: Vec<(i32, i32)> = vec![(0, 0); len];
     let mut input3: Vec<i32> = vec![0; len];
     let mut input4: Vec<i32> = vec![0; len];
     input12
         .iter_mut()
-        .for_each(|v| *v = (rng.gen_range(0..100), rng.gen_range(0..100)));
+        .for_each(|v| *v = (rng.random_range(0..100), rng.random_range(0..100)));
     rng.fill(&mut input3[..]);
     rng.fill(&mut input4[..]);
     input12.sort_unstable();

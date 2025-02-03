@@ -191,7 +191,7 @@ impl Utf8Test {
     ///  all combinations of interesting charactes  with lengths ranging from 1 to 4
     fn values() -> &'static [String] {
         VALUES.get_or_init(|| {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
 
             let characters = [
                 "z",
@@ -254,7 +254,7 @@ impl Utf8Test {
             return (*files).clone();
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let values = Self::values();
 
         let mut row_groups = vec![];

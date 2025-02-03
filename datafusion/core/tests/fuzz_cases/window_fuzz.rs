@@ -51,7 +51,7 @@ use datafusion_functions_window::nth_value::{
 };
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -400,8 +400,8 @@ fn get_random_function(
                 WindowFunctionDefinition::WindowUDF(lead_udwf()),
                 vec![
                     arg.clone(),
-                    lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
-                    lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
+                    lit(ScalarValue::Int64(Some(rng.random_range(1..10)))),
+                    lit(ScalarValue::Int64(Some(rng.random_range(1..1000)))),
                 ],
             ),
         );
@@ -411,8 +411,8 @@ fn get_random_function(
                 WindowFunctionDefinition::WindowUDF(lag_udwf()),
                 vec![
                     arg.clone(),
-                    lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
-                    lit(ScalarValue::Int64(Some(rng.gen_range(1..1000)))),
+                    lit(ScalarValue::Int64(Some(rng.random_range(1..10)))),
+                    lit(ScalarValue::Int64(Some(rng.random_range(1..1000)))),
                 ],
             ),
         );
@@ -437,12 +437,12 @@ fn get_random_function(
             WindowFunctionDefinition::WindowUDF(nth_value_udwf()),
             vec![
                 arg.clone(),
-                lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
+                lit(ScalarValue::Int64(Some(rng.random_range(1..10)))),
             ],
         ),
     );
 
-    let rand_fn_idx = rng.gen_range(0..window_fn_map.len());
+    let rand_fn_idx = rng.random_range(0..window_fn_map.len());
     let fn_name = window_fn_map.keys().collect::<Vec<_>>()[rand_fn_idx];
     let (window_fn, args) = window_fn_map.values().collect::<Vec<_>>()[rand_fn_idx];
     let mut args = args.clone();
@@ -465,12 +465,12 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
         is_preceding: bool,
     }
     let first_bound = Utils {
-        val: rng.gen_range(0..10),
-        is_preceding: rng.gen_range(0..2) == 0,
+        val: rng.random_range(0..10),
+        is_preceding: rng.random_range(0..2) == 0,
     };
     let second_bound = Utils {
-        val: rng.gen_range(0..10),
-        is_preceding: rng.gen_range(0..2) == 0,
+        val: rng.random_range(0..10),
+        is_preceding: rng.random_range(0..2) == 0,
     };
     let (start_bound, end_bound) =
         if first_bound.is_preceding == second_bound.is_preceding {
@@ -487,7 +487,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             (second_bound, first_bound)
         };
     // 0 means Range, 1 means Rows, 2 means GROUPS
-    let rand_num = rng.gen_range(0..3);
+    let rand_num = rng.random_range(0..3);
     let units = if rand_num < 1 {
         WindowFrameUnits::Range
     } else if rand_num < 2 {
@@ -519,7 +519,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             };
             let mut window_frame = WindowFrame::new_bounds(units, start_bound, end_bound);
             // with 10% use unbounded preceding in tests
-            if rng.gen_range(0..10) == 0 {
+            if rng.random_range(0..10) == 0 {
                 window_frame.start_bound =
                     WindowFrameBound::Preceding(ScalarValue::Int32(None));
             }
@@ -547,7 +547,7 @@ fn get_random_window_frame(rng: &mut StdRng, is_linear: bool) -> WindowFrame {
             };
             let mut window_frame = WindowFrame::new_bounds(units, start_bound, end_bound);
             // with 10% use unbounded preceding in tests
-            if rng.gen_range(0..10) == 0 {
+            if rng.random_range(0..10) == 0 {
                 window_frame.start_bound =
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None));
             }
@@ -571,7 +571,7 @@ fn convert_bound_to_current_row_if_applicable(
     match bound {
         WindowFrameBound::Preceding(value) | WindowFrameBound::Following(value) => {
             if let Ok(zero) = ScalarValue::new_zero(&value.data_type()) {
-                if value == &zero && rng.gen_range(0..2) == 0 {
+                if value == &zero && rng.random_range(0..2) == 0 {
                     *bound = WindowFrameBound::CurrentRow;
                 }
             }
@@ -760,9 +760,9 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut input5: Vec<String> = vec!["".to_string(); len];
     input123.iter_mut().for_each(|v| {
         *v = (
-            rng.gen_range(0..n_distinct) as i32,
-            rng.gen_range(0..n_distinct) as i32,
-            rng.gen_range(0..n_distinct) as i32,
+            rng.random_range(0..n_distinct) as i32,
+            rng.random_range(0..n_distinct) as i32,
+            rng.random_range(0..n_distinct) as i32,
         )
     });
     input123.sort();
@@ -790,7 +790,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut batches = vec![];
     if STREAM {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..50);
+            let batch_size = rng.random_range(0..50);
             if remainder.num_rows() < batch_size {
                 batches.push(remainder);
                 break;
@@ -800,7 +800,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
         }
     } else {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
+            let batch_size = rng.random_range(0..remainder.num_rows() + 1);
             batches.push(remainder.slice(0, batch_size));
             remainder = remainder.slice(batch_size, remainder.num_rows() - batch_size);
         }

@@ -4249,7 +4249,7 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
         shape_id_builder.append_value(idx as u32 + 1);
 
         // Add a random number of points
-        let num_points: usize = rng.gen_range(0..4);
+        let num_points: usize = rng.random_range(0..4);
         if num_points > 0 {
             for _ in 0..num_points.max(2) {
                 // Add x value
@@ -4257,13 +4257,13 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
                     .values()
                     .field_builder::<Int32Builder>(0)
                     .unwrap()
-                    .append_value(rng.gen_range(-10..10));
+                    .append_value(rng.random_range(-10..10));
                 // Add y value
                 points_builder
                     .values()
                     .field_builder::<Int32Builder>(1)
                     .unwrap()
-                    .append_value(rng.gen_range(-10..10));
+                    .append_value(rng.random_range(-10..10));
                 points_builder.values().append(true);
             }
         }
@@ -4272,7 +4272,7 @@ async fn table_with_nested_types(n: usize) -> Result<DataFrame> {
         points_builder.append(num_points > 0);
 
         // Append tags.
-        let num_tags: usize = rng.gen_range(0..5);
+        let num_tags: usize = rng.random_range(0..5);
         for id in 0..num_tags {
             tags_builder.values().append_value(format!("tag{}", id + 1));
         }

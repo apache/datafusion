@@ -91,7 +91,7 @@ uuid = { version = "1.7", features = ["v4"], optional = true }
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
 criterion = "0.5"
-rand = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
 [[bench]]

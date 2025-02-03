@@ -24,7 +24,7 @@ use chrono::prelude::*;
 use chrono::TimeDelta;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use rand::rngs::ThreadRng;
-use rand::seq::SliceRandom;
+use rand::seq::IndexedRandom;
 use rand::Rng;
 
 use datafusion_common::ScalarValue;
@@ -38,7 +38,7 @@ fn random_date_in_range(
     end_date: NaiveDate,
 ) -> NaiveDate {
     let days_in_range = (end_date - start_date).num_days();
-    let random_days: i64 = rng.gen_range(0..days_in_range);
+    let random_days: i64 = rng.random_range(0..days_in_range);
     start_date + TimeDelta::try_days(random_days).unwrap()
 }
 
@@ -81,7 +81,7 @@ fn patterns(rng: &mut ThreadRng) -> StringArray {
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("to_char_array_array_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data_arr = data(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
@@ -98,7 +98,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("to_char_array_scalar_1000", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let data_arr = data(&mut rng);
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);

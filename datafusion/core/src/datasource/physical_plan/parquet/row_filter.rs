@@ -597,7 +597,8 @@ mod test {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::arrow::parquet_to_arrow_schema;
     use parquet::file::reader::{FileReader, SerializedFileReader};
-    use rand::prelude::*;
+    use rand::rng;
+    use rand_distr::uniform::{UniformSampler, UniformUsize};
 
     // We should ignore predicate that read non-primitive columns
     #[test]
@@ -749,10 +750,11 @@ mod test {
 
     #[test]
     fn test_remap_projection() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
+        let uusize = UniformUsize::new(usize::MIN, usize::MAX).unwrap();
         for _ in 0..100 {
             // A random selection of column indexes in arbitrary order
-            let projection: Vec<_> = (0..100).map(|_| rng.gen()).collect();
+            let projection: Vec<_> = (0..100).map(|_| uusize.sample(&mut rng)).collect();
 
             // File order is the projection sorted
             let mut file_order = projection.clone();

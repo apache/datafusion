@@ -17,18 +17,17 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray};
+use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, PrimitiveArray};
 use arrow::datatypes::Int64Type;
-use arrow::util::bench_util::create_primitive_array;
 use arrow_schema::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
-use arrow::util::test_util::seedable_rng;
 use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
-use rand::distributions::{Distribution, Standard};
-use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
@@ -54,20 +53,20 @@ pub fn create_list_array<T>(
 ) -> ListArray
 where
     T: ArrowPrimitiveType,
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let mut nulls_builder = NullBufferBuilder::new(size);
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
 
     let offsets = OffsetBuffer::from_lengths((0..size).map(|_| {
-        let is_null = rng.gen::<f32>() < null_density;
+        let is_null = rng.random::<f32>() < null_density;
 
-        let mut length = rng.gen_range(1..10);
+        let mut length = rng.random_range(1..10);
 
         if is_null {
             nulls_builder.append_null();
 
-            if rng.gen::<f32>() <= zero_length_lists_probability {
+            if rng.random::<f32>() <= zero_length_lists_probability {
                 length = 0;
             }
         } else {
@@ -79,7 +78,15 @@ where
 
     let length = *offsets.last().unwrap() as usize;
 
-    let values = create_primitive_array::<T>(length, 0.0);
+    let values = (0..length)
+        .map(|_| {
+            if rng.random::<f32>() < 0.0 {
+                None
+            } else {
+                Some(rng.random())
+            }
+        })
+        .collect::<PrimitiveArray<T>>();
 
     let field = Field::new_list_field(T::DATA_TYPE, true);
 

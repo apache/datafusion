@@ -20,7 +20,7 @@
 use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
 use log::debug;
 use parking_lot::Mutex;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::{Builder, NamedTempFile, TempDir};
@@ -136,7 +136,7 @@ impl DiskManager {
             local_dirs.push(Arc::new(tempdir));
         }
 
-        let dir_index = thread_rng().gen_range(0..local_dirs.len());
+        let dir_index = rng().random_range(0..local_dirs.len());
         Ok(RefCountedTempFile {
             _parent_temp_dir: Arc::clone(&local_dirs[dir_index]),
             tempfile: Builder::new()

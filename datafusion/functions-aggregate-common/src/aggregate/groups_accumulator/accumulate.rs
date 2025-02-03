@@ -636,7 +636,7 @@ mod test {
 
     #[test]
     fn accumulate_fuzz() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..100 {
             Fixture::new_random(&mut rng).run();
         }
@@ -661,23 +661,23 @@ mod test {
     impl Fixture {
         fn new_random(rng: &mut ThreadRng) -> Self {
             // Number of input values in a batch
-            let num_values: usize = rng.gen_range(1..200);
+            let num_values: usize = rng.random_range(1..200);
             // number of distinct groups
-            let num_groups: usize = rng.gen_range(2..1000);
+            let num_groups: usize = rng.random_range(2..1000);
             let max_group = num_groups - 1;
 
             let group_indices: Vec<usize> = (0..num_values)
-                .map(|_| rng.gen_range(0..max_group))
+                .map(|_| rng.random_range(0..max_group))
                 .collect();
 
-            let values: Vec<u32> = (0..num_values).map(|_| rng.gen()).collect();
+            let values: Vec<u32> = (0..num_values).map(|_| rng.random()).collect();
 
             // 10% chance of false
             // 10% change of null
             // 80% chance of true
             let filter: BooleanArray = (0..num_values)
                 .map(|_| {
-                    let filter_value = rng.gen_range(0.0..1.0);
+                    let filter_value = rng.random_range(0.0..1.0);
                     if filter_value < 0.1 {
                         Some(false)
                     } else if filter_value < 0.2 {
@@ -690,14 +690,14 @@ mod test {
 
             // random values with random number and location of nulls
             // random null percentage
-            let null_pct: f32 = rng.gen_range(0.0..1.0);
+            let null_pct: f32 = rng.random_range(0.0..1.0);
             let values_with_nulls: Vec<Option<u32>> = (0..num_values)
                 .map(|_| {
-                    let is_null = null_pct < rng.gen_range(0.0..1.0);
+                    let is_null = null_pct < rng.random_range(0.0..1.0);
                     if is_null {
                         None
                     } else {
-                        Some(rng.gen())
+                        Some(rng.random())
                     }
                 })
                 .collect();

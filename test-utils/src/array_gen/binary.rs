@@ -46,11 +46,11 @@ impl BinaryArrayGenerator {
         // Pick num_binaries randomly from the distinct binary table
         let indices: UInt32Array = (0..self.num_binaries)
             .map(|_| {
-                if self.rng.gen::<f64>() < self.null_pct {
+                if self.rng.random::<f64>() < self.null_pct {
                     None
                 } else if self.num_distinct_binaries > 1 {
                     let range = 0..(self.num_distinct_binaries as u32);
-                    Some(self.rng.gen_range(range))
+                    Some(self.rng.random_range(range))
                 } else {
                     Some(0)
                 }
@@ -68,11 +68,11 @@ impl BinaryArrayGenerator {
 
         let indices: UInt32Array = (0..self.num_binaries)
             .map(|_| {
-                if self.rng.gen::<f64>() < self.null_pct {
+                if self.rng.random::<f64>() < self.null_pct {
                     None
                 } else if self.num_distinct_binaries > 1 {
                     let range = 0..(self.num_distinct_binaries as u32);
-                    Some(self.rng.gen_range(range))
+                    Some(self.rng.random_range(range))
                 } else {
                     Some(0)
                 }
@@ -88,7 +88,7 @@ fn random_binary(rng: &mut StdRng, max_len: usize) -> Vec<u8> {
     if max_len == 0 {
         Vec::new()
     } else {
-        let len = rng.gen_range(1..=max_len);
-        (0..len).map(|_| rng.gen()).collect()
+        let len = rng.random_range(1..=max_len);
+        (0..len).map(|_| rng.random()).collect()
     }
 }

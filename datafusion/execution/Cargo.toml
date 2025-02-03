@@ -44,7 +44,7 @@ futures = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
-rand = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
 tempfile = { workspace = true }
 url = { workspace = true }
 

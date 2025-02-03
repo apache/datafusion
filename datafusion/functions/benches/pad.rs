@@ -23,7 +23,7 @@ use arrow::util::bench_util::{
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use datafusion_expr::ColumnarValue;
 use datafusion_functions::unicode::{lpad, rpad};
-use rand::distributions::{Distribution, Uniform};
+use rand::distr::{Distribution, Uniform};
 use rand::Rng;
 use std::sync::Arc;
 
@@ -49,13 +49,13 @@ where
     T: ArrowPrimitiveType<Native = i64>,
 {
     let dist = Filter {
-        dist: Uniform::new_inclusive::<i64, i64>(0, len as i64),
+        dist: Uniform::new_inclusive::<i64, i64>(0, len as i64).unwrap(),
     };
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..size)
         .map(|_| {
-            if rng.gen::<f32>() < null_density {
+            if rng.random::<f32>() < null_density {
                 None
             } else {
                 Some(rng.sample(&dist))
