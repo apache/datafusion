@@ -149,6 +149,7 @@ pub fn pushdown_limit_helper(
         if limit_exec.input().as_any().is::<CoalescePartitionsExec>() {
             // If the child is a `CoalescePartitionsExec`, we should not remove the limit
             // the push_down through the `CoalescePartitionsExec` to each partition will not guarantee the limit.
+            // todo we may have a better solution if we can support with_fetch for limit inside CoalescePartitionsExec.
             global_state.satisfied = true;
             return Ok((Transformed::no(pushdown_plan), global_state));
         }
