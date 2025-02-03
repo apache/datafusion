@@ -29,7 +29,7 @@ rust-version = "1.81.0"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "54.0.0" }
+arrow = { version = "54.1.0" }
 async-trait = "0.1.0"
 aws-config = "1.5.0"
 aws-credential-types = "1.2.0"
