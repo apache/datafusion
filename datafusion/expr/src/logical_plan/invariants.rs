@@ -288,7 +288,10 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
             }
         },
         LogicalPlan::Extension(_) => Ok(()),
-        _ => plan_err!("Unsupported operator in the subquery plan."),
+        _ => plan_err!(
+            "Unsupported operator in the subquery plan: {}",
+            inner_plan.display()
+        ),
     }
 }
 
