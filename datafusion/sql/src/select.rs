@@ -264,7 +264,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }?;
 
-        if let LogicalPlan::Distinct(_) = &plan {
+        if let LogicalPlan::Projection(_) = &plan {
             Self::ambiguous_distinct_project_check(&plan, &order_by_rex)?;
         }
 
@@ -336,42 +336,49 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if missing_cols.is_empty() {
             return Ok(());
         }
-        Self::do_ambiguous_distinct_project_check(plan, &missing_cols)
+        Self::do_ambiguous_distinct_project_check(plan, &missing_cols, false)
     }
 
     fn do_ambiguous_distinct_project_check(
         plan: &LogicalPlan,
         missing_cols: &IndexSet<Column>,
+        is_distinct: bool,
     ) -> Result<()> {
-        for input in plan.inputs() {
-            if let LogicalPlan::Projection(Projection {
-                input,
-                expr,
-                schema: _,
-                ..
-            }) = input
-            {
-                if missing_cols.iter().all(|c| input.schema().has_column(c)) {
-                    let mut missing_exprs = missing_cols
-                        .iter()
-                        .map(|c| normalize_col(Expr::Column(c.clone()), input))
-                        .collect::<Result<Vec<_>>>()?;
+        if let LogicalPlan::Projection(Projection {
+            input,
+            expr,
+            schema: _,
+            ..
+        }) = plan
+        {
+            if missing_cols.iter().all(|c| input.schema().has_column(c)) {
+                let mut missing_exprs = missing_cols
+                    .iter()
+                    .map(|c| normalize_col(Expr::Column(c.clone()), input))
+                    .collect::<Result<Vec<_>>>()?;
 
-                    // Do not let duplicate columns to be added, some of the
-                    // missing_cols may be already present but without the new
-                    // projected alias.
-                    missing_exprs.retain(|e| !expr.contains(e));
+                // Do not let duplicate columns to be added, some of the
+                // missing_cols may be already present but without the new
+                // projected alias.
+                missing_exprs.retain(|e| !expr.contains(e));
+                if is_distinct {
                     LogicalPlanBuilder::ambiguous_distinct_check(
                         &missing_exprs,
                         missing_cols,
                         expr,
                     )?;
                 }
-            } else {
-                Self::do_ambiguous_distinct_project_check(input, missing_cols)?;
+            }
+        } else {
+            let is_distinct = is_distinct || matches!(plan, LogicalPlan::Distinct(_));
+            for input in plan.inputs() {
+                Self::do_ambiguous_distinct_project_check(
+                    input,
+                    missing_cols,
+                    is_distinct,
+                )?;
             }
         }
-
         Ok(())
     }
 

@@ -575,43 +575,44 @@ impl LogicalPlanBuilder {
         missing_cols: &IndexSet<Column>,
         is_distinct: bool,
     ) -> Result<LogicalPlan> {
-        let inputs = curr_plan.inputs();
-        let mut exprs = curr_plan.expressions();
-        let is_distinct = is_distinct || matches!(curr_plan, LogicalPlan::Distinct(_));
-        for input in inputs {
-            if let LogicalPlan::Projection(Projection {
+        match curr_plan {
+            LogicalPlan::Projection(Projection {
                 input,
-                expr: _,
+                mut expr,
                 schema: _,
-            }) = input
-            {
-                if missing_cols.iter().all(|c| input.schema().has_column(c)) {
-                    let mut missing_exprs = missing_cols
-                        .iter()
-                        .map(|c| normalize_col(Expr::Column(c.clone()), input))
-                        .collect::<Result<Vec<_>>>()?;
+            }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
+                let mut missing_exprs = missing_cols
+                    .iter()
+                    .map(|c| normalize_col(Expr::Column(c.clone()), &input))
+                    .collect::<Result<Vec<_>>>()?;
 
-                    // Do not let duplicate columns to be added, some of the
-                    // missing_cols may be already present but without the new
-                    // projected alias.
-                    missing_exprs.retain(|e| !exprs.contains(e));
-                    if is_distinct {
-                        Self::ambiguous_distinct_check(
-                            &missing_exprs,
-                            missing_cols,
-                            &exprs,
-                        )?;
-                    }
-                    exprs.extend(missing_exprs);
+                // Do not let duplicate columns to be added, some of the
+                // missing_cols may be already present but without the new
+                // projected alias.
+                missing_exprs.retain(|e| !expr.contains(e));
+                if is_distinct {
+                    Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
                 }
+                expr.extend(missing_exprs);
+                project(Arc::unwrap_or_clone(input), expr)
+            }
+            _ => {
+                let is_distinct =
+                    is_distinct || matches!(curr_plan, LogicalPlan::Distinct(_));
+                let new_inputs = curr_plan
+                    .inputs()
+                    .into_iter()
+                    .map(|input_plan| {
+                        Self::add_missing_columns(
+                            (*input_plan).clone(),
+                            missing_cols,
+                            is_distinct,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                curr_plan.with_new_exprs(curr_plan.expressions(), new_inputs)
             }
         }
-        let inputs = curr_plan
-            .inputs()
-            .into_iter()
-            .map(|input| input.to_owned())
-            .collect::<Vec<_>>();
-        curr_plan.with_new_exprs(exprs, inputs)
     }
 
     pub fn ambiguous_distinct_check(
