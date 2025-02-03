@@ -43,7 +43,7 @@ performed:
 - Run the sqlite test with completion (takes > 1 hr)
 - Update a few results to ignore known issues
 - Run sqlite test to verify results
-- Perform cleanup to revert changes to the Cargo.toml file/sqllogictest.rs file
+- Perform cleanup to revert changes to the Cargo.toml & sqllogictest.rs files
 - Delete backup files and the /tmp/sqlitetesting directory
 "
 read -r -p "Do you understand and accept the risk? (yes/no): " acknowledgement
@@ -120,9 +120,11 @@ rm ./index/view/10/slt_good_0.test
 echo "Renaming .test files to .slt and cleansing the files ..."
 
 # add hash-threshold lines into these 3 files as they were missing
-sed -i '1s/^/hash-threshold 8\n\n/' select1.test
-sed -i '1s/^/hash-threshold 8\n\n/' select4.test
-sed -i '1s/^/hash-threshold 8\n\n/' select5.test
+# skip using sed as gnu sed and mac sed are not friends
+
+echo -e "hash-threshold 8\n\n$(cat select1.test)" > select1.test
+echo -e "hash-threshold 8\n\n$(cat select4.test)" > select4.test
+echo -e "hash-threshold 8\n\n$(cat select5.test)" > select5.test
 # rename
 find ./ -type f -name "*.test" -exec rename -f 's/\.test/\.slt/' {} \;
 # gotta love windows :/
@@ -162,7 +164,7 @@ echo "Updating the datafusion/sqllogictest/Cargo.toml file with an updated sqllo
 
 # update the sqllogictest Cargo.toml with the new repo for sqllogictest-rs (tied to a specific hash)
 cd "$DF_HOME" || exit;
-sed -i -e 's~^sqllogictest.*~sqllogictest = { git = "https://github.com/Omega359/sqllogictest-rs.git", rev = "1cd933d" }~' datafusion/sqllogictest/Cargo.toml
+sd -f i '^sqllogictest.*' 'sqllogictest = { git = "https://github.com/Omega359/sqllogictest-rs.git", rev = "1cd933d" }' datafusion/sqllogictest/Cargo.toml
 
 echo "Replacing the datafusion/sqllogictest/bin/sqllogictests.rs file with a custom version required for running completion"
 
@@ -197,6 +199,7 @@ echo "Cleaning up source code changes and temporary files and directories"
 
 cd "$DF_HOME" || exit;
 find ./datafusion-testing/data/sqlite/ -type f -name "*.bak" -exec rm {} \;
+find ./datafusion/sqllogictest/test_files/pg_compat/ -type f -name "*.bak" -exec rm {} \;
 git checkout datafusion/sqllogictest/Cargo.toml
 git checkout datafusion/sqllogictest/bin/sqllogictests.rs
 rm -rf /tmp/sqlitetesting
