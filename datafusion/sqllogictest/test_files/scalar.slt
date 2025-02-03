@@ -1689,7 +1689,7 @@ true true false false true true
 statement ok
 drop table t1
 
-# can't use like with non stirngs
+# can't use like with non strings
 query error There isn't a common type to coerce Utf8 and Int64 in LIKE expression
 select column1 like 1 from (values('a'), ('b'), (NULL)) as t;
 
