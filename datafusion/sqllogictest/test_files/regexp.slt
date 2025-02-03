@@ -193,6 +193,29 @@ NULL
 [Köln]
 [إسرائيل]
 
+# test string view
+statement ok
+CREATE TABLE t_stringview AS
+SELECT arrow_cast(str, 'Utf8View') as str, arrow_cast(pattern, 'Utf8View') as pattern, arrow_cast(flags, 'Utf8View') as flags FROM t;
+
+query ?
+SELECT regexp_match(str, pattern, flags) FROM t_stringview;
+----
+[a]
+[A]
+[B]
+NULL
+NULL
+NULL
+[010]
+[Düsseldorf]
+[Москва]
+[Köln]
+[إسرائيل]
+
+statement ok
+DROP TABLE t_stringview;
+
 query ?
 SELECT regexp_match('foobarbequebaz', '');
 ----
@@ -353,6 +376,29 @@ X
 X
 X
 X
+
+# test string view
+statement ok
+CREATE TABLE t_stringview AS
+SELECT arrow_cast(str, 'Utf8View') as str, arrow_cast(pattern, 'Utf8View') as pattern, arrow_cast(flags, 'Utf8View') as flags FROM t;
+
+query T
+SELECT regexp_replace(str, pattern, 'X', concat('g', flags)) FROM t_stringview;
+----
+Xbc
+X
+aXc
+AbC
+aBC
+4000
+X
+X
+X
+X
+X
+
+statement ok
+DROP TABLE t_stringview;
 
 query T
 SELECT regexp_replace('ABCabcABC', '(abc)', 'X', 'gi');
@@ -621,7 +667,7 @@ CREATE TABLE t_stringview AS
 SELECT arrow_cast(str, 'Utf8View') as str, arrow_cast(pattern, 'Utf8View') as pattern, arrow_cast(start, 'Int64') as start, arrow_cast(flags, 'Utf8View') as flags FROM t;
 
 query I
-SELECT regexp_count(str, '\w') from t;
+SELECT regexp_count(str, '\w') from t_stringview;
 ----
 3
 3
@@ -636,7 +682,7 @@ SELECT regexp_count(str, '\w') from t;
 7
 
 query I
-SELECT regexp_count(str, '\w{2}', start) from t;
+SELECT regexp_count(str, '\w{2}', start) from t_stringview;
 ----
 1
 1
@@ -651,7 +697,7 @@ SELECT regexp_count(str, '\w{2}', start) from t;
 3
 
 query I
-SELECT regexp_count(str, 'ab', 1, 'i') from t;
+SELECT regexp_count(str, 'ab', 1, 'i') from t_stringview;
 ----
 1
 1
@@ -667,7 +713,7 @@ SELECT regexp_count(str, 'ab', 1, 'i') from t;
 
 
 query I
-SELECT regexp_count(str, pattern) from t;
+SELECT regexp_count(str, pattern) from t_stringview;
 ----
 1
 1
@@ -682,7 +728,7 @@ SELECT regexp_count(str, pattern) from t;
 1
 
 query I
-SELECT regexp_count(str, pattern, start) from t;
+SELECT regexp_count(str, pattern, start) from t_stringview;
 ----
 1
 1
@@ -697,7 +743,7 @@ SELECT regexp_count(str, pattern, start) from t;
 1
 
 query I
-SELECT regexp_count(str, pattern, start, flags) from t;
+SELECT regexp_count(str, pattern, start, flags) from t_stringview;
 ----
 1
 1
@@ -713,7 +759,7 @@ SELECT regexp_count(str, pattern, start, flags) from t;
 
 # test type coercion
 query I
-SELECT regexp_count(arrow_cast(str, 'Utf8'), arrow_cast(pattern, 'LargeUtf8'),  arrow_cast(start, 'Int32'), flags) from t;
+SELECT regexp_count(arrow_cast(str, 'Utf8'), arrow_cast(pattern, 'LargeUtf8'),  arrow_cast(start, 'Int32'), flags) from t_stringview;
 ----
 1
 1
