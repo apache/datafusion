@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use datafusion_expr::binary::BinaryTypeCoercer;
 use itertools::izip;
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
@@ -38,9 +39,7 @@ use datafusion_expr::expr::{
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
 use datafusion_expr::logical_plan::Subquery;
-use datafusion_expr::type_coercion::binary::{
-    comparison_coercion, get_input_types, like_coercion,
-};
+use datafusion_expr::type_coercion::binary::{comparison_coercion, like_coercion};
 use datafusion_expr::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf,
 };
@@ -190,7 +189,15 @@ impl<'a> TypeCoercionRewriter<'a> {
             .map(|(lhs, rhs)| {
                 // coerce the arguments as though they were a single binary equality
                 // expression
-                let (lhs, rhs) = self.coerce_binary_op(lhs, Operator::Eq, rhs)?;
+                let left_schema = join.left.schema();
+                let right_schema = join.right.schema();
+                let (lhs, rhs) = self.coerce_binary_op(
+                    lhs,
+                    left_schema,
+                    Operator::Eq,
+                    rhs,
+                    right_schema,
+                )?;
                 Ok((lhs, rhs))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -275,17 +282,20 @@ impl<'a> TypeCoercionRewriter<'a> {
     fn coerce_binary_op(
         &self,
         left: Expr,
+        left_schema: &DFSchema,
         op: Operator,
         right: Expr,
+        right_schema: &DFSchema,
     ) -> Result<(Expr, Expr)> {
-        let (left_type, right_type) = get_input_types(
-            &left.get_type(self.schema)?,
+        let (left_type, right_type) = BinaryTypeCoercer::new(
+            &left.get_type(left_schema)?,
             &op,
-            &right.get_type(self.schema)?,
-        )?;
+            &right.get_type(right_schema)?,
+        )
+        .get_input_types()?;
         Ok((
-            left.cast_to(&left_type, self.schema)?,
-            right.cast_to(&right_type, self.schema)?,
+            left.cast_to(&left_type, left_schema)?,
+            right.cast_to(&right_type, right_schema)?,
         ))
     }
 }
@@ -404,7 +414,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 ))))
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let (left, right) = self.coerce_binary_op(*left, op, *right)?;
+                let (left, right) =
+                    self.coerce_binary_op(*left, self.schema, op, *right, self.schema)?;
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(left),
                     op,
@@ -736,7 +747,8 @@ fn coerce_window_frame(
 // The above op will be rewrite to the binary op when creating the physical op.
 fn get_casted_expr_for_bool_op(expr: Expr, schema: &DFSchema) -> Result<Expr> {
     let left_type = expr.get_type(schema)?;
-    get_input_types(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)?;
+    BinaryTypeCoercer::new(&left_type, &Operator::IsDistinctFrom, &DataType::Boolean)
+        .get_input_types()?;
     expr.cast_to(&DataType::Boolean, schema)
 }
 
@@ -1000,6 +1012,7 @@ fn project_with_column_index(
             Expr::Column(Column {
                 relation: _,
                 ref name,
+                spans: _,
             }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
             Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
             Expr::Wildcard { .. } => {

@@ -20,11 +20,25 @@
 
 pub mod arrow_wrappers;
 pub mod execution_plan;
+pub mod insert_op;
 pub mod plan_properties;
 pub mod record_batch_stream;
 pub mod session_config;
 pub mod table_provider;
 pub mod table_source;
+
+#[cfg(feature = "integration-tests")]
+pub mod tests;
+
+/// Returns the major version of the FFI implementation. If the API evolves,
+/// we use the major version to identify compatibility over the unsafe
+/// boundary. This call is intended to be used by implementers to validate
+/// they have compatible libraries.
+pub extern "C" fn version() -> u64 {
+    let version_str = env!("CARGO_PKG_VERSION");
+    let version = semver::Version::parse(version_str).expect("Invalid version string");
+    version.major
+}
 
 #[cfg(doctest)]
 doc_comment::doctest!("../README.md", readme_example_test);

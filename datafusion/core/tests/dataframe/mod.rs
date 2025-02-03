@@ -30,8 +30,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_array::{
-    Array, BooleanArray, DictionaryArray, Float32Array, Float64Array, Int8Array,
-    UnionArray,
+    record_batch, Array, BooleanArray, DictionaryArray, Float32Array, Float64Array,
+    Int8Array, UnionArray,
 };
 use arrow_buffer::ScalarBuffer;
 use arrow_schema::{ArrowError, SchemaRef, UnionFields, UnionMode};
@@ -39,6 +39,7 @@ use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,
 };
+use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, row_number};
 use object_store::local::LocalFileSystem;
 use sqlparser::ast::NullTreatment;
@@ -1118,6 +1119,39 @@ async fn join() -> Result<()> {
     assert_eq!(100, left_rows.iter().map(|x| x.num_rows()).sum::<usize>());
     assert_eq!(100, right_rows.iter().map(|x| x.num_rows()).sum::<usize>());
     assert_eq!(2008, join_rows.iter().map(|x| x.num_rows()).sum::<usize>());
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_coercion_unnamed() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    // Test that join will coerce column types when necessary
+    // even when the relations don't have unique names
+    let left = ctx.read_batch(record_batch!(
+        ("id", Int32, [1, 2, 3]),
+        ("name", Utf8, ["a", "b", "c"])
+    )?)?;
+    let right = ctx.read_batch(record_batch!(
+        ("id", Int32, [10, 3]),
+        ("name", Utf8View, ["d", "c"]) // Utf8View is a different type
+    )?)?;
+    let cols = vec!["name", "id"];
+
+    let filter = None;
+    let join = right.join(left, JoinType::LeftAnti, &cols, &cols, filter)?;
+    let results = join.collect().await?;
+
+    assert_batches_sorted_eq!(
+        [
+            "+----+------+",
+            "| id | name |",
+            "+----+------+",
+            "| 10 | d    |",
+            "+----+------+",
+        ],
+        &results
+    );
     Ok(())
 }
 
@@ -3322,6 +3356,72 @@ async fn unnest_columns() -> Result<()> {
         .await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_dict_encoded_columns() -> Result<()> {
+    let strings = vec!["x", "y", "z"];
+    let keys = Int32Array::from_iter(0..strings.len() as i32);
+
+    let utf8_values = StringArray::from(strings.clone());
+    let utf8_dict = DictionaryArray::new(keys.clone(), Arc::new(utf8_values));
+
+    let make_array_udf_expr1 = make_array_udf().call(vec![col("column1")]);
+    let batch =
+        RecordBatch::try_from_iter(vec![("column1", Arc::new(utf8_dict) as ArrayRef)])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("test", batch)?;
+    let df = ctx
+        .table("test")
+        .await?
+        .select(vec![
+            make_array_udf_expr1.alias("make_array_expr"),
+            col("column1"),
+        ])?
+        .unnest_columns(&["make_array_expr"])?;
+
+    let results = df.collect().await.unwrap();
+    let expected = [
+        "+-----------------+---------+",
+        "| make_array_expr | column1 |",
+        "+-----------------+---------+",
+        "| x               | x       |",
+        "| y               | y       |",
+        "| z               | z       |",
+        "+-----------------+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // make_array(dict_encoded_string,literal string)
+    let make_array_udf_expr2 = make_array_udf().call(vec![
+        col("column1"),
+        lit(ScalarValue::new_utf8("fixed_string")),
+    ]);
+    let df = ctx
+        .table("test")
+        .await?
+        .select(vec![
+            make_array_udf_expr2.alias("make_array_expr"),
+            col("column1"),
+        ])?
+        .unnest_columns(&["make_array_expr"])?;
+
+    let results = df.collect().await.unwrap();
+    let expected = [
+        "+-----------------+---------+",
+        "| make_array_expr | column1 |",
+        "+-----------------+---------+",
+        "| x               | x       |",
+        "| fixed_string    | x       |",
+        "| y               | y       |",
+        "| fixed_string    | y       |",
+        "| z               | z       |",
+        "| fixed_string    | z       |",
+        "+-----------------+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
     Ok(())
 }
 
