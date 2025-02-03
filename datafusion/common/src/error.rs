@@ -571,6 +571,13 @@ impl DataFusionError {
         DiagnosticsIterator { head: self }.next()
     }
 
+    /// Sometimes DataFusion is able to collect multiple errors in a SQL query
+    /// before terminating, e.g. across different expressions in a SELECT
+    /// statements or different sides of a UNION. This method returns an
+    /// iterator over all the errors in the collection.
+    /// 
+    /// For this to work, the top-level error must be a
+    /// `DataFusionError::Collection`, not something that contains it.
     pub fn iter(&self) -> impl Iterator<Item = &DataFusionError> {
         struct ErrorIterator<'a> {
             queue: VecDeque<&'a DataFusionError>,
