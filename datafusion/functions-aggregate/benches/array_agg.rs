@@ -17,7 +17,9 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, PrimitiveArray};
+use arrow::array::{
+    Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, PrimitiveArray,
+};
 use arrow::datatypes::Int64Type;
 use arrow_schema::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
