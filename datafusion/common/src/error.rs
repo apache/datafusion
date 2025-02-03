@@ -139,7 +139,7 @@ pub enum DataFusionError {
 
     /// Errors for wrapping other errors.
     /// This is useful when we need to share DatafusionError.
-    WrappedError(Arc<DataFusionError>),
+    SharedError(Arc<DataFusionError>),
 }
 
 #[macro_export]
@@ -347,7 +347,7 @@ impl Error for DataFusionError {
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
             DataFusionError::Diagnostic(_, e) => Some(e.as_ref()),
-            DataFusionError::WrappedError(e) => Some(e.as_ref()),
+            DataFusionError::SharedError(e) => Some(e.as_ref()),
         }
     }
 }
@@ -462,7 +462,7 @@ impl DataFusionError {
             DataFusionError::Context(_, _) => "",
             DataFusionError::Substrait(_) => "Substrait error: ",
             DataFusionError::Diagnostic(_, _) => "",
-            DataFusionError::WrappedError(_) => "",
+            DataFusionError::SharedError(_) => "",
         }
     }
 
@@ -504,7 +504,7 @@ impl DataFusionError {
             }
             DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Diagnostic(_, ref err) => Cow::Owned(err.to_string()),
-            DataFusionError::WrappedError(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::SharedError(ref desc) => Cow::Owned(desc.to_string()),
         }
     }
 
