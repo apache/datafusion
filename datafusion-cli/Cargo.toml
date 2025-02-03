@@ -30,7 +30,7 @@ readme = "README.md"
 
 [dependencies]
 arrow = { version = "54.0.0" }
-async-trait = "0.1.0"
+async-trait = "0.1.86"
 aws-config = "1.5.0"
 aws-credential-types = "1.2.0"
 aws-sdk-sso = "1.57.0"
