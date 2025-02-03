@@ -83,7 +83,7 @@ arrow = { version = "54.0.0", features = [
 arrow-array = { version = "54.0.0", default-features = false, features = [
     "chrono-tz",
 ] }
-arrow-buffer = { version = "54.0.0", default-features = false }
+arrow-buffer = { version = "54.1.0", default-features = false }
 arrow-flight = { version = "54.0.0", features = [
     "flight-sql-experimental",
 ] }
