@@ -343,6 +343,13 @@ impl Error for DataFusionError {
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
             DataFusionError::Diagnostic(_, e) => Some(e.as_ref()),
+            // Can't really make a Collection fit into the mold of "an error has
+            // at most one source", but returning the first one is probably good
+            // idea. Especially since `DataFusionError::Collection` is mostly
+            // meant for consumption by the end user, so shouldn't interfere
+            // with programmatic usage too much. Plus, having 1 or 5 errors
+            // doesn't really change the fact that the query is invalid and
+            // can't be executed.
             DataFusionError::Collection(errs) => errs.first().map(|e| e as &dyn Error),
         }
     }
@@ -508,6 +515,9 @@ impl DataFusionError {
             }
             DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Diagnostic(_, ref err) => Cow::Owned(err.to_string()),
+            // Returning the message of the first error is probably fine enough,
+            // and makes `DataFusionError::Collection` a transparent wrapped,
+            // unless the end user explicitly calls `DataFusionError::iter`.
             DataFusionError::Collection(ref errs) => errs.first().expect("cannot construct DataFusionError::Collection with 0 errors, but got one such case").message(),
         }
     }
