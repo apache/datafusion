@@ -1637,7 +1637,7 @@ mod tests {
 
     use arrow::datatypes::{Field, Schema};
     use arrow::datatypes::{Int32Type, TimeUnit};
-    use arrow_array::ListArray;
+    use arrow_array::{LargeListArray, ListArray};
     use arrow_schema::DataType::Int8;
     use ast::ObjectName;
     use datafusion_common::{Spans, TableReference};
@@ -2088,6 +2088,14 @@ mod tests {
                         Some(2),
                         Some(3),
                     ])]),
+                ))),
+                "[1, 2, 3]",
+            ),
+            (
+                Expr::Literal(ScalarValue::LargeList(Arc::new(
+                    LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(
+                        vec![Some(1), Some(2), Some(3)],
+                    )]),
                 ))),
                 "[1, 2, 3]",
             ),
