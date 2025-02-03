@@ -22,7 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{assert_contains, plan_err, Result};
+use datafusion_common::{assert_contains, plan_err, Result, TableReference};
 use datafusion_expr::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
@@ -36,7 +36,6 @@ use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use datafusion_sql::sqlparser::ast::Statement;
 use datafusion_sql::sqlparser::dialect::GenericDialect;
 use datafusion_sql::sqlparser::parser::Parser;
-use datafusion_sql::TableReference;
 
 #[cfg(test)]
 #[ctor::ctor]

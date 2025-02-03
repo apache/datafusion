@@ -41,7 +41,7 @@ object_store = { workspace = true }
 pbjson-types = "0.7"
 # TODO use workspace version
 prost = "0.13"
-substrait = { version = "0.52", features = ["serde"] }
+substrait = { version = "0.53", features = ["serde"] }
 url = { workspace = true }
 
 [dev-dependencies]

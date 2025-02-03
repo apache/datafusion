@@ -129,6 +129,6 @@ fn map_keys_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         Arc::new(Field::new_list_field(map_array.key_type().clone(), false)),
         map_array.offsets().clone(),
         Arc::clone(map_array.keys()),
-        None,
+        map_array.nulls().cloned(),
     )))
 }

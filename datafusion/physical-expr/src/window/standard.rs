@@ -275,7 +275,7 @@ impl WindowExpr for StandardWindowExpr {
 pub(crate) fn add_new_ordering_expr_with_partition_by(
     eqp: &mut EquivalenceProperties,
     expr: PhysicalSortExpr,
-    partition_by: &Vec<Arc<dyn PhysicalExpr>>,
+    partition_by: &[Arc<dyn PhysicalExpr>],
 ) {
     if partition_by.is_empty() {
         // In the absence of a PARTITION BY, ordering of `self.expr` is global:
