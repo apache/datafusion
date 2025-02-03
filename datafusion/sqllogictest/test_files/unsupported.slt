@@ -1,0 +1,69 @@
+statement ok
+CREATE TABLE students(
+    id int,
+    name varchar,
+    major varchar,
+    year int
+)
+AS VALUES
+    (1,'toai','math',2014),
+    (2,'manh','math',2015),
+    (3,'bao','math',2025)
+;
+
+statement ok
+CREATE TABLE exams(
+    sid int,
+    curriculum varchar,
+    grade int,
+    date int
+)
+AS VALUES
+    (1, 'math', 10, 2014),
+    (2, 'math', 9, 2015),
+    (3, 'math', 4, 2025)
+;
+
+query TTR
+select s.name, e.curriculum, pulled.m as standard_grade from students s, exams e, (
+    select avg(e2.grade) as m, id ,d.year ,d.major from (
+        select distinct id, year, major from students
+    ) as d join exams e2 where d.id=e2.sid or (
+        d.year > e2.date and d.major = e2.curriculum
+    ) group by id,year,major
+) as pulled where 
+s.id=e.sid 
+and e.grade < pulled.m 
+and (
+    pulled.id=s.id and pulled.year=s.year and pulled.major=s.major -- join with the domain columns
+) 
+----
+manh math 9.5
+bao math 7.666666666667
+
+query TT
+explain select s.name, e.curriculum from students s, exams e where s.id=e.sid
+and (s.major='math') and e.grade < (
+    select avg(e2.grade) from exams e2 where s.id=e2.sid or (
+        s.year<e2.date and e2.curriculum=s.major -- all exams taken by the elder students in the same major
+    )
+)
+----
+logical_plan
+01)Projection: s.name, e.curriculum
+02)--Inner Join: s.id = e.sid
+03)----SubqueryAlias: s
+04)------Projection: students.id, students.name
+05)--------Filter: students.major = Utf8("math")
+06)----------TableScan: students projection=[id, name, major]
+07)----SubqueryAlias: e
+08)------Projection: exams.sid, exams.curriculum
+09)--------Filter: CAST(exams.grade AS Float64) < (<subquery>)
+10)----------Subquery:
+11)------------Projection: avg(e2.grade)
+12)--------------Aggregate: groupBy=[[]], aggr=[[avg(CAST(e2.grade AS Float64))]]
+13)----------------SubqueryAlias: e2
+14)------------------Filter: outer_ref(s.id) = exams.sid OR outer_ref(s.year) < exams.date AND exams.curriculum = outer_ref(s.major)
+15)--------------------TableScan: exams
+16)----------TableScan: exams projection=[sid, curriculum, grade]
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression ScalarSubquery(<subquery>)
