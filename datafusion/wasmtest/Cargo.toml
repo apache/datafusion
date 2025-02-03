@@ -58,8 +58,8 @@ datafusion-physical-expr = { workspace = true, default-features = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
-# getrandom must be compiled with js feature
-getrandom = { version = "0.2.8", features = ["js"] }
+# https://docs.rs/getrandom/latest/getrandom/#webassembly-support
+getrandom = { version = "0.3.1", features = ["wasm_js"] }
 
 parquet = { workspace = true }
 wasm-bindgen = "0.2.99"
