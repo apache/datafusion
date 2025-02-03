@@ -17,78 +17,14 @@
 
 use arrow::array::StructArray;
 use arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{exec_err, internal_err, HashSet, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs};
+use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
-
-/// Put values in a struct array.
-fn named_struct_expr(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    // Do not accept 0 arguments.
-    if args.is_empty() {
-        return exec_err!(
-            "named_struct requires at least one pair of arguments, got 0 instead"
-        );
-    }
-
-    if args.len() % 2 != 0 {
-        return exec_err!(
-            "named_struct requires an even number of arguments, got {} instead",
-            args.len()
-        );
-    }
-
-    let (names, values): (Vec<_>, Vec<_>) = args
-        .chunks_exact(2)
-        .enumerate()
-        .map(|(i, chunk)| {
-            let name_column = &chunk[0];
-            let name = match name_column {
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some(name_scalar))) => {
-                    name_scalar
-                }
-                // TODO: Implement Display for ColumnarValue
-                _ => {
-                    return exec_err!(
-                    "named_struct even arguments must be string literals at position {}",
-                    i * 2
-                )
-                }
-            };
-
-            Ok((name, chunk[1].clone()))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .unzip();
-
-    {
-        // Check to enforce the uniqueness of struct field name
-        let mut unique_field_names = HashSet::new();
-        for name in names.iter() {
-            if unique_field_names.contains(name) {
-                return exec_err!(
-                    "named_struct requires unique field names. Field {name} is used more than once."
-                );
-            }
-            unique_field_names.insert(name);
-        }
-    }
-
-    let fields: Fields = names
-        .into_iter()
-        .zip(&values)
-        .map(|(name, value)| Arc::new(Field::new(name, value.data_type().clone(), true)))
-        .collect::<Vec<_>>()
-        .into();
-
-    let arrays = ColumnarValue::values_to_arrays(&values)?;
-
-    let struct_array = StructArray::new(fields, arrays, None);
-    Ok(ColumnarValue::Array(Arc::new(struct_array)))
-}
 
 #[user_doc(
     doc_section(label = "Struct Functions"),
@@ -203,12 +139,28 @@ impl ScalarUDFImpl for NamedStructFunc {
         ))))
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        named_struct_expr(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let DataType::Struct(fields) = args.return_type else {
+            return internal_err!("incorrect named_struct return type");
+        };
+
+        assert_eq!(
+            fields.len(),
+            args.args.len() / 2,
+            "return type field count != argument count / 2"
+        );
+
+        let values: Vec<ColumnarValue> = args
+            .args
+            .chunks_exact(2)
+            .map(|chunk| chunk[1].clone())
+            .collect();
+        let arrays = ColumnarValue::values_to_arrays(&values)?;
+        Ok(ColumnarValue::Array(Arc::new(StructArray::new(
+            fields.clone(),
+            arrays,
+            None,
+        ))))
     }
 
     fn documentation(&self) -> Option<&Documentation> {

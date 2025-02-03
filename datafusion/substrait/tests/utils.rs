@@ -17,8 +17,7 @@
 
 #[cfg(test)]
 pub mod test {
-    use datafusion::catalog_common::TableReference;
-    use datafusion::common::{substrait_datafusion_err, substrait_err};
+    use datafusion::common::{substrait_datafusion_err, substrait_err, TableReference};
     use datafusion::datasource::empty::EmptyTable;
     use datafusion::datasource::TableProvider;
     use datafusion::error::Result;

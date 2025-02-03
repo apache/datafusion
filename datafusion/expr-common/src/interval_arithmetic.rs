@@ -18,7 +18,7 @@
 //! Interval arithmetic library
 
 use crate::operator::Operator;
-use crate::type_coercion::binary::get_result_type;
+use crate::type_coercion::binary::BinaryTypeCoercer;
 use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
@@ -26,6 +26,8 @@ use std::ops::{AddAssign, SubAssign};
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{
     DataType, IntervalDayTime, IntervalMonthDayNano, IntervalUnit, TimeUnit,
+    MAX_DECIMAL128_FOR_EACH_PRECISION, MAX_DECIMAL256_FOR_EACH_PRECISION,
+    MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION,
 };
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
 use datafusion_common::{internal_err, Result, ScalarValue};
@@ -76,6 +78,22 @@ macro_rules! get_extreme_value {
             DataType::Interval(IntervalUnit::MonthDayNano) => {
                 ScalarValue::IntervalMonthDayNano(Some(IntervalMonthDayNano::$extreme))
             }
+            DataType::Decimal128(precision, scale) => ScalarValue::Decimal128(
+                Some(
+                    paste::paste! {[<$extreme _DECIMAL128_FOR_EACH_PRECISION>]}
+                        [*precision as usize],
+                ),
+                *precision,
+                *scale,
+            ),
+            DataType::Decimal256(precision, scale) => ScalarValue::Decimal256(
+                Some(
+                    paste::paste! {[<$extreme _DECIMAL256_FOR_EACH_PRECISION>]}
+                        [*precision as usize],
+                ),
+                *precision,
+                *scale,
+            ),
             _ => unreachable!(),
         }
     };
@@ -518,7 +536,10 @@ impl Interval {
     ///       to an error.
     pub fn equal<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        if get_result_type(&self.data_type(), &Operator::Eq, &rhs.data_type()).is_err() {
+        if BinaryTypeCoercer::new(&self.data_type(), &Operator::Eq, &rhs.data_type())
+            .get_result_type()
+            .is_err()
+        {
             internal_err!(
                 "Interval data types must be compatible for equality checks, lhs:{}, rhs:{}",
                 self.data_type(),
@@ -689,7 +710,9 @@ impl Interval {
     /// choose single values arbitrarily from each of the operands.
     pub fn add<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let dt = get_result_type(&self.data_type(), &Operator::Plus, &rhs.data_type())?;
+        let dt =
+            BinaryTypeCoercer::new(&self.data_type(), &Operator::Plus, &rhs.data_type())
+                .get_result_type()?;
 
         Ok(Self::new(
             add_bounds::<false>(&dt, &self.lower, &rhs.lower),
@@ -704,7 +727,9 @@ impl Interval {
     /// each of the operands.
     pub fn sub<T: Borrow<Interval>>(&self, other: T) -> Result<Self> {
         let rhs = other.borrow();
-        let dt = get_result_type(&self.data_type(), &Operator::Minus, &rhs.data_type())?;
+        let dt =
+            BinaryTypeCoercer::new(&self.data_type(), &Operator::Minus, &rhs.data_type())
+                .get_result_type()?;
 
         Ok(Self::new(
             sub_bounds::<false>(&dt, &self.lower, &rhs.upper),
@@ -1008,17 +1033,20 @@ fn handle_overflow<const UPPER: bool>(
     lhs: &ScalarValue,
     rhs: &ScalarValue,
 ) -> ScalarValue {
-    let zero = ScalarValue::new_zero(dt).unwrap();
+    let lhs_zero = ScalarValue::new_zero(&lhs.data_type()).unwrap();
+    let rhs_zero = ScalarValue::new_zero(&rhs.data_type()).unwrap();
     let positive_sign = match op {
         Operator::Multiply | Operator::Divide => {
-            lhs.lt(&zero) && rhs.lt(&zero) || lhs.gt(&zero) && rhs.gt(&zero)
+            lhs.lt(&lhs_zero) && rhs.lt(&rhs_zero)
+                || lhs.gt(&lhs_zero) && rhs.gt(&rhs_zero)
         }
-        Operator::Plus => lhs.ge(&zero),
+        Operator::Plus => lhs.ge(&lhs_zero),
         Operator::Minus => lhs.ge(rhs),
         _ => {
             unreachable!()
         }
     };
+
     match (UPPER, positive_sign) {
         (true, true) | (false, false) => ScalarValue::try_from(dt).unwrap(),
         (true, false) => {
@@ -1832,7 +1860,12 @@ impl NullableInterval {
 
 #[cfg(test)]
 mod tests {
-    use crate::interval_arithmetic::{next_value, prev_value, satisfy_greater, Interval};
+    use crate::{
+        interval_arithmetic::{
+            handle_overflow, next_value, prev_value, satisfy_greater, Interval,
+        },
+        operator::Operator,
+    };
 
     use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
@@ -3104,6 +3137,73 @@ mod tests {
                 assert_eq!(result, case.2);
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_overflow_handling() -> Result<()> {
+        // Test integer overflow handling:
+        let dt = DataType::Int32;
+        let op = Operator::Plus;
+        let lhs = ScalarValue::Int32(Some(i32::MAX));
+        let rhs = ScalarValue::Int32(Some(1));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int32(None));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int32(Some(i32::MAX)));
+
+        // Test float overflow handling:
+        let dt = DataType::Float32;
+        let op = Operator::Multiply;
+        let lhs = ScalarValue::Float32(Some(f32::MAX));
+        let rhs = ScalarValue::Float32(Some(2.0));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(None));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(Some(f32::MAX)));
+
+        // Test float underflow handling:
+        let lhs = ScalarValue::Float32(Some(f32::MIN));
+        let rhs = ScalarValue::Float32(Some(2.0));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(Some(f32::MIN)));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Float32(None));
+
+        // Test integer underflow handling:
+        let dt = DataType::Int64;
+        let op = Operator::Minus;
+        let lhs = ScalarValue::Int64(Some(i64::MIN));
+        let rhs = ScalarValue::Int64(Some(1));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int64(Some(i64::MIN)));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Int64(None));
+
+        // Test unsigned integer handling:
+        let dt = DataType::UInt32;
+        let op = Operator::Minus;
+        let lhs = ScalarValue::UInt32(Some(0));
+        let rhs = ScalarValue::UInt32(Some(1));
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::UInt32(Some(0)));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::UInt32(None));
+
+        // Test decimal handling:
+        let dt = DataType::Decimal128(38, 35);
+        let op = Operator::Plus;
+        let lhs =
+            ScalarValue::Decimal128(Some(54321543215432154321543215432154321), 35, 35);
+        let rhs = ScalarValue::Decimal128(Some(10000), 20, 0);
+        let result = handle_overflow::<true>(&dt, op, &lhs, &rhs);
+        assert_eq!(result, ScalarValue::Decimal128(None, 38, 35));
+        let result = handle_overflow::<false>(&dt, op, &lhs, &rhs);
+        assert_eq!(
+            result,
+            ScalarValue::Decimal128(Some(99999999999999999999999999999999999999), 38, 35)
+        );
 
         Ok(())
     }
