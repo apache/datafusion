@@ -279,11 +279,11 @@ impl DataSource for FileScanConfig {
 }
 
 impl FileScanConfig {
-    /// Create a new `FileScanConfig` with default settings for scanning files.
+    /// Create a new [`FileScanConfig`] with default settings for scanning files.
     ///
     /// See example on [`FileScanConfig`]
     ///
-    /// No file groups are added by default. See [`Self::with_file`], [`Self::with_file_group]` and
+    /// No file groups are added by default. See [`Self::with_file`], [`Self::with_file_group`] and
     /// [`Self::with_file_groups`].
     ///
     /// # Parameters:

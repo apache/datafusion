@@ -28,7 +28,6 @@ use object_store::ObjectMeta;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::data_source::FileSource;
 use datafusion::datasource::file_format::csv::CsvSink;
-use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
@@ -539,20 +538,14 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.push(sort_expr);
     }
 
-    Ok(FileScanConfig {
-        object_store_url,
-        file_schema,
-        file_groups,
-        constraints,
-        statistics,
-        projection,
-        limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
-        table_partition_cols,
-        output_ordering,
-        file_compression_type: FileCompressionType::UNCOMPRESSED,
-        new_lines_in_values: false,
-        source,
-    })
+    Ok(FileScanConfig::new(object_store_url, file_schema, source)
+        .with_file_groups(file_groups)
+        .with_constraints(constraints)
+        .with_statistics(statistics)
+        .with_projection(projection)
+        .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
+        .with_table_partition_cols(table_partition_cols)
+        .with_output_ordering(output_ordering))
 }
 
 impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
