@@ -347,9 +347,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "54.0.0"
+version = "54.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a1822a1a952955637e85e8f9d6b0e04dd75d65492b87ec548dd593d3a1f772b"
+checksum = "105f01ec0090259e9a33a9263ec18ff223ab91a0ea9fbc18042f7e38005142f6"
 
 [[package]]
 name = "arrow-select"
