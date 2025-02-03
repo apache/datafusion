@@ -146,6 +146,13 @@ pub fn pushdown_limit_helper(
         global_state.skip = skip;
         global_state.fetch = fetch;
 
+        if limit_exec.input().as_any().is::<CoalescePartitionsExec>() {
+            // If the child is a `CoalescePartitionsExec`, we should not remove the limit
+            // the push_down through the `CoalescePartitionsExec` to each partition will not guarantee the limit.
+            global_state.satisfied = true;
+            return Ok((Transformed::no(pushdown_plan), global_state));
+        }
+
         // Now the global state has the most recent information, we can remove
         // the `LimitExec` plan. We will decide later if we should add it again
         // or not.
@@ -300,9 +307,6 @@ pub(crate) fn pushdown_limits(
 /// [`GlobalLimitExec`] or a [`LocalLimitExec`].
 fn extract_limit(plan: &Arc<dyn ExecutionPlan>) -> Option<LimitExec> {
     if let Some(global_limit) = plan.as_any().downcast_ref::<GlobalLimitExec>() {
-        if global_limit.input().as_any().is::<CoalescePartitionsExec>() {
-            return None;
-        }
         Some(LimitExec::Global(GlobalLimitExec::new(
             Arc::clone(global_limit.input()),
             global_limit.skip(),
