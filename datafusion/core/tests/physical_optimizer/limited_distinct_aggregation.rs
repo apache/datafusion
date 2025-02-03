@@ -19,7 +19,10 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::parquet_exec_with_sort;
+use crate::physical_optimizer::test_utils::{
+    assert_plan_matches_expected, build_group_by, mock_data, parquet_exec_with_sort,
+    schema, TestAggregate,
+};
 
 use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
 use arrow_schema::DataType;
@@ -30,9 +33,6 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::cast;
 use datafusion_physical_expr::{expressions, expressions::col, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::test_utils::{
-    assert_plan_matches_expected, build_group_by, mock_data, schema, TestAggregate,
-};
 use datafusion_physical_plan::{
     aggregates::{AggregateExec, AggregateMode},
     collect,

@@ -18,31 +18,26 @@
 [package]
 name = "datafusion-cli"
 description = "Command Line Client for DataFusion query engine."
-version = "44.0.0"
+version = "45.0.0"
 authors = ["Apache DataFusion <dev@datafusion.apache.org>"]
 edition = "2021"
 keywords = ["arrow", "datafusion", "query", "sql"]
 license = "Apache-2.0"
 homepage = "https://datafusion.apache.org"
 repository = "https://github.com/apache/datafusion"
-rust-version = "1.80.1"
+rust-version = "1.81.0"
 readme = "README.md"
 
 [dependencies]
 arrow = { version = "54.0.0" }
-async-trait = "0.1.73"
-## 1.5.13 requires a hiher MSRV 1.81 so lock until DataFusion MSRV catches up
-aws-config = "=1.5.10"
-## 1.53.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
-aws-sdk-sso = "=1.50.0"
-## 1.54.0 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
-aws-sdk-ssooidc = "=1.51.0"
-## 1.54.1 requires a higher MSRV 1.81 so lock until DataFusion MSRV catches up
-aws-sdk-sts = "=1.51.0"
-# end pin aws-sdk crates
+async-trait = "0.1.0"
+aws-config = "1.5.0"
 aws-credential-types = "1.2.0"
+aws-sdk-sso = "1.57.0"
+aws-sdk-ssooidc = "1.57.0"
+aws-sdk-sts = "1.57.0"
 clap = { version = "4.5.27", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "44.0.0", features = [
+datafusion = { path = "../datafusion/core", version = "45.0.0", features = [
     "avro",
     "crypto_expressions",
     "datetime_expressions",
@@ -53,18 +48,18 @@ datafusion = { path = "../datafusion/core", version = "44.0.0", features = [
     "unicode_expressions",
     "compression",
 ] }
-datafusion-catalog = { path = "../datafusion/catalog", version = "44.0.0" }
+datafusion-catalog = { path = "../datafusion/catalog", version = "45.0.0" }
 dirs = "6.0.0"
 env_logger = "0.11"
 futures = "0.3"
 # pin as home 0.5.11 has MSRV 1.81. Can remove this once we bump MSRV to 1.81
-home = "=0.5.9"
+home = "=0.5.11"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { version = "0.11.0", features = ["aws", "gcp", "http"] }
 parking_lot = { version = "0.12" }
 parquet = { version = "54.0.0", default-features = false }
 regex = "1.8"
-rustyline = "14.0"
+rustyline = "15.0"
 tokio = { version = "1.24", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
 url = "2.5.4"
 

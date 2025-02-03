@@ -2760,6 +2760,30 @@ select
 ----
 [[1], [1], [1], [1], [1]] [[1.1, 2.2, 3.3], [1.1, 2.2, 3.3], [1.1, 2.2, 3.3]] [[NULL, NULL], [NULL, NULL], [NULL, NULL]] [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
 
+# array_repeat scalar function with count of different integer types
+query ????????
+Select
+  array_repeat(1, arrow_cast(2,'Int8')),
+  array_repeat(2, arrow_cast(2,'Int16')),
+  array_repeat(3, arrow_cast(2,'Int32')),
+  array_repeat(4, arrow_cast(2,'Int64')),
+  array_repeat(1, arrow_cast(2,'UInt8')),
+  array_repeat(2, arrow_cast(2,'UInt16')),
+  array_repeat(3, arrow_cast(2,'UInt32')),
+  array_repeat(4, arrow_cast(2,'UInt64'));
+----
+[1, 1] [2, 2] [3, 3] [4, 4] [1, 1] [2, 2] [3, 3] [4, 4]
+
+# array_repeat scalar function with count of negative integer types
+query ????
+Select
+  array_repeat(1, arrow_cast(-2,'Int8')),
+  array_repeat(2, arrow_cast(-2,'Int16')),
+  array_repeat(3, arrow_cast(-2,'Int32')),
+  array_repeat(4, arrow_cast(-2,'Int64'));
+----
+[] [] [] []
+
 # array_repeat with columns #1
 
 statement ok
@@ -6004,6 +6028,15 @@ select list_has_all(make_array(1,2,3), make_array(4,5,6)),
 ;
 ----
 false true false true
+
+query BBBB
+select arrays_overlap(make_array(1,2,3), make_array(4,5,6)),
+        arrays_overlap(make_array(1,2,3), make_array(1,2,4)),
+        arrays_overlap(make_array(['aa']), make_array(['aa'],['bb'])),
+        arrays_overlap(make_array('aa',NULL), make_array('bb',NULL))
+;
+----
+false true true true
 
 query ???
 select range(column2),

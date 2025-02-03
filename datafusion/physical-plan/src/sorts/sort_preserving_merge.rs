@@ -23,6 +23,7 @@ use std::sync::Arc;
 use crate::common::spawn_buffered;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -32,8 +33,9 @@ use crate::{
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-
+use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
@@ -333,6 +335,39 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    /// Tries to swap the projection with its input [`SortPreservingMergeExec`].
+    /// If this is possible, it returns the new [`SortPreservingMergeExec`] whose
+    /// child is a projection. Otherwise, it returns None.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection does not narrow the schema, we should not try to push it down.
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        let mut updated_exprs = LexOrdering::default();
+        for sort in self.expr() {
+            let Some(updated_expr) = update_expr(&sort.expr, projection.expr(), false)?
+            else {
+                return Ok(None);
+            };
+            updated_exprs.push(PhysicalSortExpr {
+                expr: updated_expr,
+                options: sort.options,
+            });
+        }
+
+        Ok(Some(Arc::new(
+            SortPreservingMergeExec::new(
+                updated_exprs,
+                make_with_child(projection, self.input())?,
+            )
+            .with_fetch(self.fetch()),
+        )))
     }
 }
 

@@ -22,11 +22,9 @@
 
 use std::sync::Arc;
 
-use crate::physical_optimizer::parquet_exec;
+use crate::physical_optimizer::test_utils::{parquet_exec, trim_plan_display};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
-use datafusion::physical_optimizer::test_utils::trim_plan_display;
 use datafusion_common::config::ConfigOptions;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
@@ -34,6 +32,7 @@ use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctio
 use datafusion_physical_expr::expressions::{col, lit};
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::combine_partial_final_agg::CombinePartialFinalAggregate;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,

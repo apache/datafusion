@@ -40,6 +40,4 @@ path = "src/lib.rs"
 arrow = { workspace = true }
 datafusion-common = { workspace = true }
 itertools = { workspace = true }
-
-[dev-dependencies]
 paste = "^1.0"

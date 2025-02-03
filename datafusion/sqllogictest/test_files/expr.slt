@@ -2046,4 +2046,4 @@ select 1 where null between null and 2;
 
 query T
 select 'A' where null between 2 and null;
----
+----

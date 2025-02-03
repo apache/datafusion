@@ -20,6 +20,7 @@ use std::sync::Arc;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{ListingOptions, PartitionedFile};
 use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::source::DataSourceExec;
@@ -89,7 +90,7 @@ struct ParquetExecVisitor {
 }
 
 impl ExecutionPlanVisitor for ParquetExecVisitor {
-    type Error = datafusion_common::DataFusionError;
+    type Error = DataFusionError;
 
     /// This function is called once for every node in the tree.
     /// Based on your needs implement either `pre_visit` (visit each node before its children/inputs)

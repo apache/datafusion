@@ -31,6 +31,7 @@ use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
+use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::{
     get_record_batch_memory_size, read_spill_as_stream, spill_record_batches,
@@ -1023,6 +1024,37 @@ impl ExecutionPlan for SortExec {
         } else {
             CardinalityEffect::LowerEqual
         }
+    }
+
+    /// Tries to swap the projection with its input [`SortExec`]. If it can be done,
+    /// it returns the new swapped version having the [`SortExec`] as the top plan.
+    /// Otherwise, it returns None.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If the projection does not narrow the schema, we should not try to push it down.
+        if projection.expr().len() >= projection.input().schema().fields().len() {
+            return Ok(None);
+        }
+
+        let mut updated_exprs = LexOrdering::default();
+        for sort in self.expr() {
+            let Some(new_expr) = update_expr(&sort.expr, projection.expr(), false)?
+            else {
+                return Ok(None);
+            };
+            updated_exprs.push(PhysicalSortExpr {
+                expr: new_expr,
+                options: sort.options,
+            });
+        }
+
+        Ok(Some(Arc::new(
+            SortExec::new(updated_exprs, make_with_child(projection, self.input())?)
+                .with_fetch(self.fetch())
+                .with_preserve_partitioning(self.preserve_partitioning()),
+        )))
     }
 }
 

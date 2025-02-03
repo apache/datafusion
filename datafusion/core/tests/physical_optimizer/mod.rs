@@ -21,41 +21,10 @@ mod aggregate_statistics;
 mod combine_partial_final_agg;
 mod enforce_distribution;
 mod enforce_sorting;
+mod join_selection;
+mod limit_pushdown;
 mod limited_distinct_aggregation;
+mod projection_pushdown;
 mod replace_with_order_preserving_variants;
 mod sanity_checker;
-
-use std::sync::Arc;
-
-use arrow_schema::SchemaRef;
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
-use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::test_utils::schema;
-use datafusion_physical_plan::source::DataSourceExec;
-
-/// Create a non sorted parquet exec
-pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
-    FileScanConfig::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        schema.clone(),
-        Arc::new(ParquetSource::default()),
-    )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
-    .new_exec()
-}
-
-/// Create a single parquet file that is sorted
-pub(crate) fn parquet_exec_with_sort(
-    output_ordering: Vec<LexOrdering>,
-) -> Arc<DataSourceExec> {
-    FileScanConfig::new(
-        ObjectStoreUrl::parse("test:///").unwrap(),
-        schema(),
-        Arc::new(ParquetSource::default()),
-    )
-    .with_file(PartitionedFile::new("x".to_string(), 100))
-    .with_output_ordering(output_ordering)
-    .new_exec()
-}
+mod test_utils;

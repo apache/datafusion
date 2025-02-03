@@ -190,10 +190,10 @@ impl BoundedWindowAggExec {
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: &SchemaRef,
-        window_expr: &[Arc<dyn WindowExpr>],
+        window_exprs: &[Arc<dyn WindowExpr>],
     ) -> PlanProperties {
         // Calculate equivalence properties:
-        let eq_properties = window_equivalence_properties(schema, input, window_expr);
+        let eq_properties = window_equivalence_properties(schema, input, window_exprs);
 
         // As we can have repartitioning using the partition keys, this can
         // be either one or more than one, depending on the presence of

@@ -17,15 +17,15 @@
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::config::CsvOptions;
+use datafusion::common::parsers::CompressionTypeVariant;
+use datafusion::common::DataFusionError;
+use datafusion::common::ScalarValue;
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::error::Result;
 use datafusion::functions_aggregate::average::avg;
 use datafusion::functions_aggregate::min_max::max;
 use datafusion::prelude::*;
-use datafusion_common::config::CsvOptions;
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::DataFusionError;
-use datafusion_common::ScalarValue;
 use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;

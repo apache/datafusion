@@ -17,7 +17,6 @@
 
 //! Execution plan for reading in-memory batches of data
 
-use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -30,6 +29,9 @@ use super::{
 };
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::source::{DataSource, DataSourceExec};
+use crate::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -44,6 +46,7 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use futures::Stream;
+use parking_lot::RwLock;
 
 /// Data source configuration for reading in-memory batches of data
 pub struct MemorySourceConfig {
@@ -134,6 +137,30 @@ impl DataSource for MemorySourceConfig {
             &self.schema,
             self.projection.clone(),
         ))
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If there is any non-column or alias-carrier expression, Projection should not be removed.
+        // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
+        all_alias_free_columns(projection.expr())
+            .then(|| {
+                let all_projections = (0..self.schema().fields().len()).collect();
+                let new_projections = new_projections_for_columns(
+                    projection,
+                    self.projection().as_ref().unwrap_or(&all_projections),
+                );
+
+                MemoryExec::try_new(
+                    self.partitions(),
+                    self.original_schema(),
+                    Some(new_projections),
+                )
+                .map(|e| Arc::new(e) as _)
+            })
+            .transpose()
     }
 }
 
@@ -850,6 +877,7 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                 },],
             }
         );

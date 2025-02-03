@@ -699,15 +699,13 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Union(Union { inputs, schema }) => {
-                let input_schema = inputs[0].schema();
-                // If inputs are not pruned do not change schema
-                // TODO this seems wrong (shouldn't we always use the schema of the input?)
-                let schema = if schema.fields().len() == input_schema.fields().len() {
-                    Arc::clone(&schema)
+                let first_input_schema = inputs[0].schema();
+                if schema.fields().len() == first_input_schema.fields().len() {
+                    // If inputs are not pruned do not change schema
+                    Ok(LogicalPlan::Union(Union { inputs, schema }))
                 } else {
-                    Arc::clone(input_schema)
-                };
-                Ok(LogicalPlan::Union(Union { inputs, schema }))
+                    Ok(LogicalPlan::Union(Union::try_new(inputs)?))
+                }
             }
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
@@ -1497,7 +1495,9 @@ impl LogicalPlan {
                             (_, Some(dt)) => {
                                 param_types.insert(id.clone(), Some(dt.clone()));
                             }
-                            _ => {}
+                            _ => {
+                                param_types.insert(id.clone(), None);
+                            }
                         }
                     }
                     Ok(TreeNodeRecursion::Continue)
@@ -2641,6 +2641,107 @@ pub struct Union {
     pub inputs: Vec<Arc<LogicalPlan>>,
     /// Union schema. Should be the same for all inputs.
     pub schema: DFSchemaRef,
+}
+
+impl Union {
+    /// Constructs new Union instance deriving schema from inputs.
+    fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+        let schema = Self::derive_schema_from_inputs(&inputs, false)?;
+        Ok(Union { inputs, schema })
+    }
+
+    /// Constructs new Union instance deriving schema from inputs.
+    /// Inputs do not have to have matching types and produced schema will
+    /// take type from the first input.
+    // TODO (https://github.com/apache/datafusion/issues/14380): Avoid creating uncoerced union at all.
+    pub fn try_new_with_loose_types(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+        let schema = Self::derive_schema_from_inputs(&inputs, true)?;
+        Ok(Union { inputs, schema })
+    }
+
+    /// Constructs new Union instance deriving schema from inputs.
+    ///
+    /// `loose_types` if true, inputs do not have to have matching types and produced schema will
+    /// take type from the first input. TODO (<https://github.com/apache/datafusion/issues/14380>) this is not necessarily reasonable behavior.
+    fn derive_schema_from_inputs(
+        inputs: &[Arc<LogicalPlan>],
+        loose_types: bool,
+    ) -> Result<DFSchemaRef> {
+        if inputs.len() < 2 {
+            return plan_err!("UNION requires at least two inputs");
+        }
+        let first_schema = inputs[0].schema();
+        let fields_count = first_schema.fields().len();
+        for input in inputs.iter().skip(1) {
+            if fields_count != input.schema().fields().len() {
+                return plan_err!(
+                    "UNION queries have different number of columns: \
+                    left has {} columns whereas right has {} columns",
+                    fields_count,
+                    input.schema().fields().len()
+                );
+            }
+        }
+
+        let union_fields = (0..fields_count)
+            .map(|i| {
+                let fields = inputs
+                    .iter()
+                    .map(|input| input.schema().field(i))
+                    .collect::<Vec<_>>();
+                let first_field = fields[0];
+                let name = first_field.name();
+                let data_type = if loose_types {
+                    // TODO apply type coercion here, or document why it's better to defer
+                    // temporarily use the data type from the left input and later rely on the analyzer to
+                    // coerce the two schemas into a common one.
+                    first_field.data_type()
+                } else {
+                    fields.iter().skip(1).try_fold(
+                        first_field.data_type(),
+                        |acc, field| {
+                            if acc != field.data_type() {
+                                return plan_err!(
+                                    "UNION field {i} have different type in inputs: \
+                                    left has {} whereas right has {}",
+                                    first_field.data_type(),
+                                    field.data_type()
+                                );
+                            }
+                            Ok(acc)
+                        },
+                    )?
+                };
+                let nullable = fields.iter().any(|field| field.is_nullable());
+                let mut field = Field::new(name, data_type.clone(), nullable);
+                let field_metadata =
+                    intersect_maps(fields.iter().map(|field| field.metadata()));
+                field.set_metadata(field_metadata);
+                // TODO reusing table reference from the first schema is probably wrong
+                let table_reference = first_schema.qualified_field(i).0.cloned();
+                Ok((table_reference, Arc::new(field)))
+            })
+            .collect::<Result<_>>()?;
+        let union_schema_metadata =
+            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+
+        // Functional Dependencies doesn't preserve after UNION operation
+        let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
+        let schema = Arc::new(schema);
+
+        Ok(schema)
+    }
+}
+
+fn intersect_maps<'a>(
+    inputs: impl IntoIterator<Item = &'a HashMap<String, String>>,
+) -> HashMap<String, String> {
+    let mut inputs = inputs.into_iter();
+    let mut merged: HashMap<String, String> = inputs.next().cloned().unwrap_or_default();
+    for input in inputs {
+        merged.retain(|k, v| input.get(k) == Some(v));
+    }
+    merged
 }
 
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
@@ -4346,5 +4447,26 @@ digraph {
         let mut rewriter = ProjectJumpRewriter::new();
         plan.rewrite_with_subqueries(&mut rewriter).unwrap();
         assert!(!rewriter.filter_found);
+    }
+
+    #[test]
+    fn test_with_unresolved_placeholders() {
+        let field_name = "id";
+        let placeholder_value = "$1";
+        let schema = Schema::new(vec![Field::new(field_name, DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col(field_name).eq(placeholder(placeholder_value)))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Check that the placeholder parameters have not received a DataType.
+        let params = plan.get_parameter_types().unwrap();
+        assert_eq!(params.len(), 1);
+
+        let parameter_type = params.clone().get(placeholder_value).unwrap().clone();
+        assert_eq!(parameter_type, None);
     }
 }

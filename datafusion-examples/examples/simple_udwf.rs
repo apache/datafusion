@@ -19,14 +19,13 @@ use std::sync::Arc;
 
 use arrow::{
     array::{ArrayRef, AsArray, Float64Array},
-    datatypes::Float64Type,
+    datatypes::{DataType, Float64Type},
 };
-use arrow_schema::DataType;
 
+use datafusion::common::ScalarValue;
 use datafusion::error::Result;
+use datafusion::logical_expr::{PartitionEvaluator, Volatility, WindowFrame};
 use datafusion::prelude::*;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{PartitionEvaluator, Volatility, WindowFrame};
 
 // create local execution context with `cars.csv` registered as a table named `cars`
 async fn create_context() -> Result<SessionContext> {

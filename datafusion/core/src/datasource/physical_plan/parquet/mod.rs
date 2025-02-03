@@ -17,33 +17,6 @@
 
 //! [`ParquetSource`] FileSource for reading Parquet files
 
-use std::any::Any;
-use std::fmt::Formatter;
-use std::sync::Arc;
-
-use crate::datasource::data_source::{FileSource, FileType};
-use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningAccessPlanFilter, FileGroupPartitioner, FileOpener,
-    FileScanConfig, FileStream,
-};
-use crate::{
-    config::TableParquetOptions,
-    error::Result,
-    physical_optimizer::pruning::PruningPredicate,
-    physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder},
-};
-
-use arrow::datatypes::SchemaRef;
-use arrow_schema::Schema;
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
-use datafusion_physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-};
-
-use itertools::Itertools;
-use log::debug;
-use object_store::ObjectStore;
-
 mod access_plan;
 mod metrics;
 mod opener;
@@ -53,22 +26,44 @@ mod row_filter;
 mod row_group_filter;
 mod writer;
 
-use crate::datasource::listing::PartitionedFile;
+use std::any::Any;
+use std::fmt::Formatter;
+use std::sync::Arc;
+
+use crate::datasource::data_source::{FileSource, FileType};
+use crate::datasource::physical_plan::{
+    parquet::page_filter::PagePruningAccessPlanFilter, FileGroupPartitioner, FileOpener,
+    FileScanConfig, FileStream,
+};
 use crate::datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
+use crate::{
+    config::TableParquetOptions,
+    error::Result,
+    execution::context::TaskContext,
+    physical_plan::{
+        metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
+        DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
+        SendableRecordBatchStream, Statistics,
+    },
+};
+
 pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::{Constraints, Statistics};
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use arrow::datatypes::SchemaRef;
+use datafusion_common::Constraints;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
+use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::metrics::MetricsSet;
 pub use metrics::ParquetFileMetrics;
 use opener::ParquetOpener;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use writer::plan_to_parquet;
+
+
+use itertools::Itertools;
+use log::debug;
 
 #[derive(Debug, Clone)]
 #[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]

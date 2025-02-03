@@ -99,7 +99,6 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { version = "0.5.0", optional = true }
 chrono = { workspace = true }
-dashmap = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
@@ -181,6 +180,10 @@ name = "math_query_sql"
 [[bench]]
 harness = false
 name = "filter_query_sql"
+
+[[bench]]
+harness = false
+name = "struct_query_sql"
 
 [[bench]]
 harness = false

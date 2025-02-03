@@ -17,6 +17,8 @@
 
 use std::sync::Arc;
 
+use crate::physical_optimizer::test_utils::TestAggregate;
+
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
