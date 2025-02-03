@@ -370,8 +370,8 @@ fn try_cast_numeric_literal(
             // Different precision for decimal128 can store different range of value.
             // For example, the precision is 3, the max of value is `999` and the min
             // value is `-999`
-            MIN_DECIMAL128_FOR_EACH_PRECISION[*precision as usize - 1],
-            MAX_DECIMAL128_FOR_EACH_PRECISION[*precision as usize - 1],
+            MIN_DECIMAL128_FOR_EACH_PRECISION[*precision as usize],
+            MAX_DECIMAL128_FOR_EACH_PRECISION[*precision as usize],
         ),
         _ => return None,
     };
