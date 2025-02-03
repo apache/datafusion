@@ -472,7 +472,7 @@ impl DataFusionError {
             DataFusionError::Substrait(_) => Cow::Borrowed("Substrait error: "),
             DataFusionError::Diagnostic(_, _) => Cow::Borrowed(""),
             DataFusionError::Collection(errs) => {
-                Cow::Owned(format!("{} errors, first error: ", errs.len()))
+                Cow::Owned(format!("{} errors, first error: {}", errs.len(), errs.first().expect("cannot construct DataFusionError::Collection with 0 errors, but got one such case").error_prefix()))
             }
         }
     }

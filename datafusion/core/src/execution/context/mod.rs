@@ -1904,7 +1904,7 @@ mod tests {
         let err = plan_and_collect(&ctx, "SElECT @=   X3").await.unwrap_err();
         assert_eq!(
             err.strip_backtrace(),
-            "Error during planning: variable [\"@=\"] has no type information"
+            "1 errors, first error: Error during planning: variable [\"@=\"] has no type information"
         );
         Ok(())
     }
