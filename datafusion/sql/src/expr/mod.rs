@@ -166,6 +166,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        // The location of the original SQL expression in the source code
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;

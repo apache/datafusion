@@ -769,6 +769,21 @@ pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
         .collect()
 }
 
+/// Checks whether the given index sequence is monotonically non-decreasing.
+#[deprecated(since = "45.0.0", note = "Use std::Iterator::is_sorted instead")]
+pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
+    // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
+    let mut previous = 0;
+    for item in sequence.into_iter() {
+        let current = *item.borrow();
+        if current < previous {
+            return false;
+        }
+        previous = current;
+    }
+    true
+}
+
 /// Find indices of each element in `targets` inside `items`. If one of the
 /// elements is absent in `items`, returns an error.
 pub fn find_indices<T: PartialEq, S: Borrow<T>>(
@@ -1155,6 +1170,19 @@ mod tests {
         assert_eq!(set_difference([3, 4, 0], [1, 2, 4]), vec![3, 0]);
         assert_eq!(set_difference([0, 3, 4], [4, 1, 2]), vec![0, 3]);
         assert_eq!(set_difference([3, 4, 0], [4, 1, 2]), vec![3, 0]);
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn test_is_sorted() {
+        assert!(is_sorted::<usize>([]));
+        assert!(is_sorted([0]));
+        assert!(is_sorted([0, 3, 4]));
+        assert!(is_sorted([0, 1, 2]));
+        assert!(is_sorted([0, 1, 4]));
+        assert!(is_sorted([0usize; 0]));
+        assert!(is_sorted([1, 2]));
+        assert!(!is_sorted([3, 2]));
     }
 
     #[test]
