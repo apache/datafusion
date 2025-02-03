@@ -1156,7 +1156,7 @@ SELECT * FROM empty_table
 statement ok
 CREATE TABLE case_sensitive_table("INT32" int) AS VALUES (1), (2), (3), (4), (5);
 
-statement error DataFusion error: Schema error: No field named int32. Valid fields are case_sensitive_table."INT32".
+statement error DataFusion error: 1 errors, first error: Schema error: No field named int32\. Valid fields are case_sensitive_table\."INT32"\.
 select "int32" from case_sensitive_table
 
 query I
@@ -1382,7 +1382,7 @@ physical_plan
 02)--MemoryExec: partitions=1, partition_sizes=[1]
 
 # ambiguous column references in on join
-query error DataFusion error: Schema error: Ambiguous reference to unqualified field a
+query error DataFusion error: 1 errors, first error: Schema error: Ambiguous reference to unqualified field a
 EXPLAIN select a as a FROM table1 t1 CROSS JOIN table1 t2 order by a
 
 # run below query in multi partitions
@@ -1799,7 +1799,7 @@ select a + b from (select 1 as a, 2 as b, 1 as "a + b");
 3
 
 # Can't reference an output column by expression over projection.
-query error DataFusion error: Schema error: No field named a. Valid fields are "a \+ Int64\(1\)"\.
+query error DataFusion error: 1 errors, first error: Schema error: No field named a\. Valid fields are "a \+ Int64\(1\)"\.
 select a + 1 from (select a+1 from (select 1 as a));
 
 query I
@@ -1834,7 +1834,7 @@ statement ok
 DROP TABLE test;
 
 # Can't reference an unqualified column by a qualified name
-query error DataFusion error: Schema error: No field named t1.v1. Column names are case sensitive. You can use double quotes to refer to the "t1.v1" column or set the datafusion.sql_parser.enable_ident_normalization configuration. Valid fields are "t1.v1".
+query error DataFusion error: 1 errors, first error: Schema error: No field named t1\.v1\. Column names are case sensitive\. You can use double quotes to refer to the "t1\.v1" column or set the datafusion\.sql_parser\.enable_ident_normalization configuration\. Valid fields are "t1\.v1"\.
 SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");
 
 # Test issue: https://github.com/apache/datafusion/issues/14124

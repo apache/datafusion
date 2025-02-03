@@ -540,7 +540,7 @@ select interval '5 day 0' hour
 5 days
 
 # This is interpreted as "0 hours" with PostgreSQL, should be fixed with
-query error DataFusion error: Arrow error: Parser error: Invalid input syntax for type interval: "5 day HOUR"
+query error DataFusion error: 1 errors, first error: Arrow error: Parser error: Invalid input syntax for type interval: "5 day HOUR"
 SELECT interval '5 day' hour
 
 # expected error interval (scalar) - date / timestamp (array)
