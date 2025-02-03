@@ -35,6 +35,14 @@ create table test_substr as
 select arrow_cast(col1, 'Utf8View') as c1 from test_substr_base;
 
 statement ok
+create table test_datetime as
+select
+  arrow_cast(column1, 'Utf8View') as ts,
+  arrow_cast(column2, 'Utf8View') as d,
+  arrow_cast(column3, 'Utf8View') as t
+from test_datetime_base;
+
+statement ok
 drop table test_source
 
 #
@@ -50,6 +58,9 @@ drop table test_basic_operator;
 
 statement ok
 drop table test_substr_base;
+
+statement ok
+drop table test_datetime_base;
 
 
 # --------------------------------------
