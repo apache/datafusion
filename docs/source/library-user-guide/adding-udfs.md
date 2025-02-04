@@ -54,7 +54,7 @@ of arguments.
 
 This a lower level API with more functionality but is more complex, also documented in [`advanced_udf.rs`].
 
-```rustfixed
+```rust
 use std::sync::Arc;
 use std::any::Any;
 use std::sync::LazyLock;
@@ -116,7 +116,7 @@ impl ScalarUDFImpl for AddOne {
 ```
 We now need to register the function with DataFusion so that it can be used in the context of a query.
 
-```rustfixed
+```rust
 # use std::sync::Arc;
 # use std::any::Any;
 # use std::sync::LazyLock;
@@ -194,7 +194,7 @@ There is a an older, more concise, but also more limited API [`create_udf`] avai
 
 #### Adding a Scalar UDF
 
-```rustfixed
+```rust
 use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::common::cast::as_int64_array;
@@ -218,7 +218,7 @@ pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 This "works" in isolation, i.e. if you have a slice of `ArrayRef`s, you can call `add_one` and it will return a new
 `ArrayRef` with 1 added to each value.
 
-```rustfixed
+```rust
 # use std::sync::Arc;
 # use datafusion::arrow::array::{ArrayRef, Int64Array};
 # use datafusion::common::cast::as_int64_array;
@@ -256,7 +256,7 @@ To register a Scalar UDF, you need to wrap the function implementation in a [`Sc
 with the `SessionContext`.
 DataFusion provides the [`create_udf`] and helper functions to make this easier.
 
-```rustfixed
+```rust
 # use std::sync::Arc;
 # use datafusion::arrow::array::{ArrayRef, Int64Array};
 # use datafusion::common::cast::as_int64_array;
@@ -301,7 +301,7 @@ A few things to note on `create_udf`:
 
 That gives us a `ScalarUDF` that we can register with the `SessionContext`:
 
-```rustfixed
+```rust
 # use std::sync::Arc;
 # use datafusion::arrow::array::{ArrayRef, Int64Array};
 # use datafusion::common::cast::as_int64_array;
@@ -355,7 +355,7 @@ access to the rows around them. Access to the proximal rows is helpful, but adds
 
 For example, we will declare a user defined window function that computes a moving average.
 
-```rustfixed
+```rust
 use datafusion::arrow::{array::{ArrayRef, Float64Array, AsArray}, datatypes::Float64Type};
 use datafusion::logical_expr::{PartitionEvaluator};
 use datafusion::common::ScalarValue;
@@ -428,7 +428,7 @@ To register a Window UDF, you need to wrap the function implementation in a [`Wi
 with the `SessionContext`. DataFusion provides the [`create_udwf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udwf.rs`].
 
-```rustfixed
+```rust
 # use datafusion::arrow::{array::{ArrayRef, Float64Array, AsArray}, datatypes::Float64Type};
 # use datafusion::logical_expr::{PartitionEvaluator};
 # use datafusion::common::ScalarValue;
@@ -505,7 +505,7 @@ The `create_udwf` has five arguments to check:
 
 That gives us a `WindowUDF` that we can register with the `SessionContext`:
 
-```rustfixed
+```rust
 # use datafusion::arrow::{array::{ArrayRef, Float64Array, AsArray}, datatypes::Float64Type};
 # use datafusion::logical_expr::{PartitionEvaluator};
 # use datafusion::common::ScalarValue;
@@ -584,7 +584,7 @@ green,10.3,1996-04-12T12:05:04.000000000
 
 Then, we can query like below:
 
-```rustfixed
+```rust
 # use datafusion::arrow::{array::{ArrayRef, Float64Array, AsArray}, datatypes::Float64Type};
 # use datafusion::logical_expr::{PartitionEvaluator};
 # use datafusion::common::ScalarValue;
@@ -703,7 +703,7 @@ Aggregate UDFs are functions that take a group of rows and return a single value
 
 For example, we will declare a single-type, single return type UDAF that computes the geometric mean.
 
-```rustfixed
+```rust
 
 use datafusion::arrow::array::ArrayRef;
 use datafusion::scalar::ScalarValue;
@@ -799,7 +799,7 @@ To register a Aggregate UDF, you need to wrap the function implementation in a [
 it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udaf.rs`].
 
-```rustfixed
+```rust
 # use datafusion::arrow::array::ArrayRef;
 # use datafusion::scalar::ScalarValue;
 # use datafusion::{error::Result, physical_plan::Accumulator};
@@ -907,7 +907,7 @@ The `create_udaf` has six arguments to check:
 - The sixth argument is the description of the state, which will by passed between execution stages.
 
 
-```rustfixed
+```rust
 
 # use datafusion::arrow::array::ArrayRef;
 # use datafusion::scalar::ScalarValue;
