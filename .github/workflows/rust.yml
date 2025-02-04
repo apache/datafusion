@@ -354,9 +354,9 @@ jobs:
         shell: bash
         run: |
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,json,backtrace
+          cargo test -j 32 --lib --tests --bins --features avro,json,backtrace
           cd datafusion-cli
-          cargo test --lib --tests --bins --all-features
+          cargo test -j 32 --lib --tests --bins --all-features
 
   # Commenting out intel mac build as so few users would ever use it
   # Details: https://github.com/apache/datafusion/issues/13846
