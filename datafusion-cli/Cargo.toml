@@ -35,7 +35,7 @@ aws-credential-types = "1.2.0"
 aws-sdk-sso = "1.57.0"
 aws-sdk-ssooidc = "1.57.0"
 aws-sdk-sts = "1.57.0"
-clap = { version = "4.5.27", features = ["derive", "cargo"] }
+clap = { version = "4.5.28", features = ["derive", "cargo"] }
 datafusion = { workspace = true, features = [
     "avro",
     "crypto_expressions",
