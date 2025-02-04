@@ -1433,6 +1433,67 @@ NULL 23
 NULL 43
 5 NULL
 
+
+## array_max
+# array_max scalar function #1 (with positive index)
+query I
+select array_max(make_array(5, 3, 6, 4));
+----
+6
+
+query I
+select array_max(make_array(5, 3, 4, NULL, 6, NULL));
+----
+6
+
+query I
+select array_max(make_array(NULL, NULL));
+----
+NULL
+
+query T
+select array_max(make_array('h', 'e', 'o', 'l', 'l'));
+----
+o
+
+query T
+select array_max(make_array('h', 'e', 'l', NULL, 'l', 'o', NULL));
+----
+o
+
+query B
+select array_max(make_array(false, true, false, true));
+----
+true
+
+query B
+select array_max(make_array(false, true, NULL, false, true));
+----
+true
+
+query D
+select array_max(make_array(DATE '1992-09-01', DATE '1993-03-01', DATE '1999-05-01', DATE '1985-11-01'));
+----
+1999-05-01
+
+query D
+select array_max(make_array(DATE '1995-09-01', DATE '1999-05-01', DATE '1993-03-01', NULL));
+----
+1999-05-01
+
+query P
+select array_max(make_array(TIMESTAMP '1992-09-01', TIMESTAMP '1995-06-01', TIMESTAMP '1984-10-01'));
+----
+1995-06-01T00:00:00
+
+query P
+select array_max(make_array(NULL, TIMESTAMP '1996-10-01', TIMESTAMP '1995-06-01'));
+----
+1996-10-01T00:00:00
+
+query error Execution error: array_max needs one argument as non-empty array
+select array_max(make_array());
+
 ## array_pop_back (aliases: `list_pop_back`)
 
 # array_pop_back scalar function with null
