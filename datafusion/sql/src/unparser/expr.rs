@@ -965,10 +965,21 @@ impl Unparser<'_> {
                 ))?
                 .to_string()
         };
+
+        let time_unit = match T::DATA_TYPE {
+            DataType::Timestamp(unit, _) => unit,
+            _ => {
+                return Err(internal_datafusion_err!(
+                    "Expected Timestamp, got {:?}",
+                    T::DATA_TYPE
+                ))
+            }
+        };
+
         Ok(ast::Expr::Cast {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::Value(SingleQuotedString(ts))),
-            data_type: ast::DataType::Timestamp(None, TimezoneInfo::None),
+            data_type: self.dialect.timestamp_cast_dtype(&time_unit, &None),
             format: None,
         })
     }
@@ -2575,6 +2586,35 @@ mod tests {
 
             let actual = format!("{}", ast);
             let expected = format!(r#"CAST(a AS {identifier})"#);
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn custom_dialect_with_timestamp_cast_dtype_scalar_expr() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::new().build();
+        let mysql_dialect = CustomDialectBuilder::new()
+            .with_timestamp_cast_dtype(
+                ast::DataType::Datetime(None),
+                ast::DataType::Datetime(None),
+            )
+            .build();
+
+        for (dialect, identifier) in [
+            (&default_dialect, "TIMESTAMP"),
+            (&mysql_dialect, "DATETIME"),
+        ] {
+            let unparser = Unparser::new(dialect);
+            let expr = Expr::Literal(ScalarValue::TimestampMillisecond(
+                Some(1738285549123),
+                None,
+            ));
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = format!(r#"CAST('2025-01-31 01:05:49.123' AS {identifier})"#);
 
             assert_eq!(actual, expected);
         }
