@@ -134,18 +134,16 @@ impl ScalarUDFImpl for ConcatFunc {
         if array_len.is_none() {
             let mut result = String::new();
             for arg in args {
-                match arg {
-                    ColumnarValue::Scalar(ScalarValue::Utf8(Some(v)))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(v)))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(v))) => {
-                        result.push_str(v);
-                    }
-                    ColumnarValue::Scalar(ScalarValue::Utf8(None))
-                    | ColumnarValue::Scalar(ScalarValue::Utf8View(None))
-                    | ColumnarValue::Scalar(ScalarValue::LargeUtf8(None)) => {}
-                    other => plan_err!(
+                let ColumnarValue::Scalar(scalar) = arg else {
+                    return internal_err!("concat expected scalar value, got {arg:?}");
+                };
+
+                match scalar.try_as_str() {
+                    Some(Some(v)) => result.push_str(v),
+                    Some(None) => {} // null literal
+                    None => plan_err!(
                         "Concat function does not support scalar type {:?}",
-                        other
+                        scalar
                     )?,
                 }
             }

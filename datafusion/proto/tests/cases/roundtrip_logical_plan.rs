@@ -1815,6 +1815,8 @@ fn round_trip_datatype() {
     }
 }
 
+// See https://github.com/apache/datafusion/issues/14173 to remove deprecated dict_id
+#[allow(deprecated)]
 #[test]
 fn roundtrip_dict_id() -> Result<()> {
     let dict_id = 42;

@@ -33,6 +33,11 @@ use super::{
     PartitionMode, SharedBitmapBuilder,
 };
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::projection::{
+    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
+    ProjectionExec,
+};
+use crate::spill::get_record_batch_memory_size;
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
@@ -69,15 +74,14 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 use datafusion_physical_expr::PhysicalExprRef;
-
-use crate::spill::get_record_batch_memory_size;
-use ahash::RandomState;
-use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+
+use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -226,8 +230,8 @@ impl JoinLeftData {
 ///                                                                         │                           │
 ///            ┌───────┐                                                    │          ┌───────┐        │
 ///            │ Row 6 │        3) update_hash for batch 1 with offset 5    │          │ Row 1 │    5   │
-///   Batch 3  │       │           - hashmap.insert(Row 2, idx 5)           │ Batch 1  │       │        │
-///            │ Row 7 │           - hashmap.insert(Row 1, idx 6)           │          │ Row 2 │    6   │
+///   Batch 3  │       │           - hashmap.insert(Row 2, idx 6)           │ Batch 1  │       │        │
+///            │ Row 7 │           - hashmap.insert(Row 1, idx 5)           │          │ Row 2 │    6   │
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
@@ -863,6 +867,47 @@ impl ExecutionPlan for HashJoinExec {
         )?;
         // Project statistics if there is a projection
         Ok(stats.project(self.projection.as_ref()))
+    }
+
+    /// Tries to push `projection` down through `hash_join`. If possible, performs the
+    /// pushdown and returns a new [`HashJoinExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+        if self.contains_projection() {
+            return Ok(None);
+        }
+
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            join_on,
+        }) = try_pushdown_through_join(
+            projection,
+            self.left(),
+            self.right(),
+            self.on(),
+            self.schema(),
+            self.filter(),
+        )? {
+            Ok(Some(Arc::new(HashJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_on,
+                join_filter,
+                self.join_type(),
+                // Returned early if projection is not None
+                None,
+                *self.partition_mode(),
+                self.null_equals_null,
+            )?)))
+        } else {
+            try_embed_projection(projection, self)
+        }
     }
 }
 
@@ -1581,6 +1626,12 @@ impl Stream for HashJoinStream {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
+    }
+}
+
+impl EmbeddedProjection for HashJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
     }
 }
 
@@ -2576,7 +2627,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2611,8 +2662,11 @@ mod tests {
             Operator::Gt,
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
         )) as Arc<dyn PhysicalExpr>;
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join = join_with_filter(left, right, on, filter, &JoinType::LeftSemi, false)?;
 
@@ -2700,7 +2754,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2738,8 +2792,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(11)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema.clone()),
+        );
 
         let join =
             join_with_filter(left, right, on, filter, &JoinType::RightSemi, false)?;
@@ -2822,7 +2879,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2861,8 +2918,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join = join_with_filter(left, right, on, filter, &JoinType::LeftAnti, false)?;
 
@@ -2951,7 +3011,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices,
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2995,8 +3055,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join =
             join_with_filter(left, right, on, filter, &JoinType::RightAnti, false)?;
@@ -3359,7 +3422,11 @@ mod tests {
             Arc::new(Column::new("c", 1)),
         )) as Arc<dyn PhysicalExpr>;
 
-        JoinFilter::new(filter_expression, column_indices, intermediate_schema)
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
     }
 
     #[apply(batch_sizes)]

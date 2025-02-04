@@ -203,7 +203,6 @@ impl EquivalenceProperties {
         let mut output_ordering = self.oeq_class().output_ordering().unwrap_or_default();
         // Prune out constant expressions
         output_ordering
-            .inner
             .retain(|sort_expr| !const_exprs_contains(constants, &sort_expr.expr));
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
@@ -795,7 +794,6 @@ impl EquivalenceProperties {
         // Generate all valid orderings, given substituted expressions.
         let res = new_orderings
             .into_iter()
-            .map(|ordering| ordering.inner)
             .multi_cartesian_product()
             .map(LexOrdering::new)
             .collect::<Vec<_>>();
@@ -1048,7 +1046,7 @@ impl EquivalenceProperties {
             if self.is_expr_constant(source)
                 && !const_exprs_contains(&projected_constants, target)
             {
-                if self.is_expr_constant_accross_partitions(source) {
+                if self.is_expr_constant_across_partitions(source) {
                     projected_constants.push(
                         ConstExpr::from(target)
                             .with_across_partitions(self.get_expr_constant_value(source)),
@@ -1223,8 +1221,31 @@ impl EquivalenceProperties {
     /// # Returns
     ///
     /// Returns `true` if the expression is constant across all partitions according
-    /// to equivalence group, `false` otherwise.
+    /// to equivalence group, `false` otherwise
+    #[deprecated(
+        since = "45.0.0",
+        note = "Use [`is_expr_constant_across_partitions`] instead"
+    )]
     pub fn is_expr_constant_accross_partitions(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        self.is_expr_constant_across_partitions(expr)
+    }
+
+    /// This function determines whether the provided expression is constant
+    /// across partitions based on the known constants.
+    ///
+    /// # Parameters
+    ///
+    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
+    ///   expression to be checked.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the expression is constant across all partitions according
+    /// to equivalence group, `false` otherwise.
+    pub fn is_expr_constant_across_partitions(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> bool {
@@ -1344,7 +1365,6 @@ impl EquivalenceProperties {
         let mut new_orderings = vec![];
         for ordering in self.oeq_class {
             let new_ordering = ordering
-                .inner
                 .into_iter()
                 .map(|mut sort_expr| {
                     sort_expr.expr = with_new_schema(sort_expr.expr, &schema)?;
@@ -1630,7 +1650,7 @@ fn generate_dependency_orderings(
                 .map(|prefixes| {
                     prefixes
                         .into_iter()
-                        .flat_map(|ordering| ordering.inner.clone())
+                        .flat_map(|ordering| ordering.clone())
                         .collect()
                 })
                 .collect::<Vec<_>>()
@@ -2300,8 +2320,8 @@ impl UnionEquivalentOrderingBuilder {
         existing_constants: &[ConstExpr],
     ) -> Option<LexOrdering> {
         let mut augmented_ordering = LexOrdering::default();
-        let mut sort_expr_iter = ordering.inner.iter().peekable();
-        let mut existing_sort_expr_iter = existing_ordering.inner.iter().peekable();
+        let mut sort_expr_iter = ordering.iter().peekable();
+        let mut existing_sort_expr_iter = existing_ordering.iter().peekable();
 
         // walk in parallel down the two orderings, trying to match them up
         while sort_expr_iter.peek().is_some() || existing_sort_expr_iter.peek().is_some()
@@ -2881,7 +2901,7 @@ mod tests {
             let leading_orderings = eq_properties
                 .oeq_class()
                 .iter()
-                .flat_map(|ordering| ordering.inner.first().cloned())
+                .flat_map(|ordering| ordering.first().cloned())
                 .collect::<Vec<_>>();
             let expr_props = eq_properties.get_expr_properties(Arc::clone(&expr));
             let err_msg = format!(

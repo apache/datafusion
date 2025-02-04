@@ -45,7 +45,7 @@ use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
     equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
-    EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
+    ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
     PhysicalSortRequirement,
 };
 
@@ -512,6 +512,7 @@ impl AggregateExec {
             &group_expr_mapping,
             &mode,
             &input_order_mode,
+            aggr_expr.as_slice(),
         );
 
         Ok(AggregateExec {
@@ -648,11 +649,23 @@ impl AggregateExec {
         group_expr_mapping: &ProjectionMapping,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
+        aggr_exprs: &[Arc<AggregateFunctionExpr>],
     ) -> PlanProperties {
         // Construct equivalence properties:
         let mut eq_properties = input
             .equivalence_properties()
             .project(group_expr_mapping, schema);
+
+        // If the group by is empty, then we ensure that the operator will produce
+        // only one row, and mark the generated result as a constant value.
+        if group_expr_mapping.map.is_empty() {
+            let mut constants = eq_properties.constants().to_vec();
+            let new_constants = aggr_exprs.iter().enumerate().map(|(idx, func)| {
+                ConstExpr::new(Arc::new(Column::new(func.name(), idx)))
+            });
+            constants.extend(new_constants);
+            eq_properties = eq_properties.with_constants(constants);
+        }
 
         // Group by expression will be a distinct value after the aggregation.
         // Add it into the constraint set.
@@ -927,7 +940,7 @@ fn create_schema(
         AggregateMode::Partial => {
             // in partial mode, the fields of the accumulator's state
             for expr in aggr_expr {
-                fields.extend(expr.state_fields()?.iter().cloned())
+                fields.extend(expr.state_fields()?.iter().cloned());
             }
         }
         AggregateMode::Final
@@ -2470,25 +2483,21 @@ mod tests {
                     "labels".to_string(),
                     DataType::Struct(
                         vec![
-                            Field::new_dict(
+                            Field::new(
                                 "a".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                                0,
-                                false,
                             ),
-                            Field::new_dict(
+                            Field::new(
                                 "b".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                                0,
-                                false,
                             ),
                         ]
                         .into(),
@@ -2500,15 +2509,13 @@ mod tests {
             vec![
                 Arc::new(StructArray::from(vec![
                     (
-                        Arc::new(Field::new_dict(
+                        Arc::new(Field::new(
                             "a".to_string(),
                             DataType::Dictionary(
                                 Box::new(DataType::Int32),
                                 Box::new(DataType::Utf8),
                             ),
                             true,
-                            0,
-                            false,
                         )),
                         Arc::new(
                             vec![Some("a"), None, Some("a")]
@@ -2517,15 +2524,13 @@ mod tests {
                         ) as ArrayRef,
                     ),
                     (
-                        Arc::new(Field::new_dict(
+                        Arc::new(Field::new(
                             "b".to_string(),
                             DataType::Dictionary(
                                 Box::new(DataType::Int32),
                                 Box::new(DataType::Utf8),
                             ),
                             true,
-                            0,
-                            false,
                         )),
                         Arc::new(
                             vec![Some("b"), Some("c"), Some("b")]

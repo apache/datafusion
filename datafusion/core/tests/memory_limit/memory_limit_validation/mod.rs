@@ -15,22 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer that rewrites [`ExecutionPlan`]s.
-//!
-//! These rules take advantage of physical plan properties , such as
-//! "Repartition" or "Sortedness"
-//!
-//! [`ExecutionPlan`]: crate::physical_plan::ExecutionPlan
+//! Validates query's actual memory usage is consistent with the specified memory
+//! limit.
 
-pub mod enforce_distribution;
-pub mod enforce_sorting;
-pub mod optimizer;
-pub mod projection_pushdown;
-pub mod replace_with_order_preserving_variants;
-#[cfg(test)]
-pub mod test_utils;
-
-mod sort_pushdown;
+mod sort_mem_validation;
 mod utils;
-
-pub use datafusion_physical_optimizer::*;

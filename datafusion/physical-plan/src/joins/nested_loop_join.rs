@@ -36,7 +36,12 @@ use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
+use crate::joins::SharedBitmapBuilder;
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use crate::projection::{
+    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
+    ProjectionExec,
+};
 use crate::{
     handle_state, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
     ExecutionPlanProperties, PlanProperties, RecordBatchStream,
@@ -57,7 +62,6 @@ use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 
-use crate::joins::SharedBitmapBuilder;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -555,6 +559,44 @@ impl ExecutionPlan for NestedLoopJoinExec {
             &self.join_schema,
         )
     }
+
+    /// Tries to push `projection` down through `nested_loop_join`. If possible, performs the
+    /// pushdown and returns a new [`NestedLoopJoinExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // TODO: currently if there is projection in NestedLoopJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+        if self.contains_projection() {
+            return Ok(None);
+        }
+
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            ..
+        }) = try_pushdown_through_join(
+            projection,
+            self.left(),
+            self.right(),
+            &[],
+            self.schema(),
+            self.filter(),
+        )? {
+            Ok(Some(Arc::new(NestedLoopJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_filter,
+                self.join_type(),
+                // Returned early if projection is not None
+                None,
+            )?)))
+        } else {
+            try_embed_projection(projection, self)
+        }
+    }
 }
 
 /// Asynchronously collect input into a single batch, and creates `JoinLeftData` from it
@@ -979,6 +1021,12 @@ impl<T: BatchTransformer + Unpin + Send> RecordBatchStream for NestedLoopJoinStr
     }
 }
 
+impl EmbeddedProjection for NestedLoopJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1104,7 +1152,11 @@ pub(crate) mod tests {
             Arc::new(BinaryExpr::new(left_filter, Operator::And, right_filter))
                 as Arc<dyn PhysicalExpr>;
 
-        JoinFilter::new(filter_expression, column_indices, intermediate_schema)
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
     }
 
     pub(crate) async fn multi_partitioned_join_collect(
@@ -1514,7 +1566,11 @@ pub(crate) mod tests {
             Arc::new(BinaryExpr::new(left_filter, Operator::And, right_filter))
                 as Arc<dyn PhysicalExpr>;
 
-        JoinFilter::new(filter_expression, column_indices, intermediate_schema)
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
     }
 
     fn generate_columns(num_columns: usize, num_rows: usize) -> Vec<Vec<i32>> {

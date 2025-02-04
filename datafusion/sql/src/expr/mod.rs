@@ -30,6 +30,7 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
     ScalarValue,
 };
+
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{InList, WildcardOptions};
 use datafusion_expr::{
@@ -165,6 +166,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        // The location of the original SQL expression in the source code
         let mut expr = self.sql_expr_to_logical_expr(sql, schema, planner_context)?;
         expr = self.rewrite_partial_qualifier(expr, schema);
         self.validate_schema_satisfies_exprs(schema, std::slice::from_ref(&expr))?;
@@ -819,10 +821,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("ANY in LIKE expression");
         }
         let pattern = self.sql_expr_to_logical_expr(pattern, schema, planner_context)?;
-        let pattern_type = pattern.get_type(schema)?;
-        if pattern_type != DataType::Utf8 && pattern_type != DataType::Null {
-            return plan_err!("Invalid pattern in LIKE expression");
-        }
         let escape_char = if let Some(char) = escape_char {
             if char.len() != 1 {
                 return plan_err!("Invalid escape character in LIKE expression");
@@ -1075,10 +1073,9 @@ mod tests {
     use sqlparser::parser::Parser;
 
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::TableReference;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
-
-    use crate::TableReference;
 
     use super::*;
 

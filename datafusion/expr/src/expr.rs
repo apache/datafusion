@@ -35,7 +35,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFSchema, HashMap, Result, ScalarValue, TableReference,
+    plan_err, Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
@@ -1111,7 +1111,11 @@ impl Expr {
     /// output schema. We can use this qualified name to reference the field.
     pub fn qualified_name(&self) -> (Option<TableReference>, String) {
         match self {
-            Expr::Column(Column { relation, name }) => (relation.clone(), name.clone()),
+            Expr::Column(Column {
+                relation,
+                name,
+                spans: _,
+            }) => (relation.clone(), name.clone()),
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
         }
@@ -1661,6 +1665,16 @@ impl Expr {
             | Expr::WindowFunction(..)
             | Expr::Literal(..)
             | Expr::Placeholder(..) => false,
+        }
+    }
+
+    /// Returns a reference to the set of locations in the SQL query where this
+    /// expression appears, if known. [`None`] is returned if the expression
+    /// type doesn't support tracking locations yet.
+    pub fn spans(&self) -> Option<&Spans> {
+        match self {
+            Expr::Column(col) => Some(&col.spans),
+            _ => None,
         }
     }
 }
@@ -2281,6 +2295,11 @@ impl Display for SchemaDisplay<'_> {
                 Ok(())
             }
             // Expr is not shown since it is aliased
+            Expr::Alias(Alias {
+                name,
+                relation: Some(relation),
+                ..
+            }) => write!(f, "{relation}.{name}"),
             Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
             Expr::Between(Between {
                 expr,
@@ -2769,10 +2788,10 @@ fn fmt_function(
 /// The name of the column (field) that this `Expr` will produce in the physical plan.
 /// The difference from [Expr::schema_name] is that top-level columns are unqualified.
 pub fn physical_name(expr: &Expr) -> Result<String> {
-    if let Expr::Column(col) = expr {
-        Ok(col.name.clone())
-    } else {
-        Ok(expr.schema_name().to_string())
+    match expr {
+        Expr::Column(col) => Ok(col.name.clone()),
+        Expr::Alias(alias) => Ok(alias.name.clone()),
+        _ => Ok(expr.schema_name().to_string()),
     }
 }
 
@@ -3021,6 +3040,30 @@ mod test {
             ),
             "* RENAME (c1 AS a1)"
         )
+    }
+
+    #[test]
+    fn test_schema_display_alias_with_relation() {
+        assert_eq!(
+            format!(
+                "{}",
+                SchemaDisplay(
+                    &lit(1).alias_qualified("table_name".into(), "column_name")
+                )
+            ),
+            "table_name.column_name"
+        );
+    }
+
+    #[test]
+    fn test_schema_display_alias_without_relation() {
+        assert_eq!(
+            format!(
+                "{}",
+                SchemaDisplay(&lit(1).alias_qualified(None::<&str>, "column_name"))
+            ),
+            "column_name"
+        );
     }
 
     fn wildcard_options(

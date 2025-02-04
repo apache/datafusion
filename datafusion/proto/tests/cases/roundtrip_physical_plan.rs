@@ -332,15 +332,13 @@ fn roundtrip_window() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         nth_value_window,
         &[col("b", &schema)?],
-        &LexOrdering {
-            inner: vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-        },
+        &LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }]),
         Arc::new(window_frame),
     ));
 
@@ -1134,15 +1132,13 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         udwf,
         &[col("b", &schema)?],
-        &LexOrdering {
-            inner: vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-        },
+        &LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }]),
         Arc::new(window_frame),
     ));
 
