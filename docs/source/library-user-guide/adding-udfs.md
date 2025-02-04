@@ -799,7 +799,7 @@ To register a Aggregate UDF, you need to wrap the function implementation in a [
 it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udaf.rs`].
 
-```rust
+```rustfixed
 # use datafusion::arrow::array::ArrayRef;
 # use datafusion::scalar::ScalarValue;
 # use datafusion::{error::Result, physical_plan::Accumulator};
@@ -907,7 +907,7 @@ The `create_udaf` has six arguments to check:
 - The sixth argument is the description of the state, which will by passed between execution stages.
 
 
-```rust
+```rustfixed
 
 # use datafusion::arrow::array::ArrayRef;
 # use datafusion::scalar::ScalarValue;
@@ -1060,13 +1060,22 @@ single method, `call`, that takes a slice of `Expr`s and returns a `Result<Arc<d
 In the `call` method, you parse the input `Expr`s and return a `TableProvider`. You might also want to do some
 validation of the input `Expr`s, e.g. checking that the number of arguments is correct.
 
-```torustfix
+```rust
+
 use datafusion::common::plan_err;
-use datafusion::datasource::function::TableFunctionImpl;
-// Other imports here
+use datafusion::catalog::TableFunctionImpl;
+use datafusion::arrow::array::{ArrayRef, Int64Array};
+use std::sync::Arc;
+use datafusion::datasource::memory::MemTable;
+use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::ScalarValue;
+use datafusion::common::Result;
+use datafusion_expr::Expr;
+use datafusion::catalog::TableProvider;
 
 /// A table function that returns a table provider with the value as a single column
-#[derive(Default)]
+#[derive(Debug)]
 pub struct EchoFunction {}
 
 impl TableFunctionImpl for EchoFunction {
