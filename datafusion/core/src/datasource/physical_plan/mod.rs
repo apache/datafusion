@@ -30,8 +30,9 @@ mod statistics;
 
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
+pub use self::parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
-pub use self::parquet::{ParquetFileMetrics, ParquetFileReaderFactory, ParquetSource};
+pub use self::parquet::{ParquetFileMetrics, ParquetFileReaderFactory};
 
 pub use arrow_file::ArrowSource;
 pub use avro::AvroSource;

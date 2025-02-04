@@ -170,7 +170,7 @@ impl ExecutionPlan for ArrowExec {
     }
 
     /// Redistribute files across partitions according to their size
-    /// See comments on [`FileGroupPartitioner`] for more detail.
+    /// See comments on `FileGroupPartitioner` for more detail.
     fn repartitioned(
         &self,
         target_partitions: usize,

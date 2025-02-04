@@ -351,7 +351,7 @@ impl ExecutionPlan for CsvExec {
     }
 
     /// Redistribute files across partitions according to their size
-    /// See comments on [`FileGroupPartitioner`] for more detail.
+    /// See comments on `FileGroupPartitioner` for more detail.
     ///
     /// Return `None` if can't get repartitioned (empty, compressed file, or `newlines_in_values` set).
     fn repartitioned(
