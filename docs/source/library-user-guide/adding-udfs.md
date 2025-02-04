@@ -703,7 +703,8 @@ Aggregate UDFs are functions that take a group of rows and return a single value
 
 For example, we will declare a single-type, single return type UDAF that computes the geometric mean.
 
-```torustfix
+```rustfixed
+
 use datafusion::arrow::array::ArrayRef;
 use datafusion::scalar::ScalarValue;
 use datafusion::{error::Result, physical_plan::Accumulator};
@@ -792,49 +793,105 @@ impl Accumulator for GeometricMean {
 }
 ```
 
-### registering an Aggregate UDF
+### Registering an Aggregate UDF
 
 To register a Aggregate UDF, you need to wrap the function implementation in a [`AggregateUDF`] struct and then register
 it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udaf.rs`].
 
-```torustfix
+```rust
+# use datafusion::arrow::array::ArrayRef;
+# use datafusion::scalar::ScalarValue;
+# use datafusion::{error::Result, physical_plan::Accumulator};
+#
+# #[derive(Debug)]
+# struct GeometricMean {
+#     n: u32,
+#     prod: f64,
+# }
+#
+# impl GeometricMean {
+#     pub fn new() -> Self {
+#         GeometricMean { n: 0, prod: 1.0 }
+#     }
+# }
+#
+# impl Accumulator for GeometricMean {
+#     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+#         Ok(vec![
+#             ScalarValue::from(self.prod),
+#             ScalarValue::from(self.n),
+#         ])
+#     }
+#
+#     fn evaluate(&mut self) -> Result<ScalarValue> {
+#         let value = self.prod.powf(1.0 / self.n as f64);
+#         Ok(ScalarValue::from(value))
+#     }
+#
+#     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+#         if values.is_empty() {
+#             return Ok(());
+#         }
+#         let arr = &values[0];
+#         (0..arr.len()).try_for_each(|index| {
+#             let v = ScalarValue::try_from_array(arr, index)?;
+#
+#             if let ScalarValue::Float64(Some(value)) = v {
+#                 self.prod *= value;
+#                 self.n += 1;
+#             } else {
+#                 unreachable!("")
+#             }
+#             Ok(())
+#         })
+#     }
+#
+#     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+#         if states.is_empty() {
+#             return Ok(());
+#         }
+#         let arr = &states[0];
+#         (0..arr.len()).try_for_each(|index| {
+#             let v = states
+#                 .iter()
+#                 .map(|array| ScalarValue::try_from_array(array, index))
+#                 .collect::<Result<Vec<_>>>()?;
+#             if let (ScalarValue::Float64(Some(prod)), ScalarValue::UInt32(Some(n))) = (&v[0], &v[1])
+#             {
+#                 self.prod *= prod;
+#                 self.n += n;
+#             } else {
+#                 unreachable!("")
+#             }
+#             Ok(())
+#         })
+#     }
+#
+#     fn size(&self) -> usize {
+#         std::mem::size_of_val(self)
+#     }
+# }
+
 use datafusion::logical_expr::{Volatility, create_udaf};
 use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
 
 // here is where we define the UDAF. We also declare its signature:
 let geometric_mean = create_udaf(
-// the name; used to represent it in plan descriptions and in the registry, to use in SQL.
-"geo_mean",
-// the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.
-vec![DataType::Float64],
-// the return type; DataFusion expects this to match the type returned by `evaluate`.
-Arc::new(DataType::Float64),
-Volatility::Immutable,
-// This is the accumulator factory; DataFusion uses it to create new accumulators.
-Arc::new( | _ | Ok(Box::new(GeometricMean::new()))),
-// This is the description of the state. `state()` must match the types here.
-Arc::new(vec![DataType::Float64, DataType::UInt32]),
+    // the name; used to represent it in plan descriptions and in the registry, to use in SQL.
+    "geo_mean",
+    // the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.
+    vec![DataType::Float64],
+    // the return type; DataFusion expects this to match the type returned by `evaluate`.
+    Arc::new(DataType::Float64),
+    Volatility::Immutable,
+    // This is the accumulator factory; DataFusion uses it to create new accumulators.
+    Arc::new( | _ | Ok(Box::new(GeometricMean::new()))),
+    // This is the description of the state. `state()` must match the types here.
+    Arc::new(vec![DataType::Float64, DataType::UInt32]),
 );
-
-
-// That gives us a `AggregateUDF` that we can register with the `SessionContext`:
-use datafusion::execution::context::SessionContext;
-
-let ctx = SessionContext::new();
-
-ctx.register_udaf(geometric_mean);
-
-// Then, we can query like below:
-
-let df = ctx.sql("SELECT geo_mean(a) FROM t").await?;
-
 ```
-
-[`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
-[`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
-[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 
 The `create_udaf` has six arguments to check:
 
@@ -848,6 +905,119 @@ The `create_udaf` has six arguments to check:
   for the same input.
 - The fifth argument is the function implementation. This is the function that we defined above.
 - The sixth argument is the description of the state, which will by passed between execution stages.
+
+
+```rust
+
+# use datafusion::arrow::array::ArrayRef;
+# use datafusion::scalar::ScalarValue;
+# use datafusion::{error::Result, physical_plan::Accumulator};
+#
+# #[derive(Debug)]
+# struct GeometricMean {
+#     n: u32,
+#     prod: f64,
+# }
+#
+# impl GeometricMean {
+#     pub fn new() -> Self {
+#         GeometricMean { n: 0, prod: 1.0 }
+#     }
+# }
+#
+# impl Accumulator for GeometricMean {
+#     fn state(&mut self) -> Result<Vec<ScalarValue>> {
+#         Ok(vec![
+#             ScalarValue::from(self.prod),
+#             ScalarValue::from(self.n),
+#         ])
+#     }
+#
+#     fn evaluate(&mut self) -> Result<ScalarValue> {
+#         let value = self.prod.powf(1.0 / self.n as f64);
+#         Ok(ScalarValue::from(value))
+#     }
+#
+#     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+#         if values.is_empty() {
+#             return Ok(());
+#         }
+#         let arr = &values[0];
+#         (0..arr.len()).try_for_each(|index| {
+#             let v = ScalarValue::try_from_array(arr, index)?;
+#
+#             if let ScalarValue::Float64(Some(value)) = v {
+#                 self.prod *= value;
+#                 self.n += 1;
+#             } else {
+#                 unreachable!("")
+#             }
+#             Ok(())
+#         })
+#     }
+#
+#     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+#         if states.is_empty() {
+#             return Ok(());
+#         }
+#         let arr = &states[0];
+#         (0..arr.len()).try_for_each(|index| {
+#             let v = states
+#                 .iter()
+#                 .map(|array| ScalarValue::try_from_array(array, index))
+#                 .collect::<Result<Vec<_>>>()?;
+#             if let (ScalarValue::Float64(Some(prod)), ScalarValue::UInt32(Some(n))) = (&v[0], &v[1])
+#             {
+#                 self.prod *= prod;
+#                 self.n += n;
+#             } else {
+#                 unreachable!("")
+#             }
+#             Ok(())
+#         })
+#     }
+#
+#     fn size(&self) -> usize {
+#         std::mem::size_of_val(self)
+#     }
+# }
+
+use datafusion::logical_expr::{Volatility, create_udaf};
+use datafusion::arrow::datatypes::DataType;
+use std::sync::Arc;
+use datafusion::execution::context::SessionContext;
+use datafusion::datasource::file_format::options::CsvReadOptions;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let geometric_mean = create_udaf(
+        "geo_mean",
+        vec![DataType::Float64],
+        Arc::new(DataType::Float64),
+        Volatility::Immutable,
+        Arc::new( | _ | Ok(Box::new(GeometricMean::new()))),
+        Arc::new(vec![DataType::Float64, DataType::UInt32]),
+    );
+
+    // That gives us a `AggregateUDF` that we can register with the `SessionContext`:
+    use datafusion::execution::context::SessionContext;
+
+    let ctx = SessionContext::new();
+    ctx.register_udaf(geometric_mean);
+
+    // register csv table first
+    let csv_path = "../../datafusion/core/tests/data/cars.csv".to_string();
+    ctx.register_csv("cars", &csv_path, CsvReadOptions::default().has_header(true)).await?;
+
+    // Then, we can query like below:
+    let df = ctx.sql("SELECT geo_mean(speed) FROM cars").await?;
+    Ok(())
+}
+
+```
+[`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
+[`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
+[`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
 
 
 ## Adding a User-Defined Table Function
