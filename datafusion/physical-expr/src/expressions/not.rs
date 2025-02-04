@@ -22,6 +22,7 @@ use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::utils::stats_v2_graph::{get_one, get_zero};
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
@@ -29,9 +30,7 @@ use datafusion_common::{cast::as_boolean_array, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2;
-use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-    Bernoulli, Exponential, Gaussian, Uniform, Unknown,
-};
+use datafusion_physical_expr_common::stats_v2::StatisticsV2::Bernoulli;
 
 /// Not expression
 #[derive(Debug, Eq)]
@@ -124,30 +123,19 @@ impl PhysicalExpr for NotExpr {
     fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
         assert_eq!(stats.len(), 1);
         match stats[0] {
-            Uniform { interval } => {
-                if interval.lower().data_type().eq(&DataType::Boolean)
-                    && interval.lower().data_type().eq(&DataType::Boolean)
-                {
-                    StatisticsV2::new_uniform(interval.not()?)
+            Bernoulli { p } => {
+                if p.eq(get_zero()) {
+                    StatisticsV2::new_bernoulli(get_one().clone())
+                } else if p.eq(get_one()) {
+                    StatisticsV2::new_bernoulli(get_zero().clone())
                 } else {
-                    Ok(StatisticsV2::new_unknown_with_uncertain_range())
-                }
-            }
-            Unknown { range, .. } => {
-                if range.lower().data_type().eq(&DataType::Boolean)
-                    && range.lower().data_type().eq(&DataType::Boolean)
-                {
-                    StatisticsV2::new_unknown(None, None, None, range.not()?)
-                } else {
-                    Ok(StatisticsV2::new_unknown_with_uncertain_range())
+                    StatisticsV2::new_bernoulli(get_one().sub_checked(p)?)
                 }
             }
             // Note: NOT Exponential distribution is mirrored on X axis and in fact,
             //  it is a plot of logarithmic function, which is Unknown.
             // Note: NOT Gaussian distribution is mirrored on X axis and is Unknown
-            Exponential { .. } | Gaussian { .. } | Bernoulli { .. } => {
-                Ok(StatisticsV2::new_unknown_with_uncertain_range())
-            }
+            _ => Ok(StatisticsV2::new_uncertain_bernoulli()),
         }
     }
 }
@@ -163,6 +151,7 @@ mod tests {
     use crate::expressions::{col, Column};
     use arrow::{array::BooleanArray, datatypes::*};
     use std::sync::LazyLock;
+    use datafusion_physical_expr_common::stats_v2::StatisticsV2::{Exponential, Gaussian, Uniform, Unknown};
 
     #[test]
     fn neg_op() -> Result<()> {
@@ -230,30 +219,12 @@ mod tests {
         let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
         let expr = not(a)?;
 
-        // Uniform with boolean bounds
-        assert_eq!(
-            expr.evaluate_statistics(&[&Uniform {
-                interval: Interval::CERTAINLY_FALSE
-            }])?,
-            Uniform {
-                interval: Interval::CERTAINLY_TRUE
-            }
-        );
-        assert_eq!(
-            expr.evaluate_statistics(&[&Uniform {
-                interval: Interval::CERTAINLY_FALSE
-            }])?,
-            Uniform {
-                interval: Interval::CERTAINLY_TRUE
-            }
-        );
-
         // Uniform with non-boolean bounds
         assert_eq!(
             expr.evaluate_statistics(&[&Uniform {
                 interval: Interval::make_unbounded(&DataType::Float64)?
             }])?,
-            uncertain_unknown()
+            StatisticsV2::new_uncertain_bernoulli()
         );
 
         // Exponential
@@ -262,7 +233,7 @@ mod tests {
                 rate: ScalarValue::new_one(&DataType::Float64)?,
                 offset: ScalarValue::new_one(&DataType::Float64)?
             }])?,
-            uncertain_unknown()
+            StatisticsV2::new_uncertain_bernoulli()
         );
 
         // Gaussian
@@ -271,18 +242,31 @@ mod tests {
                 mean: ScalarValue::new_one(&DataType::Float64)?,
                 variance: ScalarValue::new_one(&DataType::Float64)?
             }])?,
-            uncertain_unknown()
+            StatisticsV2::new_uncertain_bernoulli()
         );
 
         // Bernoulli
         assert_eq!(
             expr.evaluate_statistics(&[&Bernoulli {
-                p: ScalarValue::Float64(Some(0.25))
+                p: ScalarValue::Float64(Some(0.))
             }])?,
-            uncertain_unknown()
+            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(1.)))?
         );
 
-        // Unknown with boolean interval as range
+        assert_eq!(
+            expr.evaluate_statistics(&[&Bernoulli {
+                p: ScalarValue::Float64(Some(1.))
+            }])?,
+            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.)))?
+        );
+
+        assert_eq!(
+            expr.evaluate_statistics(&[&Bernoulli {
+                p: ScalarValue::Float64(Some(0.25))
+            }])?,
+            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.75)))?
+        );
+
         assert_eq!(
             expr.evaluate_statistics(&[&Unknown {
                 mean: Some(ScalarValue::Boolean(Some(true))),
@@ -290,12 +274,7 @@ mod tests {
                 variance: Some(ScalarValue::Boolean(Some(true))),
                 range: Interval::CERTAINLY_TRUE
             }])?,
-            Unknown {
-                mean: None,
-                median: None,
-                variance: None,
-                range: Interval::CERTAINLY_FALSE
-            }
+            StatisticsV2::new_uncertain_bernoulli()
         );
 
         // Unknown with non-boolean interval as range
@@ -306,19 +285,10 @@ mod tests {
                 variance: None,
                 range: Interval::make_unbounded(&DataType::Float64)?
             }])?,
-            uncertain_unknown()
+            StatisticsV2::new_uncertain_bernoulli()
         );
 
         Ok(())
-    }
-
-    fn uncertain_unknown() -> StatisticsV2 {
-        Unknown {
-            mean: None,
-            median: None,
-            variance: None,
-            range: Interval::UNCERTAIN,
-        }
     }
 
     fn schema() -> SchemaRef {

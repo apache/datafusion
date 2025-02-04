@@ -18,7 +18,7 @@
 //! Interval arithmetic library
 
 use crate::operator::Operator;
-use crate::type_coercion::binary::get_result_type;
+use crate::type_coercion::binary::{comparison_coercion_numeric, get_result_type};
 use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
@@ -642,11 +642,22 @@ impl Interval {
     pub fn contains_value<T: Borrow<ScalarValue>>(&self, other: T) -> Result<bool> {
         let rhs = other.borrow();
         if self.data_type().ne(&rhs.data_type()) {
-            return internal_err!(
-                "Data types must be compatible for containment checks, lhs:{}, rhs:{}",
-                self.data_type(),
-                rhs.data_type()
-            );
+            return if let Some(common_type) =
+                comparison_coercion_numeric(&self.data_type(), &rhs.data_type())
+            {
+                Ok(
+                    self.lower.cast_to(&common_type)? <= rhs.cast_to(&common_type)?
+                        && (self.upper.is_null()
+                            || rhs.cast_to(&common_type)?
+                                <= self.upper.cast_to(&common_type)?),
+                )
+            } else {
+                internal_err!(
+                    "Data types must be compatible for containment checks, lhs:{}, rhs:{}",
+                    self.data_type(),
+                    rhs.data_type()
+                )
+            };
         }
 
         // We only check the upper bound for a `None` value because `None`
@@ -2556,6 +2567,33 @@ mod tests {
         ];
         for (first, second, expected) in possible_cases {
             assert_eq!(first.contains(second)?, expected)
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_contains_value() -> Result<()> {
+        let possible_cases = vec![
+            (
+                Interval::make(Some(0), Some(100))?,
+                ScalarValue::Int32(Some(50)),
+                true,
+            ),
+            (
+                Interval::make(Some(0), Some(100))?,
+                ScalarValue::Int32(Some(150)),
+                false,
+            ),
+            (
+                Interval::make(Some(0), Some(100))?,
+                ScalarValue::Float64(Some(50.)),
+                true,
+            ),
+        ];
+
+        for (interval, value, expected) in possible_cases {
+            assert_eq!(interval.contains_value(value)?, expected)
         }
 
         Ok(())

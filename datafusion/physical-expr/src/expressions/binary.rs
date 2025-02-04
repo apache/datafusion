@@ -24,7 +24,6 @@ use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::utils::stats_v2_graph::{
     new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
-    new_unknown_from_interval,
 };
 use crate::PhysicalExpr;
 
@@ -541,8 +540,8 @@ impl PhysicalExpr for BinaryExpr {
                         self.propagate_constraints(interval, &[left, right])?;
                     if let Some(propagated) = propagated {
                         Ok(Some(vec![
-                            new_unknown_from_interval(&propagated[0])?,
-                            new_unknown_from_interval(&propagated[1])?,
+                            StatisticsV2::new_unknown_from_interval(&propagated[0])?,
+                            StatisticsV2::new_unknown_from_interval(&propagated[1])?,
                         ]))
                     } else {
                         Ok(None)
@@ -4727,8 +4726,8 @@ mod tests {
                 assert_eq!(
                     expr.propagate_statistics(&parent, &ref_view)?,
                     Some(vec![
-                        new_unknown_from_interval(&left_interval)?,
-                        new_unknown_from_interval(&right_interval)?
+                        StatisticsV2::new_unknown_from_interval(&left_interval)?,
+                        StatisticsV2::new_unknown_from_interval(&right_interval)?
                     ])
                 );
             }

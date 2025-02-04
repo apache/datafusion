@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::OnceLock;
 use crate::stats_v2::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
+use std::sync::OnceLock;
 
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result, ScalarValue};
@@ -29,8 +29,7 @@ fn get_ln_two() -> &'static ScalarValue {
     LN_TWO_LOCK.get_or_init(|| ScalarValue::Float64(Some(2_f64.ln())))
 }
 
-
-/// New, enhanced `Statistics` definition, represents five core definitions
+/// New, enhanced `Statistics` definition, represents five core definitions.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StatisticsV2 {
     Uniform {
@@ -45,6 +44,7 @@ pub enum StatisticsV2 {
         mean: ScalarValue,
         variance: ScalarValue,
     },
+    /// `p` always has [`DataType::Float64`]
     Bernoulli {
         p: ScalarValue,
     },
@@ -60,6 +60,13 @@ impl StatisticsV2 {
     /// Constructs a new [`StatisticsV2`] with [`Uniform`] distribution from given [`Interval`],
     /// and checks newly created statistic on validness.
     pub fn new_uniform(interval: Interval) -> Result<Self> {
+        if interval.data_type().eq(&DataType::Boolean) {
+            return internal_err!(
+                "Construction of boolean Uniform statistic is prohibited.\
+             Create Bernoulli statistic instead."
+            );
+        }
+
         let stat = Uniform { interval };
         if stat.is_valid()? {
             Ok(stat)
@@ -101,6 +108,12 @@ impl StatisticsV2 {
         }
     }
 
+    pub fn new_uncertain_bernoulli() -> Self {
+        Bernoulli {
+            p: ScalarValue::Float64(Some(0.5)),
+        }
+    }
+
     /// Constructs a new [`StatisticsV2`] with [`Unknown`] distribution from given
     /// mean, median, variance, which are optional and range. Additionally, constructor
     /// checks newly created statistic on validness.
@@ -110,6 +123,13 @@ impl StatisticsV2 {
         variance: Option<ScalarValue>,
         range: Interval,
     ) -> Result<Self> {
+        if range.data_type().eq(&DataType::Boolean) {
+            return internal_err!(
+                "Usage of boolean range during Unknown statistic construction \
+            is prohibited. Create Bernoulli statistic instead."
+            );
+        }
+
         let stat = Unknown {
             mean,
             median,
@@ -124,13 +144,20 @@ impl StatisticsV2 {
         }
     }
 
-    pub fn new_unknown_with_uncertain_range() -> Self {
-        Unknown {
-            mean: None,
-            median: None,
-            variance: None,
-            range: Interval::UNCERTAIN,
-        }
+    /// Creates a new [`Unknown`] statistics instance with a given range.
+    /// It makes its best to infer mean, median and variance, if it is possible.
+    /// This builder is moved here due to original package visibility limitations.
+    pub fn new_unknown_from_interval(range: &Interval) -> Result<StatisticsV2> {
+        // Note: to avoid code duplication for mean/median/variance computation, we wrap
+        // existing range in temporary uniform distribution and compute all these properties.
+        let fake_uniform = &StatisticsV2::new_uniform(range.clone())?;
+
+        StatisticsV2::new_unknown(
+            fake_uniform.mean()?,
+            fake_uniform.median()?,
+            fake_uniform.variance()?,
+            range.clone(),
+        )
     }
 
     /// Validates accumulated statistic for selected distribution methods:
@@ -157,6 +184,11 @@ impl StatisticsV2 {
                 Ok(variance.ge(&zero))
             }
             Bernoulli { p } => {
+                if !p.data_type().eq(&DataType::Float64) {
+                    return internal_err!(
+                        "Bernoulli distribution can hold only float probability"
+                    );
+                }
                 let zero = ScalarValue::new_zero(&DataType::Float64)?;
                 let one = ScalarValue::new_one(&DataType::Float64)?;
                 Ok(p.ge(&zero) && p.le(&one))
@@ -240,9 +272,7 @@ impl StatisticsV2 {
                     .cast_to(&DataType::Float64)?;
                 agg.div(ScalarValue::Float64(Some(2.))).map(Some)
             }
-            Exponential { rate, .. } => {
-                get_ln_two().div(rate).map(Some)
-            }
+            Exponential { rate, .. } => get_ln_two().div(rate).map(Some),
             Gaussian { mean, .. } => Ok(Some(mean.clone())),
             Bernoulli { p } => {
                 if p.gt(&ScalarValue::Float64(Some(0.5))) {
@@ -264,8 +294,13 @@ impl StatisticsV2 {
     pub fn variance(&self) -> Result<Option<ScalarValue>> {
         match &self {
             Uniform { interval, .. } => {
-                let base_value_ref = interval.upper().sub_checked(interval.lower())?;
-                let base_pow = base_value_ref.mul_checked(&base_value_ref)?;
+                let base_value_ref = interval
+                    .upper()
+                    .sub_checked(interval.lower())?
+                    .cast_to(&DataType::Float64)?;
+                let base_pow = base_value_ref
+                    .mul_checked(&base_value_ref)?
+                    .cast_to(&DataType::Float64)?;
                 base_pow.div(ScalarValue::Float64(Some(12.))).map(Some)
             }
             Exponential { rate, .. } => {
@@ -299,8 +334,8 @@ impl StatisticsV2 {
                     ScalarValue::try_from(offset_data_type)?,
                 )?;
                 Ok(interval)
-            },
-            Gaussian {..} => Ok(Interval::make_unbounded(&DataType::Float64)?),
+            }
+            Gaussian { .. } => Ok(Interval::make_unbounded(&DataType::Float64)?),
             Bernoulli { p } => {
                 if p.eq(&ScalarValue::new_zero(&DataType::Float64)?) {
                     Ok(Interval::CERTAINLY_FALSE)
@@ -309,7 +344,7 @@ impl StatisticsV2 {
                 } else {
                     Ok(Interval::UNCERTAIN)
                 }
-            },
+            }
             Unknown { range, .. } => Ok(range.clone()),
         }
     }
@@ -346,6 +381,8 @@ mod tests {
                 interval: Interval::make_zero(&DataType::Int8).unwrap()
             }
         );
+
+        assert!(StatisticsV2::new_uniform(Interval::UNCERTAIN).is_err());
     }
 
     #[test]
@@ -425,6 +462,10 @@ mod tests {
                 true,
             ),
             (
+                StatisticsV2::new_bernoulli(ScalarValue::Int64(Some(0))),
+                false,
+            ),
+            (
                 StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.25))),
                 true,
             ),
@@ -449,6 +490,11 @@ mod tests {
     #[test]
     fn unknown_stats_is_valid_test() {
         let unknown_stats = vec![
+            // Usage of boolean range during Unknown statistic construction is prohibited.
+            (
+                StatisticsV2::new_unknown(None, None, None, Interval::UNCERTAIN),
+                false,
+            ),
             (
                 StatisticsV2::new_unknown(
                     None,
@@ -737,6 +783,12 @@ mod tests {
                     Interval::make_zero(&DataType::Float64).unwrap(),
                 ),
                 Some(ScalarValue::Float64(Some(0.02))),
+            ),
+            (
+                StatisticsV2::new_unknown_from_interval(
+                    &Interval::make(Some(0), Some(12)).unwrap(),
+                ),
+                Some(ScalarValue::Float64(Some(12.))),
             ),
         ];
         //endregion

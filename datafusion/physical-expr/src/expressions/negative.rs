@@ -21,7 +21,6 @@ use std::any::Any;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::utils::stats_v2_graph::new_unknown_from_interval;
 use crate::PhysicalExpr;
 
 use arrow::{
@@ -162,15 +161,20 @@ impl PhysicalExpr for NegativeExpr {
                         self.evaluate_bounds(&[range])?,
                     )
                 } else {
-                    new_unknown_from_interval(&self.evaluate_bounds(&[range])?)
+                    StatisticsV2::new_unknown_from_interval(
+                        &self.evaluate_bounds(&[range])?,
+                    )
                 }
             }
             Bernoulli { p } => StatisticsV2::new_bernoulli(
                 ScalarValue::new_one(&DataType::Float64)?.sub_checked(p)?,
             ),
-            Exponential { .. } | Gaussian { .. } => {
-                Ok(StatisticsV2::new_unknown_with_uncertain_range())
-            }
+            Exponential { .. } | Gaussian { .. } => Ok(StatisticsV2::new_unknown(
+                None,
+                None,
+                None,
+                Interval::make_unbounded(&DataType::Float64)?,
+            )?),
         }
     }
 
@@ -199,7 +203,9 @@ impl PhysicalExpr for NegativeExpr {
                         self.propagate_constraints(parent_interval, &[child_interval])?;
 
                     if let Some(propagated) = propagated {
-                        Ok(Some(vec![new_unknown_from_interval(&propagated[0])?]))
+                        Ok(Some(vec![StatisticsV2::new_unknown_from_interval(
+                            &propagated[0],
+                        )?]))
                     } else {
                         Ok(None)
                     }
@@ -329,7 +335,12 @@ mod tests {
                 rate: ScalarValue::Float64(Some(1.)),
                 offset: ScalarValue::Float64(Some(1.)),
             }])?,
-            StatisticsV2::new_unknown_with_uncertain_range()
+            StatisticsV2::new_unknown(
+                None,
+                None,
+                None,
+                Interval::make_unbounded(&Float64)?,
+            )?
         );
 
         // Gaussian
@@ -338,7 +349,12 @@ mod tests {
                 mean: ScalarValue::Int32(Some(15)),
                 variance: ScalarValue::Int32(Some(225)),
             }])?,
-            StatisticsV2::new_unknown_with_uncertain_range()
+            StatisticsV2::new_unknown(
+                None,
+                None,
+                None,
+                Interval::make_unbounded(&Float64)?,
+            )?
         );
 
         // Unknown
@@ -379,10 +395,10 @@ mod tests {
     #[test]
     fn test_propagate_statistics_range_holders() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
-        let original_child_interval = Interval::make(Some(-2.), Some(3.))?;
-        let after_propagation = Interval::make(Some(-2.), Some(0.))?;
+        let original_child_interval = Interval::make(Some(-2), Some(3))?;
+        let after_propagation = Interval::make(Some(-2), Some(0))?;
 
-        let parent = StatisticsV2::new_uniform(Interval::make(Some(0.), Some(4.))?)?;
+        let parent = StatisticsV2::new_uniform(Interval::make(Some(0), Some(4))?)?;
         let children: Vec<Vec<StatisticsV2>> = vec![
             vec![Uniform {
                 interval: original_child_interval.clone(),
@@ -397,10 +413,12 @@ mod tests {
 
         for child_view in children {
             let ref_view: Vec<&StatisticsV2> = child_view.iter().collect();
-            assert_eq!(
-                negative_expr.propagate_statistics(&parent, &ref_view)?,
-                Some(vec![new_unknown_from_interval(&after_propagation)?])
-            );
+
+            let actual = negative_expr.propagate_statistics(&parent, &ref_view)?;
+            let expected = Some(vec![StatisticsV2::new_unknown_from_interval(
+                &after_propagation,
+            )?]);
+            assert_eq!(actual, expected);
         }
 
         Ok(())
