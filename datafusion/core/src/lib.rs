@@ -875,6 +875,12 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/adding-udfs.md",
+    library_user_guide_adding_udfs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/library-user-guide/using-the-sql-api.md",
     library_user_guide_sql_api
 );
