@@ -2511,6 +2511,22 @@ fn select_groupby_orderby() {
   FROM person GROUP BY person.birth_date ORDER BY birth_date;
 "#;
     quick_test(sql, expected);
+
+    // Use columnized `avg(age)` in the order by
+    let sql = r#"SELECT
+  avg(age) + avg(age) + 1,
+  date_trunc('month', person.birth_date) AS "birth_date"
+  FROM person GROUP BY person.birth_date ORDER BY avg(age);
+"#;
+
+    let expected = 
+    "Projection: avg(person.age) + avg(person.age) + Int64(1), birth_date\
+     \n  Sort: avg(person.age) ASC NULLS LAST\
+     \n    Projection: avg(person.age) + avg(person.age) + Int64(1), date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date, avg(person.age)\
+     \n      Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]\
+     \n        TableScan: person";
+
+    quick_test(sql, expected);
 }
 
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
