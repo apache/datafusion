@@ -353,9 +353,9 @@ fn build_join(
         ) => {
             let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
             let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
-            Some(in_predicate.and(join_filter))
+            in_predicate.and(join_filter)
         }
-        (Some(join_filter), _) => Some(join_filter),
+        (Some(join_filter), _) => join_filter,
         (
             _,
             Some(Expr::BinaryExpr(BinaryExpr {
@@ -366,23 +366,19 @@ fn build_join(
         ) => {
             let right_col = create_col_from_scalar_expr(right.deref(), alias)?;
             let in_predicate = Expr::eq(left.deref().clone(), Expr::Column(right_col));
-            Some(in_predicate)
+            in_predicate
         }
-        _ => None,
+        _ => return Ok(None),
     };
-    if let Some(join_filter) = join_filter {
-        // join our sub query into the main plan
-        let new_plan = LogicalPlanBuilder::from(left.clone())
-            .join_on(sub_query_alias, join_type, Some(join_filter))?
-            .build()?;
-        debug!(
-            "predicate subquery optimized:\n{}",
-            new_plan.display_indent()
-        );
-        Ok(Some(new_plan))
-    } else {
-        Ok(None)
-    }
+    // join our sub query into the main plan
+    let new_plan = LogicalPlanBuilder::from(left.clone())
+        .join_on(sub_query_alias, join_type, Some(join_filter))?
+        .build()?;
+    debug!(
+        "predicate subquery optimized:\n{}",
+        new_plan.display_indent()
+    );
+    Ok(Some(new_plan))
 }
 
 struct SubqueryInfo {
