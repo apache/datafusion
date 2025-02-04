@@ -128,13 +128,13 @@ There is a an older, more concise, but also more limited API [`create_udf`] avai
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int64Array};
-use datafusion::common::Result;
 use datafusion::common::cast::as_int64_array;
-use datafusion::physical_plan::functions::columnar_values_to_array;
+use datafusion::common::Result;
+use datafusion::logical_expr::ColumnarValue;
 
-pub fn add_one(args: &[ColumnarValue]) -> Result<ArrayRef> {
+pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // Error handling omitted for brevity
-    let args = columnar_values_to_array(args)?;
+    let args = ColumnarValue::values_to_arrays(args)?;
     let i64s = as_int64_array(&args[0])?;
 
     let new_array = i64s
@@ -142,7 +142,7 @@ pub fn add_one(args: &[ColumnarValue]) -> Result<ArrayRef> {
         .map(|array_elem| array_elem.map(|value| value + 1))
         .collect::<Int64Array>();
 
-    Ok(Arc::new(new_array))
+    Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
 }
 ```
 
@@ -151,10 +151,11 @@ This "works" in isolation, i.e. if you have a slice of `ArrayRef`s, you can call
 
 ```torustfix
 let input = vec![Some(1), None, Some(3)];
-let input = Arc::new(Int64Array::from(input)) as ArrayRef;
+let input = ColumnarValue::from(Arc::new(Int64Array::from(input)) as ArrayRef);
 
-let result = add_one( & [input]).unwrap();
-let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+let result = add_one(&[input]).unwrap();
+let binding = result.into_array(1).unwrap();
+let result = binding.as_any().downcast_ref::<Int64Array>().unwrap();
 
 assert_eq!(result, &Int64Array::from(vec![Some(2), None, Some(4)]));
 ```
@@ -174,11 +175,11 @@ use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
 
 let udf = create_udf(
-"add_one",
-vec![DataType::Int64],
-Arc::new(DataType::Int64),
-Volatility::Immutable,
-Arc::new(add_one),
+    "add_one",
+    vec![DataType::Int64],
+    DataType::Int64,
+    Volatility::Immutable,
+    Arc::new(add_one),
 );
 ```
 
