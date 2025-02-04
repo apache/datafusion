@@ -556,14 +556,12 @@ impl ExprIntervalGraph {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
-            let mut children_intervals = neighbors
+            let children_intervals = neighbors
                 .map(|child| self.graph[child].interval())
                 .collect::<Vec<_>>();
             // If the current expression is a leaf, its interval should already
             // be set externally, just continue with the evaluation procedure:
             if !children_intervals.is_empty() {
-                // Reverse to align with `PhysicalExpr`'s children:
-                children_intervals.reverse();
                 self.graph[node].interval =
                     self.graph[node].expr.evaluate_bounds(&children_intervals)?;
             }
@@ -577,8 +575,6 @@ impl ExprIntervalGraph {
         &mut self,
         given_range: Interval,
     ) -> Result<PropagationResult> {
-        let mut bfs = Bfs::new(&self.graph, self.root);
-
         // Adjust the root node with the given range:
         if let Some(interval) = self.graph[self.root].interval.intersect(given_range)? {
             self.graph[self.root].interval = interval;
@@ -586,16 +582,16 @@ impl ExprIntervalGraph {
             return Ok(PropagationResult::Infeasible);
         }
 
+        let mut bfs = Bfs::new(&self.graph, self.root);
+
         while let Some(node) = bfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
-            let mut children = neighbors.collect::<Vec<_>>();
+            let children = neighbors.collect::<Vec<_>>();
             // If the current expression is a leaf, its range is now final.
             // So, just continue with the propagation procedure:
             if children.is_empty() {
                 continue;
             }
-            // Reverse to align with `PhysicalExpr`'s children:
-            children.reverse();
             let children_intervals = children
                 .iter()
                 .map(|child| self.graph[*child].interval())

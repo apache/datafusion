@@ -18,6 +18,7 @@
 use std::sync::{Arc, OnceLock};
 
 use crate::expressions::Literal;
+use crate::intervals::cp_solver::PropagationResult;
 use crate::physical_expr::PhysicalExpr;
 use crate::utils::{build_dag, ExprTreeNode};
 
@@ -33,14 +34,12 @@ use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
     Exponential, Gaussian, Uniform, Unknown,
 };
 
-use crate::intervals::cp_solver::PropagationResult;
 use log::debug;
 use petgraph::adj::DefaultIx;
 use petgraph::prelude::Bfs;
 use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::visit::DfsPostOrder;
 use petgraph::Outgoing;
-use StatisticsV2::Bernoulli;
 
 #[derive(Clone, Debug)]
 pub struct ExprStatisticGraphNode {
@@ -62,6 +61,14 @@ pub fn get_one() -> &'static ScalarValue {
 }
 
 impl ExprStatisticGraphNode {
+    /// Creates a DAEG node from DataFusion's [`ExprTreeNode`] object and `StatisticV2` statistic.
+    pub fn make_node_with_stats(
+        node: &ExprTreeNode<NodeIndex>,
+        stats: StatisticsV2,
+    ) -> Self {
+        Self::new(Arc::clone(&node.expr), stats)
+    }
+
     /// Creates a DAEG node from DataFusion's [`ExprTreeNode`] object. Literals are creating
     /// [`Uniform`] distribution kind of statistic with definite, singleton intervals.
     /// Otherwise, create [`Unknown`] statistic with an unbounded interval, by default.
@@ -82,14 +89,6 @@ impl ExprStatisticGraphNode {
         }
     }
 
-    /// Creates a DAEG node from DataFusion's [`ExprTreeNode`] object and [`StatisticV2`] statistic.
-    pub fn make_node_with_stats(
-        node: &ExprTreeNode<NodeIndex>,
-        stats: StatisticsV2,
-    ) -> Self {
-        Self::new(Arc::clone(&node.expr), stats)
-    }
-
     /// Creates a new graph node with prepared statistics
     fn new(expr: Arc<dyn PhysicalExpr>, stats: StatisticsV2) -> Self {
         ExprStatisticGraphNode {
@@ -106,7 +105,7 @@ impl ExprStatisticGraphNode {
         }
     }
 
-    /// Creates a new graph node as [`Bernoulli`] distribution with uncertain probability.
+    /// Creates a new graph node as `Bernoulli` distribution with uncertain probability.
     fn new_bernoulli(expr: Arc<dyn PhysicalExpr>) -> Result<Self> {
         Ok(ExprStatisticGraphNode {
             expr,
@@ -163,20 +162,30 @@ impl ExprStatisticGraph {
     }
 
     /// Runs a propagation mechanism in a top-down manner to define a statistics for a leaf nodes.
-    pub fn propagate(&mut self) -> Result<PropagationResult> {
-        match &self.graph[self.root].statistics {
-            Bernoulli { p } => {
-                if p.eq(get_zero()) {
-                    return Ok(PropagationResult::Infeasible);
-                } else if p.eq(get_one()) {
-                    return Ok(PropagationResult::CannotPropagate);
-                } else {
-                    self.graph[self.root].statistics = Uniform {
-                        interval: Interval::CERTAINLY_TRUE,
-                    }
-                }
+    pub fn propagate_statistics(
+        &mut self,
+        given_stats: StatisticsV2,
+    ) -> Result<PropagationResult> {
+        // Adjust the root node with the given range:
+        if let Some(interval) = self.graph[self.root]
+            .statistics
+            .range()?
+            .intersect(given_stats.range()?)?
+        {
+            if interval == Interval::CERTAINLY_TRUE {
+                self.graph[self.root].statistics =
+                    StatisticsV2::new_bernoulli(get_one().clone())?;
+            } else if interval == Interval::CERTAINLY_FALSE {
+                self.graph[self.root].statistics =
+                    StatisticsV2::new_bernoulli(get_zero().clone())?;
             }
-            _ => return Ok(PropagationResult::Infeasible),
+            // if interval == Interval::UNCERTAIN => do nothing to the root
+            else if interval != Interval::UNCERTAIN {
+                self.graph[self.root].statistics =
+                    StatisticsV2::new_unknown_from_interval(&interval)?;
+            }
+        } else {
+            return Ok(PropagationResult::Infeasible);
         }
 
         let mut bfs = Bfs::new(&self.graph, self.root);
@@ -214,15 +223,13 @@ impl ExprStatisticGraph {
     /// Runs a statistics evaluation mechanism in a bottom-up manner,
     /// to calculate a root expression statistic.
     /// Returns a calculated root expression statistic.
-    pub fn evaluate(&mut self) -> Result<&StatisticsV2> {
+    pub fn evaluate_statistics(&mut self) -> Result<&StatisticsV2> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
-
         while let Some(idx) = dfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(idx, Outgoing);
             let children_statistics = neighbors
                 .map(|child| &self.graph[child].statistics)
                 .collect::<Vec<_>>();
-
             // Note: all distributions are recognized as independent, by default.
             if !children_statistics.is_empty() {
                 self.graph[idx].statistics = self.graph[idx]
@@ -251,7 +258,7 @@ pub fn new_unknown_from_binary_expr(
 }
 
 //noinspection DuplicatedCode
-/// Tries to create a new [`Bernoulli`] distribution, by computing the result probability,
+/// Tries to create a new `Bernoulli` distribution, by computing the result probability,
 /// specifically, for Eq and NotEq operators with range-contained distributions.
 /// If not being able to compute a probability, returns an [`Unknown`] distribution.
 pub fn new_bernoulli_from_binary_expr(
@@ -467,10 +474,8 @@ pub fn compute_range(
             Operator::Eq => {
                 if let Some(intersection) = l.intersect(r)? {
                     Ok(intersection)
-                } else if let Some(data_type) = left_stat.data_type() {
-                    Interval::make_zero(&data_type)
                 } else {
-                    internal_err!("Invariant violation: data_type cannot be None here")
+                    Interval::make_zero(&left_stat.data_type())
                 }
             }
             _ => Interval::make_unbounded(&DataType::Float64),
@@ -481,11 +486,15 @@ pub fn compute_range(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::expressions::{binary, try_cast, BinaryExpr, Column};
     use crate::intervals::cp_solver::PropagationResult;
     use crate::utils::stats_v2_graph::{
-        compute_mean, compute_median, compute_range, compute_variance, ExprStatisticGraph,
+        compute_mean, compute_median, compute_range, compute_variance, get_one,
+        ExprStatisticGraph,
     };
+
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::ScalarValue::Float64;
     use datafusion_common::{Result, ScalarValue};
@@ -500,7 +509,6 @@ mod tests {
     use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
         Bernoulli, Uniform, Unknown,
     };
-    use std::sync::Arc;
 
     type Actual = Option<ScalarValue>;
     type Expected = Option<ScalarValue>;
@@ -727,7 +735,7 @@ mod tests {
                 StatisticsV2::new_uniform(Interval::make(Some(1.), Some(5.))?)?,
             ),
         ]);
-        let ev_stats = graph.evaluate()?;
+        let ev_stats = graph.evaluate_statistics()?;
         assert_eq!(
             ev_stats,
             &Bernoulli {
@@ -741,7 +749,11 @@ mod tests {
                 p: ScalarValue::from(Some(0.5)),
             },
         );
-        assert_eq!(graph.propagate().unwrap(), PropagationResult::Success);
+        assert_eq!(
+            graph
+                .propagate_statistics(StatisticsV2::new_bernoulli(get_one().clone())?)?,
+            PropagationResult::Success
+        );
         Ok(())
     }
 }

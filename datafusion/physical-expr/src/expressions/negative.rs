@@ -145,27 +145,28 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
-        assert_eq!(stats.len(), 1);
+        debug_assert_eq!(stats.len(), 1);
         match stats[0] {
             Uniform { interval } => {
                 StatisticsV2::new_uniform(self.evaluate_bounds(&[interval])?)
             }
-            Unknown { range, .. } => {
-                if let (Some(mean), Some(median), Some(variance)) =
-                    (stats[0].mean()?, stats[0].median()?, stats[0].variance()?)
-                {
-                    StatisticsV2::new_unknown(
-                        Some(mean.arithmetic_negate()?),
-                        Some(median.arithmetic_negate()?),
-                        Some(variance),
-                        self.evaluate_bounds(&[range])?,
-                    )
-                } else {
-                    StatisticsV2::new_unknown_from_interval(
-                        &self.evaluate_bounds(&[range])?,
-                    )
-                }
-            }
+            Unknown {
+                mean,
+                median,
+                variance,
+                range,
+            } => StatisticsV2::new_unknown(
+                mean.as_ref().map(|mn| mn.arithmetic_negate()).transpose()?,
+                median
+                    .as_ref()
+                    .map(|md| md.arithmetic_negate())
+                    .transpose()?,
+                variance
+                    .as_ref()
+                    .map(|var| var.arithmetic_negate())
+                    .transpose()?,
+                self.evaluate_bounds(&[range])?,
+            ),
             Bernoulli { p } => StatisticsV2::new_bernoulli(
                 ScalarValue::new_one(&DataType::Float64)?.sub_checked(p)?,
             ),
@@ -183,7 +184,7 @@ impl PhysicalExpr for NegativeExpr {
         parent_stat: &StatisticsV2,
         children_stat: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
-        assert_eq!(
+        debug_assert_eq!(
             children_stat.len(),
             1,
             "NegativeExpr should have only one child"
@@ -191,6 +192,10 @@ impl PhysicalExpr for NegativeExpr {
         match parent_stat {
             Uniform {
                 interval: parent_interval,
+            }
+            | Unknown {
+                range: parent_interval,
+                ..
             } => match children_stat[0] {
                 Uniform {
                     interval: child_interval,
