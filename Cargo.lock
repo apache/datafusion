@@ -866,7 +866,6 @@ dependencies = [
  "base64-simd",
  "bytes",
  "bytes-utils",
- "futures-core",
  "http 0.2.12",
  "http 1.2.0",
  "http-body 0.4.6",
@@ -879,8 +878,6 @@ dependencies = [
  "ryu",
  "serde",
  "time",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -1840,16 +1837,12 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-credential-types",
- "aws-sdk-sso",
- "aws-sdk-ssooidc",
- "aws-sdk-sts",
  "clap 4.5.28",
  "ctor",
  "datafusion",
  "dirs",
  "env_logger",
  "futures",
- "home",
  "mimalloc",
  "object_store",
  "parking_lot",
