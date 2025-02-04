@@ -389,6 +389,10 @@ where o_orderstatus in (
 2
 3
 
+# uncorrelated exists
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT 1 WHERE EXISTS (SELECT 1)
+
 #exists_subquery_with_same_table
 #Subquery and outer query refer to the same table.
 #It will not be rewritten to join because it is not a correlated subquery.
