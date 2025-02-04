@@ -127,10 +127,8 @@ There is a an older, more concise, but also more limited API [`create_udf`] avai
 
 #### Adding a Scalar UDF
 
-```rust
+```rustfixed
 use std::sync::Arc;
-use arrow_array::Int64Array;
-
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::common::cast::as_int64_array;
 use datafusion::common::Result;
@@ -148,12 +146,10 @@ pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
     Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
 }
-```
 
-This "works" in isolation, i.e. if you have a slice of `ArrayRef`s, you can call `add_one` and it will return a new
-`ArrayRef` with 1 added to each value.
+// This "works" in isolation, i.e. if you have a slice of `ArrayRef`s, you can call `add_one` and it will return a new
+// `ArrayRef` with 1 added to each value.
 
-```rust
 let input = vec![Some(1), None, Some(3)];
 let input = ColumnarValue::from(Arc::new(Int64Array::from(input)) as ArrayRef);
 
@@ -174,9 +170,27 @@ with the `SessionContext`.
 DataFusion provides the [`create_udf`] and helper functions to make this easier.
 
 ```rust
+use std::sync::Arc;
+use datafusion::arrow::array::{ArrayRef, Int64Array};
+use datafusion::common::cast::as_int64_array;
+use datafusion::common::Result;
+use datafusion::logical_expr::ColumnarValue;
+
 use datafusion::logical_expr::{Volatility, create_udf};
 use datafusion::arrow::datatypes::DataType;
-use std::sync::Arc;
+
+pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    // Error handling omitted for brevity
+    let args = ColumnarValue::values_to_arrays(args)?;
+    let i64s = as_int64_array(&args[0])?;
+
+    let new_array = i64s
+        .iter()
+        .map(|array_elem| array_elem.map(|value| value + 1))
+        .collect::<Int64Array>();
+
+    Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
+}
 
 let udf = create_udf(
     "add_one",
@@ -185,14 +199,21 @@ let udf = create_udf(
     Volatility::Immutable,
     Arc::new(add_one),
 );
+
+// That gives us a `ScalarUDF` that we can register with the `SessionContext`:
+
+use datafusion::execution::context::SessionContext;
+
+let mut ctx = SessionContext::new();
+ctx.register_udf(udf);
+
+// At this point, you can use the `add_one` function in your query:
+
+let query = "SELECT add_one(1)";
+let df = ctx.sql(&query);
 ```
 
-[`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
-[`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
-[`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
-[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
-
-A few things to note:
+A few things to note on `create_udf`:
 
 - The first argument is the name of the function. This is the name that will be used in SQL queries.
 - The second argument is a vector of `DataType`s. This is the list of argument types that the function accepts. I.e. in
@@ -204,23 +225,10 @@ A few things to note:
   for the same input.
 - The fifth argument is the function implementation. This is the function that we defined above.
 
-That gives us a `ScalarUDF` that we can register with the `SessionContext`:
-
-```torustfix
-use datafusion::execution::context::SessionContext;
-
-let mut ctx = SessionContext::new();
-
-ctx.register_udf(udf);
-```
-
-At this point, you can use the `add_one` function in your query:
-
-```torustfix
-let sql = "SELECT add_one(1)";
-
-let df = ctx.sql( & sql).await.unwrap();
-```
+[`scalarudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html
+[`create_udf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udf.html
+[`process_scalar_func_inputs`]: https://docs.rs/datafusion/latest/datafusion/physical_expr/functions/fn.process_scalar_func_inputs.html
+[`advanced_udf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udf.rs
 
 ## Adding a Window UDF
 
