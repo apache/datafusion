@@ -23,7 +23,7 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::common::{
     not_impl_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef,
+    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, TableReference,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
@@ -66,7 +66,6 @@ use datafusion::logical_expr::{
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion::prelude::{lit, JoinType};
-use datafusion::sql::TableReference;
 use datafusion::{
     error::Result, logical_expr::utils::split_conjunction, prelude::Column,
     scalar::ScalarValue,

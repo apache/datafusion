@@ -139,6 +139,7 @@ parquet = { version = "54.1.0", default-features = false, features = [
     "object_store",
 ] }
 pbjson = { version = "0.7.0" }
+pbjson-types = "0.7"
 # Should match arrow-flight's version of prost.
 prost = "0.13.1"
 prost-derive = "0.13.1"
