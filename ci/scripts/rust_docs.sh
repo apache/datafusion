@@ -20,5 +20,3 @@
 set -ex
 export RUSTDOCFLAGS="-D warnings"
 cargo doc --document-private-items --no-deps --workspace --locked
-cd datafusion-cli
-cargo doc --document-private-items --no-deps --locked

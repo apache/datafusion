@@ -224,10 +224,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run doctests
-        run: |
-          cargo test --profile ci --doc --features avro,json --locked
-          cd datafusion-cli
-          cargo test --profile ci --doc --all-features --locked
+        run: cargo test --profile ci --doc --features avro,json --locked
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -354,8 +351,6 @@ jobs:
   #        run: |
   #          export PATH=$PATH:$HOME/d/protoc/bin
   #          cargo test --lib --tests --bins --features avro,json,backtrace
-  #          cd datafusion-cli
-  #          cargo test --lib --tests --bins --all-features
 
   # Commenting out intel mac build as so few users would ever use it
   # Details: https://github.com/apache/datafusion/issues/13846
@@ -371,10 +366,7 @@ jobs:
   #        uses: ./.github/actions/setup-macos-builder
   #      - name: Run tests (excluding doctests)
   #        shell: bash
-  #        run: |
-  #          cargo test run --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace
-  #          cd datafusion-cli
-  #          cargo test run --profile ci --lib --tests --bins --all-features
+  #        run: cargo test run --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace
 
   macos-aarch64:
     name: cargo test (macos-aarch64)
@@ -388,10 +380,7 @@ jobs:
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run tests (excluding doctests)
         shell: bash
-        run: |
-          cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests --locked
-          cd datafusion-cli
-          cargo test --profile ci --lib --tests --bins --all-features --locked
+        run: cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests --locked
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
@@ -607,7 +596,4 @@ jobs:
         run: cargo msrv --output-format json --log-target stdout verify
       - name: Check datafusion-proto
         working-directory: datafusion/proto
-        run: cargo msrv --output-format json --log-target stdout verify
-      - name: Check datafusion-cli
-        working-directory: datafusion-cli
         run: cargo msrv --output-format json --log-target stdout verify
