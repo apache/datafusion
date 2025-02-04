@@ -301,7 +301,7 @@ A few things to note on `create_udf`:
 
 That gives us a `ScalarUDF` that we can register with the `SessionContext`:
 
-```rust
+```rustfixed
 # use std::sync::Arc;
 # use datafusion::arrow::array::{ArrayRef, Int64Array};
 # use datafusion::common::cast::as_int64_array;
@@ -355,7 +355,7 @@ access to the rows around them. Access to the proximal rows is helpful, but adds
 
 For example, we will declare a user defined window function that computes a moving average.
 
-```torustfix
+```rustfixed
 use datafusion::arrow::{array::{ArrayRef, Float64Array, AsArray}, datatypes::Float64Type};
 use datafusion::logical_expr::{PartitionEvaluator};
 use datafusion::common::ScalarValue;
@@ -428,18 +428,62 @@ To register a Window UDF, you need to wrap the function implementation in a [`Wi
 with the `SessionContext`. DataFusion provides the [`create_udwf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udwf.rs`].
 
-```torustfix
+```rust
+# use datafusion::arrow::{array::{ArrayRef, Float64Array, AsArray}, datatypes::Float64Type};
+# use datafusion::logical_expr::{PartitionEvaluator};
+# use datafusion::common::ScalarValue;
+# use datafusion::error::Result;
+#
+# #[derive(Clone, Debug)]
+# struct MyPartitionEvaluator {}
+#
+# impl MyPartitionEvaluator {
+#     fn new() -> Self {
+#         Self {}
+#     }
+# }
+#
+# impl PartitionEvaluator for MyPartitionEvaluator {
+#     fn uses_window_frame(&self) -> bool {
+#         true
+#     }
+#
+#     fn evaluate(
+#         &mut self,
+#         values: &[ArrayRef],
+#         range: &std::ops::Range<usize>,
+#     ) -> Result<ScalarValue> {
+#         // Again, the input argument is an array of floating
+#         // point numbers to calculate a moving average
+#         let arr: &Float64Array = values[0].as_ref().as_primitive::<Float64Type>();
+#
+#         let range_len = range.end - range.start;
+#
+#         // our smoothing function will average all the values in the
+#         let output = if range_len > 0 {
+#             let sum: f64 = arr.values().iter().skip(range.start).take(range_len).sum();
+#             Some(sum / range_len as f64)
+#         } else {
+#             None
+#         };
+#
+#         Ok(ScalarValue::Float64(output))
+#     }
+# }
+# fn make_partition_evaluator() -> Result<Box<dyn PartitionEvaluator>> {
+#     Ok(Box::new(MyPartitionEvaluator::new()))
+# }
 use datafusion::logical_expr::{Volatility, create_udwf};
 use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
 
 // here is where we define the UDWF. We also declare its signature:
 let smooth_it = create_udwf(
-"smooth_it",
-DataType::Float64,
-Arc::new(DataType::Float64),
-Volatility::Immutable,
-Arc::new(make_partition_evaluator),
+    "smooth_it",
+    DataType::Float64,
+    Arc::new(DataType::Float64),
+    Volatility::Immutable,
+    Arc::new(make_partition_evaluator),
 );
 ```
 
