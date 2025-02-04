@@ -153,7 +153,6 @@ serde_json = { workspace = true }
 sysinfo = "0.33.1"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
-indoc = "2"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
