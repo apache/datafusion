@@ -199,7 +199,6 @@ impl ExprStatisticGraph {
             }
             // Reverse to align with `PhysicalExpr`'s children:
             children.reverse();
-
             let children_stats = children
                 .iter()
                 .map(|child| self.graph[*child].statistic())
@@ -227,11 +226,13 @@ impl ExprStatisticGraph {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(idx) = dfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(idx, Outgoing);
-            let children_statistics = neighbors
+            let mut children_statistics = neighbors
                 .map(|child| &self.graph[child].statistics)
                 .collect::<Vec<_>>();
             // Note: all distributions are recognized as independent, by default.
             if !children_statistics.is_empty() {
+                // Reverse to align with `PhysicalExpr`'s children:
+                children_statistics.reverse();
                 self.graph[idx].statistics = self.graph[idx]
                     .expr
                     .evaluate_statistics(&children_statistics)?;
