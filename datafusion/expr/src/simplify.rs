@@ -17,10 +17,10 @@
 
 //! Structs and traits to provide the information needed for expression simplification.
 
-use arrow::datatypes::DataType;
-use datafusion_common::{DFSchemaRef, DataFusionError, Result};
-
 use crate::{execution_props::ExecutionProps, Expr, ExprSchemable};
+use arrow::datatypes::DataType;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{DFSchemaRef, DataFusionError, Result};
 
 /// Provides the information necessary to apply algebraic simplification to an
 /// [Expr]. See [SimplifyContext] for one concrete implementation.
@@ -38,6 +38,9 @@ pub trait SimplifyInfo {
     /// Returns details needed for partial expression evaluation
     fn execution_props(&self) -> &ExecutionProps;
 
+    /// Returns the config options
+    fn config_options(&self) -> &ConfigOptions;
+
     /// Returns data type of this expr needed for determining optimized int type of a value
     fn get_data_type(&self, expr: &Expr) -> Result<DataType>;
 }
@@ -53,14 +56,16 @@ pub trait SimplifyInfo {
 pub struct SimplifyContext<'a> {
     schema: Option<DFSchemaRef>,
     props: &'a ExecutionProps,
+    config_options: &'a ConfigOptions,
 }
 
 impl<'a> SimplifyContext<'a> {
     /// Create a new SimplifyContext
-    pub fn new(props: &'a ExecutionProps) -> Self {
+    pub fn new(props: &'a ExecutionProps, config_options: &'a ConfigOptions) -> Self {
         Self {
             schema: None,
             props,
+            config_options,
         }
     }
 
@@ -105,6 +110,10 @@ impl SimplifyInfo for SimplifyContext<'_> {
 
     fn execution_props(&self) -> &ExecutionProps {
         self.props
+    }
+
+    fn config_options(&self) -> &ConfigOptions {
+        self.config_options
     }
 }
 

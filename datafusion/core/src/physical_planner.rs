@@ -89,6 +89,7 @@ use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
+use datafusion_common::config::ConfigOptions;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
@@ -199,7 +200,12 @@ impl PhysicalPlanner for DefaultPhysicalPlanner {
         input_dfschema: &DFSchema,
         session_state: &SessionState,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        create_physical_expr(expr, input_dfschema, session_state.execution_props())
+        create_physical_expr(
+            expr,
+            input_dfschema,
+            session_state.execution_props(),
+            session_state.config_options(),
+        )
     }
 }
 
@@ -623,6 +629,7 @@ impl DefaultPhysicalPlanner {
                             e,
                             logical_schema,
                             session_state.execution_props(),
+                            session_state.config_options(),
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -714,6 +721,7 @@ impl DefaultPhysicalPlanner {
                             logical_input_schema,
                             &physical_input_schema,
                             session_state.execution_props(),
+                            session_state.config_options(),
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -827,6 +835,7 @@ impl DefaultPhysicalPlanner {
                     expr,
                     input_dfschema,
                     session_state.execution_props(),
+                    session_state.config_options(),
                 )?;
                 let new_sort =
                     SortExec::new(sort_expr, physical_input).with_fetch(*fetch);
@@ -1006,12 +1015,22 @@ impl DefaultPhysicalPlanner {
                 let left_df_schema = left.schema();
                 let right_df_schema = right.schema();
                 let execution_props = session_state.execution_props();
+                let config_options = session_state.config_options();
                 let join_on = keys
                     .iter()
                     .map(|(l, r)| {
-                        let l = create_physical_expr(l, left_df_schema, execution_props)?;
-                        let r =
-                            create_physical_expr(r, right_df_schema, execution_props)?;
+                        let l = create_physical_expr(
+                            l,
+                            left_df_schema,
+                            execution_props,
+                            config_options,
+                        )?;
+                        let r = create_physical_expr(
+                            r,
+                            right_df_schema,
+                            execution_props,
+                            config_options,
+                        )?;
                         Ok((l, r))
                     })
                     .collect::<Result<join_utils::JoinOn>>()?;
@@ -1083,6 +1102,7 @@ impl DefaultPhysicalPlanner {
                             expr,
                             &filter_df_schema,
                             session_state.execution_props(),
+                            config_options,
                         )?;
                         let column_indices = join_utils::JoinFilter::build_column_indices(
                             left_field_indices,
@@ -1468,8 +1488,12 @@ fn get_null_physical_expr_pair(
     input_schema: &Schema,
     session_state: &SessionState,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
-    let physical_expr =
-        create_physical_expr(expr, input_dfschema, session_state.execution_props())?;
+    let physical_expr = create_physical_expr(
+        expr,
+        input_dfschema,
+        session_state.execution_props(),
+        session_state.config_options(),
+    )?;
     let physical_name = physical_name(&expr.clone())?;
 
     let data_type = physical_expr.data_type(input_schema)?;
@@ -1484,8 +1508,12 @@ fn get_physical_expr_pair(
     input_dfschema: &DFSchema,
     session_state: &SessionState,
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
-    let physical_expr =
-        create_physical_expr(expr, input_dfschema, session_state.execution_props())?;
+    let physical_expr = create_physical_expr(
+        expr,
+        input_dfschema,
+        session_state.execution_props(),
+        session_state.config_options(),
+    )?;
     let physical_name = physical_name(expr)?;
     Ok((physical_expr, physical_name))
 }
@@ -1516,6 +1544,7 @@ pub fn create_window_expr_with_name(
     name: impl Into<String>,
     logical_schema: &DFSchema,
     execution_props: &ExecutionProps,
+    config_options: &ConfigOptions,
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
     let physical_schema: &Schema = &logical_schema.into();
@@ -1528,12 +1557,24 @@ pub fn create_window_expr_with_name(
             window_frame,
             null_treatment,
         }) => {
-            let physical_args =
-                create_physical_exprs(args, logical_schema, execution_props)?;
-            let partition_by =
-                create_physical_exprs(partition_by, logical_schema, execution_props)?;
-            let order_by =
-                create_physical_sort_exprs(order_by, logical_schema, execution_props)?;
+            let physical_args = create_physical_exprs(
+                args,
+                logical_schema,
+                execution_props,
+                config_options,
+            )?;
+            let partition_by = create_physical_exprs(
+                partition_by,
+                logical_schema,
+                execution_props,
+                config_options,
+            )?;
+            let order_by = create_physical_sort_exprs(
+                order_by,
+                logical_schema,
+                execution_props,
+                config_options,
+            )?;
 
             if !is_window_frame_bound_valid(window_frame) {
                 return plan_err!(
@@ -1565,13 +1606,14 @@ pub fn create_window_expr(
     e: &Expr,
     logical_schema: &DFSchema,
     execution_props: &ExecutionProps,
+    config_options: &ConfigOptions,
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
         _ => (e.schema_name().to_string(), e),
     };
-    create_window_expr_with_name(e, name, logical_schema, execution_props)
+    create_window_expr_with_name(e, name, logical_schema, execution_props, config_options)
 }
 
 type AggregateExprWithOptionalArgs = (
@@ -1589,6 +1631,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
+    config_options: &ConfigOptions,
 ) -> Result<AggregateExprWithOptionalArgs> {
     match e {
         Expr::AggregateFunction(AggregateFunction {
@@ -1605,13 +1648,18 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 physical_name(e)?
             };
 
-            let physical_args =
-                create_physical_exprs(args, logical_input_schema, execution_props)?;
+            let physical_args = create_physical_exprs(
+                args,
+                logical_input_schema,
+                execution_props,
+                config_options,
+            )?;
             let filter = match filter {
                 Some(e) => Some(create_physical_expr(
                     e,
                     logical_input_schema,
                     execution_props,
+                    config_options,
                 )?),
                 None => None,
             };
@@ -1625,6 +1673,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         exprs,
                         logical_input_schema,
                         execution_props,
+                        config_options,
                     )?),
                     None => None,
                 };
@@ -1657,6 +1706,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
+    config_options: &ConfigOptions,
 ) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
@@ -1671,6 +1721,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
         logical_input_schema,
         physical_input_schema,
         execution_props,
+        config_options,
     )
 }
 
@@ -1679,6 +1730,7 @@ pub fn create_physical_sort_expr(
     e: &SortExpr,
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    config_options: &ConfigOptions,
 ) -> Result<PhysicalSortExpr> {
     let SortExpr {
         expr,
@@ -1686,7 +1738,12 @@ pub fn create_physical_sort_expr(
         nulls_first,
     } = e;
     Ok(PhysicalSortExpr {
-        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+        expr: create_physical_expr(
+            expr,
+            input_dfschema,
+            execution_props,
+            config_options,
+        )?,
         options: SortOptions {
             descending: !asc,
             nulls_first: *nulls_first,
@@ -1699,10 +1756,18 @@ pub fn create_physical_sort_exprs(
     exprs: &[SortExpr],
     input_dfschema: &DFSchema,
     execution_props: &ExecutionProps,
+    config_options: &ConfigOptions,
 ) -> Result<LexOrdering> {
     exprs
         .iter()
-        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
+        .map(|expr| {
+            create_physical_sort_expr(
+                expr,
+                input_dfschema,
+                execution_props,
+                config_options,
+            )
+        })
         .collect::<Result<LexOrdering>>()
 }
 

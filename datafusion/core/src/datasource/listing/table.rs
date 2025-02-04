@@ -916,6 +916,7 @@ impl TableProvider for ListingTable {
                     &expr,
                     &table_df_schema,
                     state.execution_props(),
+                    session_state.config_options(),
                 )?;
                 Some(filters)
             }
