@@ -26,5 +26,5 @@ of [TableProvider] based on files in a directory (either locally or on remote
 object storage such as S3).
 
 [df]: https://crates.io/crates/datafusion
-[ListingTable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
-[TableProvider]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
+[listingtable]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
+[tableprovider]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html
