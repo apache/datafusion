@@ -23,12 +23,12 @@ use arrow::datatypes::DataType;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 
 use crate::utils::make_scalar_function;
-use datafusion_common::types::logical_string;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::types::{LogicalType, NativeType};
+use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, Like, ScalarUDFImpl, Signature,
-    TypeSignatureClass, Volatility,
+    ColumnarValue, Documentation, Expr, Like, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_expr_common::type_coercion::binary::string_coercion;
 use datafusion_macros::user_doc;
 
 /// Returns true if string starts with prefix.
@@ -67,13 +67,7 @@ impl Default for StartsWithFunc {
 impl StartsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![
-                    TypeSignatureClass::AnyNative(logical_string()),
-                    TypeSignatureClass::AnyNative(logical_string()),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -105,6 +99,57 @@ impl ScalarUDFImpl for StartsWithFunc {
                 make_scalar_function(starts_with, vec![])(args)
             }
             _ => internal_err!("Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View")?,
+        }
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return plan_err!(
+                "The {} function requires 2 arguments, but got {}.",
+                self.name(),
+                arg_types.len()
+            );
+        }
+
+        let first_arg_type = &arg_types[0];
+        let first_native_type: NativeType = first_arg_type.into();
+        let second_arg_type = &arg_types[1];
+        let second_native_type: NativeType = second_arg_type.into();
+        let target_native_type = NativeType::String;
+
+        let first_data_type = if first_native_type.is_integer()
+            || first_native_type.is_binary()
+            || first_native_type == NativeType::String
+            || first_native_type == NativeType::Null
+        {
+            target_native_type.default_cast_for(first_arg_type)
+        } else {
+            plan_err!(
+                "The first argument of the {} function can only be a string, integer, or binary but got {:?}.",
+                self.name(),
+                first_arg_type
+            )
+        }?;
+        let second_data_type = if second_native_type.is_integer()
+            || second_native_type.is_binary()
+            || second_native_type == NativeType::String
+            || second_native_type == NativeType::Null
+        {
+            target_native_type.default_cast_for(second_arg_type)
+        } else {
+            plan_err!(
+                "The second argument of the {} function can only be a string, integer, or binary but got {:?}.",
+                self.name(),
+                second_arg_type
+            )
+        }?;
+
+        if let Some(coerced_type) = string_coercion(&first_data_type, &second_data_type) {
+            Ok(vec![coerced_type.clone(), coerced_type])
+        } else {
+            plan_err!(
+                    "{first_data_type} and {second_data_type} are not coercible to a common string type"
+                )
         }
     }
 

@@ -437,6 +437,12 @@ impl NativeType {
     }
 
     #[inline]
+    pub fn is_binary(&self) -> bool {
+        use NativeType::*;
+        matches!(self, Binary | FixedSizeBinary(_))
+    }
+
+    #[inline]
     pub fn is_timestamp(&self) -> bool {
         matches!(self, NativeType::Timestamp(_, _))
     }

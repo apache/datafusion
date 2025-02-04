@@ -552,10 +552,6 @@ fn get_valid_types(
                             )
                         }
                     }
-                    TypeSignatureClass::AnyNative(native_type) => {
-                        let target_type = native_type.native();
-                        target_type.default_cast_for(current_type)
-                    }
                     TypeSignatureClass::Numeric(native_type) => {
                         let target_type = native_type.native();
                         if target_type.is_numeric() && logical_type.is_numeric() {
@@ -614,7 +610,7 @@ fn get_valid_types(
             // Following the behavior of `TypeSignature::String`, we find the common string type.
             let string_indices: Vec<_> = target_types.iter().enumerate()
                 .filter(|(_, t)| {
-                    matches!(t, TypeSignatureClass::Native(n) | TypeSignatureClass::AnyNative(n) if n.native() == &NativeType::String)
+                    matches!(t, TypeSignatureClass::Native(n) if n.native() == &NativeType::String)
                 })
                 .map(|(i, _)| i)
                 .collect();

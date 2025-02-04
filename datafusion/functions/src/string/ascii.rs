@@ -19,11 +19,10 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::types::logical_string;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::types::{LogicalType, NativeType};
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
-    Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -64,10 +63,7 @@ impl Default for AsciiFunc {
 impl AsciiFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![TypeSignatureClass::AnyNative(logical_string())],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -97,6 +93,33 @@ impl ScalarUDFImpl for AsciiFunc {
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
         make_scalar_function(ascii, vec![])(args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return plan_err!(
+                "The {} function requires 1 argument, but got {}.",
+                self.name(),
+                arg_types.len()
+            );
+        }
+
+        let arg_type = &arg_types[0];
+        let current_native_type: NativeType = arg_type.into();
+        let target_native_type = NativeType::String;
+        if current_native_type.is_integer()
+            || current_native_type.is_binary()
+            || current_native_type == NativeType::String
+            || current_native_type == NativeType::Null
+        {
+            Ok(vec![target_native_type.default_cast_for(arg_type)?])
+        } else {
+            plan_err!(
+                "The first argument of the {} function can only be a string, integer, or binary but got {:?}.",
+                self.name(),
+                arg_type
+            )
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
