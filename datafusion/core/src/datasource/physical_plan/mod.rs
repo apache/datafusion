@@ -30,6 +30,7 @@ mod statistics;
 
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
+#[cfg(feature = "parquet")]
 pub use self::parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
 pub use self::parquet::{ParquetFileMetrics, ParquetFileReaderFactory};
