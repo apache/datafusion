@@ -59,7 +59,7 @@ impl OctetLengthFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![TypeSignatureClass::Native(logical_string())],
+                vec![TypeSignatureClass::AnyNative(logical_string())],
                 Volatility::Immutable,
             ),
         }

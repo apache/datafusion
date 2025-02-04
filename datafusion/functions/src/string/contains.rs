@@ -66,8 +66,8 @@ impl ContainsFunc {
         Self {
             signature: Signature::coercible(
                 vec![
-                    TypeSignatureClass::Native(logical_string()),
-                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignatureClass::AnyNative(logical_string()),
+                    TypeSignatureClass::AnyNative(logical_string()),
                 ],
                 Volatility::Immutable,
             ),
