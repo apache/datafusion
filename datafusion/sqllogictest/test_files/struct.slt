@@ -459,14 +459,14 @@ create table t as values({r: 'a', c: 1}), ({r: 'b', c: 2.3});
 query ?
 select * from t;
 ----
-{c0: a, c1: 1.0}
-{c0: b, c1: 2.3}
+{r: a, c: 1.0}
+{r: b, c: 2.3}
 
 query T
 select arrow_typeof(column1) from t;
 ----
-Struct([Field { name: "c0", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c1", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "c0", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c1", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
 
 statement ok
 drop table t;

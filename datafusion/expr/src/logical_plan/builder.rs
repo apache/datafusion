@@ -1906,9 +1906,7 @@ pub fn unnest_with_options(
                         .extend(std::iter::repeat(index).take(transformed_columns.len()));
                     Ok(transformed_columns
                         .iter()
-                        .map(|(col, data_type)| {
-                            (col.relation.to_owned(), data_type.to_owned())
-                        })
+                        .map(|(col, field)| (col.relation.to_owned(), field.to_owned()))
                         .collect())
                 }
                 None => {

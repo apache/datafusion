@@ -566,18 +566,19 @@ fn type_union_resolution_coercion(
                 None
             }
 
-            let types = lhs
+            let coerced_types = lhs
                 .iter()
                 .map(|lhs_field| search_corresponding_coerced_type(lhs_field, rhs))
                 .collect::<Option<Vec<_>>>()?;
 
-            let fields = types
+            // preserve the field name and nullability
+            let orig_fields = std::iter::zip(lhs.iter(), rhs.iter());
+
+            let fields: Vec<FieldRef> = coerced_types
                 .into_iter()
-                .enumerate()
-                .map(|(i, datatype)| {
-                    Arc::new(Field::new(format!("c{i}"), datatype, true))
-                })
-                .collect::<Vec<FieldRef>>();
+                .zip(orig_fields)
+                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
+                .collect();
             Some(DataType::Struct(fields.into()))
         }
         _ => {
@@ -743,8 +744,10 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     match (lhs_type, rhs_type) {
         (Utf8, _) if rhs_type.is_numeric() => Some(Utf8),
         (LargeUtf8, _) if rhs_type.is_numeric() => Some(LargeUtf8),
+        (Utf8View, _) if rhs_type.is_numeric() => Some(Utf8View),
         (_, Utf8) if lhs_type.is_numeric() => Some(Utf8),
         (_, LargeUtf8) if lhs_type.is_numeric() => Some(LargeUtf8),
+        (_, Utf8View) if lhs_type.is_numeric() => Some(Utf8View),
         _ => None,
     }
 }
