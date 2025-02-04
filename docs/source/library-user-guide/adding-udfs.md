@@ -122,7 +122,7 @@ There is a an older, more concise, but also more limited API [`create_udf`] avai
 
 #### Adding a Scalar UDF
 
-```torustfix
+```rust
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int64Array};
