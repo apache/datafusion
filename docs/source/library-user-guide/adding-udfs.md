@@ -62,9 +62,9 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{DataFusionError, plan_err, Result};
 use datafusion_expr::{col, ColumnarValue, Documentation, ScalarFunctionArgs, Signature, Volatility};
-use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
 use datafusion::arrow::array::{ArrayRef, Int64Array};
+use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
 
 /// This struct for a simple UDF that adds one to an int32
 #[derive(Debug)]
@@ -113,12 +113,79 @@ impl ScalarUDFImpl for AddOne {
         Some(&*DOCUMENTATION)
     }
 }
+```
+We now need to register the function with DataFusion so that it can be used in the context of a query.
+
+```rust
+# use std::sync::Arc;
+# use std::any::Any;
+# use std::sync::LazyLock;
+# use arrow::datatypes::DataType;
+# use datafusion_common::cast::as_int64_array;
+# use datafusion_common::{DataFusionError, plan_err, Result};
+# use datafusion_expr::{col, ColumnarValue, Documentation, ScalarFunctionArgs, Signature, Volatility};
+# use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+# use datafusion::arrow::array::{ArrayRef, Int64Array};
+# use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
+#
+# /// This struct for a simple UDF that adds one to an int32
+# #[derive(Debug)]
+# struct AddOne {
+#   signature: Signature,
+# }
+#
+# impl AddOne {
+#   fn new() -> Self {
+#     Self {
+#       signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
+#      }
+#   }
+# }
+#
+# static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+#     Documentation::builder(DOC_SECTION_MATH, "Add one to an int32", "add_one(2)")
+#         .with_argument("arg1", "The int32 number to add one to")
+#         .build()
+# });
+#
+# /// Implement the ScalarUDFImpl trait for AddOne
+# impl ScalarUDFImpl for AddOne {
+#    fn as_any(&self) -> &dyn Any { self }
+#    fn name(&self) -> &str { "add_one" }
+#    fn signature(&self) -> &Signature { &self.signature }
+#    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+#      if !matches!(args.get(0), Some(&DataType::Int32)) {
+#        return plan_err!("add_one only accepts Int32 arguments");
+#      }
+#      Ok(DataType::Int32)
+#    }
+#    // The actual implementation would add one to the argument
+#    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+#         let args = ColumnarValue::values_to_arrays(&args.args)?;
+#         let i64s = as_int64_array(&args[0])?;
+#
+#         let new_array = i64s
+#             .iter()
+#             .map(|array_elem| array_elem.map(|value| value + 1))
+#             .collect::<Int64Array>();
+#
+#         Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
+#    }
+#    fn documentation(&self) -> Option<&Documentation> {
+#         Some(&*DOCUMENTATION)
+#     }
+# }
+use datafusion::execution::context::SessionContext;
 
 // Create a new ScalarUDF from the implementation
 let add_one = ScalarUDF::from(AddOne::new());
 
 // Call the function `add_one(col)`
 let expr = add_one.call(vec![col("a")]);
+
+// register the UDF with the context so it can be invoked by name and from SQL
+let mut ctx = SessionContext::new();
+ctx.register_udf(add_one.clone());
 ```
 
 ### Adding a Scalar UDF by [`create_udf`]
@@ -169,7 +236,7 @@ To register a Scalar UDF, you need to wrap the function implementation in a [`Sc
 with the `SessionContext`.
 DataFusion provides the [`create_udf`] and helper functions to make this easier.
 
-```rust
+```rustfixed
 use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::common::cast::as_int64_array;
