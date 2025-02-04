@@ -50,8 +50,7 @@ datafusion = { workspace = true, features = [
 dirs = "6.0.0"
 env_logger = { workspace = true }
 futures = { workspace = true }
-# pin as home 0.5.11 has MSRV 1.81. Can remove this once we bump MSRV to 1.81
-home = "=0.5.11"
+home = "0.5.11"
 mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "gcp", "http"] }
 parking_lot = { workspace = true }
