@@ -23,6 +23,4 @@
 
 This crate is a submodule of DataFusion that provides catalog management functionality, including catalogs, schemas, and tables.
 
-
-
 [df]: https://crates.io/crates/datafusion

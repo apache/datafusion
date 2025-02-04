@@ -1222,6 +1222,7 @@ dependencies = [
  "bzip2 0.5.0",
  "chrono",
  "datafusion-catalog",
+ "datafusion-catalog-listing",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",
@@ -1275,6 +1276,28 @@ dependencies = [
  "log",
  "parking_lot",
  "sqlparser",
+]
+
+[[package]]
+name = "datafusion-catalog-listing"
+version = "45.0.0"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "chrono",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "futures",
+ "glob",
+ "itertools 0.14.0",
+ "log",
+ "object_store",
+ "url",
 ]
 
 [[package]]
