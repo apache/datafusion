@@ -1327,8 +1327,34 @@ pub async fn from_read_rel(
         table_ref: TableReference,
         schema: DFSchema,
         projection: &Option<MaskExpression>,
+        filter: &Option<Box<Expression>>,
+        best_effort_filter: &Option<Box<Expression>>,
     ) -> Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
+
+        let mut filters = vec![];
+        if filter.is_some() {
+            let filter_expr = consumer
+                .consume_expression(&(filter.clone().unwrap()), &schema)
+                .await?;
+            filters.append(
+                &mut split_conjunction(&filter_expr)
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+            );
+        }
+        if best_effort_filter.is_some() {
+            let best_effort_filter_expr = consumer
+                .consume_expression(&(best_effort_filter.clone().unwrap()), &schema)
+                .await?;
+            filters.append(
+                &mut split_conjunction(&best_effort_filter_expr)
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+            );
+        }
 
         let plan = {
             let provider = match consumer.resolve_table_ref(&table_ref).await? {
@@ -1336,10 +1362,11 @@ pub async fn from_read_rel(
                 _ => return plan_err!("No table named '{table_ref}'"),
             };
 
-            LogicalPlanBuilder::scan(
+            LogicalPlanBuilder::scan_with_filters(
                 table_ref,
                 provider_as_source(Arc::clone(&provider)),
                 None,
+                filters,
             )?
             .build()?
         };
@@ -1382,6 +1409,8 @@ pub async fn from_read_rel(
                 table_reference,
                 substrait_schema,
                 &read.projection,
+                &read.filter,
+                &read.best_effort_filter,
             )
             .await
         }
@@ -1464,6 +1493,8 @@ pub async fn from_read_rel(
                 table_reference,
                 substrait_schema,
                 &read.projection,
+                &read.filter,
+                &read.best_effort_filter,
             )
             .await
         }
