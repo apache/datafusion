@@ -2519,12 +2519,12 @@ fn select_groupby_orderby() {
   FROM person GROUP BY person.birth_date ORDER BY avg(age);
 "#;
 
-    let expected = 
-    "Projection: avg(person.age) + avg(person.age) + Int64(1), birth_date\
-     \n  Sort: avg(person.age) ASC NULLS LAST\
-     \n    Projection: avg(person.age) + avg(person.age) + Int64(1), date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date, avg(person.age)\
-     \n      Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]\
-     \n        TableScan: person";
+    let expected =
+        "Projection: avg(person.age) + avg(person.age) + Int64(1), birth_date\
+        \n  Sort: avg(person.age) ASC NULLS LAST\
+        \n    Projection: avg(person.age) + avg(person.age) + Int64(1), date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date, avg(person.age)\
+        \n      Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]\
+        \n        TableScan: person";
 
     quick_test(sql, expected);
 }

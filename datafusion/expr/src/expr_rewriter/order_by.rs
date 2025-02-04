@@ -21,7 +21,9 @@ use crate::expr::Alias;
 use crate::expr_rewriter::normalize_col;
 use crate::{expr::Sort, Cast, Expr, LogicalPlan, TryCast};
 
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{Column, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
