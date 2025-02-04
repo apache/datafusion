@@ -52,4 +52,4 @@ jobs:
       - name: Check dependencies
         run: |
           cd dev/depcheck
-          cargo run --locked
+          cargo run
