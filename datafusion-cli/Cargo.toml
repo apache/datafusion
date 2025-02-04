@@ -36,7 +36,7 @@ aws-sdk-sso = "1.57.0"
 aws-sdk-ssooidc = "1.57.0"
 aws-sdk-sts = "1.57.0"
 clap = { version = "4.5.27", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", workspace = true, features = [
+datafusion = { workspace = true, features = [
     "avro",
     "crypto_expressions",
     "datetime_expressions",
