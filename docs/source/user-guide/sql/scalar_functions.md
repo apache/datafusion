@@ -4185,6 +4185,8 @@ SELECT map_values(map([100, 5], [42, 43]));
 - [sha256](#sha256)
 - [sha384](#sha384)
 - [sha512](#sha512)
+- [xxhash32](#xxhash32)
+- [xxhash64](#xxhash64)
 
 ### `digest`
 
@@ -4330,6 +4332,52 @@ sha512(expression)
 | sha512(Utf8("foo"))                       |
 +-------------------------------------------+
 | <sha512_hash_result>                      |
++-------------------------------------------+
+```
+
+### `xxhash32`
+
+Computes the XXHash32 hash of a binary string.
+
+```
+xxhash32(expression)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select xxhash32('foo');
++-------------------------------------------+
+| xxhash32(Utf8("foo"))                     |
++-------------------------------------------+
+| <xxhash32_result>                         |
++-------------------------------------------+
+```
+
+### `xxhash64`
+
+Computes the XXHash64 hash of a binary string.
+
+```
+xxhash64(expression)
+```
+
+#### Arguments
+
+- **expression**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+
+#### Example
+
+```sql
+> select xxhash64('foo');
++-------------------------------------------+
+| xxhash64(Utf8("foo"))                     |
++-------------------------------------------+
+| <xxhash64_result>                         |
 +-------------------------------------------+
 ```
 

@@ -17,7 +17,7 @@
 
 use arrow::array::{Array, StringArray, LargeStringArray, BinaryArray, LargeBinaryArray, };
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Utf8, Utf8View, LargeUtf8, Binary, LargeBinary, Int64, UInt32, UInt64};
+use arrow::datatypes::DataType::{Utf8, Utf8View, LargeUtf8, Binary, LargeBinary, Int64};
 use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TypeSignature
@@ -359,13 +359,21 @@ fn process_array<T: Hasher>(array: &dyn Array, mut hasher: T, hash_type: HashTyp
 
     match array.data_type() {
         Utf8 | Utf8View | LargeUtf8 => {
-            let string_array = array.as_any().downcast_ref::<StringArray>().unwrap();
+            let string_array: &dyn Array = if array.data_type() == &Utf8 || array.data_type() == &Utf8View {
+                array.as_any().downcast_ref::<StringArray>().unwrap()
+            } else {
+                array.as_any().downcast_ref::<LargeStringArray>().unwrap()
+            };
             for i in 0..array.len() {
                 if array.is_null(i) {
                     hash_results.push(String::new()); // Handle null values
                     continue;
                 }
-                let value = string_array.value(i);
+                let value = if let Some(string_array) = string_array.as_any().downcast_ref::<StringArray>() {
+                    string_array.value(i)
+                } else {
+                    string_array.as_any().downcast_ref::<LargeStringArray>().unwrap().value(i)
+                };
                 if value.is_empty() {
                     hash_results.push(String::new());
                     continue;
