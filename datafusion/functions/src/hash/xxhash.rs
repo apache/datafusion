@@ -348,7 +348,7 @@ fn hash_value<T: Hasher>(value_bytes: &[u8], mut hasher: T, hash_type: HashType)
             Ok(hex::encode(hash_u32.to_be_bytes()))
         },
         HashType::U64 => {
-            let hash_u64 = hash as u64;
+            let hash_u64 = hash;
             Ok(hex::encode(hash_u64.to_be_bytes()))
         },
     }
