@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::stats_v2::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
 use std::sync::OnceLock;
+
+use crate::stats_v2::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
 
 use arrow::datatypes::DataType;
 use datafusion_common::{internal_err, Result, ScalarValue};
@@ -105,12 +106,6 @@ impl StatisticsV2 {
             Ok(stat)
         } else {
             internal_err!("Tried to construct invalid Bernoulli statistic")
-        }
-    }
-
-    pub fn new_uncertain_bernoulli() -> Self {
-        Bernoulli {
-            p: ScalarValue::Float64(Some(0.5)),
         }
     }
 
@@ -351,13 +346,13 @@ impl StatisticsV2 {
 
     /// Returns a data type of the statistics, if present
     /// explicitly, or able to determine implicitly.
-    pub fn data_type(&self) -> Option<DataType> {
+    pub fn data_type(&self) -> DataType {
         match &self {
-            Uniform { interval, .. } => Some(interval.data_type()),
-            Exponential { offset, .. } => Some(offset.data_type()),
-            Bernoulli { .. } => Some(DataType::Boolean),
-            Unknown { range, .. } => Some(range.data_type()),
-            _ => None,
+            Uniform { interval, .. } => interval.data_type(),
+            Exponential { offset, .. } => offset.data_type(),
+            Gaussian { mean, .. } => mean.data_type(),
+            Bernoulli { .. } => DataType::Boolean,
+            Unknown { range, .. } => range.data_type(),
         }
     }
 }

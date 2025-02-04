@@ -577,14 +577,14 @@ impl ExprIntervalGraph {
         &mut self,
         given_range: Interval,
     ) -> Result<PropagationResult> {
-        let mut bfs = Bfs::new(&self.graph, self.root);
-
         // Adjust the root node with the given range:
         if let Some(interval) = self.graph[self.root].interval.intersect(given_range)? {
             self.graph[self.root].interval = interval;
         } else {
             return Ok(PropagationResult::Infeasible);
         }
+
+        let mut bfs = Bfs::new(&self.graph, self.root);
 
         while let Some(node) = bfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);

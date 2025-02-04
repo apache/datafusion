@@ -36,7 +36,7 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::binary::get_result_type;
@@ -508,17 +508,15 @@ impl PhysicalExpr for BinaryExpr {
 
         if self.op.is_numerical_operators() {
             if let Some(stats) = add_sub_on_gaussians(&self.op, left_stat, right_stat)? {
-                Ok(stats)
-            } else {
-                new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+                return Ok(stats);
             }
         } else if self.op.supports_propagation() {
-            new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat)
+            return new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat);
         } else if self.op.is_logic_operator() {
-            handle_and_or_evaluation(&self.op, left_stat, right_stat)
-        } else {
-            new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+            return evaluate_statistics_logical(&self.op, left_stat, right_stat);
         }
+
+        new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
     }
 
     fn propagate_statistics(
@@ -601,28 +599,6 @@ impl PhysicalExpr for BinaryExpr {
             }),
             _ => Ok(ExprProperties::new_unknown()),
         }
-    }
-}
-
-fn handle_and_or_evaluation(
-    op: &Operator,
-    left_stat: &StatisticsV2,
-    right_stat: &StatisticsV2,
-) -> Result<StatisticsV2> {
-    match (left_stat, right_stat) {
-        (Bernoulli { p: p_left }, Bernoulli { p: p_right }) => {
-            if *op == Operator::And {
-                StatisticsV2::new_bernoulli(p_left.mul_checked(p_right)?)
-            } else if *op == Operator::Or {
-                StatisticsV2::new_bernoulli(
-                    ScalarValue::Float64(Some(1.)).sub(p_left.mul_checked(p_right)?)?,
-                )
-            } else {
-                unreachable!("Only AND and OR operator are handled here")
-            }
-        }
-        // TODO: complement with more cases
-        (_, _) => new_unknown_from_binary_expr(op, left_stat, right_stat),
     }
 }
 
@@ -817,6 +793,31 @@ pub fn similar_to(
     Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
 }
 
+fn evaluate_statistics_logical(
+    op: &Operator,
+    left_stat: &StatisticsV2,
+    right_stat: &StatisticsV2,
+) -> Result<StatisticsV2> {
+    match (left_stat, right_stat) {
+        (Bernoulli { p: p_left }, Bernoulli { p: p_right }) => {
+            if *op == Operator::And {
+                StatisticsV2::new_bernoulli(p_left.mul_checked(p_right)?)
+            } else if *op == Operator::Or {
+                StatisticsV2::new_bernoulli(
+                    ScalarValue::Float64(Some(1.)).sub(p_left.mul_checked(p_right)?)?,
+                )
+            } else {
+                not_impl_err!(
+                    "Only AND and OR operator are handled for statistical evaluation"
+                )
+            }
+        }
+        (_, _) => internal_err!(
+            "Only boolean datatypes can be evaluated with a logical operator"
+        ),
+    }
+}
+
 fn add_sub_on_gaussians(
     op: &Operator,
     left_stat: &StatisticsV2,
@@ -848,6 +849,7 @@ fn add_sub_on_gaussians(
 mod tests {
     use super::*;
     use crate::expressions::{col, lit, try_cast, Column, Literal};
+
     use datafusion_common::plan_datafusion_err;
     use datafusion_expr::type_coercion::binary::get_input_types;
     use datafusion_physical_expr_common::stats_v2::StatisticsV2::Uniform;

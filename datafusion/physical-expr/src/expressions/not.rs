@@ -24,9 +24,10 @@ use std::sync::Arc;
 
 use crate::utils::stats_v2_graph::{get_one, get_zero};
 use crate::PhysicalExpr;
+
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, Result, ScalarValue};
+use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2;
@@ -121,7 +122,7 @@ impl PhysicalExpr for NotExpr {
     }
 
     fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
-        assert_eq!(stats.len(), 1);
+        debug_assert_eq!(stats.len(), 1);
         match stats[0] {
             Bernoulli { p } => {
                 if p.eq(get_zero()) {
@@ -132,10 +133,8 @@ impl PhysicalExpr for NotExpr {
                     StatisticsV2::new_bernoulli(get_one().sub_checked(p)?)
                 }
             }
-            // Note: NOT Exponential distribution is mirrored on X axis and in fact,
-            //  it is a plot of logarithmic function, which is Unknown.
-            // Note: NOT Gaussian distribution is mirrored on X axis and is Unknown
-            _ => Ok(StatisticsV2::new_uncertain_bernoulli()),
+            // https://github.com/apache/datafusion/blob/85fbde2661bdb462fc498dc18f055c44f229604c/datafusion/expr/src/expr.rs#L241
+            _ => internal_err!("NotExpr cannot used with non-boolean datatypes"),
         }
     }
 }
@@ -147,11 +146,15 @@ pub fn not(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
     use super::*;
     use crate::expressions::{col, Column};
+
     use arrow::{array::BooleanArray, datatypes::*};
-    use std::sync::LazyLock;
-    use datafusion_physical_expr_common::stats_v2::StatisticsV2::{Exponential, Gaussian, Uniform, Unknown};
+    use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
+        Exponential, Gaussian, Uniform, Unknown,
+    };
 
     #[test]
     fn neg_op() -> Result<()> {
@@ -220,30 +223,27 @@ mod tests {
         let expr = not(a)?;
 
         // Uniform with non-boolean bounds
-        assert_eq!(
-            expr.evaluate_statistics(&[&Uniform {
+        assert!(expr
+            .evaluate_statistics(&[&Uniform {
                 interval: Interval::make_unbounded(&DataType::Float64)?
-            }])?,
-            StatisticsV2::new_uncertain_bernoulli()
-        );
+            }])
+            .is_err());
 
         // Exponential
-        assert_eq!(
-            expr.evaluate_statistics(&[&Exponential {
+        assert!(expr
+            .evaluate_statistics(&[&Exponential {
                 rate: ScalarValue::new_one(&DataType::Float64)?,
                 offset: ScalarValue::new_one(&DataType::Float64)?
-            }])?,
-            StatisticsV2::new_uncertain_bernoulli()
-        );
+            }])
+            .is_err());
 
         // Gaussian
-        assert_eq!(
-            expr.evaluate_statistics(&[&Gaussian {
+        assert!(expr
+            .evaluate_statistics(&[&Gaussian {
                 mean: ScalarValue::new_one(&DataType::Float64)?,
                 variance: ScalarValue::new_one(&DataType::Float64)?
-            }])?,
-            StatisticsV2::new_uncertain_bernoulli()
-        );
+            }])
+            .is_err());
 
         // Bernoulli
         assert_eq!(
@@ -267,26 +267,24 @@ mod tests {
             StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.75)))?
         );
 
-        assert_eq!(
-            expr.evaluate_statistics(&[&Unknown {
+        assert!(expr
+            .evaluate_statistics(&[&Unknown {
                 mean: Some(ScalarValue::Boolean(Some(true))),
                 median: Some(ScalarValue::Boolean(Some(true))),
                 variance: Some(ScalarValue::Boolean(Some(true))),
                 range: Interval::CERTAINLY_TRUE
-            }])?,
-            StatisticsV2::new_uncertain_bernoulli()
-        );
+            }])
+            .is_err());
 
         // Unknown with non-boolean interval as range
-        assert_eq!(
-            expr.evaluate_statistics(&[&Unknown {
+        assert!(expr
+            .evaluate_statistics(&[&Unknown {
                 mean: None,
                 median: None,
                 variance: None,
                 range: Interval::make_unbounded(&DataType::Float64)?
-            }])?,
-            StatisticsV2::new_uncertain_bernoulli()
-        );
+            }])
+            .is_err());
 
         Ok(())
     }

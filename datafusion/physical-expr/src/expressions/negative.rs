@@ -28,7 +28,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
@@ -145,35 +145,41 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
-        assert_eq!(stats.len(), 1);
+        debug_assert_eq!(stats.len(), 1);
         match stats[0] {
             Uniform { interval } => {
                 StatisticsV2::new_uniform(self.evaluate_bounds(&[interval])?)
             }
-            Unknown { range, .. } => {
-                if let (Some(mean), Some(median), Some(variance)) =
-                    (stats[0].mean()?, stats[0].median()?, stats[0].variance()?)
-                {
-                    StatisticsV2::new_unknown(
-                        Some(mean.arithmetic_negate()?),
-                        Some(median.arithmetic_negate()?),
-                        Some(variance),
-                        self.evaluate_bounds(&[range])?,
-                    )
-                } else {
-                    StatisticsV2::new_unknown_from_interval(
-                        &self.evaluate_bounds(&[range])?,
-                    )
-                }
-            }
-            Bernoulli { p } => StatisticsV2::new_bernoulli(
-                ScalarValue::new_one(&DataType::Float64)?.sub_checked(p)?,
+            Unknown {
+                mean,
+                median,
+                variance,
+                range,
+            } => StatisticsV2::new_unknown(
+                mean.as_ref().map(|mn| mn.arithmetic_negate()).transpose()?,
+                median
+                    .as_ref()
+                    .map(|md| md.arithmetic_negate())
+                    .transpose()?,
+                variance.clone(),
+                self.evaluate_bounds(&[range])?,
             ),
-            Exponential { .. } | Gaussian { .. } => Ok(StatisticsV2::new_unknown(
-                None,
-                None,
-                None,
-                Interval::make_unbounded(&DataType::Float64)?,
+            Bernoulli { .. } => {
+                internal_err!("NegativeExpr cannot operate on Boolean datatype")
+            }
+            Exponential { offset, .. } => {
+                let exp_lower = offset.clone();
+                let exp_upper = ScalarValue::try_from(exp_lower.data_type())?;
+                Ok(StatisticsV2::new_unknown(
+                    None,
+                    None,
+                    None,
+                    Interval::try_new(exp_upper, exp_lower.arithmetic_negate()?)?,
+                )?)
+            }
+            Gaussian { mean, variance } => Ok(StatisticsV2::new_gaussian(
+                mean.arithmetic_negate()?,
+                variance.clone(),
             )?),
         }
     }
@@ -183,7 +189,7 @@ impl PhysicalExpr for NegativeExpr {
         parent_stat: &StatisticsV2,
         children_stat: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
-        assert_eq!(
+        debug_assert_eq!(
             children_stat.len(),
             1,
             "NegativeExpr should have only one child"
@@ -191,6 +197,10 @@ impl PhysicalExpr for NegativeExpr {
         match parent_stat {
             Uniform {
                 interval: parent_interval,
+            }
+            | Unknown {
+                range: parent_interval,
+                ..
             } => match children_stat[0] {
                 Uniform {
                     interval: child_interval,
@@ -322,12 +332,11 @@ mod tests {
         );
 
         // Bernoulli
-        assert_eq!(
-            negative_expr.evaluate_statistics(&[&Bernoulli {
+        assert!(negative_expr
+            .evaluate_statistics(&[&Bernoulli {
                 p: ScalarValue::Float64(Some(0.75))
-            }])?,
-            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.25)))?
-        );
+            }])
+            .is_err());
 
         // Exponential
         assert_eq!(
@@ -339,7 +348,10 @@ mod tests {
                 None,
                 None,
                 None,
-                Interval::make_unbounded(&Float64)?,
+                Interval::try_new(
+                    ScalarValue::Float64(None),
+                    ScalarValue::Float64(Some(-1.))
+                )?,
             )?
         );
 
@@ -349,11 +361,9 @@ mod tests {
                 mean: ScalarValue::Int32(Some(15)),
                 variance: ScalarValue::Int32(Some(225)),
             }])?,
-            StatisticsV2::new_unknown(
-                None,
-                None,
-                None,
-                Interval::make_unbounded(&Float64)?,
+            StatisticsV2::new_gaussian(
+                ScalarValue::Int32(Some(-15)),
+                ScalarValue::Int32(Some(225))
             )?
         );
 

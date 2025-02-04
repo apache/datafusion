@@ -17,11 +17,12 @@
 
 //! Interval arithmetic library
 
-use crate::operator::Operator;
-use crate::type_coercion::binary::{comparison_coercion_numeric, get_result_type};
 use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{AddAssign, SubAssign};
+
+use crate::operator::Operator;
+use crate::type_coercion::binary::{comparison_coercion_numeric, get_result_type};
 
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{
@@ -632,37 +633,31 @@ impl Interval {
         Ok(Some(Self { lower, upper }))
     }
 
-    /// Decide if this interval certainly contains, possibly contains, or can't
-    /// contain a [`ScalarValue`] (`other`) by returning `[true, true]`,
-    /// `[false, true]` or `[false, false]` respectively.
-    ///
-    /// NOTE: This function only works with intervals of the same data type.
-    ///       Attempting to compare intervals of different data types will lead
-    ///       to an error.
+    /// Decide if this interval contains a [`ScalarValue`] (`other`) by returning `true` or `false`.
     pub fn contains_value<T: Borrow<ScalarValue>>(&self, other: T) -> Result<bool> {
         let rhs = other.borrow();
-        if self.data_type().ne(&rhs.data_type()) {
-            return if let Some(common_type) =
-                comparison_coercion_numeric(&self.data_type(), &rhs.data_type())
-            {
-                Ok(
-                    self.lower.cast_to(&common_type)? <= rhs.cast_to(&common_type)?
-                        && (self.upper.is_null()
-                            || rhs.cast_to(&common_type)?
-                                <= self.upper.cast_to(&common_type)?),
-                )
-            } else {
-                internal_err!(
-                    "Data types must be compatible for containment checks, lhs:{}, rhs:{}",
-                    self.data_type(),
-                    rhs.data_type()
-                )
-            };
-        }
+
+        let (lhs_lower, lhs_upper, rhs) = if self.data_type().eq(&rhs.data_type()) {
+            (&self.lower, &self.upper, rhs)
+        } else if let Some(common_type) =
+            comparison_coercion_numeric(&self.data_type(), &rhs.data_type())
+        {
+            (
+                &self.lower.cast_to(&common_type)?,
+                &self.upper.cast_to(&common_type)?,
+                &rhs.cast_to(&common_type)?,
+            )
+        } else {
+            return internal_err!(
+                "Data types must be compatible for containment checks, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
+            );
+        };
 
         // We only check the upper bound for a `None` value because `None`
         // values are less than `Some` values according to Rust.
-        Ok(&self.lower <= rhs && (self.upper.is_null() || rhs <= &self.upper))
+        Ok(lhs_lower <= rhs && (lhs_upper.is_null() || rhs <= lhs_upper))
     }
 
     /// Decide if this interval is a superset of, overlaps with, or
@@ -1846,6 +1841,7 @@ mod tests {
     use crate::interval_arithmetic::{next_value, prev_value, satisfy_greater, Interval};
 
     use arrow::datatypes::DataType;
+    use datafusion_common::rounding::{next_down, next_up};
     use datafusion_common::{Result, ScalarValue};
 
     #[test]
@@ -2589,6 +2585,16 @@ mod tests {
                 Interval::make(Some(0), Some(100))?,
                 ScalarValue::Float64(Some(50.)),
                 true,
+            ),
+            (
+                Interval::make(Some(0), Some(100))?,
+                ScalarValue::Float64(Some(next_down(100.))),
+                true,
+            ),
+            (
+                Interval::make(Some(0), Some(100))?,
+                ScalarValue::Float64(Some(next_up(100.))),
+                false,
             ),
         ];
 
