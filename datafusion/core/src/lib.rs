@@ -809,8 +809,8 @@ pub mod variable {
     pub use datafusion_expr::var_provider::{VarProvider, VarType};
 }
 
-#[cfg(test)]
 pub mod test;
+
 pub mod test_util;
 
 #[cfg(doctest)]
