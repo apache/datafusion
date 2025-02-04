@@ -128,7 +128,7 @@ impl ExecutionPlan for DataSourceExec {
             let plan = self
                 .clone()
                 .with_source(source)
-                // Changing file groups may invalidate output partitioning. Update it also
+                // Changing source partitioning may invalidate output partitioning. Update it also
                 .with_partitioning(output_partitioning);
             Ok(Some(Arc::new(plan)))
         } else {

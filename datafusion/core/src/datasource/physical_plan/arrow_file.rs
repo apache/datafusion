@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::datasource::data_source::{FileSource, FileType};
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{
-    FileGroupPartitioner, FileMeta, FileOpenFuture, FileOpener, FileScanConfig,
+    FileMeta, FileOpenFuture, FileOpener, FileScanConfig, JsonSource,
 };
 use crate::error::Result;
 
@@ -37,6 +37,7 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
@@ -49,13 +50,8 @@ use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore};
 #[derive(Debug, Clone)]
 #[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
 pub struct ArrowExec {
+    inner: DataSourceExec,
     base_config: FileScanConfig,
-    projected_statistics: Statistics,
-    projected_schema: SchemaRef,
-    projected_output_ordering: Vec<LexOrdering>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
 }
 
 #[allow(unused, deprecated)]
@@ -74,18 +70,35 @@ impl ArrowExec {
             projected_constraints,
             &base_config,
         );
+        let arrow = ArrowSource::default();
+        let base_config = base_config.with_source(Arc::new(arrow));
         Self {
+            inner: DataSourceExec::new(Arc::new(base_config.clone())),
             base_config,
-            projected_schema,
-            projected_statistics,
-            projected_output_ordering,
-            metrics: ExecutionPlanMetricsSet::new(),
-            cache,
         }
     }
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+
+    fn file_scan_config(&self) -> FileScanConfig {
+        let source = self.inner.source();
+        source
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .unwrap()
+            .clone()
+    }
+
+    fn json_source(&self) -> JsonSource {
+        let source = self.file_scan_config();
+        source
+            .file_source()
+            .as_any()
+            .downcast_ref::<JsonSource>()
+            .unwrap()
+            .clone()
     }
 
     fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
@@ -113,10 +126,10 @@ impl ArrowExec {
     }
 
     fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
-        self.base_config.file_groups = file_groups;
-        // Changing file groups may invalidate output partitioning. Update it also
-        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
-        self.cache = self.cache.with_partitioning(output_partitioning);
+        self.base_config.file_groups = file_groups.clone();
+        let mut file_source = self.file_scan_config();
+        file_source = file_source.with_file_groups(file_groups);
+        self.inner = self.inner.with_source(Arc::new(file_source));
         self
     }
 }
@@ -128,8 +141,7 @@ impl DisplayAs for ArrowExec {
         t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(f, "ArrowExec: ")?;
-        self.base_config.fmt_as(t, f)
+        self.inner.fmt_as(t, f)
     }
 }
 
@@ -144,7 +156,7 @@ impl ExecutionPlan for ArrowExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        &self.cache
+        self.inner.properties()
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
@@ -164,65 +176,27 @@ impl ExecutionPlan for ArrowExec {
         target_partitions: usize,
         config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
-        let repartitioned_file_groups_option = FileGroupPartitioner::new()
-            .with_target_partitions(target_partitions)
-            .with_repartition_file_min_size(repartition_file_min_size)
-            .with_preserve_order_within_groups(
-                self.properties().output_ordering().is_some(),
-            )
-            .repartition_file_groups(&self.base_config.file_groups);
-
-        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            let mut new_plan = self.clone();
-            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
-            return Ok(Some(Arc::new(new_plan)));
-        }
-        Ok(None)
+        self.inner.repartitioned(target_partitions, config)
     }
     fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        use super::file_stream::FileStream;
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.base_config.object_store_url)?;
-
-        let opener = ArrowOpener {
-            object_store,
-            projection: self.base_config.file_column_projection_indices(),
-        };
-        let stream = FileStream::new(
-            &self.base_config,
-            partition,
-            Arc::new(opener),
-            &self.metrics,
-        )?;
-        Ok(Box::pin(stream))
+        self.inner.execute(partition, context)
     }
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        self.inner.metrics()
     }
     fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_statistics.clone())
+        self.inner.statistics()
     }
     fn fetch(&self) -> Option<usize> {
-        self.base_config.limit
+        self.inner.fetch()
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        let new_config = self.base_config.clone().with_limit(limit);
-
-        Some(Arc::new(Self {
-            base_config: new_config,
-            projected_statistics: self.projected_statistics.clone(),
-            projected_schema: Arc::clone(&self.projected_schema),
-            projected_output_ordering: self.projected_output_ordering.clone(),
-            metrics: self.metrics.clone(),
-            cache: self.cache.clone(),
-        }))
+        self.inner.with_fetch(limit)
     }
 }
 

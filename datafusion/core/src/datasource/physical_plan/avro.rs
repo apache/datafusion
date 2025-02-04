@@ -34,6 +34,7 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
@@ -44,13 +45,8 @@ use object_store::ObjectStore;
 #[derive(Debug, Clone)]
 #[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
 pub struct AvroExec {
+    inner: DataSourceExec,
     base_config: FileScanConfig,
-    projected_statistics: Statistics,
-    projected_schema: SchemaRef,
-    projected_output_ordering: Vec<LexOrdering>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
-    cache: PlanProperties,
 }
 
 #[allow(unused, deprecated)]
@@ -69,13 +65,10 @@ impl AvroExec {
             projected_constraints,
             &base_config,
         );
+        let base_config = base_config.with_source(Arc::new(AvroSource::default()));
         Self {
+            inner: DataSourceExec::new(Arc::new(base_config.clone())),
             base_config,
-            projected_schema,
-            projected_statistics,
-            projected_output_ordering,
-            metrics: ExecutionPlanMetricsSet::new(),
-            cache,
         }
     }
 
@@ -108,8 +101,7 @@ impl AvroExec {
 #[allow(unused, deprecated)]
 impl DisplayAs for AvroExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "AvroExec: ")?;
-        self.base_config.fmt_as(t, f)
+        self.inner.fmt_as(t, f)
     }
 }
 
@@ -124,7 +116,7 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn properties(&self) -> &PlanProperties {
-        &self.cache
+        self.inner.properties()
     }
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         Vec::new()
@@ -151,51 +143,23 @@ impl ExecutionPlan for AvroExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        use super::file_stream::FileStream;
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.base_config.object_store_url)?;
-
-        let config = Arc::new(private::DeprecatedAvroConfig {
-            schema: Arc::clone(&self.base_config.file_schema),
-            batch_size: context.session_config().batch_size(),
-            projection: self.base_config.projected_file_column_names(),
-            object_store,
-        });
-        let opener = private::DeprecatedAvroOpener { config };
-
-        let stream = FileStream::new(
-            &self.base_config,
-            partition,
-            Arc::new(opener),
-            &self.metrics,
-        )?;
-        Ok(Box::pin(stream))
+        self.inner.execute(partition, context)
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_statistics.clone())
+        self.inner.statistics()
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        self.inner.metrics()
     }
 
     fn fetch(&self) -> Option<usize> {
-        self.base_config.limit
+        self.inner.fetch()
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        let new_config = self.base_config.clone().with_limit(limit);
-
-        Some(Arc::new(Self {
-            base_config: new_config,
-            projected_statistics: self.projected_statistics.clone(),
-            projected_schema: Arc::clone(&self.projected_schema),
-            projected_output_ordering: self.projected_output_ordering.clone(),
-            metrics: self.metrics.clone(),
-            cache: self.cache.clone(),
-        }))
+        self.inner.with_fetch(limit)
     }
 }
 

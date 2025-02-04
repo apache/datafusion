@@ -22,9 +22,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::{
-    calculate_range, FileGroupPartitioner, FileScanConfig, FileStream, RangeCalculation,
-};
+use super::{calculate_range, FileScanConfig, RangeCalculation};
 use crate::datasource::data_source::{FileSource, FileType};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
@@ -42,6 +40,7 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use futures::{StreamExt, TryStreamExt};
@@ -54,12 +53,9 @@ use tokio::task::JoinSet;
 #[derive(Debug, Clone)]
 #[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
 pub struct NdJsonExec {
+    inner: DataSourceExec,
     base_config: FileScanConfig,
-    projected_statistics: Statistics,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     file_compression_type: FileCompressionType,
-    cache: PlanProperties,
 }
 
 #[allow(unused, deprecated)]
@@ -81,12 +77,16 @@ impl NdJsonExec {
             projected_constraints,
             &base_config,
         );
+
+        let json = JsonSource::default();
+        let base_config = base_config
+            .with_file_compression_type(file_compression_type)
+            .with_source(Arc::new(json));
+
         Self {
+            inner: DataSourceExec::new(Arc::new(base_config.clone())),
+            file_compression_type: base_config.file_compression_type,
             base_config,
-            projected_statistics,
-            metrics: ExecutionPlanMetricsSet::new(),
-            file_compression_type,
-            cache,
         }
     }
 
@@ -98,6 +98,25 @@ impl NdJsonExec {
     /// Ref to file compression type
     pub fn file_compression_type(&self) -> &FileCompressionType {
         &self.file_compression_type
+    }
+
+    fn file_scan_config(&self) -> FileScanConfig {
+        let source = self.inner.source();
+        source
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .unwrap()
+            .clone()
+    }
+
+    fn json_source(&self) -> JsonSource {
+        let source = self.file_scan_config();
+        source
+            .file_source()
+            .as_any()
+            .downcast_ref::<JsonSource>()
+            .unwrap()
+            .clone()
     }
 
     fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
@@ -124,10 +143,10 @@ impl NdJsonExec {
     }
 
     fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
-        self.base_config.file_groups = file_groups;
-        // Changing file groups may invalidate output partitioning. Update it also
-        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
-        self.cache = self.cache.with_partitioning(output_partitioning);
+        self.base_config.file_groups = file_groups.clone();
+        let mut file_source = self.file_scan_config();
+        file_source = file_source.with_file_groups(file_groups);
+        self.inner = self.inner.with_source(Arc::new(file_source));
         self
     }
 }
@@ -139,8 +158,7 @@ impl DisplayAs for NdJsonExec {
         t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(f, "JsonExec: ")?;
-        self.base_config.fmt_as(t, f)
+        self.inner.fmt_as(t, f)
     }
 }
 
@@ -154,7 +172,7 @@ impl ExecutionPlan for NdJsonExec {
         self
     }
     fn properties(&self) -> &PlanProperties {
-        &self.cache
+        self.inner.properties()
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -173,26 +191,7 @@ impl ExecutionPlan for NdJsonExec {
         target_partitions: usize,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if self.file_compression_type.is_compressed() {
-            return Ok(None);
-        }
-        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
-        let preserve_order_within_groups = self.properties().output_ordering().is_some();
-        let file_groups = &self.base_config.file_groups;
-
-        let repartitioned_file_groups_option = FileGroupPartitioner::new()
-            .with_target_partitions(target_partitions)
-            .with_preserve_order_within_groups(preserve_order_within_groups)
-            .with_repartition_file_min_size(repartition_file_min_size)
-            .repartition_file_groups(file_groups);
-
-        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            let mut new_plan = self.clone();
-            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
-            return Ok(Some(Arc::new(new_plan)));
-        }
-
-        Ok(None)
+        self.inner.repartitioned(target_partitions, config)
     }
 
     fn execute(
@@ -200,50 +199,23 @@ impl ExecutionPlan for NdJsonExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let batch_size = context.session_config().batch_size();
-
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.base_config.object_store_url)?;
-        let opener = JsonOpener {
-            batch_size,
-            projected_schema: self.base_config.projected_file_schema(),
-            file_compression_type: self.file_compression_type.to_owned(),
-            object_store,
-        };
-
-        let stream = FileStream::new(
-            &self.base_config,
-            partition,
-            Arc::new(opener),
-            &self.metrics,
-        )?;
-
-        Ok(Box::pin(stream) as SendableRecordBatchStream)
+        self.inner.execute(partition, context)
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_statistics.clone())
+        self.inner.statistics()
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        self.inner.metrics()
     }
 
     fn fetch(&self) -> Option<usize> {
-        self.base_config.limit
+        self.inner.fetch()
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        let new_config = self.base_config.clone().with_limit(limit);
-
-        Some(Arc::new(Self {
-            base_config: new_config,
-            projected_statistics: self.projected_statistics.clone(),
-            metrics: self.metrics.clone(),
-            file_compression_type: self.file_compression_type,
-            cache: self.cache.clone(),
-        }))
+        self.inner.with_fetch(limit)
     }
 }
 
