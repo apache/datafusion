@@ -210,7 +210,8 @@ ctx.register_udf(udf);
 // At this point, you can use the `add_one` function in your query:
 
 let query = "SELECT add_one(1)";
-let df = ctx.sql(&query);
+let df_fut = ctx.sql(&query);
+// let df = ctx.sql(&query).await.unwrap();
 ```
 
 A few things to note on `create_udf`:
