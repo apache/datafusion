@@ -55,6 +55,7 @@ of arguments.
 This a lower level API with more functionality but is more complex, also documented in [`advanced_udf.rs`].
 
 ```rust
+use std::sync::Arc;
 use std::any::Any;
 use std::sync::LazyLock;
 use arrow::datatypes::DataType;
@@ -63,6 +64,7 @@ use datafusion_common::{DataFusionError, plan_err, Result};
 use datafusion_expr::{col, ColumnarValue, Documentation, ScalarFunctionArgs, Signature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion::arrow::array::{ArrayRef, Int64Array};
 
 /// This struct for a simple UDF that adds one to an int32
 #[derive(Debug)]
@@ -97,14 +99,15 @@ impl ScalarUDFImpl for AddOne {
    }
    // The actual implementation would add one to the argument
    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
+        let args = ColumnarValue::values_to_arrays(&args.args)?;
         let i64s = as_int64_array(&args[0])?;
 
         let new_array = i64s
             .iter()
             .map(|array_elem| array_elem.map(|value| value + 1))
             .collect::<Int64Array>();
-        Ok(Arc::new(new_array))
+
+        Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
    }
    fn documentation(&self) -> Option<&Documentation> {
         Some(&*DOCUMENTATION)
@@ -124,8 +127,9 @@ There is a an older, more concise, but also more limited API [`create_udf`] avai
 
 #### Adding a Scalar UDF
 
-```rust
+```torustfix
 use std::sync::Arc;
+use arrow_array::Int64Array;
 
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::common::cast::as_int64_array;
