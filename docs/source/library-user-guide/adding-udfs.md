@@ -54,7 +54,7 @@ of arguments.
 
 This a lower level API with more functionality but is more complex, also documented in [`advanced_udf.rs`].
 
-```rust
+```rustfixed
 use std::sync::Arc;
 use std::any::Any;
 use std::sync::LazyLock;
@@ -127,7 +127,7 @@ There is a an older, more concise, but also more limited API [`create_udf`] avai
 
 #### Adding a Scalar UDF
 
-```torustfix
+```rust
 use std::sync::Arc;
 use arrow_array::Int64Array;
 
@@ -153,7 +153,7 @@ pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 This "works" in isolation, i.e. if you have a slice of `ArrayRef`s, you can call `add_one` and it will return a new
 `ArrayRef` with 1 added to each value.
 
-```torustfix
+```rust
 let input = vec![Some(1), None, Some(3)];
 let input = ColumnarValue::from(Arc::new(Int64Array::from(input)) as ArrayRef);
 
@@ -173,7 +173,7 @@ To register a Scalar UDF, you need to wrap the function implementation in a [`Sc
 with the `SessionContext`.
 DataFusion provides the [`create_udf`] and helper functions to make this easier.
 
-```torustfix
+```rust
 use datafusion::logical_expr::{Volatility, create_udf};
 use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
