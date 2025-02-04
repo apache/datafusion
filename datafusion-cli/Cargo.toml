@@ -65,6 +65,8 @@ url = "2.5.4"
 [dev-dependencies]
 assert_cmd = "2.0"
 ctor = "0.2.9"
+insta = { version = "1.41.1", features = ["glob", "filters"] }
+insta-cmd = "0.6.0"
 predicates = "3.0"
 rstest = "0.24"
 
