@@ -23,7 +23,7 @@ export CARGO_PROFILE_CI_OPT_LEVEL="s"
 export CARGO_PROFILE_CI_STRIP=true
 
 cd datafusion-examples/examples/
-cargo build --profile ci --examples
+cargo build --profile ci --examples --locked
 
 files=$(ls .)
 for filename in $files
@@ -31,6 +31,6 @@ do
   example_name=`basename $filename ".rs"`
   # Skip tests that rely on external storage and flight
   if [ ! -d $filename ]; then
-    cargo run --profile ci --example $example_name
+    cargo run --profile ci --example $example_name --locked
   fi
 done

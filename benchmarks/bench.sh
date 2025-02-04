@@ -34,7 +34,7 @@ COMMAND=
 BENCHMARK=all
 DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
-CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
+CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release --locked"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
 VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
 
@@ -490,9 +490,9 @@ data_imdb() {
     local imdb_temp_gz="${imdb_dir}/imdb.tgz"
     local imdb_url="https://event.cwi.nl/da/job/imdb.tgz"
 
-   # imdb has 21 files, we just separate them into 3 groups for better readability 
+   # imdb has 21 files, we just separate them into 3 groups for better readability
     local first_required_files=(
-        "aka_name.parquet"    
+        "aka_name.parquet"
         "aka_title.parquet"
         "cast_info.parquet"
         "char_name.parquet"
@@ -539,13 +539,13 @@ data_imdb() {
     if [ "$convert_needed" = true ]; then
         # Expected size of the dataset
         expected_size="1263193115" # 1.18 GB
-        
+
         echo -n "Looking for imdb.tgz... "
         if [ -f "${imdb_temp_gz}" ]; then
             echo "found"
             echo -n "Checking size... "
             OUTPUT_SIZE=$(wc -c "${imdb_temp_gz}" 2>/dev/null | awk '{print $1}' || true)
-            
+
             #Checking the size of the existing file
             if [ "${OUTPUT_SIZE}" = "${expected_size}" ]; then
                 # Existing file is of the expected size, no need for download
@@ -559,7 +559,7 @@ data_imdb() {
 
                 # Download the dataset
                 curl -o "${imdb_temp_gz}" "${imdb_url}"
-                
+
                 # Size check of the installed file
                 DOWNLOADED_SIZE=$(wc -c "${imdb_temp_gz}" | awk '{print $1}')
                 if [ "${DOWNLOADED_SIZE}" != "${expected_size}" ]; then
@@ -591,7 +591,7 @@ data_imdb() {
 # Runs the imdb benchmark
 run_imdb() {
     IMDB_DIR="${DATA_DIR}/imdb"
-    
+
     RESULTS_FILE="${RESULTS_DIR}/imdb.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
@@ -726,9 +726,9 @@ run_external_aggr() {
     echo "Running external aggregation benchmark..."
 
     # Only parquet is supported.
-    # Since per-operator memory limit is calculated as (total-memory-limit / 
+    # Since per-operator memory limit is calculated as (total-memory-limit /
     # number-of-partitions), and by default `--partitions` is set to number of
-    # CPU cores, we set a constant number of partitions to prevent this 
+    # CPU cores, we set a constant number of partitions to prevent this
     # benchmark to fail on some machines.
     $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
 }
