@@ -161,4 +161,4 @@ CI uses the committed `Cargo.lock` file, and dependencies are updated regularly
 using [Dependabot] PRs.
 
 [updated guidance]: https://blog.rust-lang.org/2023/08/29/committing-lockfiles.html
-[Dependabot]: https://docs.github.com/en/code-security/dependabot/working-with-dependabot
+[dependabot]: https://docs.github.com/en/code-security/dependabot/working-with-dependabot
