@@ -29,7 +29,7 @@ pub mod expr_fn {
         xxhash32,
         "Computes the XXHash32 hash of a binary string.",
         input
-    ),(
+    ) ,(
         xxhash64,
         "Computes the XXHash64 hash of a binary string.",
         input
@@ -38,5 +38,7 @@ pub mod expr_fn {
 
 /// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![xxhash32(), xxhash64()]
+    vec![xxhash32(), 
+    xxhash64()
+    ]
 }
