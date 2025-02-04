@@ -588,6 +588,7 @@ pub fn base_type(data_type: &DataType) -> DataType {
         DataType::List(field)
         | DataType::LargeList(field)
         | DataType::FixedSizeList(field, _) => base_type(field.data_type()),
+        DataType::Dictionary(_, value_type) => base_type(value_type),
         _ => data_type.to_owned(),
     }
 }

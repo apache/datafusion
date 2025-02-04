@@ -736,6 +736,26 @@ select contains('', '');
 ----
 true
 
+query B
+select contains('Spark SQL', 'SPARK');
+----
+false
+
+query B
+select contains('Spark SQL', 'Spark');
+----
+true
+
+query B
+select contains('Spark SQL', NULL);
+----
+NULL
+
+query B
+select contains(X'537061726b2053514c', X'537061726b');
+----
+true
+
 
 ## Demonstrate how to test for trailing whitespace
 

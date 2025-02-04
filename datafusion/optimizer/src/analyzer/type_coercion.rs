@@ -86,10 +86,6 @@ fn coerce_output(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPla
 }
 
 impl AnalyzerRule for TypeCoercion {
-    fn name(&self) -> &str {
-        "type_coercion"
-    }
-
     fn analyze(&self, plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
         let empty_schema = DFSchema::empty();
 
@@ -100,6 +96,10 @@ impl AnalyzerRule for TypeCoercion {
 
         // finish
         coerce_output(transformed_plan, config)
+    }
+
+    fn name(&self) -> &str {
+        "type_coercion"
     }
 }
 
@@ -589,7 +589,7 @@ fn transform_schema_to_nonview(dfschema: &DFSchemaRef) -> Option<Result<DFSchema
                 DataType::Utf8View => {
                     transformed = true;
                     (
-                        qualifier.cloned() as Option<TableReference>,
+                        qualifier.cloned(),
                         Arc::new(Field::new(
                             field.name(),
                             DataType::LargeUtf8,
@@ -600,7 +600,7 @@ fn transform_schema_to_nonview(dfschema: &DFSchemaRef) -> Option<Result<DFSchema
                 DataType::BinaryView => {
                     transformed = true;
                     (
-                        qualifier.cloned() as Option<TableReference>,
+                        qualifier.cloned(),
                         Arc::new(Field::new(
                             field.name(),
                             DataType::LargeBinary,
@@ -608,10 +608,7 @@ fn transform_schema_to_nonview(dfschema: &DFSchemaRef) -> Option<Result<DFSchema
                         )),
                     )
                 }
-                _ => (
-                    qualifier.cloned() as Option<TableReference>,
-                    Arc::clone(field),
-                ),
+                _ => (qualifier.cloned(), Arc::clone(field)),
             })
             .unzip();
 
@@ -1026,11 +1023,10 @@ fn project_with_column_index(
 
 #[cfg(test)]
 mod test {
-    use std::any::Any;
-    use std::sync::Arc;
-
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
+    use std::any::Any;
+    use std::sync::Arc;
 
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,

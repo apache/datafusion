@@ -20,9 +20,11 @@ use arrow::datatypes::DataType;
 use std::any::Any;
 
 use crate::utils::utf8_to_int_type;
-use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_common::types::{LogicalType, NativeType};
+use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -37,7 +39,7 @@ use datafusion_macros::user_doc;
 | 80                             |
 +--------------------------------+
 ```"#,
-    standard_argument(name = "str", prefix = "String"),
+    standard_argument(name = "str", prefix = "Coercible String"),
     related_udf(name = "length"),
     related_udf(name = "octet_length")
 )]
@@ -55,7 +57,7 @@ impl Default for BitLengthFunc {
 impl BitLengthFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -103,6 +105,33 @@ impl ScalarUDFImpl for BitLengthFunc {
                 )),
                 _ => unreachable!("bit length"),
             },
+        }
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return plan_err!(
+                "The {} function requires 1 argument, but got {}.",
+                self.name(),
+                arg_types.len()
+            );
+        }
+
+        let arg_type = &arg_types[0];
+        let current_native_type: NativeType = arg_type.into();
+        let target_native_type = NativeType::String;
+        if current_native_type.is_integer()
+            || current_native_type.is_binary()
+            || current_native_type == NativeType::String
+            || current_native_type == NativeType::Null
+        {
+            Ok(vec![target_native_type.default_cast_for(arg_type)?])
+        } else {
+            plan_err!(
+                "The first argument of the {} function can only be a string, integer, or binary but got {:?}.",
+                self.name(),
+                arg_type
+            )
         }
     }
 

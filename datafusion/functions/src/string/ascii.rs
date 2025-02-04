@@ -19,9 +19,11 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_common::types::{LogicalType, NativeType};
+use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -44,7 +46,7 @@ use std::sync::Arc;
 | 128640            |
 +-------------------+
 ```"#,
-    standard_argument(name = "str", prefix = "String"),
+    standard_argument(name = "str", prefix = "Coercible String"),
     related_udf(name = "chr")
 )]
 #[derive(Debug)]
@@ -61,7 +63,7 @@ impl Default for AsciiFunc {
 impl AsciiFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(1, Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -91,6 +93,33 @@ impl ScalarUDFImpl for AsciiFunc {
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
         make_scalar_function(ascii, vec![])(args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 1 {
+            return plan_err!(
+                "The {} function requires 1 argument, but got {}.",
+                self.name(),
+                arg_types.len()
+            );
+        }
+
+        let arg_type = &arg_types[0];
+        let current_native_type: NativeType = arg_type.into();
+        let target_native_type = NativeType::String;
+        if current_native_type.is_integer()
+            || current_native_type.is_binary()
+            || current_native_type == NativeType::String
+            || current_native_type == NativeType::Null
+        {
+            Ok(vec![target_native_type.default_cast_for(arg_type)?])
+        } else {
+            plan_err!(
+                "The first argument of the {} function can only be a string, integer, or binary but got {:?}.",
+                self.name(),
+                arg_type
+            )
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -130,7 +159,7 @@ pub fn ascii(args: &[ArrayRef]) -> Result<ArrayRef> {
             let string_array = args[0].as_string_view();
             Ok(calculate_ascii(string_array)?)
         }
-        _ => internal_err!("Unsupported data type"),
+        other => internal_err!("Unsupported data type for ascii: {:?}", other),
     }
 }
 
@@ -143,7 +172,7 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
-    macro_rules! test_ascii {
+    macro_rules! test_ascii_invoke {
         ($INPUT:expr, $EXPECTED:expr) => {
             test_function!(
                 AsciiFunc::new(),
@@ -175,11 +204,11 @@ mod tests {
     }
 
     #[test]
-    fn test_functions() -> Result<()> {
-        test_ascii!(Some(String::from("x")), Ok(Some(120)));
-        test_ascii!(Some(String::from("a")), Ok(Some(97)));
-        test_ascii!(Some(String::from("")), Ok(Some(0)));
-        test_ascii!(None, Ok(None));
+    fn test_ascii_invoke() -> Result<()> {
+        test_ascii_invoke!(Some(String::from("x")), Ok(Some(120)));
+        test_ascii_invoke!(Some(String::from("a")), Ok(Some(97)));
+        test_ascii_invoke!(Some(String::from("")), Ok(Some(0)));
+        test_ascii_invoke!(None, Ok(None));
         Ok(())
     }
 }

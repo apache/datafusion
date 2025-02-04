@@ -21,7 +21,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::coerced_fixed_size_list_to_list;
+use datafusion_common::utils::{base_type, coerced_fixed_size_list_to_list};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     types::{LogicalType, NativeType},
@@ -53,14 +53,14 @@ pub fn data_types_with_scalar_udf(
     let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
+        return if type_signature.supports_zero_argument() {
+            Ok(vec![])
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
+            plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name())
         } else {
-            return plan_err!("{} does not support zero arguments.", func.name());
-        }
+            plan_err!("{} does not support zero arguments.", func.name())
+        };
     }
 
     let valid_types =
@@ -91,14 +91,14 @@ pub fn data_types_with_aggregate_udf(
     let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
+        return if type_signature.supports_zero_argument() {
+            Ok(vec![])
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
+            plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name())
         } else {
-            return plan_err!("{} does not support zero arguments.", func.name());
-        }
+            plan_err!("{} does not support zero arguments.", func.name())
+        };
     }
 
     let valid_types =
@@ -128,14 +128,14 @@ pub fn data_types_with_window_udf(
     let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
+        return if type_signature.supports_zero_argument() {
+            Ok(vec![])
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name());
+            plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.", func.name())
         } else {
-            return plan_err!("{} does not support zero arguments.", func.name());
-        }
+            plan_err!("{} does not support zero arguments.", func.name())
+        };
     }
 
     let valid_types =
@@ -165,20 +165,20 @@ pub fn data_types(
     let type_signature = &signature.type_signature;
 
     if current_types.is_empty() {
-        if type_signature.supports_zero_argument() {
-            return Ok(vec![]);
+        return if type_signature.supports_zero_argument() {
+            Ok(vec![])
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!(
+            plan_err!(
                 "signature {:?} does not support zero arguments. Use TypeSignature::Nullary for zero arguments.",
                 type_signature
-            );
+            )
         } else {
-            return plan_err!(
+            plan_err!(
                 "signature {:?} does not support zero arguments.",
                 type_signature
-            );
-        }
+            )
+        };
     }
 
     let valid_types = get_valid_types(type_signature, current_types)?;
@@ -387,8 +387,8 @@ fn get_valid_types(
 
         // We need to find the coerced base type, mainly for cases like:
         // `array_append(List(null), i64)` -> `List(i64)`
-        let array_base_type = datafusion_common::utils::base_type(array_type);
-        let elem_base_type = datafusion_common::utils::base_type(elem_type);
+        let array_base_type = base_type(array_type);
+        let elem_base_type = base_type(elem_type);
         let new_base_type = comparison_coercion(&array_base_type, &elem_base_type);
 
         let new_base_type = new_base_type.ok_or_else(|| {
@@ -453,62 +453,19 @@ fn get_valid_types(
             .collect(),
         TypeSignature::String(number) => {
             function_length_check(current_types.len(), *number)?;
-
-            let mut new_types = Vec::with_capacity(current_types.len());
-            for data_type in current_types.iter() {
-                let logical_data_type: NativeType = data_type.into();
-                if logical_data_type == NativeType::String {
-                    new_types.push(data_type.to_owned());
-                } else if logical_data_type == NativeType::Null {
-                    // TODO: Switch to Utf8View if all the string functions supports Utf8View
-                    new_types.push(DataType::Utf8);
-                } else {
-                    return plan_err!(
-                        "The signature expected NativeType::String but received {logical_data_type}"
-                    );
-                }
-            }
-
-            // Find the common string type for the given types
-            fn find_common_type(
-                lhs_type: &DataType,
-                rhs_type: &DataType,
-            ) -> Result<DataType> {
-                match (lhs_type, rhs_type) {
-                    (DataType::Dictionary(_, lhs), DataType::Dictionary(_, rhs)) => {
-                        find_common_type(lhs, rhs)
-                    }
-                    (DataType::Dictionary(_, v), other)
-                    | (other, DataType::Dictionary(_, v)) => find_common_type(v, other),
-                    _ => {
-                        if let Some(coerced_type) = string_coercion(lhs_type, rhs_type) {
-                            Ok(coerced_type)
-                        } else {
-                            plan_err!(
-                                "{} and {} are not coercible to a common string type",
-                                lhs_type,
-                                rhs_type
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Length checked above, safe to unwrap
-            let mut coerced_type = new_types.first().unwrap().to_owned();
+            let new_types = validate_and_collect_string_types(current_types)?;
+            let mut coerced_type = new_types
+                .first()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Expected at least one type in the list of types"
+                    )
+                })?
+                .to_owned();
             for t in new_types.iter().skip(1) {
-                coerced_type = find_common_type(&coerced_type, t)?;
+                coerced_type = find_common_string_type(&coerced_type, t)?;
             }
-
-            fn base_type_or_default_type(data_type: &DataType) -> DataType {
-                if let DataType::Dictionary(_, v) = data_type {
-                    base_type_or_default_type(v)
-                } else {
-                    data_type.to_owned()
-                }
-            }
-
-            vec![vec![base_type_or_default_type(&coerced_type); *number]]
+            vec![vec![base_type(&coerced_type); *number]]
         }
         TypeSignature::Numeric(number) => {
             function_length_check(current_types.len(), *number)?;
@@ -584,23 +541,36 @@ fn get_valid_types(
                 match target_type_class {
                     TypeSignatureClass::Native(native_type) => {
                         let target_type = native_type.native();
-                        if &logical_type == target_type {
-                            return target_type.default_cast_for(current_type);
+                        if &logical_type == target_type
+                            || logical_type == NativeType::Null
+                            || (target_type.is_numeric() && logical_type.is_numeric())
+                        {
+                            target_type.default_cast_for(current_type)
+                        } else {
+                            internal_err!(
+                                "Expect {target_type_class} but received {current_type}"
+                            )
                         }
-
-                        if logical_type == NativeType::Null {
-                            return target_type.default_cast_for(current_type);
+                    }
+                    TypeSignatureClass::Numeric(native_type) => {
+                        let target_type = native_type.native();
+                        if target_type.is_numeric() && logical_type.is_numeric() {
+                            target_type.default_cast_for(current_type)
+                        } else {
+                            internal_err!(
+                                "Expect {target_type_class} but received {current_type}"
+                            )
                         }
-
+                    }
+                    TypeSignatureClass::Integer(native_type) => {
+                        let target_type = native_type.native();
                         if target_type.is_integer() && logical_type.is_integer() {
-                            return target_type.default_cast_for(current_type);
+                            target_type.default_cast_for(current_type)
+                        } else {
+                            internal_err!(
+                                "Expect {target_type_class} but received {current_type}"
+                            )
                         }
-
-                        internal_err!(
-                            "Expect {} but received {}",
-                            target_type_class,
-                            current_type
-                        )
                     }
                     // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
                     TypeSignatureClass::Timestamp
@@ -635,6 +605,24 @@ fn get_valid_types(
             {
                 let target_type = can_coerce_to(current_type, target_type_class)?;
                 new_types.push(target_type);
+            }
+
+            // Following the behavior of `TypeSignature::String`, we find the common string type.
+            let string_indices: Vec<_> = target_types.iter().enumerate()
+                .filter(|(_, t)| {
+                    matches!(t, TypeSignatureClass::Native(n) if n.native() == &NativeType::String)
+                })
+                .map(|(i, _)| i)
+                .collect();
+            if !string_indices.is_empty() {
+                let mut coerced_string_type = new_types[string_indices[0]].to_owned();
+                for &i in string_indices.iter().skip(1) {
+                    coerced_string_type =
+                        find_common_string_type(&coerced_string_type, &new_types[i])?;
+                }
+                for i in string_indices {
+                    new_types[i] = coerced_string_type.clone();
+                }
             }
 
             vec![new_types]
@@ -742,6 +730,47 @@ fn get_valid_types(
     };
 
     Ok(valid_types)
+}
+
+/// Validates that all data types are either [`NativeType::String`] or [`NativeType::Null`].
+/// For [`NativeType::Null`], returns [`DataType::Utf8`] as the default string type.
+/// Returns error if any type is neither [`NativeType::String`] nor [`NativeType::Null`].
+fn validate_and_collect_string_types(data_types: &[DataType]) -> Result<Vec<DataType>> {
+    data_types
+        .iter()
+        .map(|data_type| {
+            let logical_type: NativeType = data_type.into();
+            match logical_type {
+                NativeType::String => Ok(data_type.to_owned()),
+                // TODO: Switch to Utf8View if all the string functions supports Utf8View
+                NativeType::Null => Ok(DataType::Utf8),
+                _ => plan_err!("The signature expected NativeType::String but received {logical_type}"),
+            }
+        })
+        .collect()
+}
+
+/// Returns a common string [`DataType`] that both input types can be coerced to.
+/// Handles [`DataType::Dictionary`] by recursively finding common type of their value [`DataType`].
+/// Returns error if types cannot be coerced to a common string [`DataType`].
+fn find_common_string_type(lhs_type: &DataType, rhs_type: &DataType) -> Result<DataType> {
+    match (lhs_type, rhs_type) {
+        (DataType::Dictionary(_, lhs), DataType::Dictionary(_, rhs)) => {
+            find_common_string_type(lhs, rhs)
+        }
+        (DataType::Dictionary(_, v), other) | (other, DataType::Dictionary(_, v)) => {
+            find_common_string_type(v, other)
+        }
+        _ => {
+            if let Some(coerced_type) = string_coercion(lhs_type, rhs_type) {
+                Ok(coerced_type)
+            } else {
+                plan_err!(
+                    "{lhs_type} and {rhs_type} are not coercible to a common string type"
+                )
+            }
+        }
+    }
 }
 
 /// Try to coerce the current argument types to match the given `valid_types`.
@@ -881,7 +910,7 @@ fn coerced_from<'a>(
             Null | Timestamp(_, None) | Date32 | Utf8 | LargeUtf8,
         ) => Some(type_into.clone()),
         (Interval(_), Utf8 | LargeUtf8) => Some(type_into.clone()),
-        // We can go into a Utf8View from a Utf8 or LargeUtf8
+        // We can go into a Utf8View from an Utf8 or LargeUtf8
         (Utf8View, Utf8 | LargeUtf8 | Null) => Some(type_into.clone()),
         // Any type can be coerced into strings
         (Utf8 | LargeUtf8, _) => Some(type_into.clone()),
@@ -892,7 +921,7 @@ fn coerced_from<'a>(
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
         // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
         (List(_) | LargeList(_), _)
-            if datafusion_common::utils::base_type(type_from).eq(&Null)
+            if base_type(type_from).eq(&Null)
                 || list_ndims(type_from) == list_ndims(type_into) =>
         {
             Some(type_into.clone())
@@ -931,12 +960,17 @@ fn coerced_from<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
 
-    use crate::Volatility;
-
-    use super::*;
-    use arrow::datatypes::Field;
-    use datafusion_common::assert_contains;
+    use crate::type_coercion::functions::{
+        can_coerce_from, coerced_from, data_types, get_valid_types, maybe_data_types,
+    };
+    use crate::TypeSignature;
+    use arrow::datatypes::{DataType, Field, TimeUnit};
+    use datafusion_common::{assert_contains, Result};
+    use datafusion_expr_common::signature::{
+        Signature, Volatility, FIXED_SIZE_LIST_WILDCARD,
+    };
 
     #[test]
     fn test_string_conversion() {
@@ -1124,7 +1158,7 @@ mod tests {
             Volatility::Stable,
         );
 
-        let coerced_data_types = data_types("test", &current_types, &signature).unwrap();
+        let coerced_data_types = data_types("test", &current_types, &signature)?;
         assert_eq!(coerced_data_types, current_types);
 
         // make sure it can't coerce to a different size
@@ -1140,7 +1174,7 @@ mod tests {
             vec![DataType::FixedSizeList(Arc::clone(&inner), 2)],
             Volatility::Stable,
         );
-        let coerced_data_types = data_types("test", &current_types, &signature).unwrap();
+        let coerced_data_types = data_types("test", &current_types, &signature)?;
         assert_eq!(coerced_data_types, current_types);
 
         Ok(())

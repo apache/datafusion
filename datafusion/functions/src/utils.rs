@@ -22,7 +22,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
 
-/// Creates a function to identify the optimal return type of a string function given
+/// Creates a function to identify the optimal return type for a string function given
 /// the type of its first argument.
 ///
 /// If the input type is `LargeUtf8` or `LargeBinary` the return type is
@@ -66,10 +66,10 @@ macro_rules! get_optimal_return_type {
     };
 }
 
-// `utf8_to_str_type`: returns either a Utf8 or LargeUtf8 based on the input type size.
+// `utf8_to_str_type`: returns either an Utf8 or LargeUtf8 based on the input type size.
 get_optimal_return_type!(utf8_to_str_type, DataType::LargeUtf8, DataType::Utf8);
 
-// `utf8_to_int_type`: returns either a Int32 or Int64 based on the input type size.
+// `utf8_to_int_type`: returns either an Int32 or Int64 based on the input type size.
 get_optimal_return_type!(utf8_to_int_type, DataType::Int64, DataType::Int32);
 
 /// Creates a scalar function implementation for the given function.
@@ -109,7 +109,7 @@ where
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let result = (inner)(&args);
+        let result = inner(&args);
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
             let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
@@ -122,6 +122,21 @@ where
 
 #[cfg(test)]
 pub mod test {
+    use super::*;
+    use arrow::datatypes::DataType;
+
+    #[test]
+    fn string_to_int_type() {
+        let v = utf8_to_int_type(&DataType::Utf8, "test").unwrap();
+        assert_eq!(v, DataType::Int32);
+
+        let v = utf8_to_int_type(&DataType::Utf8View, "test").unwrap();
+        assert_eq!(v, DataType::Int32);
+
+        let v = utf8_to_int_type(&DataType::LargeUtf8, "test").unwrap();
+        assert_eq!(v, DataType::Int64);
+    }
+
     /// $FUNC ScalarUDFImpl to test
     /// $ARGS arguments (vec) to pass to function
     /// $EXPECTED a Result<ColumnarValue>
@@ -183,21 +198,5 @@ pub mod test {
         };
     }
 
-    use arrow::datatypes::DataType;
-    #[allow(unused_imports)]
     pub(crate) use test_function;
-
-    use super::*;
-
-    #[test]
-    fn string_to_int_type() {
-        let v = utf8_to_int_type(&DataType::Utf8, "test").unwrap();
-        assert_eq!(v, DataType::Int32);
-
-        let v = utf8_to_int_type(&DataType::Utf8View, "test").unwrap();
-        assert_eq!(v, DataType::Int32);
-
-        let v = utf8_to_int_type(&DataType::LargeUtf8, "test").unwrap();
-        assert_eq!(v, DataType::Int64);
-    }
 }

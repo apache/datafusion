@@ -775,7 +775,7 @@ ascii(str)
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str**: Coercible String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -808,7 +808,7 @@ bit_length(str)
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str**: Coercible String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -1000,8 +1000,8 @@ contains(str, search_str)
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **search_str**: The string to search for in str.
+- **str**: Coercible String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **search_str**: The coercible string to search for in str.
 
 #### Example
 
@@ -1024,8 +1024,8 @@ ends_with(str, substr)
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **substr**: Substring to test for.
+- **str**: Coercible String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **substr**: Coercible substring to test for.
 
 #### Example
 
@@ -1264,7 +1264,7 @@ octet_length(str)
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str**: Coercible String expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -1491,8 +1491,8 @@ starts_with(str, substr)
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **substr**: Substring to test for.
+- **str**: Coercible String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **substr**: Coercible substring to test for.
 
 #### Example
 
