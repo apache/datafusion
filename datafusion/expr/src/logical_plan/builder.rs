@@ -1602,7 +1602,7 @@ pub fn table_scan_with_filter_and_fetch(
     )
 }
 
-fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
+pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource { table_schema })
 }

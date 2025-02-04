@@ -902,9 +902,11 @@ logical_plan
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Column { relation: Some(Bare { table: "u" }), name: "column1" })
 
 # uncorrelated EXISTS with unnest
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+query I
 SELECT 1
 WHERE EXISTS (SELECT unnest([2]))
+----
+1
 
 # EXISTS with unnest below correlation
 query I

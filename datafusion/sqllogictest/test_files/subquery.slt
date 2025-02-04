@@ -390,8 +390,10 @@ where o_orderstatus in (
 3
 
 # uncorrelated exists
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+query I
 SELECT 1 WHERE EXISTS (SELECT 1)
+----
+1
 
 #exists_subquery_with_same_table
 #Subquery and outer query refer to the same table.
@@ -400,12 +402,12 @@ query TT
 explain SELECT t1_id, t1_name, t1_int FROM t1 WHERE EXISTS(SELECT t1_int FROM t1 WHERE t1.t1_id > t1.t1_int)
 ----
 logical_plan
-01)Filter: EXISTS (<subquery>)
-02)--Subquery:
-03)----Projection: t1.t1_int
-04)------Filter: t1.t1_int < t1.t1_id
-05)--------TableScan: t1
-06)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
+01)LeftSemi Join: 
+02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: 
+05)------Filter: t1.t1_int < t1.t1_id
+06)--------TableScan: t1 projection=[t1_id, t1_int]
 
 
 #in_subquery_with_same_table
@@ -619,11 +621,10 @@ query TT
 explain SELECT t1_id, t1_name FROM t1 WHERE EXISTS (SELECT NULL)
 ----
 logical_plan
-01)Filter: EXISTS (<subquery>)
-02)--Subquery:
-03)----Projection: NULL
-04)------EmptyRelation
-05)--TableScan: t1 projection=[t1_id, t1_name]
+01)LeftSemi Join: 
+02)--TableScan: t1 projection=[t1_id, t1_name]
+03)--SubqueryAlias: __correlated_sq_1
+04)----EmptyRelation
 
 #exists_subquery_with_limit
 #de-correlated, limit is removed
