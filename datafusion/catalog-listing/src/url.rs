@@ -324,6 +324,7 @@ impl std::fmt::Display for ListingTableUrl {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const GLOB_START_CHARS: [char; 3] = ['?', '*', '['];
 
 /// Splits `path` at the first path segment containing a glob expression, returning
@@ -332,6 +333,7 @@ const GLOB_START_CHARS: [char; 3] = ['?', '*', '['];
 /// Path delimiters are determined using [`std::path::is_separator`] which
 /// permits `/` as a path delimiter even on Windows platforms.
 ///
+#[cfg(not(target_arch = "wasm32"))]
 fn split_glob_expression(path: &str) -> Option<(&str, &str)> {
     let mut last_separator = 0;
 
