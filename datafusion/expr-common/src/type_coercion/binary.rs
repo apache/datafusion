@@ -507,18 +507,19 @@ fn type_union_resolution_coercion(
                 None
             }
 
-            let types = lhs
+            let coerced_types = lhs
                 .iter()
                 .map(|lhs_field| search_corresponding_coerced_type(lhs_field, rhs))
                 .collect::<Option<Vec<_>>>()?;
 
-            let fields = types
+            // preserve the field name and nullability
+            let orig_fields = std::iter::zip(lhs.iter(), rhs.iter());
+
+            let fields: Vec<FieldRef> = coerced_types
                 .into_iter()
-                .enumerate()
-                .map(|(i, datatype)| {
-                    Arc::new(Field::new(format!("c{i}"), datatype, true))
-                })
-                .collect::<Vec<FieldRef>>();
+                .zip(orig_fields)
+                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
+                .collect();
             Some(DataType::Struct(fields.into()))
         }
         _ => {
@@ -684,8 +685,10 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     match (lhs_type, rhs_type) {
         (Utf8, _) if rhs_type.is_numeric() => Some(Utf8),
         (LargeUtf8, _) if rhs_type.is_numeric() => Some(LargeUtf8),
+        (Utf8View, _) if rhs_type.is_numeric() => Some(Utf8View),
         (_, Utf8) if lhs_type.is_numeric() => Some(Utf8),
         (_, LargeUtf8) if lhs_type.is_numeric() => Some(LargeUtf8),
+        (_, Utf8View) if lhs_type.is_numeric() => Some(Utf8View),
         _ => None,
     }
 }
@@ -961,21 +964,29 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
                 return None;
             }
 
-            let types = std::iter::zip(lhs_fields.iter(), rhs_fields.iter())
+            let coerced_types = std::iter::zip(lhs_fields.iter(), rhs_fields.iter())
                 .map(|(lhs, rhs)| comparison_coercion(lhs.data_type(), rhs.data_type()))
                 .collect::<Option<Vec<DataType>>>()?;
 
-            let fields = types
+            // preserve the field name and nullability
+            let orig_fields = std::iter::zip(lhs_fields.iter(), rhs_fields.iter());
+
+            let fields: Vec<FieldRef> = coerced_types
                 .into_iter()
-                .enumerate()
-                .map(|(i, datatype)| {
-                    Arc::new(Field::new(format!("c{i}"), datatype, true))
-                })
-                .collect::<Vec<FieldRef>>();
+                .zip(orig_fields)
+                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
+                .collect();
             Some(Struct(fields.into()))
         }
         _ => None,
     }
+}
+
+/// returns the result of coercing two fields to a common type
+fn coerce_fields(common_type: DataType, lhs: &FieldRef, rhs: &FieldRef) -> FieldRef {
+    let is_nullable = lhs.is_nullable() || rhs.is_nullable();
+    let name = lhs.name(); // pick the name from the left field
+    Arc::new(Field::new(name, common_type, is_nullable))
 }
 
 /// Returns the output type of applying mathematics operations such as

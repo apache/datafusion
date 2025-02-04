@@ -190,7 +190,15 @@ impl<'a> TypeCoercionRewriter<'a> {
             .map(|(lhs, rhs)| {
                 // coerce the arguments as though they were a single binary equality
                 // expression
-                let (lhs, rhs) = self.coerce_binary_op(lhs, Operator::Eq, rhs)?;
+                let left_schema = join.left.schema();
+                let right_schema = join.right.schema();
+                let (lhs, rhs) = self.coerce_binary_op(
+                    lhs,
+                    left_schema,
+                    Operator::Eq,
+                    rhs,
+                    right_schema,
+                )?;
                 Ok((lhs, rhs))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -275,17 +283,19 @@ impl<'a> TypeCoercionRewriter<'a> {
     fn coerce_binary_op(
         &self,
         left: Expr,
+        left_schema: &DFSchema,
         op: Operator,
         right: Expr,
+        right_schema: &DFSchema,
     ) -> Result<(Expr, Expr)> {
         let (left_type, right_type) = get_input_types(
-            &left.get_type(self.schema)?,
+            &left.get_type(left_schema)?,
             &op,
-            &right.get_type(self.schema)?,
+            &right.get_type(right_schema)?,
         )?;
         Ok((
-            left.cast_to(&left_type, self.schema)?,
-            right.cast_to(&right_type, self.schema)?,
+            left.cast_to(&left_type, left_schema)?,
+            right.cast_to(&right_type, right_schema)?,
         ))
     }
 }
@@ -404,7 +414,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 ))))
             }
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-                let (left, right) = self.coerce_binary_op(*left, op, *right)?;
+                let (left, right) =
+                    self.coerce_binary_op(*left, self.schema, op, *right, self.schema)?;
                 Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr::new(
                     Box::new(left),
                     op,

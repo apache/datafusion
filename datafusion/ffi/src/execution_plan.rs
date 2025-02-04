@@ -27,7 +27,7 @@ use datafusion::{
     execution::{SendableRecordBatchStream, TaskContext},
     physical_plan::{DisplayAs, ExecutionPlan, PlanProperties},
 };
-use tokio::runtime::Runtime;
+use tokio::runtime::Handle;
 
 use crate::{
     plan_properties::FFI_PlanProperties, record_batch_stream::FFI_RecordBatchStream,
@@ -72,7 +72,7 @@ unsafe impl Sync for FFI_ExecutionPlan {}
 pub struct ExecutionPlanPrivateData {
     pub plan: Arc<dyn ExecutionPlan>,
     pub context: Arc<TaskContext>,
-    pub runtime: Option<Arc<Runtime>>,
+    pub runtime: Option<Handle>,
 }
 
 unsafe extern "C" fn properties_fn_wrapper(
@@ -110,7 +110,7 @@ unsafe extern "C" fn execute_fn_wrapper(
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
     let ctx = &(*private_data).context;
-    let runtime = (*private_data).runtime.as_ref().map(Arc::clone);
+    let runtime = (*private_data).runtime.clone();
 
     match plan.execute(partition, Arc::clone(ctx)) {
         Ok(rbs) => RResult::ROk(FFI_RecordBatchStream::new(rbs, runtime)),
@@ -153,7 +153,7 @@ impl FFI_ExecutionPlan {
     pub fn new(
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-        runtime: Option<Arc<Runtime>>,
+        runtime: Option<Handle>,
     ) -> Self {
         let private_data = Box::new(ExecutionPlanPrivateData {
             plan,
