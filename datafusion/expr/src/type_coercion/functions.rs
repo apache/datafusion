@@ -257,7 +257,10 @@ fn get_valid_types_with_scalar_udf(
     match signature {
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
             Ok(coerced_types) => Ok(vec![coerced_types]),
-            Err(e) => exec_err!("User-defined coercion failed with {:?}", e),
+            Err(e) => exec_err!(
+                "User-defined coercion failed with {:?}",
+                e.strip_backtrace()
+            ),
         },
         TypeSignature::OneOf(signatures) => {
             let mut res = vec![];
@@ -295,7 +298,12 @@ fn get_valid_types_with_aggregate_udf(
     let valid_types = match signature {
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
             Ok(coerced_types) => vec![coerced_types],
-            Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+            Err(e) => {
+                return exec_err!(
+                    "User-defined coercion failed with {:?}",
+                    e.strip_backtrace()
+                )
+            }
         },
         TypeSignature::OneOf(signatures) => signatures
             .iter()
@@ -318,7 +326,12 @@ fn get_valid_types_with_window_udf(
     let valid_types = match signature {
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
             Ok(coerced_types) => vec![coerced_types],
-            Err(e) => return exec_err!("User-defined coercion failed with {:?}", e),
+            Err(e) => {
+                return exec_err!(
+                    "User-defined coercion failed with {:?}",
+                    e.strip_backtrace()
+                )
+            }
         },
         TypeSignature::OneOf(signatures) => signatures
             .iter()
