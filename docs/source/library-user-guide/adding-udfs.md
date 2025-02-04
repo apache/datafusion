@@ -1061,18 +1061,14 @@ In the `call` method, you parse the input `Expr`s and return a `TableProvider`. 
 validation of the input `Expr`s, e.g. checking that the number of arguments is correct.
 
 ```rust
-
-use datafusion::common::plan_err;
-use datafusion::catalog::TableFunctionImpl;
-use datafusion::arrow::array::{ArrayRef, Int64Array};
 use std::sync::Arc;
+use datafusion::common::{plan_err, ScalarValue, Result};
+use datafusion::catalog::{TableFunctionImpl, TableProvider};
+use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion::datasource::memory::MemTable;
 use arrow::record_batch::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::common::ScalarValue;
-use datafusion::common::Result;
 use datafusion_expr::Expr;
-use datafusion::catalog::TableProvider;
 
 /// A table function that returns a table provider with the value as a single column
 #[derive(Debug)]
@@ -1105,23 +1101,58 @@ impl TableFunctionImpl for EchoFunction {
 
 With the UDTF implemented, you can register it with the `SessionContext`:
 
-```torustfix
+```rust
+# use std::sync::Arc;
+# use datafusion::common::{plan_err, ScalarValue, Result};
+# use datafusion::catalog::{TableFunctionImpl, TableProvider};
+# use datafusion::arrow::array::{ArrayRef, Int64Array};
+# use datafusion::datasource::memory::MemTable;
+# use arrow::record_batch::RecordBatch;
+# use arrow::datatypes::{DataType, Field, Schema};
+# use datafusion_expr::Expr;
+#
+# /// A table function that returns a table provider with the value as a single column
+# #[derive(Debug, Default)]
+# pub struct EchoFunction {}
+#
+# impl TableFunctionImpl for EchoFunction {
+#     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+#         let Some(Expr::Literal(ScalarValue::Int64(Some(value)))) = exprs.get(0) else {
+#             return plan_err!("First argument must be an integer");
+#         };
+#
+#         // Create the schema for the table
+#         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+#
+#         // Create a single RecordBatch with the value as a single column
+#         let batch = RecordBatch::try_new(
+#             schema.clone(),
+#             vec![Arc::new(Int64Array::from(vec![*value]))],
+#         )?;
+#
+#         // Create a MemTable plan that returns the RecordBatch
+#         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
+#
+#         Ok(Arc::new(provider))
+#     }
+# }
+
 use datafusion::execution::context::SessionContext;
-
-let ctx = SessionContext::new();
-
-ctx.register_udtf("echo", Arc::new(EchoFunction::default ()));
-```
-
-And if all goes well, you can use it in your query:
-
-```torustfix
 use datafusion::arrow::util::pretty;
 
-let df = ctx.sql("SELECT * FROM echo(1)").await?;
+#[tokio::main]
+async fn main() -> Result<()> {
+    let ctx = SessionContext::new();
 
-let results = df.collect().await?;
-pretty::print_batches( & results) ?;
+    ctx.register_udtf("echo", Arc::new(EchoFunction::default()));
+
+    // And if all goes well, you can use it in your query:
+
+    let results = ctx.sql("SELECT * FROM echo(1)").await?.collect().await?;
+    pretty::print_batches(&results)?;
+    Ok(())
+}
+
 // +---+
 // | a |
 // +---+
