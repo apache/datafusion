@@ -56,56 +56,59 @@ This a lower level API with more functionality but is more complex, also documen
 
 ```rust
 use std::any::Any;
+use std::sync::LazyLock;
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, plan_err, Result};
-use datafusion_expr::{col, ColumnarValue, Signature, Volatility};
+use datafusion_expr::{col, ColumnarValue, Documentation, ScalarFunctionArgs, Signature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion::execution::context::SessionContext;
 
+/// This struct for a simple UDF that adds one to an int32
 #[derive(Debug)]
 struct AddOne {
-    signature: Signature
-};
+  signature: Signature,
+}
 
 impl AddOne {
-    fn new() -> Self {
-        Self {
-            signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable)
-        }
-    }
+  fn new() -> Self {
+    Self {
+      signature: Signature::uniform(1, vec![DataType::Int32], Volatility::Immutable),
+     }
+  }
 }
+
+static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(DOC_SECTION_MATH, "Add one to an int32", "add_one(2)")
+        .with_argument("arg1", "The int32 number to add one to")
+        .build()
+});
 
 /// Implement the ScalarUDFImpl trait for AddOne
 impl ScalarUDFImpl for AddOne {
-    fn as_any(&self) -> &dyn Any { self }
-    fn name(&self) -> &str { "add_one" }
-    fn signature(&self) -> &Signature { &self.signature }
-    fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        if !matches!(args.get(0), Some(&DataType::Int32)) {
-            return plan_err!("add_one only accepts Int32 arguments");
-        }
-        Ok(DataType::Int32)
-    }
-    // The actual implementation would add one to the argument
-    fn invoke_batch(&self, args: &[ColumnarValue], _number_rows: usize) -> Result<ColumnarValue> {
-        let args = columnar_values_to_array(args)?;
-        let i64s = as_int64_array(&args[0])?;
-
-        let new_array = i64s
-            .iter()
-            .map(|array_elem| array_elem.map(|value| value + 1))
-            .collect::<Int64Array>();
-        Ok(Arc::new(new_array))
+   fn as_any(&self) -> &dyn Any { self }
+   fn name(&self) -> &str { "add_one" }
+   fn signature(&self) -> &Signature { &self.signature }
+   fn return_type(&self, args: &[DataType]) -> Result<DataType> {
+     if !matches!(args.get(0), Some(&DataType::Int32)) {
+       return plan_err!("add_one only accepts Int32 arguments");
+     }
+     Ok(DataType::Int32)
+   }
+   // The actual implementation would add one to the argument
+   fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        unimplemented!()
+   }
+   fn documentation(&self) -> Option<&Documentation> {
+        Some(&*DOCUMENTATION)
     }
 }
-```
 
-We now need to register the function with DataFusion so that it can be used in the context of a query.
-
-```rust
 // Create a new ScalarUDF from the implementation
 let add_one = ScalarUDF::from(AddOne::new());
 
-// register the UDF with the context so it can be invoked by name and from SQL
+
+// Register the UDF with the context so it can be invoked by name and from SQL
 let mut ctx = SessionContext::new();
 ctx.register_udf(add_one.clone());
 
@@ -119,7 +122,7 @@ There is a an older, more concise, but also more limited API [`create_udf`] avai
 
 #### Adding a Scalar UDF
 
-```rust
+```torustfix
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int64Array};
@@ -144,7 +147,7 @@ pub fn add_one(args: &[ColumnarValue]) -> Result<ArrayRef> {
 This "works" in isolation, i.e. if you have a slice of `ArrayRef`s, you can call `add_one` and it will return a new
 `ArrayRef` with 1 added to each value.
 
-```rust
+```torustfix
 let input = vec![Some(1), None, Some(3)];
 let input = Arc::new(Int64Array::from(input)) as ArrayRef;
 
@@ -163,7 +166,7 @@ To register a Scalar UDF, you need to wrap the function implementation in a [`Sc
 with the `SessionContext`.
 DataFusion provides the [`create_udf`] and helper functions to make this easier.
 
-```rust
+```torustfix
 use datafusion::logical_expr::{Volatility, create_udf};
 use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
@@ -196,7 +199,7 @@ A few things to note:
 
 That gives us a `ScalarUDF` that we can register with the `SessionContext`:
 
-```rust
+```torustfix
 use datafusion::execution::context::SessionContext;
 
 let mut ctx = SessionContext::new();
@@ -206,7 +209,7 @@ ctx.register_udf(udf);
 
 At this point, you can use the `add_one` function in your query:
 
-```rust
+```torustfix
 let sql = "SELECT add_one(1)";
 
 let df = ctx.sql( & sql).await.unwrap();
@@ -219,7 +222,7 @@ access to the rows around them. Access to the proximal rows is helpful, but adds
 
 For example, we will declare a user defined window function that computes a moving average.
 
-```rust
+```torustfix
 use datafusion::arrow::{array::{ArrayRef, Float64Array, AsArray}, datatypes::Float64Type};
 use datafusion::logical_expr::{PartitionEvaluator};
 use datafusion::common::ScalarValue;
@@ -292,7 +295,7 @@ To register a Window UDF, you need to wrap the function implementation in a [`Wi
 with the `SessionContext`. DataFusion provides the [`create_udwf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udwf.rs`].
 
-```rust
+```torustfix
 use datafusion::logical_expr::{Volatility, create_udwf};
 use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
@@ -325,7 +328,7 @@ The `create_udwf` has five arguments to check:
 
 That gives us a `WindowUDF` that we can register with the `SessionContext`:
 
-```rust
+```torustfix
 use datafusion::execution::context::SessionContext;
 
 let ctx = SessionContext::new();
@@ -349,7 +352,7 @@ green,10.3,1996-04-12T12:05:04.000000000
 
 Then, we can query like below:
 
-```rust
+```torustfix
 use datafusion::datasource::file_format::options::CsvReadOptions;
 // register csv table first
 let csv_path = "cars.csv".to_string();
@@ -401,7 +404,7 @@ Aggregate UDFs are functions that take a group of rows and return a single value
 
 For example, we will declare a single-type, single return type UDAF that computes the geometric mean.
 
-```rust
+```torustfix
 use datafusion::arrow::array::ArrayRef;
 use datafusion::scalar::ScalarValue;
 use datafusion::{error::Result, physical_plan::Accumulator};
@@ -496,7 +499,7 @@ To register a Aggregate UDF, you need to wrap the function implementation in a [
 it with the `SessionContext`. DataFusion provides the [`create_udaf`] helper functions to make this easier.
 There is a lower level API with more functionality but is more complex, that is documented in [`advanced_udaf.rs`].
 
-```rust
+```torustfix
 use datafusion::logical_expr::{Volatility, create_udaf};
 use datafusion::arrow::datatypes::DataType;
 use std::sync::Arc;
@@ -515,6 +518,19 @@ Arc::new( | _ | Ok(Box::new(GeometricMean::new()))),
 // This is the description of the state. `state()` must match the types here.
 Arc::new(vec![DataType::Float64, DataType::UInt32]),
 );
+
+
+// That gives us a `AggregateUDF` that we can register with the `SessionContext`:
+use datafusion::execution::context::SessionContext;
+
+let ctx = SessionContext::new();
+
+ctx.register_udaf(geometric_mean);
+
+// Then, we can query like below:
+
+let df = ctx.sql("SELECT geo_mean(a) FROM t").await?;
+
 ```
 
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
@@ -534,21 +550,6 @@ The `create_udaf` has six arguments to check:
 - The fifth argument is the function implementation. This is the function that we defined above.
 - The sixth argument is the description of the state, which will by passed between execution stages.
 
-That gives us a `AggregateUDF` that we can register with the `SessionContext`:
-
-```rust
-use datafusion::execution::context::SessionContext;
-
-let ctx = SessionContext::new();
-
-ctx.register_udaf(geometric_mean);
-```
-
-Then, we can query like below:
-
-```rust
-let df = ctx.sql("SELECT geo_mean(a) FROM t").await?;
-```
 
 ## Adding a User-Defined Table Function
 
@@ -590,7 +591,7 @@ single method, `call`, that takes a slice of `Expr`s and returns a `Result<Arc<d
 In the `call` method, you parse the input `Expr`s and return a `TableProvider`. You might also want to do some
 validation of the input `Expr`s, e.g. checking that the number of arguments is correct.
 
-```rust
+```torustfix
 use datafusion::common::plan_err;
 use datafusion::datasource::function::TableFunctionImpl;
 // Other imports here
@@ -626,7 +627,7 @@ impl TableFunctionImpl for EchoFunction {
 
 With the UDTF implemented, you can register it with the `SessionContext`:
 
-```rust
+```torustfix
 use datafusion::execution::context::SessionContext;
 
 let ctx = SessionContext::new();
@@ -636,7 +637,7 @@ ctx.register_udtf("echo", Arc::new(EchoFunction::default ()));
 
 And if all goes well, you can use it in your query:
 
-```rust
+```torustfix
 use datafusion::arrow::util::pretty;
 
 let df = ctx.sql("SELECT * FROM echo(1)").await?;
