@@ -32,8 +32,8 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
-    Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
-    Values, Volatility,
+    Extension, InvariantLevel, LogicalPlan, PartitionEvaluator, Repartition,
+    UserDefinedLogicalNode, Values, Volatility,
 };
 use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLINE_INLIST;
 use datafusion::prelude::*;
@@ -109,6 +109,14 @@ impl UserDefinedLogicalNode for MockUserDefinedLogicalPlan {
 
     fn schema(&self) -> &DFSchemaRef {
         &self.empty_schema
+    }
+
+    fn check_invariants(
+        &self,
+        _check: InvariantLevel,
+        _plan: &LogicalPlan,
+    ) -> Result<()> {
+        Ok(())
     }
 
     fn expressions(&self) -> Vec<Expr> {
