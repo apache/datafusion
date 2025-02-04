@@ -342,7 +342,7 @@ fn build_join(
             replace_qualified_name(filter, &all_correlated_cols, &alias).map(Some)
         })?;
 
-    if let Some(join_filter) = match (join_filter_opt, in_predicate_opt) {
+    let join_filter = match (join_filter_opt, in_predicate_opt) {
         (
             Some(join_filter),
             Some(Expr::BinaryExpr(BinaryExpr {
@@ -369,7 +369,8 @@ fn build_join(
             Some(in_predicate)
         }
         _ => None,
-    } {
+    };
+    if let Some(join_filter) = join_filter {
         // join our sub query into the main plan
         let new_plan = LogicalPlanBuilder::from(left.clone())
             .join_on(sub_query_alias, join_type, Some(join_filter))?
