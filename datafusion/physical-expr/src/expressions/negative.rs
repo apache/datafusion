@@ -28,7 +28,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
@@ -161,20 +161,25 @@ impl PhysicalExpr for NegativeExpr {
                     .as_ref()
                     .map(|md| md.arithmetic_negate())
                     .transpose()?,
-                variance
-                    .as_ref()
-                    .map(|var| var.arithmetic_negate())
-                    .transpose()?,
+                variance.clone(),
                 self.evaluate_bounds(&[range])?,
             ),
-            Bernoulli { p } => StatisticsV2::new_bernoulli(
-                ScalarValue::new_one(&DataType::Float64)?.sub_checked(p)?,
-            ),
-            Exponential { .. } | Gaussian { .. } => Ok(StatisticsV2::new_unknown(
-                None,
-                None,
-                None,
-                Interval::make_unbounded(&DataType::Float64)?,
+            Bernoulli { .. } => {
+                internal_err!("NegativeExpr cannot operate on Boolean datatype")
+            }
+            Exponential { offset, .. } => {
+                let exp_lower = offset.clone();
+                let exp_upper = ScalarValue::try_from(exp_lower.data_type())?;
+                Ok(StatisticsV2::new_unknown(
+                    None,
+                    None,
+                    None,
+                    Interval::try_new(exp_upper, exp_lower.arithmetic_negate()?)?,
+                )?)
+            }
+            Gaussian { mean, variance } => Ok(StatisticsV2::new_gaussian(
+                mean.arithmetic_negate()?,
+                variance.clone(),
             )?),
         }
     }
@@ -327,12 +332,11 @@ mod tests {
         );
 
         // Bernoulli
-        assert_eq!(
-            negative_expr.evaluate_statistics(&[&Bernoulli {
+        assert!(negative_expr
+            .evaluate_statistics(&[&Bernoulli {
                 p: ScalarValue::Float64(Some(0.75))
-            }])?,
-            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.25)))?
-        );
+            }])
+            .is_err());
 
         // Exponential
         assert_eq!(
@@ -344,7 +348,10 @@ mod tests {
                 None,
                 None,
                 None,
-                Interval::make_unbounded(&Float64)?,
+                Interval::try_new(
+                    ScalarValue::Float64(None),
+                    ScalarValue::Float64(Some(-1.))
+                )?,
             )?
         );
 
@@ -354,11 +361,9 @@ mod tests {
                 mean: ScalarValue::Int32(Some(15)),
                 variance: ScalarValue::Int32(Some(225)),
             }])?,
-            StatisticsV2::new_unknown(
-                None,
-                None,
-                None,
-                Interval::make_unbounded(&Float64)?,
+            StatisticsV2::new_gaussian(
+                ScalarValue::Int32(Some(-15)),
+                ScalarValue::Int32(Some(225))
             )?
         );
 
