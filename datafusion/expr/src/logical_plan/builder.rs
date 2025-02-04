@@ -243,8 +243,10 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let n_cols = values[0].len();
         let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+        let mut field_nullabilities: Vec<bool> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
             let field_type = schema.field(j).data_type();
+            field_nullabilities.push(schema.field(j).is_nullable());
             for row in values.iter() {
                 let value = &row[j];
                 let data_type = value.get_type(schema)?;
@@ -263,7 +265,7 @@ impl LogicalPlanBuilder {
             field_types.push(field_type.to_owned());
         }
 
-        Self::infer_inner(values, &field_types, schema)
+        Self::infer_inner(values, &field_types, &field_nullabilities, schema)
     }
 
     fn infer_data(values: Vec<Vec<Expr>>) -> Result<Self> {
@@ -296,12 +298,15 @@ impl LogicalPlanBuilder {
             field_types.push(common_type.unwrap_or(DataType::Null));
         }
 
-        Self::infer_inner(values, &field_types, &schema)
+        let field_nullabilities =
+            (0..n_cols).into_iter().map(|_| true).collect::<Vec<_>>();
+        Self::infer_inner(values, &field_types, &field_nullabilities, &schema)
     }
 
     fn infer_inner(
         mut values: Vec<Vec<Expr>>,
         field_types: &[DataType],
+        field_nullabilities: &[bool],
         schema: &DFSchema,
     ) -> Result<Self> {
         // wrap cast if data type is not same as common type.
@@ -316,11 +321,12 @@ impl LogicalPlanBuilder {
         }
         let fields = field_types
             .iter()
+            .zip(field_nullabilities)
             .enumerate()
-            .map(|(j, data_type)| {
+            .map(|(j, (data_type, nullable))| {
                 // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
                 let name = &format!("column{}", j + 1);
-                Field::new(name, data_type.clone(), true)
+                Field::new(name, data_type.clone(), *nullable)
             })
             .collect::<Vec<_>>();
         let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;

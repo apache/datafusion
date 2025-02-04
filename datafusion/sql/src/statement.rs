@@ -1860,6 +1860,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let column_index = table_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
+
                     if value_indices[column_index].is_some() {
                         return schema_err!(SchemaError::DuplicateUnqualifiedField {
                             name: c,
@@ -1900,6 +1901,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Projection
         let mut planner_context =
             PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
+        planner_context.set_table_schema(Some(DFSchemaRef::new(
+            DFSchema::from_unqualified_fields(fields.clone(), Default::default())?,
+        )));
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {
             plan_err!("Column count doesn't match insert query!")?;
