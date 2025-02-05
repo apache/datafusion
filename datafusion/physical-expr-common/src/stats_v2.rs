@@ -36,9 +36,7 @@ pub enum StatisticsV2 {
     /// Uniform distribution, represented by its range. For a more in-depth discussion, see:
     ///
     /// https://en.wikipedia.org/wiki/Continuous_uniform_distribution
-    Uniform {
-        interval: Interval,
-    },
+    Uniform { interval: Interval },
     /// Exponential distribution with an optional shift, whose PDF is as follows:
     /// f(x, λ, offset) = (λe)^(-λ(x - offset)), if x >= offset, 0 otherwise.
     /// For a more in-depth discussion, see:
