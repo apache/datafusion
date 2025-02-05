@@ -32,7 +32,9 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::{DisplayAs, FileScanConfig, parquet::source::ParquetSource};
+use crate::datasource::physical_plan::{
+    parquet::source::ParquetSource, DisplayAs, FileScanConfig,
+};
 use crate::datasource::schema_adapter::SchemaAdapterFactory;
 use crate::{
     config::TableParquetOptions,
