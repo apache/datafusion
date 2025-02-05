@@ -4302,21 +4302,21 @@ digraph {
             LogicalPlan::Limit(Limit {
                 skip: None,
                 fetch: None,
-                input: input.clone(),
+                input: Arc::clone(&input),
             }),
             LogicalPlan::Limit(Limit {
                 skip: None,
                 fetch: Some(Box::new(Expr::Literal(
                     ScalarValue::new_ten(&DataType::UInt32).unwrap(),
                 ))),
-                input: input.clone(),
+                input: Arc::clone(&input),
             }),
             LogicalPlan::Limit(Limit {
                 skip: Some(Box::new(Expr::Literal(
                     ScalarValue::new_ten(&DataType::UInt32).unwrap(),
                 ))),
                 fetch: None,
-                input: input.clone(),
+                input: Arc::clone(&input),
             }),
             LogicalPlan::Limit(Limit {
                 skip: Some(Box::new(Expr::Literal(
@@ -4325,7 +4325,7 @@ digraph {
                 fetch: Some(Box::new(Expr::Literal(
                     ScalarValue::new_ten(&DataType::UInt32).unwrap(),
                 ))),
-                input: input.clone(),
+                input,
             }),
         ];
 
