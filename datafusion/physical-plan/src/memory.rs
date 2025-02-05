@@ -458,6 +458,10 @@ impl DataSource for MemorySourceConfig {
         Some(Arc::new(source.with_limit(limit)))
     }
 
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
     fn try_swapping_with_projection(
         &self,
         projection: &ProjectionExec,
@@ -1158,6 +1162,7 @@ mod tests {
         let exec = MemorySourceConfig::try_new_from_batches(schema, batches).unwrap();
         assert_eq!(exec.fetch(), None);
 
+        println!("{:?}", exec.source().fetch());
         let exec = exec.with_fetch(Some(4)).unwrap();
         assert_eq!(exec.fetch(), Some(4));
 

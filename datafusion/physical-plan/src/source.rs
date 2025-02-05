@@ -53,12 +53,8 @@ pub trait DataSource: Send + Sync {
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
     fn statistics(&self) -> datafusion_common::Result<Statistics>;
-    fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
-        None
-    }
-    fn fetch(&self) -> Option<usize> {
-        None
-    }
+    fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
+    fn fetch(&self) -> Option<usize>;
     fn metrics(&self) -> ExecutionPlanMetricsSet {
         ExecutionPlanMetricsSet::new()
     }
