@@ -15,19 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, StringArray, LargeStringArray, BinaryArray, LargeBinaryArray, };
+use arrow::array::{Array, BinaryArray, LargeBinaryArray, LargeStringArray, StringArray};
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Utf8, Utf8View, LargeUtf8, Binary, LargeBinary, Int64};
-use datafusion_common::{Result, ScalarValue, plan_err};
+use arrow::datatypes::DataType::{Binary, Int64, LargeBinary, LargeUtf8, Utf8, Utf8View};
+use datafusion_common::DataFusionError;
+use datafusion_common::{plan_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, TypeSignature
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
-use twox_hash::{XxHash64, XxHash32};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::hash::Hasher;
-use datafusion_common::DataFusionError;
 use std::sync::Arc;
+use twox_hash::{XxHash32, XxHash64};
 
 #[user_doc(
     doc_section(label = "Hashing Functions"),
@@ -123,7 +123,7 @@ impl ScalarUDFImpl for XxHash32Func {
         &self,
         args: &[ColumnarValue],
         _number_rows: usize,
-    ) -> Result<ColumnarValue> {        
+    ) -> Result<ColumnarValue> {
         let input_data = &args[0];
 
         let seed = if args.len() > 1 {
@@ -131,46 +131,62 @@ impl ScalarUDFImpl for XxHash32Func {
                 if *seed >= 0 && *seed <= u32::MAX as i64 {
                     *seed as u32
                 } else {
-                    return Err(DataFusionError::Execution(format!("Seed value out of range for UInt32: {}", seed)));
+                    return Err(DataFusionError::Execution(format!(
+                        "Seed value out of range for UInt32: {}",
+                        seed
+                    )));
                 }
-            }
-            else{
+            } else {
                 let actual_type = format!("{:?}", &args[1]);
-                return Err(DataFusionError::Execution(format!("Expected a Int64 seed value, but got {}", actual_type)));
+                return Err(DataFusionError::Execution(format!(
+                    "Expected a Int64 seed value, but got {}",
+                    actual_type
+                )));
             }
-            
         } else {
             0 // Default seed value
         };
 
         let result = match input_data {
-        ColumnarValue::Array(array) => {
-            let hash_results = process_array(array, XxHash32::with_seed(seed), HashType::U32)?;
-            let hash_array = StringArray::from(hash_results);
-            Arc::new(hash_array) as Arc<dyn Array>
-        },
-        ColumnarValue::Scalar(scalar) => {
-            match scalar {
-                ScalarValue::Utf8(Some(ref v)) | ScalarValue::Utf8View(Some(ref v)) | ScalarValue::LargeUtf8(Some(ref v)) => {
+            ColumnarValue::Array(array) => {
+                let hash_results =
+                    process_array(array, XxHash32::with_seed(seed), HashType::U32)?;
+                let hash_array = StringArray::from(hash_results);
+                Arc::new(hash_array) as Arc<dyn Array>
+            }
+            ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Utf8(Some(ref v))
+                | ScalarValue::Utf8View(Some(ref v))
+                | ScalarValue::LargeUtf8(Some(ref v)) => {
                     if v.is_empty() {
-                        return Ok(ColumnarValue::Array(Arc::new(StringArray::from(vec![""]))));
+                        return Ok(ColumnarValue::Array(Arc::new(StringArray::from(
+                            vec![""],
+                        ))));
                     }
-                    let hash_result = hash_value(v.as_bytes(), XxHash32::with_seed(seed), HashType::U32)?;
+                    let hash_result = hash_value(
+                        v.as_bytes(),
+                        XxHash32::with_seed(seed),
+                        HashType::U32,
+                    )?;
                     let hash_array = StringArray::from(vec![hash_result]);
                     Arc::new(hash_array) as Arc<dyn Array>
                 }
-                ScalarValue::Binary(Some(ref v)) | ScalarValue::LargeBinary(Some(ref v)) => {
-                    let hash_result = hash_value(v, XxHash32::with_seed(seed), HashType::U32)?;
+                ScalarValue::Binary(Some(ref v))
+                | ScalarValue::LargeBinary(Some(ref v)) => {
+                    let hash_result =
+                        hash_value(v, XxHash32::with_seed(seed), HashType::U32)?;
                     let hash_array = StringArray::from(vec![hash_result]);
                     Arc::new(hash_array) as Arc<dyn Array>
                 }
                 _ => {
                     let actual_type = format!("{:?}", scalar);
-                    return Err(DataFusionError::Internal(format!("Unsupported scalar type: {}", actual_type)));
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported scalar type: {}",
+                        actual_type
+                    )));
                 }
-            }
-        }
-    };
+            },
+        };
 
         Ok(ColumnarValue::Array(result))
     }
@@ -274,7 +290,7 @@ impl ScalarUDFImpl for XxHash64Func {
         &self,
         args: &[ColumnarValue],
         _number_rows: usize,
-    ) -> Result<ColumnarValue> {        
+    ) -> Result<ColumnarValue> {
         let input_data = &args[0];
 
         let seed = if args.len() > 1 {
@@ -282,46 +298,62 @@ impl ScalarUDFImpl for XxHash64Func {
                 if *seed >= 0 {
                     *seed as u64
                 } else {
-                    return Err(DataFusionError::Execution(format!("Seed value out of range for UInt64: {}", seed)));
+                    return Err(DataFusionError::Execution(format!(
+                        "Seed value out of range for UInt64: {}",
+                        seed
+                    )));
                 }
-            }
-            else{
+            } else {
                 let actual_type = format!("{:?}", &args[1]);
-                return Err(DataFusionError::Execution(format!("Expected a Int64 seed value, but got {}", actual_type)));
+                return Err(DataFusionError::Execution(format!(
+                    "Expected a Int64 seed value, but got {}",
+                    actual_type
+                )));
             }
-            
         } else {
             0 // Default seed value
         };
 
         let result = match input_data {
-        ColumnarValue::Array(array) => {
-            let hash_results = process_array(array, XxHash64::with_seed(seed), HashType::U64)?;
-            let hash_array = StringArray::from(hash_results);
-            Arc::new(hash_array) as Arc<dyn Array>
-        },
-        ColumnarValue::Scalar(scalar) => {
-            match scalar {
-                ScalarValue::Utf8(Some(ref v)) | ScalarValue::Utf8View(Some(ref v)) | ScalarValue::LargeUtf8(Some(ref v)) => {
+            ColumnarValue::Array(array) => {
+                let hash_results =
+                    process_array(array, XxHash64::with_seed(seed), HashType::U64)?;
+                let hash_array = StringArray::from(hash_results);
+                Arc::new(hash_array) as Arc<dyn Array>
+            }
+            ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Utf8(Some(ref v))
+                | ScalarValue::Utf8View(Some(ref v))
+                | ScalarValue::LargeUtf8(Some(ref v)) => {
                     if v.is_empty() {
-                        return Ok(ColumnarValue::Array(Arc::new(StringArray::from(vec![""]))));
+                        return Ok(ColumnarValue::Array(Arc::new(StringArray::from(
+                            vec![""],
+                        ))));
                     }
-                    let hash_result = hash_value(v.as_bytes(), XxHash64::with_seed(seed), HashType::U64)?;
+                    let hash_result = hash_value(
+                        v.as_bytes(),
+                        XxHash64::with_seed(seed),
+                        HashType::U64,
+                    )?;
                     let hash_array = StringArray::from(vec![hash_result]);
                     Arc::new(hash_array) as Arc<dyn Array>
                 }
-                ScalarValue::Binary(Some(ref v)) | ScalarValue::LargeBinary(Some(ref v)) => {
-                    let hash_result = hash_value(v, XxHash64::with_seed(seed), HashType::U64)?;
+                ScalarValue::Binary(Some(ref v))
+                | ScalarValue::LargeBinary(Some(ref v)) => {
+                    let hash_result =
+                        hash_value(v, XxHash64::with_seed(seed), HashType::U64)?;
                     let hash_array = StringArray::from(vec![hash_result]);
                     Arc::new(hash_array) as Arc<dyn Array>
                 }
                 _ => {
                     let actual_type = format!("{:?}", scalar);
-                    return Err(DataFusionError::Internal(format!("Unsupported scalar type: {}", actual_type)));
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported scalar type: {}",
+                        actual_type
+                    )));
                 }
-            }
-        }
-    };
+            },
+        };
 
         Ok(ColumnarValue::Array(result))
     }
@@ -339,46 +371,65 @@ pub enum HashType {
     U64,
 }
 
-fn hash_value<T: Hasher>(value_bytes: &[u8], mut hasher: T, hash_type: HashType) -> Result<String, DataFusionError> {
+fn hash_value<T: Hasher>(
+    value_bytes: &[u8],
+    mut hasher: T,
+    hash_type: HashType,
+) -> Result<String, DataFusionError> {
     hasher.write(value_bytes);
     let hash = hasher.finish();
     match hash_type {
         HashType::U32 => {
             let hash_u32 = hash as u32;
             Ok(hex::encode(hash_u32.to_be_bytes()))
-        },
+        }
         HashType::U64 => {
             let hash_u64 = hash;
             Ok(hex::encode(hash_u64.to_be_bytes()))
-        },
+        }
     }
 }
 
-fn process_array<T: Hasher>(array: &dyn Array, mut hasher: T, hash_type: HashType) -> Result<Vec<String>> {
+fn process_array<T: Hasher>(
+    array: &dyn Array,
+    mut hasher: T,
+    hash_type: HashType,
+) -> Result<Vec<String>> {
     let mut hash_results: Vec<String> = Vec::with_capacity(array.len());
 
     match array.data_type() {
         Utf8 | Utf8View | LargeUtf8 => {
-            let string_array: &dyn Array = if array.data_type() == &Utf8 || array.data_type() == &Utf8View {
-                array.as_any().downcast_ref::<StringArray>().unwrap()
-            } else {
-                array.as_any().downcast_ref::<LargeStringArray>().unwrap()
-            };
+            let string_array: &dyn Array =
+                if array.data_type() == &Utf8 || array.data_type() == &Utf8View {
+                    array.as_any().downcast_ref::<StringArray>().unwrap()
+                } else {
+                    array.as_any().downcast_ref::<LargeStringArray>().unwrap()
+                };
             for i in 0..array.len() {
                 if array.is_null(i) {
                     hash_results.push(String::new()); // Handle null values
                     continue;
                 }
-                let value = if let Some(string_array) = string_array.as_any().downcast_ref::<StringArray>() {
+                let value = if let Some(string_array) =
+                    string_array.as_any().downcast_ref::<StringArray>()
+                {
                     string_array.value(i)
                 } else {
-                    string_array.as_any().downcast_ref::<LargeStringArray>().unwrap().value(i)
+                    string_array
+                        .as_any()
+                        .downcast_ref::<LargeStringArray>()
+                        .unwrap()
+                        .value(i)
                 };
                 if value.is_empty() {
                     hash_results.push(String::new());
                     continue;
                 }
-                hash_results.push(hash_value(value.as_bytes(), &mut hasher, hash_type.clone())?);
+                hash_results.push(hash_value(
+                    value.as_bytes(),
+                    &mut hasher,
+                    hash_type.clone(),
+                )?);
             }
         }
 
@@ -393,10 +444,16 @@ fn process_array<T: Hasher>(array: &dyn Array, mut hasher: T, hash_type: HashTyp
                     hash_results.push(String::new()); // Handle null values
                     continue;
                 }
-                let value = if let Some(binary_array) = binary_array.as_any().downcast_ref::<BinaryArray>() {
+                let value = if let Some(binary_array) =
+                    binary_array.as_any().downcast_ref::<BinaryArray>()
+                {
                     binary_array.value(i)
                 } else {
-                    binary_array.as_any().downcast_ref::<LargeBinaryArray>().unwrap().value(i)
+                    binary_array
+                        .as_any()
+                        .downcast_ref::<LargeBinaryArray>()
+                        .unwrap()
+                        .value(i)
                 };
                 hash_results.push(hash_value(value, &mut hasher, hash_type.clone())?);
             }
@@ -409,8 +466,11 @@ fn process_array<T: Hasher>(array: &dyn Array, mut hasher: T, hash_type: HashTyp
         }
         _ => {
             let actual_type = format!("{:?}", array.data_type());
-            return Err(DataFusionError::Internal(format!("Unsupported array type: {}", actual_type)));
-        },
+            return Err(DataFusionError::Internal(format!(
+                "Unsupported array type: {}",
+                actual_type
+            )));
+        }
     }
 
     Ok(hash_results)

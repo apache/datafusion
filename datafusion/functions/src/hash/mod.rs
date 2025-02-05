@@ -25,20 +25,21 @@ make_udf_function!(xxhash::XxHash32Func, xxhash32);
 make_udf_function!(xxhash::XxHash64Func, xxhash64);
 
 pub mod expr_fn {
-    export_functions!((
-        xxhash32,
-        "Computes the XXHash32 hash of a binary string.",
-        input
-    ) ,(
-        xxhash64,
-        "Computes the XXHash64 hash of a binary string.",
-        input
-    ));
+    export_functions!(
+        (
+            xxhash32,
+            "Computes the XXHash32 hash of a binary string.",
+            input
+        ),
+        (
+            xxhash64,
+            "Computes the XXHash64 hash of a binary string.",
+            input
+        )
+    );
 }
 
 /// Returns all DataFusion functions defined in this package
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
-    vec![xxhash32(), 
-    xxhash64()
-    ]
+    vec![xxhash32(), xxhash64()]
 }

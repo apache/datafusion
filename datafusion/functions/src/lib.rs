@@ -154,6 +154,8 @@ pub mod expr_fn {
     pub use super::datetime::expr_fn::*;
     #[cfg(feature = "encoding_expressions")]
     pub use super::encoding::expr_fn::*;
+    #[cfg(feature = "hash_expressions")]
+    pub use super::hash::expr_fn::*;
     #[cfg(feature = "math_expressions")]
     pub use super::math::expr_fn::*;
     #[cfg(feature = "regex_expressions")]
@@ -162,8 +164,6 @@ pub mod expr_fn {
     pub use super::string::expr_fn::*;
     #[cfg(feature = "unicode_expressions")]
     pub use super::unicode::expr_fn::*;
-    #[cfg(feature = "hash_expressions")]
-    pub use super::hash::expr_fn::*;
 }
 
 /// Return all default functions
