@@ -18,9 +18,26 @@
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
 use datafusion_expr::function::Hint;
 use datafusion_expr::ColumnarValue;
+
+/// Converts a collection of function arguments into an fixed-size array of length N
+/// producing a reasonable error message in case of unexpected number of arguments.
+pub fn take_function_args<const N: usize, T>(
+    function_name: &str,
+    args: impl IntoIterator<Item = T>,
+) -> Result<[T; N]> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    args.try_into().map_err(|v: Vec<T>| {
+        exec_datafusion_err!(
+            "{} function requires {} arguments, got {}",
+            function_name,
+            N,
+            v.len()
+        )
+    })
+}
 
 /// Creates a function to identify the optimal return type of a string function given
 /// the type of its first argument.
