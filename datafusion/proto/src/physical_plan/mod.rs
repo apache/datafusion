@@ -264,12 +264,16 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             )
                         })
                         .transpose()?;
-                    let source = Arc::new(ParquetSource::new(
+                    let mut source = Arc::new(ParquetSource::new(
                         Arc::clone(&schema),
                         predicate,
                         None,
                         TableParquetOptions::default(),
                     ));
+
+                    if let Some(options) = scan.parquet_options.as_ref() {
+                        source = source.with_table_parquet_options(options.try_into()?);
+                    }
                     let base_config = parse_protobuf_file_scan_config(
                         scan.base_conf.as_ref().unwrap(),
                         registry,
@@ -1690,6 +1694,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                     extension_codec,
                                 )?),
                                 predicate,
+                                parquet_options: Some(exec.table_parquet_options().try_into()?),
                             },
                         )),
                     });

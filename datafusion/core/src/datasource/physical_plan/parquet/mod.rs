@@ -32,11 +32,13 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
+use crate::datasource::physical_plan::file_stream::FileStream;
 use crate::datasource::physical_plan::parquet::source::ParquetSource;
 use crate::datasource::physical_plan::{
-    parquet::page_filter::PagePruningAccessPlanFilter, FileScanConfig,
+    DisplayAs, FileGroupPartitioner, FileScanConfig};
+use crate::datasource::schema_adapter::{
+    DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
-use crate::datasource::schema_adapter::SchemaAdapterFactory;
 use crate::{
     config::TableParquetOptions,
     error::Result,
@@ -55,10 +57,12 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr}
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::source::DataSourceExec;
-use datafusion_physical_plan::DisplayAs;
 pub use metrics::ParquetFileMetrics;
+use opener::ParquetOpener;
+pub use page_filter::PagePruningAccessPlanFilter;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
+pub use row_group_filter::RowGroupAccessPlanFilter;
 pub use writer::plan_to_parquet;
 
 use log::debug;

@@ -709,11 +709,15 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         Operator::Eq,
         lit("1"),
     ));
+
+    let mut options = TableParquetOptions::new();
+    options.global.pushdown_filters = true;
+
     let source = Arc::new(ParquetSource::new(
         Arc::clone(&file_schema),
         Some(predicate),
         None,
-        TableParquetOptions::default(),
+        options,
     ));
 
     let scan_config = FileScanConfig {
@@ -739,6 +743,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         new_lines_in_values: false,
         source,
     };
+
     roundtrip_test(scan_config.new_exec())
 }
 
