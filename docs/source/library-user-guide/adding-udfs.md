@@ -114,6 +114,7 @@ impl ScalarUDFImpl for AddOne {
     }
 }
 ```
+
 We now need to register the function with DataFusion so that it can be used in the context of a query.
 
 ```rust
@@ -286,6 +287,7 @@ let udf = create_udf(
     Arc::new(add_one),
 );
 ```
+
 A few things to note on `create_udf`:
 
 - The first argument is the name of the function. This is the name that will be used in SQL queries.
@@ -297,7 +299,6 @@ A few things to note on `create_udf`:
   the same value for the same input. A random number generator would be `Volatile` because it returns a different value
   for the same input.
 - The fifth argument is the function implementation. This is the function that we defined above.
-
 
 That gives us a `ScalarUDF` that we can register with the `SessionContext`:
 
@@ -906,7 +907,6 @@ The `create_udaf` has six arguments to check:
 - The fifth argument is the function implementation. This is the function that we defined above.
 - The sixth argument is the description of the state, which will by passed between execution stages.
 
-
 ```rust
 
 # use datafusion::arrow::array::ArrayRef;
@@ -1015,10 +1015,10 @@ async fn main() -> Result<()> {
 }
 
 ```
+
 [`aggregateudf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.AggregateUDF.html
 [`create_udaf`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/fn.create_udaf.html
 [`advanced_udaf.rs`]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/advanced_udaf.rs
-
 
 ## Adding a User-Defined Table Function
 
