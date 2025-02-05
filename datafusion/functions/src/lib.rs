@@ -139,7 +139,7 @@ pub mod planner;
 
 pub mod strings;
 
-mod utils;
+pub mod utils;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
