@@ -19,28 +19,273 @@
 //! file sources.
 
 use std::{
-    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, mem::size_of,
-    sync::Arc, vec,
+    borrow::Cow,
+    collections::HashMap,
+    fmt::{Debug, Formatter, Result as FmtResult},
+    marker::PhantomData,
+    mem::size_of,
+    sync::Arc,
+    vec,
 };
 
-use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
-use datafusion_catalog_listing::PartitionedFile; 
-use datafusion_execution::object_store::ObjectStoreUrl;
+use crate::minmax_statistics::MinMaxStatistics;
+use crate::PartitionedFile;
 use datafusion_common::error::Result;
 use datafusion_common::scalar::ScalarValue;
+use datafusion_execution::object_store::ObjectStoreUrl;
 
 use arrow::array::{ArrayData, BufferBuilder};
+use arrow::array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, UInt16Type};
-use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     exec_err, ColumnStatistics, Constraints, DataFusionError, Statistics,
 };
-use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 
-use log::warn;
+use datafusion_physical_plan::display::display_orderings;
+use datafusion_physical_plan::display::ProjectSchemaDisplay;
+use datafusion_physical_plan::DisplayAs;
+use datafusion_physical_plan::DisplayFormatType;
+use log::{debug, warn};
+
+/// A wrapper to customize partitioned file display
+///
+/// Prints in the format:
+/// ```text
+/// {NUM_GROUPS groups: [[file1, file2,...], [fileN, fileM, ...], ...]}
+/// ```
+#[derive(Debug)]
+struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
+
+impl DisplayAs for FileGroupsDisplay<'_> {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
+        let n_groups = self.0.len();
+        let groups = if n_groups == 1 { "group" } else { "groups" };
+        write!(f, "{{{n_groups} {groups}: [")?;
+        match t {
+            DisplayFormatType::Default => {
+                // To avoid showing too many partitions
+                let max_groups = 5;
+                fmt_up_to_n_elements(self.0, max_groups, f, |group, f| {
+                    FileGroupDisplay(group).fmt_as(t, f)
+                })?;
+            }
+            DisplayFormatType::Verbose => {
+                fmt_elements_split_by_commas(self.0.iter(), f, |group, f| {
+                    FileGroupDisplay(group).fmt_as(t, f)
+                })?
+            }
+        }
+        write!(f, "]}}")
+    }
+}
+
+/// A wrapper to customize partitioned group of files display
+///
+/// Prints in the format:
+/// ```text
+/// [file1, file2,...]
+/// ```
+#[derive(Debug)]
+pub struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
+
+impl DisplayAs for FileGroupDisplay<'_> {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
+        write!(f, "[")?;
+        match t {
+            DisplayFormatType::Default => {
+                // To avoid showing too many files
+                let max_files = 5;
+                fmt_up_to_n_elements(self.0, max_files, f, |pf, f| {
+                    write!(f, "{}", pf.object_meta.location.as_ref())?;
+                    if let Some(range) = pf.range.as_ref() {
+                        write!(f, ":{}..{}", range.start, range.end)?;
+                    }
+                    Ok(())
+                })?
+            }
+            DisplayFormatType::Verbose => {
+                fmt_elements_split_by_commas(self.0.iter(), f, |pf, f| {
+                    write!(f, "{}", pf.object_meta.location.as_ref())?;
+                    if let Some(range) = pf.range.as_ref() {
+                        write!(f, ":{}..{}", range.start, range.end)?;
+                    }
+                    Ok(())
+                })?
+            }
+        }
+        write!(f, "]")
+    }
+}
+
+/// helper to format an array of up to N elements
+fn fmt_up_to_n_elements<E, F>(
+    elements: &[E],
+    n: usize,
+    f: &mut Formatter,
+    format_element: F,
+) -> FmtResult
+where
+    F: Fn(&E, &mut Formatter) -> FmtResult,
+{
+    let len = elements.len();
+    fmt_elements_split_by_commas(elements.iter().take(n), f, |element, f| {
+        format_element(element, f)
+    })?;
+    // Remaining elements are showed as `...` (to indicate there is more)
+    if len > n {
+        write!(f, ", ...")?;
+    }
+    Ok(())
+}
+
+/// helper formatting array elements with a comma and a space between them
+fn fmt_elements_split_by_commas<E, I, F>(
+    iter: I,
+    f: &mut Formatter,
+    format_element: F,
+) -> FmtResult
+where
+    I: Iterator<Item = E>,
+    F: Fn(E, &mut Formatter) -> FmtResult,
+{
+    for (idx, element) in iter.enumerate() {
+        if idx > 0 {
+            write!(f, ", ")?;
+        }
+        format_element(element, f)?;
+    }
+    Ok(())
+}
+
+/// The various listing tables does not attempt to read all files
+/// concurrently, instead they will read files in sequence within a
+/// partition.  This is an important property as it allows plans to
+/// run against 1000s of files and not try to open them all
+/// concurrently.
+///
+/// However, it means if we assign more than one file to a partition
+/// the output sort order will not be preserved as illustrated in the
+/// following diagrams:
+///
+/// When only 1 file is assigned to each partition, each partition is
+/// correctly sorted on `(A, B, C)`
+///
+/// ```text
+///┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┓
+///  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
+///┃   ┌───────────────┐     ┌──────────────┐ │   ┌──────────────┐ │   ┌─────────────┐   ┃
+///  │ │   1.parquet   │ │ │ │  2.parquet   │   │ │  3.parquet   │   │ │  4.parquet  │ │
+///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │   │Sort: A, B, C │ │   │Sort: A, B, C│   ┃
+///  │ └───────────────┘ │ │ └──────────────┘   │ └──────────────┘   │ └─────────────┘ │
+///┃                                          │                    │                     ┃
+///  │                   │ │                    │                    │                 │
+///┃                                          │                    │                     ┃
+///  │                   │ │                    │                    │                 │
+///┃                                          │                    │                     ┃
+///  │                   │ │                    │                    │                 │
+///┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
+///     DataFusion           DataFusion           DataFusion           DataFusion
+///┃    Partition 1          Partition 2          Partition 3          Partition 4       ┃
+/// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
+///
+///                                      ParquetExec
+///```
+///
+/// However, when more than 1 file is assigned to each partition, each
+/// partition is NOT correctly sorted on `(A, B, C)`. Once the second
+/// file is scanned, the same values for A, B and C can be repeated in
+/// the same sorted stream
+///
+///```text
+///┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
+///  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
+///┃   ┌───────────────┐     ┌──────────────┐ │
+///  │ │   1.parquet   │ │ │ │  2.parquet   │   ┃
+///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
+///  │ └───────────────┘ │ │ └──────────────┘   ┃
+///┃   ┌───────────────┐     ┌──────────────┐ │
+///  │ │   3.parquet   │ │ │ │  4.parquet   │   ┃
+///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
+///  │ └───────────────┘ │ │ └──────────────┘   ┃
+///┃                                          │
+///  │                   │ │                    ┃
+///┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///     DataFusion           DataFusion         ┃
+///┃    Partition 1          Partition 2
+/// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
+///
+///              ParquetExec
+///```
+fn get_projected_output_ordering(
+    base_config: &FileScanConfig,
+    projected_schema: &SchemaRef,
+) -> Vec<LexOrdering> {
+    let mut all_orderings = vec![];
+    for output_ordering in &base_config.output_ordering {
+        let mut new_ordering = LexOrdering::default();
+        for PhysicalSortExpr { expr, options } in output_ordering.iter() {
+            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+                let name = col.name();
+                if let Some((idx, _)) = projected_schema.column_with_name(name) {
+                    // Compute the new sort expression (with correct index) after projection:
+                    new_ordering.push(PhysicalSortExpr {
+                        expr: Arc::new(Column::new(name, idx)),
+                        options: *options,
+                    });
+                    continue;
+                }
+            }
+            // Cannot find expression in the projected_schema, stop iterating
+            // since rest of the orderings are violated
+            break;
+        }
+
+        // do not push empty entries
+        // otherwise we may have `Some(vec![])` at the output ordering.
+        if new_ordering.is_empty() {
+            continue;
+        }
+
+        // Check if any file groups are not sorted
+        if base_config.file_groups.iter().any(|group| {
+            if group.len() <= 1 {
+                // File groups with <= 1 files are always sorted
+                return false;
+            }
+
+            let statistics = match MinMaxStatistics::new_from_files(
+                &new_ordering,
+                projected_schema,
+                base_config.projection.as_deref(),
+                group,
+            ) {
+                Ok(statistics) => statistics,
+                Err(e) => {
+                    log::trace!("Error fetching statistics for file group: {e}");
+                    // we can't prove that it's ordered, so we have to reject it
+                    return true;
+                }
+            };
+
+            !statistics.is_sorted()
+        }) {
+            debug!(
+                "Skipping specified output ordering {:?}. \
+                Some file groups couldn't be determined to be sorted: {:?}",
+                base_config.output_ordering[0], base_config.file_groups
+            );
+            continue;
+        }
+
+        all_orderings.push(new_ordering);
+    }
+    all_orderings
+}
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is
@@ -285,7 +530,7 @@ impl FileScanConfig {
     }
 
     #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
-    pub(crate) fn projected_file_column_names(&self) -> Option<Vec<String>> {
+    pub fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()
                 .filter(|col_idx| **col_idx < self.file_schema.fields().len())
@@ -296,7 +541,7 @@ impl FileScanConfig {
     }
 
     /// Projects only file schema, ignoring partition columns
-    pub(crate) fn projected_file_schema(&self) -> SchemaRef {
+    pub fn projected_file_schema(&self) -> SchemaRef {
         let fields = self.file_column_projection_indices().map(|indices| {
             indices
                 .iter()
@@ -316,7 +561,7 @@ impl FileScanConfig {
         )
     }
 
-    pub(crate) fn file_column_projection_indices(&self) -> Option<Vec<usize>> {
+    pub fn file_column_projection_indices(&self) -> Option<Vec<usize>> {
         self.projection.as_ref().map(|p| {
             p.iter()
                 .filter(|col_idx| **col_idx < self.file_schema.fields().len())
@@ -388,6 +633,41 @@ impl FileScanConfig {
                     .collect()
             })
             .collect())
+    }
+}
+
+impl Debug for FileScanConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "object_store_url={:?}, ", self.object_store_url)?;
+
+        write!(f, "statistics={:?}, ", self.statistics)?;
+
+        DisplayAs::fmt_as(self, DisplayFormatType::Verbose, f)
+    }
+}
+
+impl DisplayAs for FileScanConfig {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
+        let (schema, _, _, orderings) = self.project();
+
+        write!(f, "file_groups=")?;
+        FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+
+        if !schema.fields().is_empty() {
+            write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
+        }
+
+        if let Some(limit) = self.limit {
+            write!(f, ", limit={limit}")?;
+        }
+
+        display_orderings(f, &orderings)?;
+
+        if !self.constraints.is_empty() {
+            write!(f, ", {}", self.constraints)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -641,10 +921,41 @@ fn create_output_array(
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::Int32Array;
+    use arrow::array::Int32Array;
+    use arrow_schema::SortOptions;
+    use datafusion_common::assert_batches_eq;
+    use datafusion_expr::SortExpr;
+    use datafusion_physical_expr::create_physical_expr;
 
     use super::*;
-    use crate::{test::columns, test_util::aggr_test_schema};
+
+    /// Get the schema for the aggregate_test_* csv files
+    fn aggr_test_schema() -> SchemaRef {
+        let mut f1 = Field::new("c1", DataType::Utf8, false);
+        f1.set_metadata(HashMap::from_iter(vec![("testing".into(), "test".into())]));
+        let schema = Schema::new(vec![
+            f1,
+            Field::new("c2", DataType::UInt32, false),
+            Field::new("c3", DataType::Int8, false),
+            Field::new("c4", DataType::Int16, false),
+            Field::new("c5", DataType::Int32, false),
+            Field::new("c6", DataType::Int64, false),
+            Field::new("c7", DataType::UInt8, false),
+            Field::new("c8", DataType::UInt16, false),
+            Field::new("c9", DataType::UInt32, false),
+            Field::new("c10", DataType::UInt64, false),
+            Field::new("c11", DataType::Float32, false),
+            Field::new("c12", DataType::Float64, false),
+            Field::new("c13", DataType::Utf8, false),
+        ]);
+
+        Arc::new(schema)
+    }
+
+    /// Returns the column names on the schema
+    fn columns(schema: &Schema) -> Vec<String> {
+        schema.fields().iter().map(|f| f.name().clone()).collect()
+    }
 
     #[test]
     fn physical_plan_config_no_projection() {
@@ -816,7 +1127,7 @@ mod tests {
             "| 2 | 0  | 12 | 2021 | 26  |",
             "+---+----+----+------+-----+",
         ];
-        crate::assert_batches_eq!(expected, &[projected_batch]);
+        assert_batches_eq!(expected, &[projected_batch]);
 
         // project another batch that is larger than the previous one
         let file_batch = build_table_i32(
@@ -846,7 +1157,7 @@ mod tests {
             "| 9 | -6  | 16 | 2021 | 27  |",
             "+---+-----+----+------+-----+",
         ];
-        crate::assert_batches_eq!(expected, &[projected_batch]);
+        assert_batches_eq!(expected, &[projected_batch]);
 
         // project another batch that is smaller than the previous one
         let file_batch = build_table_i32(
@@ -874,7 +1185,7 @@ mod tests {
             "| 3 | 4 | 6 | 2021 | 28  |",
             "+---+---+---+------+-----+",
         ];
-        crate::assert_batches_eq!(expected, &[projected_batch]);
+        assert_batches_eq!(expected, &[projected_batch]);
 
         // forgot to dictionary-wrap the scalar value
         let file_batch = build_table_i32(
@@ -902,7 +1213,7 @@ mod tests {
             "| 2 | 0  | 12 | 2021 | 26  |",
             "+---+----+----+------+-----+",
         ];
-        crate::assert_batches_eq!(expected, &[projected_batch]);
+        assert_batches_eq!(expected, &[projected_batch]);
     }
 
     #[test]
@@ -995,7 +1306,7 @@ mod tests {
             name: &'static str,
             file_schema: Schema,
             files: Vec<File>,
-            sort: Vec<datafusion_expr::SortExpr>,
+            sort: Vec<SortExpr>,
             expected_result: Result<Vec<Vec<&'static str>>, &'static str>,
         }
 
@@ -1136,11 +1447,32 @@ mod tests {
                     ))))
                     .collect::<Vec<_>>(),
             ));
+
+            // This is a copy of datafusion::physical_planner::create_physical_sort_expr
+            // Create a physical sort expression from a logical expression
+            fn create_physical_sort_expr(
+                e: &SortExpr,
+                input_dfschema: &DFSchema,
+                execution_props: &ExecutionProps,
+            ) -> Result<PhysicalSortExpr> {
+                let SortExpr {
+                    expr,
+                    asc,
+                    nulls_first,
+                } = e;
+                Ok(PhysicalSortExpr {
+                    expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+                    options: SortOptions {
+                        descending: !asc,
+                        nulls_first: *nulls_first,
+                    },
+                })
+            }
             let sort_order = LexOrdering::from(
                 case.sort
                     .into_iter()
                     .map(|expr| {
-                        crate::physical_planner::create_physical_sort_expr(
+                        create_physical_sort_expr(
                             &expr,
                             &DFSchema::try_from(table_schema.as_ref().clone())?,
                             &ExecutionProps::default(),

@@ -47,6 +47,7 @@ use arrow::json;
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use arrow_array::RecordBatch;
 use arrow_schema::ArrowError;
+use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{not_impl_err, GetExt, DEFAULT_JSON_EXTENSION};
@@ -85,9 +86,10 @@ impl JsonFormatFactory {
 impl FileFormatFactory for JsonFormatFactory {
     fn create(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         format_options: &HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let json_options = match &self.options {
             None => {
                 let mut table_options = state.default_table_options();
@@ -187,7 +189,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -235,7 +237,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -245,7 +247,7 @@ impl FileFormat for JsonFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -257,7 +259,7 @@ impl FileFormat for JsonFormat {
     async fn create_writer_physical_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &SessionState,
+        _state: &dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

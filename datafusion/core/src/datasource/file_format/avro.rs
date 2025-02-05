@@ -25,6 +25,7 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 use datafusion_common::internal_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::GetExt;
@@ -38,7 +39,6 @@ use super::FileFormatFactory;
 use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
 use crate::datasource::physical_plan::{AvroExec, FileScanConfig};
 use crate::error::Result;
-use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
@@ -56,7 +56,7 @@ impl AvroFormatFactory {
 impl FileFormatFactory for AvroFormatFactory {
     fn create(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _format_options: &HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(AvroFormat))
@@ -111,7 +111,7 @@ impl FileFormat for AvroFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -136,7 +136,7 @@ impl FileFormat for AvroFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -146,7 +146,7 @@ impl FileFormat for AvroFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -160,6 +160,7 @@ impl FileFormat for AvroFormat {
 mod tests {
     use super::*;
     use crate::datasource::file_format::test_util::scan_format;
+    use crate::execution::SessionState;
     use crate::physical_plan::collect;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{as_string_array, Array};

@@ -21,12 +21,12 @@ mod arrow_file;
 mod avro;
 mod csv;
 mod file_groups;
-mod file_scan_config;
+// mod file_scan_config;
 mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
-mod statistics;
+// mod statistics;
 
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
@@ -36,44 +36,33 @@ pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactor
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
 pub use csv::{CsvConfig, CsvExec, CsvExecBuilder, CsvOpener};
+pub use datafusion_catalog_listing::file_scan_config::{
+    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroupDisplay,
+    FileScanConfig,
+};
 use datafusion_expr::dml::InsertOp;
 pub use file_groups::FileGroupPartitioner;
-pub use file_scan_config::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-};
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
 pub use json::{JsonOpener, NdJsonExec};
 
-use std::{
-    fmt::{Debug, Formatter, Result as FmtResult},
-    ops::Range,
-    sync::Arc,
-    vec,
-};
+use std::{ops::Range, sync::Arc};
 
 use super::{file_format::write::demux::start_demuxer_task, listing::ListingTableUrl};
 use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
-use crate::error::Result;
-use crate::physical_plan::{DisplayAs, DisplayFormatType};
-use crate::{
-    datasource::{
-        listing::{FileRange, PartitionedFile},
-        object_store::ObjectStoreUrl,
-    },
-    physical_plan::display::{display_orderings, ProjectSchemaDisplay},
+use crate::datasource::{
+    listing::{FileRange, PartitionedFile},
+    object_store::ObjectStoreUrl,
 };
+use crate::error::Result;
+use crate::physical_plan::DisplayAs;
 
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::PhysicalSortExpr;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::insert::DataSink;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use log::debug;
 use object_store::{path::Path, GetOptions, GetRange, ObjectMeta, ObjectStore};
 
 /// General behaviors for files that do `DataSink` operations
@@ -161,151 +150,6 @@ impl FileSinkConfig {
     }
 }
 
-impl Debug for FileScanConfig {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(f, "object_store_url={:?}, ", self.object_store_url)?;
-
-        write!(f, "statistics={:?}, ", self.statistics)?;
-
-        DisplayAs::fmt_as(self, DisplayFormatType::Verbose, f)
-    }
-}
-
-impl DisplayAs for FileScanConfig {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let (schema, _, _, orderings) = self.project();
-
-        write!(f, "file_groups=")?;
-        FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
-
-        if !schema.fields().is_empty() {
-            write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
-        }
-
-        if let Some(limit) = self.limit {
-            write!(f, ", limit={limit}")?;
-        }
-
-        display_orderings(f, &orderings)?;
-
-        if !self.constraints.is_empty() {
-            write!(f, ", {}", self.constraints)?;
-        }
-
-        Ok(())
-    }
-}
-
-/// A wrapper to customize partitioned file display
-///
-/// Prints in the format:
-/// ```text
-/// {NUM_GROUPS groups: [[file1, file2,...], [fileN, fileM, ...], ...]}
-/// ```
-#[derive(Debug)]
-struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
-
-impl DisplayAs for FileGroupsDisplay<'_> {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let n_groups = self.0.len();
-        let groups = if n_groups == 1 { "group" } else { "groups" };
-        write!(f, "{{{n_groups} {groups}: [")?;
-        match t {
-            DisplayFormatType::Default => {
-                // To avoid showing too many partitions
-                let max_groups = 5;
-                fmt_up_to_n_elements(self.0, max_groups, f, |group, f| {
-                    FileGroupDisplay(group).fmt_as(t, f)
-                })?;
-            }
-            DisplayFormatType::Verbose => {
-                fmt_elements_split_by_commas(self.0.iter(), f, |group, f| {
-                    FileGroupDisplay(group).fmt_as(t, f)
-                })?
-            }
-        }
-        write!(f, "]}}")
-    }
-}
-
-/// A wrapper to customize partitioned group of files display
-///
-/// Prints in the format:
-/// ```text
-/// [file1, file2,...]
-/// ```
-#[derive(Debug)]
-pub(crate) struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
-
-impl DisplayAs for FileGroupDisplay<'_> {
-    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        write!(f, "[")?;
-        match t {
-            DisplayFormatType::Default => {
-                // To avoid showing too many files
-                let max_files = 5;
-                fmt_up_to_n_elements(self.0, max_files, f, |pf, f| {
-                    write!(f, "{}", pf.object_meta.location.as_ref())?;
-                    if let Some(range) = pf.range.as_ref() {
-                        write!(f, ":{}..{}", range.start, range.end)?;
-                    }
-                    Ok(())
-                })?
-            }
-            DisplayFormatType::Verbose => {
-                fmt_elements_split_by_commas(self.0.iter(), f, |pf, f| {
-                    write!(f, "{}", pf.object_meta.location.as_ref())?;
-                    if let Some(range) = pf.range.as_ref() {
-                        write!(f, ":{}..{}", range.start, range.end)?;
-                    }
-                    Ok(())
-                })?
-            }
-        }
-        write!(f, "]")
-    }
-}
-
-/// helper to format an array of up to N elements
-fn fmt_up_to_n_elements<E, F>(
-    elements: &[E],
-    n: usize,
-    f: &mut Formatter,
-    format_element: F,
-) -> FmtResult
-where
-    F: Fn(&E, &mut Formatter) -> FmtResult,
-{
-    let len = elements.len();
-    fmt_elements_split_by_commas(elements.iter().take(n), f, |element, f| {
-        format_element(element, f)
-    })?;
-    // Remaining elements are showed as `...` (to indicate there is more)
-    if len > n {
-        write!(f, ", ...")?;
-    }
-    Ok(())
-}
-
-/// helper formatting array elements with a comma and a space between them
-fn fmt_elements_split_by_commas<E, I, F>(
-    iter: I,
-    f: &mut Formatter,
-    format_element: F,
-) -> FmtResult
-where
-    I: Iterator<Item = E>,
-    F: Fn(E, &mut Formatter) -> FmtResult,
-{
-    for (idx, element) in iter.enumerate() {
-        if idx > 0 {
-            write!(f, ", ")?;
-        }
-        format_element(element, f)?;
-    }
-    Ok(())
-}
-
 /// A single file or part of a file that should be read, along with its schema, statistics
 pub struct FileMeta {
     /// Path for the file (e.g. URL, filesystem path, etc)
@@ -334,131 +178,6 @@ impl From<ObjectMeta> for FileMeta {
             metadata_size_hint: None,
         }
     }
-}
-
-/// The various listing tables does not attempt to read all files
-/// concurrently, instead they will read files in sequence within a
-/// partition.  This is an important property as it allows plans to
-/// run against 1000s of files and not try to open them all
-/// concurrently.
-///
-/// However, it means if we assign more than one file to a partition
-/// the output sort order will not be preserved as illustrated in the
-/// following diagrams:
-///
-/// When only 1 file is assigned to each partition, each partition is
-/// correctly sorted on `(A, B, C)`
-///
-/// ```text
-///┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┓
-///  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ┐
-///┃   ┌───────────────┐     ┌──────────────┐ │   ┌──────────────┐ │   ┌─────────────┐   ┃
-///  │ │   1.parquet   │ │ │ │  2.parquet   │   │ │  3.parquet   │   │ │  4.parquet  │ │
-///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │   │Sort: A, B, C │ │   │Sort: A, B, C│   ┃
-///  │ └───────────────┘ │ │ └──────────────┘   │ └──────────────┘   │ └─────────────┘ │
-///┃                                          │                    │                     ┃
-///  │                   │ │                    │                    │                 │
-///┃                                          │                    │                     ┃
-///  │                   │ │                    │                    │                 │
-///┃                                          │                    │                     ┃
-///  │                   │ │                    │                    │                 │
-///┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘  ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
-///     DataFusion           DataFusion           DataFusion           DataFusion
-///┃    Partition 1          Partition 2          Partition 3          Partition 4       ┃
-/// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
-///
-///                                      ParquetExec
-///```
-///
-/// However, when more than 1 file is assigned to each partition, each
-/// partition is NOT correctly sorted on `(A, B, C)`. Once the second
-/// file is scanned, the same values for A, B and C can be repeated in
-/// the same sorted stream
-///
-///```text
-///┏ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
-///  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐ ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─  ┃
-///┃   ┌───────────────┐     ┌──────────────┐ │
-///  │ │   1.parquet   │ │ │ │  2.parquet   │   ┃
-///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
-///  │ └───────────────┘ │ │ └──────────────┘   ┃
-///┃   ┌───────────────┐     ┌──────────────┐ │
-///  │ │   3.parquet   │ │ │ │  4.parquet   │   ┃
-///┃   │ Sort: A, B, C │     │Sort: A, B, C │ │
-///  │ └───────────────┘ │ │ └──────────────┘   ┃
-///┃                                          │
-///  │                   │ │                    ┃
-///┃  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
-///     DataFusion           DataFusion         ┃
-///┃    Partition 1          Partition 2
-/// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
-///
-///              ParquetExec
-///```
-fn get_projected_output_ordering(
-    base_config: &FileScanConfig,
-    projected_schema: &SchemaRef,
-) -> Vec<LexOrdering> {
-    let mut all_orderings = vec![];
-    for output_ordering in &base_config.output_ordering {
-        let mut new_ordering = LexOrdering::default();
-        for PhysicalSortExpr { expr, options } in output_ordering.iter() {
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                let name = col.name();
-                if let Some((idx, _)) = projected_schema.column_with_name(name) {
-                    // Compute the new sort expression (with correct index) after projection:
-                    new_ordering.push(PhysicalSortExpr {
-                        expr: Arc::new(Column::new(name, idx)),
-                        options: *options,
-                    });
-                    continue;
-                }
-            }
-            // Cannot find expression in the projected_schema, stop iterating
-            // since rest of the orderings are violated
-            break;
-        }
-
-        // do not push empty entries
-        // otherwise we may have `Some(vec![])` at the output ordering.
-        if new_ordering.is_empty() {
-            continue;
-        }
-
-        // Check if any file groups are not sorted
-        if base_config.file_groups.iter().any(|group| {
-            if group.len() <= 1 {
-                // File groups with <= 1 files are always sorted
-                return false;
-            }
-
-            let statistics = match statistics::MinMaxStatistics::new_from_files(
-                &new_ordering,
-                projected_schema,
-                base_config.projection.as_deref(),
-                group,
-            ) {
-                Ok(statistics) => statistics,
-                Err(e) => {
-                    log::trace!("Error fetching statistics for file group: {e}");
-                    // we can't prove that it's ordered, so we have to reject it
-                    return true;
-                }
-            };
-
-            !statistics.is_sorted()
-        }) {
-            debug!(
-                "Skipping specified output ordering {:?}. \
-                Some file groups couldn't be determined to be sorted: {:?}",
-                base_config.output_ordering[0], base_config.file_groups
-            );
-            continue;
-        }
-
-        all_orderings.push(new_ordering);
-    }
-    all_orderings
 }
 
 /// Represents the possible outcomes of a range calculation.
@@ -577,7 +296,7 @@ mod tests {
         StringArray, UInt64Array,
     };
     use arrow_schema::{Field, Schema};
-
+    use crate::datasource::physical_plan::FileGroupDisplay;
     use crate::datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapterFactory,
     };

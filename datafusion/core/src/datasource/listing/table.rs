@@ -32,6 +32,7 @@ use crate::datasource::{
     physical_plan::{FileScanConfig, FileSinkConfig},
 };
 use crate::execution::context::SessionState;
+
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_expr::dml::InsertOp;
@@ -191,7 +192,7 @@ impl ListingTableConfig {
     }
 
     /// Infer the [`SchemaRef`] based on `table_path` suffix.  Requires `self.options` to be set prior to using.
-    pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_schema(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let schema = if let Some(url) = self.table_paths.first() {
@@ -216,7 +217,7 @@ impl ListingTableConfig {
     }
 
     /// Infer the partition columns from the path. Requires `self.options` to be set prior to using.
-    pub async fn infer_partitions_from_path(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_partitions_from_path(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let Some(url) = self.table_paths.first() else {
@@ -484,7 +485,7 @@ impl ListingOptions {
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema<'a>(
         &'a self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
         let store = state.runtime_env().object_store(table_path)?;
@@ -509,7 +510,7 @@ impl ListingOptions {
     /// Allows specifying partial partitions.
     pub async fn validate_partitions(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &ListingTableUrl,
     ) -> Result<()> {
         if self.table_partition_cols.is_empty() {
@@ -563,7 +564,7 @@ impl ListingOptions {
     /// and therefore may fail to detect invalid partitioning.
     pub(crate) async fn infer_partitions(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &ListingTableUrl,
     ) -> Result<Vec<String>> {
         let store = state.runtime_env().object_store(table_path)?;
@@ -1091,7 +1092,7 @@ impl ListingTable {
     /// be distributed to different threads / executors.
     async fn list_files_for_scan<'a>(
         &'a self,
-        ctx: &'a SessionState,
+        ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
@@ -1152,7 +1153,7 @@ impl ListingTable {
     /// If they are not, it infers the statistics from the file and stores them in the cache.
     async fn do_collect_statistics(
         &self,
-        ctx: &SessionState,
+        ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> Result<Arc<Statistics>> {

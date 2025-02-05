@@ -28,13 +28,13 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::file_scan_config::PartitionColumnProjector;
 use crate::datasource::physical_plan::{FileMeta, FileScanConfig};
 use crate::error::Result;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
 use crate::physical_plan::RecordBatchStream;
+use datafusion_catalog_listing::file_scan_config::PartitionColumnProjector;
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
