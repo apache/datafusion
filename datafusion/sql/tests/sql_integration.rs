@@ -94,6 +94,7 @@ fn parse_decimals() {
                 enable_ident_normalization: false,
                 support_varchar_with_length: false,
                 enable_options_value_normalization: false,
+                collect_spans: false,
             },
         );
     }
@@ -149,6 +150,7 @@ fn parse_ident_normalization() {
                 enable_ident_normalization,
                 support_varchar_with_length: false,
                 enable_options_value_normalization: false,
+                collect_spans: false,
             },
         );
         if plan.is_ok() {
@@ -3630,10 +3632,10 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
     // param is not number following the $ sign
     // panic due to error returned from the parser
     let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
-    assert_eq!(
-        logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: ParserError(\"Expected: AS, found: SELECT\")"
-    )
+    assert!(logical_plan(sql)
+        .unwrap_err()
+        .strip_backtrace()
+        .contains("Expected: AS, found: SELECT"))
 }
 
 #[test]
@@ -3671,7 +3673,7 @@ fn test_non_prepare_statement_should_infer_types() {
 
 #[test]
 #[should_panic(
-    expected = "value: SQL(ParserError(\"Expected: [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1\""
+    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [form] NORMALIZED FROM after IS, found: $1"
 )]
 fn test_prepare_statement_to_plan_panic_is_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
@@ -4406,6 +4408,10 @@ fn plan_create_index() {
 }
 
 fn assert_field_not_found(err: DataFusionError, name: &str) {
+    let err = match err {
+        DataFusionError::Diagnostic(_, err) => *err,
+        err => err,
+    };
     match err {
         DataFusionError::SchemaError { .. } => {
             let msg = format!("{err}");
