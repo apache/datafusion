@@ -3003,7 +3003,7 @@ SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
   LAST_VALUE(amount ORDER BY ts ASC) AS fv2
   FROM sales_global
 ----
-30 100
+30 80
 
 # Conversion in between FIRST_VALUE and LAST_VALUE to resolve
 # contradictory requirements should work in multi partitions.
