@@ -19,7 +19,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow_array::{ArrayRef, Int32Array};
-use arrow_buffer::IntervalDayTime;
+use arrow::array::types::IntervalDayTime;
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::{error::Result, execution::context::ExecutionProps, prelude::*};
 use datafusion_common::cast::as_int32_array;
