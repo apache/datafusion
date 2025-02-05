@@ -497,8 +497,10 @@ impl Stream for ObservedStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let poll = self.inner.poll_next_unpin(cx);
-        let poll = self.limit_reached(poll);
+        let mut poll = self.inner.poll_next_unpin(cx);
+        if self.fetch.is_some() {
+            poll = self.limit_reached(poll);
+        }
         self.baseline_metrics.record_poll(poll)
     }
 }
