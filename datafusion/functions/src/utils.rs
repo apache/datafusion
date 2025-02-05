@@ -36,8 +36,8 @@ use datafusion_expr::ColumnarValue;
 ///   // ... do stuff..
 ///   Ok(())
 /// }
-/// 
-/// // Calling the function with 1 argument produces an error: 
+///
+/// // Calling the function with 1 argument produces an error:
 /// let ten = ColumnarValue::from(ScalarValue::from(10i32));
 /// let twenty = ColumnarValue::from(ScalarValue::from(20i32));
 /// let args = vec![ten.clone()];
