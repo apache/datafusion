@@ -20,9 +20,9 @@
 use arrow::array::{ArrayRef, Capacities, MutableArrayData};
 use arrow_array::{make_array, ListArray};
 
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
 use arrow_array::{Array, MapArray};
-use arrow_buffer::OffsetBuffer;
 use arrow_schema::Field;
 
 use datafusion_common::{cast::as_map_array, exec_err, Result};

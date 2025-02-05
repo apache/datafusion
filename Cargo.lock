@@ -1730,7 +1730,6 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ipc",
  "arrow-schema",
  "async-compression",
@@ -1741,6 +1740,7 @@ dependencies = [
  "criterion",
  "ctor",
  "datafusion-catalog",
+ "datafusion-catalog-listing",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",
@@ -1829,6 +1829,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-catalog-listing"
+version = "45.0.0"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "async-compression",
+ "async-trait",
+ "chrono",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "futures",
+ "glob",
+ "itertools 0.14.0",
+ "log",
+ "object_store",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "datafusion-cli"
 version = "45.0.0"
 dependencies = [
@@ -1863,7 +1889,6 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ipc",
  "arrow-schema",
  "base64 0.22.1",
@@ -2028,7 +2053,6 @@ version = "45.0.0"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
- "arrow-buffer",
  "arrow-schema",
  "criterion",
  "datafusion-common",
@@ -2064,7 +2088,6 @@ version = "45.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ord",
  "arrow-schema",
  "criterion",
@@ -2160,7 +2183,6 @@ dependencies = [
  "ahash 0.8.11",
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-schema",
  "criterion",
  "datafusion-common",
@@ -2186,7 +2208,6 @@ version = "45.0.0"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
- "arrow-buffer",
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.14.5",
@@ -2223,7 +2244,6 @@ dependencies = [
  "ahash 0.8.11",
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ord",
  "arrow-schema",
  "async-trait",
@@ -2351,7 +2371,6 @@ dependencies = [
 name = "datafusion-substrait"
 version = "45.0.0"
 dependencies = [
- "arrow-buffer",
  "async-recursion",
  "async-trait",
  "chrono",

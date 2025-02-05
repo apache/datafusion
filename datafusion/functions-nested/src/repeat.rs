@@ -19,13 +19,13 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{Capacities, MutableArrayData};
+use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::compute::cast;
 use arrow_array::{
     new_null_array, Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait,
     UInt64Array,
 };
-use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{LargeList, List};
 use arrow_schema::{DataType, Field};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
