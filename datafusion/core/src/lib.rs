@@ -896,3 +896,9 @@ doc_comment::doctest!(
     "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
     library_user_guide_dataframe_api
 );
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/catalogs.md",
+    library_user_guide_catalogs
+);

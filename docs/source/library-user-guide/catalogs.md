@@ -39,7 +39,12 @@ In the following example, we'll implement an in memory catalog, starting with th
 
 The `MemorySchemaProvider` is a simple implementation of the `SchemaProvider` trait. It stores state (i.e. tables) in a `DashMap`, which then underlies the `SchemaProvider` trait.
 
-```rust
+```fixed
+use std::sync::Arc;
+use dashmap::DashMap;
+use datafusion::catalog::{TableProvider, SchemaProvider};
+
+## [derive(Debug)]
 pub struct MemorySchemaProvider {
     tables: DashMap<String, Arc<dyn TableProvider>>,
 }
@@ -50,6 +55,20 @@ pub struct MemorySchemaProvider {
 Then we implement the `SchemaProvider` trait for `MemorySchemaProvider`.
 
 ```rust
+# use std::sync::Arc;
+# use dashmap::DashMap;
+# use datafusion::catalog::TableProvider;
+
+use std::any::Any;
+use datafusion::catalog::SchemaProvider;
+use async_trait::async_trait;
+use datafusion::common::{Result, exec_err};
+
+##[derive(Debug)]
+pub struct MemorySchemaProvider {
+    tables: DashMap<String, Arc<dyn TableProvider>>,
+}
+
 #[async_trait]
 impl SchemaProvider for MemorySchemaProvider {
     fn as_any(&self) -> &dyn Any {
@@ -63,8 +82,8 @@ impl SchemaProvider for MemorySchemaProvider {
             .collect()
     }
 
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        self.tables.get(name).map(|table| table.value().clone())
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        Ok(self.tables.get(name).map(|table| table.value().clone()))
     }
 
     fn register_table(
@@ -92,7 +111,7 @@ impl SchemaProvider for MemorySchemaProvider {
 
 Without getting into a `CatalogProvider` implementation, we can create a `MemorySchemaProvider` and register `TableProvider`s with it.
 
-```rust
+```tofix
 let schema_provider = Arc::new(MemorySchemaProvider::new());
 let table_provider = _; // create a table provider
 
@@ -107,7 +126,7 @@ It's often useful to fetch metadata about which tables are in a schema, from a r
 
 The trait is roughly the same except for the `table` method, and the addition of the `#[async_trait]` attribute.
 
-```rust
+```tofix
 #[async_trait]
 impl SchemaProvider for Schema {
     async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
@@ -120,7 +139,7 @@ impl SchemaProvider for Schema {
 
 As mentioned, the `CatalogProvider` can manage the schemas in a catalog, and the `MemoryCatalogProvider` is a simple implementation of the `CatalogProvider` trait. It stores schemas in a `DashMap`.
 
-```rust
+```tofix
 pub struct MemoryCatalogProvider {
     schemas: DashMap<String, Arc<dyn SchemaProvider>>,
 }
@@ -128,7 +147,7 @@ pub struct MemoryCatalogProvider {
 
 With that the `CatalogProvider` trait can be implemented.
 
-```rust
+```tofix
 impl CatalogProvider for MemoryCatalogProvider {
     fn as_any(&self) -> &dyn Any {
         self
@@ -171,7 +190,7 @@ Again, this is fairly straightforward, as there's an underlying data structure t
 
 ## Implementing `MemoryCatalogProviderList`
 
-```rust
+```tofix
 pub struct MemoryCatalogProviderList {
     /// Collection of catalogs containing schemas and ultimately TableProviders
     pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
@@ -180,7 +199,7 @@ pub struct MemoryCatalogProviderList {
 
 With that the `CatalogProviderList` trait can be implemented.
 
-```rust
+```tofix
 impl CatalogProviderList for MemoryCatalogProviderList {
     fn as_any(&self) -> &dyn Any {
         self
