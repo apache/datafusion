@@ -21,8 +21,8 @@ use std::sync::Arc;
 use crate::strings::make_and_append_view;
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayIter, ArrayRef, AsArray, Int64Array, OffsetSizeTrait, StringArrayType,
-    StringViewArray, StringViewBuilder,
+    Array, ArrayIter, ArrayRef, AsArray, Int64Array, StringArrayType, StringViewArray,
+    StringViewBuilder,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
@@ -186,11 +186,11 @@ pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            string_substr::<_, i32>(string_array, &args[1..])
+            string_substr::<_>(string_array, &args[1..])
         }
         DataType::LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            string_substr::<_, i64>(string_array, &args[1..])
+            string_substr::<_>(string_array, &args[1..])
         }
         DataType::Utf8View => {
             let string_array = args[0].as_string_view();
@@ -426,10 +426,9 @@ fn string_view_substr(
     }
 }
 
-fn string_substr<'a, V, T>(string_array: V, args: &[ArrayRef]) -> Result<ArrayRef>
+fn string_substr<'a, V>(string_array: V, args: &[ArrayRef]) -> Result<ArrayRef>
 where
     V: StringArrayType<'a>,
-    T: OffsetSizeTrait,
 {
     let start_array = as_int64_array(&args[0])?;
     let count_array_opt = if args.len() == 2 {
