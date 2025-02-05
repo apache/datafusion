@@ -31,7 +31,6 @@ use crate::execution_plan::CardinalityEffect;
 use crate::projection::{make_with_child, ProjectionExec};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
-use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
@@ -185,11 +184,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        let mut statistics = self.input.statistics()?;
-        if let Some(fetch) = self.fetch {
-            statistics.num_rows = Precision::Exact(fetch);
-        }
-        Ok(statistics)
+        Statistics::with_fetch(self.input.statistics()?, self.schema(), self.fetch, 0, 1)
     }
 
     fn supports_limit_pushdown(&self) -> bool {
