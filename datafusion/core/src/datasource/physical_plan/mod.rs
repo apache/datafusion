@@ -36,10 +36,7 @@ pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactor
 pub use arrow_file::ArrowExec;
 pub use avro::AvroExec;
 pub use csv::{CsvConfig, CsvExec, CsvExecBuilder, CsvOpener};
-pub use datafusion_catalog_listing::file_scan_config::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroupDisplay,
-    FileScanConfig,
-};
+pub use datafusion_catalog_listing::file_scan_config::*;
 use datafusion_expr::dml::InsertOp;
 pub use file_groups::FileGroupPartitioner;
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
