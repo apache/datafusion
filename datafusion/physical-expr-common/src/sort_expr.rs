@@ -325,9 +325,13 @@ fn to_str(options: &SortOptions) -> &str {
 
 ///`LexOrdering` contains a `Vec<PhysicalSortExpr>`, which represents
 /// a lexicographical ordering.
+///
+/// For example, `vec![a ASC, b DESC]` represents a lexicographical ordering
+/// that first sorts by column `a` in ascending order, then by column `b` in
+/// descending order.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct LexOrdering {
-    pub inner: Vec<PhysicalSortExpr>,
+    inner: Vec<PhysicalSortExpr>,
 }
 
 impl AsRef<LexOrdering> for LexOrdering {
@@ -337,7 +341,7 @@ impl AsRef<LexOrdering> for LexOrdering {
 }
 
 impl LexOrdering {
-    // Creates a new [`LexOrdering`] from a vector
+    /// Creates a new [`LexOrdering`] from a vector
     pub fn new(inner: Vec<PhysicalSortExpr>) -> Self {
         Self { inner }
     }
@@ -348,46 +352,61 @@ impl LexOrdering {
         &EMPTY_ORDER
     }
 
+    /// Returns the number of elements that can be stored in the LexOrdering
+    /// without reallocating.
     pub fn capacity(&self) -> usize {
         self.inner.capacity()
     }
 
+    /// Clears the LexOrdering, removing all elements.
     pub fn clear(&mut self) {
         self.inner.clear()
     }
 
+    /// Returns `true` if the LexOrdering contains `expr`
     pub fn contains(&self, expr: &PhysicalSortExpr) -> bool {
         self.inner.contains(expr)
     }
 
+    /// Add all elements from `iter` to the LexOrdering.
     pub fn extend<I: IntoIterator<Item = PhysicalSortExpr>>(&mut self, iter: I) {
         self.inner.extend(iter)
     }
 
+    /// Remove all elements from the LexOrdering where `f` evaluates to `false`.
+    pub fn retain<F>(&mut self, f: F)
+    where
+        F: FnMut(&PhysicalSortExpr) -> bool,
+    {
+        self.inner.retain(f)
+    }
+
+    /// Returns `true` if the LexOrdering contains no elements.
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &PhysicalSortExpr> {
+    /// Returns an iterator over each `&PhysicalSortExpr` in the LexOrdering.
+    pub fn iter(&self) -> core::slice::Iter<PhysicalSortExpr> {
         self.inner.iter()
     }
 
+    /// Returns the number of elements in the LexOrdering.
     pub fn len(&self) -> usize {
         self.inner.len()
     }
 
+    /// Removes the last element from the LexOrdering and returns it, or `None` if it is empty.
     pub fn pop(&mut self) -> Option<PhysicalSortExpr> {
         self.inner.pop()
     }
 
+    /// Appends an element to the back of the LexOrdering.
     pub fn push(&mut self, physical_sort_expr: PhysicalSortExpr) {
         self.inner.push(physical_sort_expr)
     }
 
-    pub fn retain(&mut self, f: impl FnMut(&PhysicalSortExpr) -> bool) {
-        self.inner.retain(f)
-    }
-
+    /// Truncates the LexOrdering, keeping only the first `len` elements.
     pub fn truncate(&mut self, len: usize) {
         self.inner.truncate(len)
     }
@@ -400,9 +419,12 @@ impl LexOrdering {
 
     /// Converts a `LexRequirement` into a `LexOrdering`.
     ///
-    /// This function converts `PhysicalSortRequirement` to `PhysicalSortExpr`
-    /// for each entry in the input. If required ordering is None for an entry
-    /// default ordering `ASC, NULLS LAST` if given (see the `PhysicalSortExpr::from`).
+    /// This function converts [`PhysicalSortRequirement`] to [`PhysicalSortExpr`]
+    /// for each entry in the input.
+    ///
+    /// If the required ordering is `None` for an entry in `requirement`, the
+    /// default ordering `ASC, NULLS LAST` is used (see
+    /// [`PhysicalSortExpr::from`]).
     pub fn from_lex_requirement(requirement: LexRequirement) -> LexOrdering {
         requirement
             .into_iter()
@@ -425,6 +447,15 @@ impl LexOrdering {
         }
         output
     }
+
+    /// Transforms each `PhysicalSortExpr` in the `LexOrdering`
+    /// in place using the provided closure `f`.
+    pub fn transform<F>(&mut self, f: F)
+    where
+        F: FnMut(&mut PhysicalSortExpr),
+    {
+        self.inner.iter_mut().for_each(f);
+    }
 }
 
 impl From<Vec<PhysicalSortExpr>> for LexOrdering {
@@ -436,6 +467,13 @@ impl From<Vec<PhysicalSortExpr>> for LexOrdering {
 impl From<LexRequirement> for LexOrdering {
     fn from(value: LexRequirement) -> Self {
         Self::from_lex_requirement(value)
+    }
+}
+
+/// Convert a `LexOrdering` into a `Arc[<PhysicalSortExpr>]` for fast copies
+impl From<LexOrdering> for Arc<[PhysicalSortExpr]> {
+    fn from(value: LexOrdering) -> Self {
+        value.inner.into()
     }
 }
 

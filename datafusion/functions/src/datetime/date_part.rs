@@ -38,11 +38,11 @@ use datafusion_common::{
     },
     exec_err, internal_err,
     types::logical_string,
-    ExprSchema, Result, ScalarValue,
+    Result, ScalarValue,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_expr_common::signature::TypeSignatureClass;
 use datafusion_macros::user_doc;
@@ -136,21 +136,30 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        internal_err!("return_type_from_exprs should be called instead")
+        internal_err!("return_type_from_args should be called instead")
     }
 
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        _schema: &dyn ExprSchema,
-        _arg_types: &[DataType],
-    ) -> Result<DataType> {
-        match &args[0] {
-            Expr::Literal(ScalarValue::Utf8(Some(part))) if is_epoch(part) => {
-                Ok(DataType::Float64)
-            }
-            _ => Ok(DataType::Int32),
-        }
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        // Length check handled in the signature
+        debug_assert_eq!(args.scalar_arguments.len(), 2);
+
+        args.scalar_arguments[0]
+            .and_then(|sv| {
+                sv.try_as_str()
+                    .flatten()
+                    .filter(|s| !s.is_empty())
+                    .map(|part| {
+                        if is_epoch(part) {
+                            ReturnInfo::new_nullable(DataType::Float64)
+                        } else {
+                            ReturnInfo::new_nullable(DataType::Int32)
+                        }
+                    })
+            })
+            .map_or_else(
+                || exec_err!("{} requires non-empty constant string", self.name()),
+                Ok,
+            )
     }
 
     fn invoke_batch(

@@ -711,3 +711,168 @@ OFFSET 3 LIMIT 2;
 
 statement ok
 drop table ordered_table;
+
+# Test issue: https://github.com/apache/datafusion/issues/14204
+# Test limit pushdown with subquery
+statement ok
+create table testSubQueryLimit (a int, b int) as values (1,2), (2,3), (3,4);
+
+query IIII
+select * from testSubQueryLimit as t1 join (select * from testSubQueryLimit limit 1) limit 10;
+----
+1 2 1 2
+2 3 1 2
+3 4 1 2
+
+query TT
+explain select * from testSubQueryLimit as t1 join (select * from testSubQueryLimit limit 1) limit 10;
+----
+logical_plan
+01)Limit: skip=0, fetch=10
+02)--Cross Join: 
+03)----SubqueryAlias: t1
+04)------Limit: skip=0, fetch=10
+05)--------TableScan: testsubquerylimit projection=[a, b], fetch=10
+06)----Limit: skip=0, fetch=1
+07)------TableScan: testsubquerylimit projection=[a, b], fetch=1
+physical_plan
+01)ProjectionExec: expr=[a@2 as a, b@3 as b, a@0 as a, b@1 as b]
+02)--GlobalLimitExec: skip=0, fetch=10
+03)----CrossJoinExec
+04)------GlobalLimitExec: skip=0, fetch=1
+05)--------MemoryExec: partitions=1, partition_sizes=[1]
+06)------GlobalLimitExec: skip=0, fetch=10
+07)--------MemoryExec: partitions=1, partition_sizes=[1]
+
+
+query IIII
+select * from testSubQueryLimit as t1 join (select * from testSubQueryLimit limit 10) limit 2;
+----
+1 2 1 2
+1 2 2 3
+
+query TT
+explain select * from testSubQueryLimit as t1 join (select * from testSubQueryLimit limit 10) limit 2;
+----
+logical_plan
+01)Limit: skip=0, fetch=2
+02)--Cross Join: 
+03)----SubqueryAlias: t1
+04)------Limit: skip=0, fetch=2
+05)--------TableScan: testsubquerylimit projection=[a, b], fetch=2
+06)----Limit: skip=0, fetch=2
+07)------TableScan: testsubquerylimit projection=[a, b], fetch=2
+physical_plan
+01)GlobalLimitExec: skip=0, fetch=2
+02)--CrossJoinExec
+03)----GlobalLimitExec: skip=0, fetch=2
+04)------MemoryExec: partitions=1, partition_sizes=[1]
+05)----GlobalLimitExec: skip=0, fetch=2
+06)------MemoryExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table testSubQueryLimit;
+
+
+# Test push down limit with more than one partition
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+# Set up 3 partitions
+statement ok
+set datafusion.execution.target_partitions = 3;
+
+# automatically partition all files over 1 byte
+statement ok
+set datafusion.optimizer.repartition_file_min_size = 1;
+
+# Create a table as a data source
+statement ok
+CREATE TABLE src_table (
+    part_key INT,
+    value INT
+) AS VALUES(1, 0), (1, 1), (1, 100), (2, 0), (2, 2), (2, 2), (2, 100), (3, 4), (3, 5), (3, 6);
+
+
+# Setup 3 files, i.e., as many as there are partitions:
+
+# File 1:
+query I
+COPY (SELECT * FROM src_table where part_key = 1)
+TO 'test_files/scratch/parquet/test_limit_with_partitions/part-0.parquet'
+STORED AS PARQUET;
+----
+3
+
+# File 2:
+query I
+COPY (SELECT * FROM src_table where part_key = 2)
+TO 'test_files/scratch/parquet/test_limit_with_partitions/part-1.parquet'
+STORED AS PARQUET;
+----
+4
+
+# File 3:
+query I
+COPY (SELECT * FROM src_table where part_key = 3)
+TO 'test_files/scratch/parquet/test_limit_with_partitions/part-2.parquet'
+STORED AS PARQUET;
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE test_limit_with_partitions
+(
+  part_key INT,
+  value INT
+)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet/test_limit_with_partitions/';
+
+query TT
+explain
+with selection as (
+    select *
+    from test_limit_with_partitions
+    limit 1
+)
+select 1 as foo
+from selection
+order by part_key
+limit 1000;
+----
+logical_plan
+01)Projection: foo
+02)--Sort: selection.part_key ASC NULLS LAST, fetch=1000
+03)----Projection: Int64(1) AS foo, selection.part_key
+04)------SubqueryAlias: selection
+05)--------Limit: skip=0, fetch=1
+06)----------TableScan: test_limit_with_partitions projection=[part_key], fetch=1
+physical_plan
+01)ProjectionExec: expr=[foo@0 as foo]
+02)--SortExec: TopK(fetch=1000), expr=[part_key@1 ASC NULLS LAST], preserve_partitioning=[false]
+03)----ProjectionExec: expr=[1 as foo, part_key@0 as part_key]
+04)------GlobalLimitExec: skip=0, fetch=1
+05)--------CoalescePartitionsExec
+06)----------ParquetExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-0.parquet:0..794], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-1.parquet:0..794], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/test_limit_with_partitions/part-2.parquet:0..794]]}, projection=[part_key], limit=1
+
+query I
+with selection as (
+    select *
+    from test_limit_with_partitions
+    limit 1
+)
+select 1 as foo
+from selection
+order by part_key
+limit 1000;
+----
+1
+
+# Tear down test_filter_with_limit table:
+statement ok
+DROP TABLE test_limit_with_partitions;
+
+# Tear down src_table table:
+statement ok
+DROP TABLE src_table;

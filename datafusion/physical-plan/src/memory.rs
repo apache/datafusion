@@ -17,7 +17,6 @@
 
 //! Execution plan for reading in-memory batches of data
 
-use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -29,12 +28,17 @@ use super::{
     Statistics,
 };
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use arrow_schema::Schema;
-use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
+use datafusion_common::{
+    internal_err, plan_err, project_schema, Constraints, Result, ScalarValue,
+};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -43,6 +47,7 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 
 use futures::Stream;
+use parking_lot::RwLock;
 
 /// Execution plan for reading in-memory batches of data
 #[derive(Clone)]
@@ -88,14 +93,25 @@ impl DisplayAs for MemoryExec {
                     })
                     .unwrap_or_default();
 
+                let constraints = self.cache.equivalence_properties().constraints();
+                let constraints = if constraints.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {}", constraints)
+                };
+
                 if self.show_sizes {
                     write!(
                         f,
-                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}",
+                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}{constraints}",
                         partition_sizes.len(),
                     )
                 } else {
-                    write!(f, "MemoryExec: partitions={}", partition_sizes.len(),)
+                    write!(
+                        f,
+                        "MemoryExec: partitions={}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
                 }
             }
         }
@@ -153,6 +169,30 @@ impl ExecutionPlan for MemoryExec {
             self.projection.clone(),
         ))
     }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If there is any non-column or alias-carrier expression, Projection should not be removed.
+        // This process can be moved into MemoryExec, but it would be an overlap of their responsibility.
+        all_alias_free_columns(projection.expr())
+            .then(|| {
+                let all_projections = (0..self.schema().fields().len()).collect();
+                let new_projections = new_projections_for_columns(
+                    projection,
+                    self.projection().as_ref().unwrap_or(&all_projections),
+                );
+
+                MemoryExec::try_new(
+                    self.partitions(),
+                    self.original_schema(),
+                    Some(new_projections),
+                )
+                .map(|e| Arc::new(e) as _)
+            })
+            .transpose()
+    }
 }
 
 impl MemoryExec {
@@ -164,8 +204,13 @@ impl MemoryExec {
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
-        let cache =
-            Self::compute_properties(Arc::clone(&projected_schema), &[], partitions);
+        let constraints = Constraints::empty();
+        let cache = Self::compute_properties(
+            Arc::clone(&projected_schema),
+            &[],
+            constraints,
+            partitions,
+        );
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
@@ -255,7 +300,12 @@ impl MemoryExec {
         }
 
         let partitions = vec![batches];
-        let cache = Self::compute_properties(Arc::clone(&schema), &[], &partitions);
+        let cache = Self::compute_properties(
+            Arc::clone(&schema),
+            &[],
+            Constraints::empty(),
+            &partitions,
+        );
         Ok(Self {
             partitions,
             schema: Arc::clone(&schema),
@@ -267,10 +317,20 @@ impl MemoryExec {
         })
     }
 
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.cache = self.cache.with_constraints(constraints);
+        self
+    }
+
     /// Set `show_sizes` to determine whether to display partition sizes
     pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
         self.show_sizes = show_sizes;
         self
+    }
+
+    /// Ref to constraints
+    pub fn constraints(&self) -> &Constraints {
+        self.cache.equivalence_properties().constraints()
     }
 
     /// Ref to partitions
@@ -320,7 +380,7 @@ impl MemoryExec {
         let fields = self.schema.fields();
         let ambiguous_column = sort_information
             .iter()
-            .flat_map(|ordering| ordering.inner.clone())
+            .flat_map(|ordering| ordering.clone())
             .flat_map(|expr| collect_columns(&expr.expr))
             .find(|col| {
                 fields
@@ -377,10 +437,12 @@ impl MemoryExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: Constraints,
         partitions: &[Vec<RecordBatch>],
     ) -> PlanProperties {
         PlanProperties::new(
-            EquivalenceProperties::new_with_orderings(schema, orderings),
+            EquivalenceProperties::new_with_orderings(schema, orderings)
+                .with_constraints(constraints),
             Partitioning::UnknownPartitioning(partitions.len()),
             EmissionType::Incremental,
             Boundedness::Bounded,
@@ -660,8 +722,8 @@ mod memory_exec_tests {
             .try_with_sort_information(sort_information)?;
 
         assert_eq!(
-            mem_exec.properties().output_ordering().unwrap().to_vec(),
-            expected_output_order.inner
+            mem_exec.properties().output_ordering().unwrap(),
+            &expected_output_order
         );
         let eq_properties = mem_exec.properties().equivalence_properties();
         assert!(eq_properties.oeq_class().contains(&sort1));
@@ -875,6 +937,7 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                 },],
             }
         );

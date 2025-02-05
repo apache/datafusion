@@ -22,15 +22,14 @@ use std::{any::Any, cmp::Ordering};
 
 use arrow::array::{Capacities, MutableArrayData};
 use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
 use arrow_schema::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
 };
 use datafusion_expr::{
-    type_coercion::binary::get_wider_type, ColumnarValue, Documentation, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -276,25 +275,32 @@ impl ScalarUDFImpl for ArrayConcat {
         let mut expr_type = DataType::Null;
         let mut max_dims = 0;
         for arg_type in arg_types {
-            match arg_type {
-                DataType::List(field) => {
-                    if !field.data_type().equals_datatype(&DataType::Null) {
-                        let dims = list_ndims(arg_type);
-                        expr_type = match max_dims.cmp(&dims) {
-                            Ordering::Greater => expr_type,
-                            Ordering::Equal => get_wider_type(&expr_type, arg_type)?,
-                            Ordering::Less => {
-                                max_dims = dims;
-                                arg_type.clone()
-                            }
-                        };
+            let DataType::List(field) = arg_type else {
+                return plan_err!(
+                    "The array_concat function can only accept list as the args."
+                );
+            };
+            if !field.data_type().equals_datatype(&DataType::Null) {
+                let dims = list_ndims(arg_type);
+                expr_type = match max_dims.cmp(&dims) {
+                    Ordering::Greater => expr_type,
+                    Ordering::Equal => {
+                        if expr_type == DataType::Null {
+                            arg_type.clone()
+                        } else if !expr_type.equals_datatype(arg_type) {
+                            return plan_err!(
+                            "It is not possible to concatenate arrays of different types. Expected: {}, got: {}", expr_type, arg_type
+                                );
+                        } else {
+                            expr_type
+                        }
                     }
-                }
-                _ => {
-                    return plan_err!(
-                        "The array_concat function can only accept list as the args."
-                    )
-                }
+
+                    Ordering::Less => {
+                        max_dims = dims;
+                        arg_type.clone()
+                    }
+                };
             }
         }
 
@@ -354,7 +360,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut array_lengths = vec![];
     let mut arrays = vec![];
-    let mut valid = BooleanBufferBuilder::new(row_count);
+    let mut valid = NullBufferBuilder::new(row_count);
     for i in 0..row_count {
         let nulls = list_arrays
             .iter()
@@ -365,7 +371,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         let is_null = nulls.iter().all(|&x| x);
         if is_null {
             array_lengths.push(0);
-            valid.append(false);
+            valid.append_null();
         } else {
             // Get all the arrays on i-th row
             let values = list_arrays
@@ -382,12 +388,11 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let concatenated_array = arrow::compute::concat(elements.as_slice())?;
             array_lengths.push(concatenated_array.len());
             arrays.push(concatenated_array);
-            valid.append(true);
+            valid.append_non_null();
         }
     }
     // Assume all arrays have the same data type
     let data_type = list_arrays[0].value_type();
-    let buffer = valid.finish();
 
     let elements = arrays
         .iter()
@@ -398,7 +403,7 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
         Arc::new(arrow::compute::concat(elements.as_slice())?),
-        Some(NullBuffer::new(buffer)),
+        valid.finish(),
     );
 
     Ok(Arc::new(list_arr))

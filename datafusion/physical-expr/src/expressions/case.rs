@@ -344,26 +344,38 @@ impl CaseExpr {
     fn case_column_or_null(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let when_expr = &self.when_then_expr[0].0;
         let then_expr = &self.when_then_expr[0].1;
-        if let ColumnarValue::Array(bit_mask) = when_expr.evaluate(batch)? {
-            let bit_mask = bit_mask
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .expect("predicate should evaluate to a boolean array");
-            // invert the bitmask
-            let bit_mask = match bit_mask.null_count() {
-                0 => not(bit_mask)?,
-                _ => not(&prep_null_mask_filter(bit_mask))?,
-            };
-            match then_expr.evaluate(batch)? {
-                ColumnarValue::Array(array) => {
-                    Ok(ColumnarValue::Array(nullif(&array, &bit_mask)?))
-                }
-                ColumnarValue::Scalar(_) => {
-                    internal_err!("expression did not evaluate to an array")
+
+        match when_expr.evaluate(batch)? {
+            // WHEN true --> column
+            ColumnarValue::Scalar(ScalarValue::Boolean(Some(true))) => {
+                then_expr.evaluate(batch)
+            }
+            // WHEN [false | null] --> NULL
+            ColumnarValue::Scalar(_) => {
+                // return scalar NULL value
+                ScalarValue::try_from(self.data_type(&batch.schema())?)
+                    .map(ColumnarValue::Scalar)
+            }
+            // WHEN column --> column
+            ColumnarValue::Array(bit_mask) => {
+                let bit_mask = bit_mask
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .expect("predicate should evaluate to a boolean array");
+                // invert the bitmask
+                let bit_mask = match bit_mask.null_count() {
+                    0 => not(bit_mask)?,
+                    _ => not(&prep_null_mask_filter(bit_mask))?,
+                };
+                match then_expr.evaluate(batch)? {
+                    ColumnarValue::Array(array) => {
+                        Ok(ColumnarValue::Array(nullif(&array, &bit_mask)?))
+                    }
+                    ColumnarValue::Scalar(_) => {
+                        internal_err!("expression did not evaluate to an array")
+                    }
                 }
             }
-        } else {
-            internal_err!("predicate did not evaluate to an array")
         }
     }
 
@@ -892,6 +904,53 @@ mod tests {
             &Float64Array::from(vec![Some(1.77), None, None, None, None, Some(1.77)]);
 
         assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_with_scalar_predicate() -> Result<()> {
+        let batch = case_test_batch_nulls()?;
+        let schema = batch.schema();
+
+        // SELECT CASE WHEN TRUE THEN load4 END
+        let when = lit(true);
+        let then = col("load4", &schema)?;
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when, then)],
+            None,
+            schema.as_ref(),
+        )?;
+
+        // many rows
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
+        let expected = &Float64Array::from(vec![
+            Some(1.77),
+            None,
+            None,
+            Some(1.78),
+            None,
+            Some(1.77),
+        ]);
+        assert_eq!(expected, result);
+
+        // one row
+        let expected = Float64Array::from(vec![Some(1.1)]);
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(expected.clone())])?;
+        let result = expr
+            .evaluate(&batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array");
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
+        assert_eq!(&expected, result);
 
         Ok(())
     }

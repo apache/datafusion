@@ -41,7 +41,7 @@ use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
     internal_err, not_impl_err,
     tree_node::{TransformedResult, TreeNode},
-    Column, DataFusionError, Result, TableReference,
+    Column, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::OUTER_REFERENCE_COLUMN_PREFIX;
 use datafusion_expr::{
@@ -919,23 +919,29 @@ impl Unparser<'_> {
                 // information included in the TableScan node.
                 if !already_projected {
                     if let Some(project_vec) = &table_scan.projection {
-                        let project_columns = project_vec
-                            .iter()
-                            .cloned()
-                            .map(|i| {
-                                let schema = table_scan.source.schema();
-                                let field = schema.field(i);
-                                if alias.is_some() {
-                                    Column::new(alias.clone(), field.name().clone())
-                                } else {
-                                    Column::new(
-                                        Some(table_scan.table_name.clone()),
-                                        field.name().clone(),
-                                    )
-                                }
-                            })
-                            .collect::<Vec<_>>();
-                        builder = builder.project(project_columns)?;
+                        if project_vec.is_empty() {
+                            builder = builder.project(vec![Expr::Literal(
+                                ScalarValue::Int64(Some(1)),
+                            )])?;
+                        } else {
+                            let project_columns = project_vec
+                                .iter()
+                                .cloned()
+                                .map(|i| {
+                                    let schema = table_scan.source.schema();
+                                    let field = schema.field(i);
+                                    if alias.is_some() {
+                                        Column::new(alias.clone(), field.name().clone())
+                                    } else {
+                                        Column::new(
+                                            Some(table_scan.table_name.clone()),
+                                            field.name().clone(),
+                                        )
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+                            builder = builder.project(project_columns)?;
+                        };
                     }
                 }
 
@@ -1090,10 +1096,12 @@ impl Unparser<'_> {
                     Expr::Column(Column {
                         relation: _,
                         name: left_name,
+                        spans: _,
                     }),
                     Expr::Column(Column {
                         relation: _,
                         name: right_name,
+                        spans: _,
                     }),
                 ) if left_name == right_name => {
                     idents.push(self.new_ident_quoted_if_needs(left_name.to_string()));

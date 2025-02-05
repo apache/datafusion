@@ -17,12 +17,11 @@
 
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
-use arrow::array::BooleanBufferBuilder;
-use arrow::buffer::NullBuffer;
 use arrow::datatypes::i256;
 use arrow::record_batch::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, PrimitiveArray};
+use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::DataType;
 use datafusion_common::Result;
@@ -166,10 +165,12 @@ where
             null_idx: Option<usize>,
         ) -> PrimitiveArray<T> {
             let nulls = null_idx.map(|null_idx| {
-                let mut buffer = BooleanBufferBuilder::new(values.len());
-                buffer.append_n(values.len(), true);
-                buffer.set_bit(null_idx, false);
-                unsafe { NullBuffer::new_unchecked(buffer.finish(), 1) }
+                let mut buffer = NullBufferBuilder::new(values.len());
+                buffer.append_n_non_nulls(null_idx);
+                buffer.append_null();
+                buffer.append_n_non_nulls(values.len() - null_idx - 1);
+                // NOTE: The inner builder must be constructed as there is at least one null
+                buffer.finish().unwrap()
             });
             PrimitiveArray::<T>::new(values.into(), nulls)
         }

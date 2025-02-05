@@ -16,22 +16,56 @@
 // under the License.
 
 //! Regex expressions
-use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::compute::kernels::regexp;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 use datafusion_common::exec_err;
 use datafusion_common::ScalarValue;
 use datafusion_common::{arrow_datafusion_err, plan_err};
-use datafusion_common::{
-    cast::as_generic_string_array, internal_err, DataFusionError, Result,
-};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_REGEX;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "Regular Expression Functions"),
+    description = "Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.",
+    syntax_example = "regexp_match(str, regexp[, flags])",
+    sql_example = r#"```sql
+            > select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
+            +---------------------------------------------------------+
+            | regexp_match(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
+            +---------------------------------------------------------+
+            | [Köln]                                                  |
+            +---------------------------------------------------------+
+            SELECT regexp_match('aBc', '(b|d)', 'i');
+            +---------------------------------------------------+
+            | regexp_match(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
+            +---------------------------------------------------+
+            | [B]                                               |
+            +---------------------------------------------------+
+```
+Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
+"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(
+        name = "regexp",
+        description = "Regular expression to match against.
+            Can be a constant, column, or function."
+    ),
+    argument(
+        name = "flags",
+        description = r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
+  - **i**: case-insensitive: letters match both upper and lower case
+  - **m**: multi-line mode: ^ and $ match begin/end of line
+  - **s**: allow . to match \n
+  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
+  - **U**: swap the meaning of x* and x*?"#
+    )
+)]
 #[derive(Debug)]
 pub struct RegexpMatchFunc {
     signature: Signature,
@@ -50,11 +84,12 @@ impl RegexpMatchFunc {
             signature: Signature::one_of(
                 vec![
                     // Planner attempts coercion to the target type starting with the most preferred candidate.
-                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8, Utf8)`.
-                    // If that fails, it proceeds to `(LargeUtf8, Utf8)`.
-                    // TODO: Native support Utf8View for regexp_match.
+                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
+                    // If that fails, it proceeds to `(Utf8, Utf8)`.
+                    TypeSignature::Exact(vec![Utf8View, Utf8View]),
                     TypeSignature::Exact(vec![Utf8, Utf8]),
                     TypeSignature::Exact(vec![LargeUtf8, LargeUtf8]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8View, Utf8View]),
                     TypeSignature::Exact(vec![Utf8, Utf8, Utf8]),
                     TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
                 ],
@@ -102,7 +137,7 @@ impl ScalarUDFImpl for RegexpMatchFunc {
             .map(|arg| arg.to_array(inferred_length))
             .collect::<Result<Vec<_>>>()?;
 
-        let result = regexp_match_func(&args);
+        let result = regexp_match(&args);
         if is_scalar {
             // If all inputs are scalar, keeps output as scalar
             let result = result.and_then(|arr| ScalarValue::try_from_array(&arr, 0));
@@ -113,75 +148,39 @@ impl ScalarUDFImpl for RegexpMatchFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_regexp_match_doc())
+        self.doc()
     }
 }
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_regexp_match_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_REGEX,
-            "Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.",
-            "regexp_match(str, regexp[, flags])")
-            .with_sql_example(r#"```sql
-            > select regexp_match('Köln', '[a-zA-Z]ö[a-zA-Z]{2}');
-            +---------------------------------------------------------+
-            | regexp_match(Utf8("Köln"),Utf8("[a-zA-Z]ö[a-zA-Z]{2}")) |
-            +---------------------------------------------------------+
-            | [Köln]                                                  |
-            +---------------------------------------------------------+
-            SELECT regexp_match('aBc', '(b|d)', 'i');
-            +---------------------------------------------------+
-            | regexp_match(Utf8("aBc"),Utf8("(b|d)"),Utf8("i")) |
-            +---------------------------------------------------+
-            | [B]                                               |
-            +---------------------------------------------------+
-```
-Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/regexp.rs)
-"#)
-            .with_standard_argument("str", Some("String"))
-            .with_argument("regexp","Regular expression to match against.
-            Can be a constant, column, or function.")
-            .with_argument("flags",
-                           r#"Optional regular expression flags that control the behavior of the regular expression. The following flags are supported:
-  - **i**: case-insensitive: letters match both upper and lower case
-  - **m**: multi-line mode: ^ and $ match begin/end of line
-  - **s**: allow . to match \n
-  - **R**: enables CRLF mode: when multi-line mode is enabled, \r\n is used
-  - **U**: swap the meaning of x* and x*?"#)
-            .build()
-    })
-}
-
-fn regexp_match_func(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        DataType::Utf8 => regexp_match::<i32>(args),
-        DataType::LargeUtf8 => regexp_match::<i64>(args),
-        other => {
-            internal_err!("Unsupported data type {other:?} for function regexp_match")
-        }
-    }
-}
-pub fn regexp_match<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn regexp_match(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => {
-            let values = as_generic_string_array::<T>(&args[0])?;
-            let regex = as_generic_string_array::<T>(&args[1])?;
-            regexp::regexp_match(values, regex, None)
+            regexp::regexp_match(&args[0], &args[1], None)
                 .map_err(|e| arrow_datafusion_err!(e))
         }
         3 => {
-            let values = as_generic_string_array::<T>(&args[0])?;
-            let regex = as_generic_string_array::<T>(&args[1])?;
-            let flags = as_generic_string_array::<T>(&args[2])?;
-
-            if flags.iter().any(|s| s == Some("g")) {
-                return plan_err!("regexp_match() does not support the \"global\" option");
+            match args[2].data_type() {
+                DataType::Utf8View => {
+                    if args[2].as_string_view().iter().any(|s| s == Some("g")) {
+                        return plan_err!("regexp_match() does not support the \"global\" option");
+                    }
+                }
+                DataType::Utf8 => {
+                    if args[2].as_string::<i32>().iter().any(|s| s == Some("g")) {
+                        return plan_err!("regexp_match() does not support the \"global\" option");
+                    }
+                }
+                DataType::LargeUtf8 => {
+                    if args[2].as_string::<i64>().iter().any(|s| s == Some("g")) {
+                        return plan_err!("regexp_match() does not support the \"global\" option");
+                    }
+                }
+                e => {
+                    return plan_err!("regexp_match was called with unexpected data type {e:?}");
+                }
             }
 
-            regexp::regexp_match(values, regex, Some(flags))
+            regexp::regexp_match(&args[0], &args[1], Some(&args[2]))
                 .map_err(|e| arrow_datafusion_err!(e))
         }
         other => exec_err!(
@@ -213,7 +212,7 @@ mod tests {
         expected_builder.append(false);
         let expected = expected_builder.finish();
 
-        let re = regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns)]).unwrap();
+        let re = regexp_match(&[Arc::new(values), Arc::new(patterns)]).unwrap();
 
         assert_eq!(re.as_ref(), &expected);
     }
@@ -238,9 +237,8 @@ mod tests {
         expected_builder.append(false);
         let expected = expected_builder.finish();
 
-        let re =
-            regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
-                .unwrap();
+        let re = regexp_match(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+            .unwrap();
 
         assert_eq!(re.as_ref(), &expected);
     }
@@ -252,7 +250,7 @@ mod tests {
         let flags = StringArray::from(vec!["g"]);
 
         let re_err =
-            regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
+            regexp_match(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
                 .expect_err("unsupported flag should have failed");
 
         assert_eq!(re_err.strip_backtrace(), "Error during planning: regexp_match() does not support the \"global\" option");

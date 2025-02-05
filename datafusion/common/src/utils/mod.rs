@@ -770,6 +770,7 @@ pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
 }
 
 /// Checks whether the given index sequence is monotonically non-decreasing.
+#[deprecated(since = "45.0.0", note = "Use std::Iterator::is_sorted instead")]
 pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
     // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
     let mut previous = 0;
@@ -1172,6 +1173,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_is_sorted() {
         assert!(is_sorted::<usize>([]));
         assert!(is_sorted([0]));

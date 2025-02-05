@@ -347,7 +347,10 @@ async fn write_parquet_file(
     let mut buf = BytesMut::new().writer();
     let mut props = WriterProperties::builder();
     if let Some(truncation_length) = truncation_length {
-        props = props.set_max_statistics_size(truncation_length);
+        props = {
+            #[allow(deprecated)]
+            props.set_max_statistics_size(truncation_length)
+        }
     }
     props = props.set_statistics_enabled(EnabledStatistics::Chunk); // row group level
     let props = props.build();

@@ -20,7 +20,7 @@
 use crate::utils::make_scalar_function;
 use arrow::compute;
 use arrow_array::{Array, ArrayRef, ListArray};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
 use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, Field, SortOptions};
 use datafusion_common::cast::{as_list_array, as_string_array};
@@ -172,11 +172,11 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut array_lengths = vec![];
     let mut arrays = vec![];
-    let mut valid = BooleanBufferBuilder::new(row_count);
+    let mut valid = NullBufferBuilder::new(row_count);
     for i in 0..row_count {
         if list_array.is_null(i) {
             array_lengths.push(0);
-            valid.append(false);
+            valid.append_null();
         } else {
             let arr_ref = list_array.value(i);
             let arr_ref = arr_ref.as_ref();
@@ -184,7 +184,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let sorted_array = compute::sort(arr_ref, sort_option)?;
             array_lengths.push(sorted_array.len());
             arrays.push(sorted_array);
-            valid.append(true);
+            valid.append_non_null();
         }
     }
 
@@ -201,7 +201,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
         Arc::new(compute::concat(elements.as_slice())?),
-        Some(NullBuffer::new(buffer)),
+        buffer,
     );
     Ok(Arc::new(list_arr))
 }

@@ -23,11 +23,10 @@ use arrow::datatypes::DataType;
 use arrow_buffer::BooleanBuffer;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_doc::Documentation;
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_CONDITIONAL;
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::OnceLock;
 
 const SORT_OPTIONS: SortOptions = SortOptions {
     // We want greatest first
@@ -37,6 +36,23 @@ const SORT_OPTIONS: SortOptions = SortOptions {
     nulls_first: true,
 };
 
+#[user_doc(
+    doc_section(label = "Conditional Functions"),
+    description = "Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.",
+    syntax_example = "greatest(expression1[, ..., expression_n])",
+    sql_example = r#"```sql
+> select greatest(4, 7, 5);
++---------------------------+
+| greatest(4,7,5)           |
++---------------------------+
+| 7                         |
++---------------------------+
+```"#,
+    argument(
+        name = "expression1, expression_n",
+        description = "Expressions to compare and return the greatest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
+    )
+)]
 #[derive(Debug)]
 pub struct GreatestFunc {
     signature: Signature,
@@ -139,32 +155,8 @@ impl ScalarUDFImpl for GreatestFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_greatest_doc())
+        self.doc()
     }
-}
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_greatest_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_CONDITIONAL,
-            "Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.",
-            "greatest(expression1[, ..., expression_n])")
-            .with_sql_example(r#"```sql
-> select greatest(4, 7, 5);
-+---------------------------+
-| greatest(4,7,5)           |
-+---------------------------+
-| 7                         |
-+---------------------------+
-```"#,
-            )
-            .with_argument(
-                "expression1, expression_n",
-                "Expressions to compare and return the greatest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
-            )
-            .build()
-    })
 }
 
 #[cfg(test)]

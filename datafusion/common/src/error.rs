@@ -27,7 +27,7 @@ use std::result;
 use std::sync::Arc;
 
 use crate::utils::quote_identifier;
-use crate::{Column, DFSchema, TableReference};
+use crate::{Column, DFSchema, Diagnostic, TableReference};
 #[cfg(feature = "avro")]
 use apache_avro::Error as AvroError;
 use arrow::error::ArrowError;
@@ -131,6 +131,11 @@ pub enum DataFusionError {
     /// Errors from either mapping LogicalPlans to/from Substrait plans
     /// or serializing/deserializing protobytes to Substrait plans
     Substrait(String),
+    /// Error wrapped together with additional contextual information intended
+    /// for end users, to help them understand what went wrong by providing
+    /// human-readable messages, and locations in the source query that relate
+    /// to the error in some way.
+    Diagnostic(Box<Diagnostic>, Box<DataFusionError>),
 }
 
 #[macro_export]
@@ -167,6 +172,18 @@ impl Display for SchemaError {
                 valid_fields,
             } => {
                 write!(f, "No field named {}", field.quoted_flat_name())?;
+                let lower_valid_fields = valid_fields
+                    .iter()
+                    .map(|column| column.flat_name().to_lowercase())
+                    .collect::<Vec<String>>();
+                if lower_valid_fields.contains(&field.flat_name().to_lowercase()) {
+                    write!(
+                        f,
+                        ". Column names are case sensitive. You can use double quotes to refer to the \"{}\" column \
+                        or set the datafusion.sql_parser.enable_ident_normalization configuration",
+                        field.quoted_flat_name()
+                    )?;
+                }
                 if !valid_fields.is_empty() {
                     write!(
                         f,
@@ -316,6 +333,7 @@ impl Error for DataFusionError {
             DataFusionError::External(e) => Some(e.as_ref()),
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
+            DataFusionError::Diagnostic(_, e) => Some(e.as_ref()),
         }
     }
 }
@@ -429,6 +447,7 @@ impl DataFusionError {
             DataFusionError::External(_) => "External error: ",
             DataFusionError::Context(_, _) => "",
             DataFusionError::Substrait(_) => "Substrait error: ",
+            DataFusionError::Diagnostic(_, _) => "",
         }
     }
 
@@ -469,7 +488,57 @@ impl DataFusionError {
                 Cow::Owned(format!("{desc}\ncaused by\n{}", *err))
             }
             DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::Diagnostic(_, ref err) => Cow::Owned(err.to_string()),
         }
+    }
+
+    /// Wraps the error with contextual information intended for end users
+    pub fn with_diagnostic(self, diagnostic: Diagnostic) -> Self {
+        Self::Diagnostic(Box::new(diagnostic), Box::new(self))
+    }
+
+    /// Wraps the error with contextual information intended for end users.
+    /// Takes a function that inspects the error and returns the diagnostic to
+    /// wrap it with.
+    pub fn with_diagnostic_fn<F: FnOnce(&DataFusionError) -> Diagnostic>(
+        self,
+        f: F,
+    ) -> Self {
+        let diagnostic = f(&self);
+        self.with_diagnostic(diagnostic)
+    }
+
+    /// Gets the [`Diagnostic`] associated with the error, if any. If there is
+    /// more than one, only the outermost [`Diagnostic`] is returned.
+    pub fn diagnostic(&self) -> Option<&Diagnostic> {
+        struct DiagnosticsIterator<'a> {
+            head: &'a DataFusionError,
+        }
+
+        impl<'a> Iterator for DiagnosticsIterator<'a> {
+            type Item = &'a Diagnostic;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                loop {
+                    if let DataFusionError::Diagnostic(diagnostics, source) = self.head {
+                        self.head = source.as_ref();
+                        return Some(diagnostics);
+                    }
+
+                    if let Some(source) = self
+                        .head
+                        .source()
+                        .and_then(|source| source.downcast_ref::<DataFusionError>())
+                    {
+                        self.head = source;
+                    } else {
+                        return None;
+                    }
+                }
+            }
+        }
+
+        DiagnosticsIterator { head: self }.next()
     }
 }
 

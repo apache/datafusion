@@ -321,6 +321,8 @@ impl TryFrom<&protobuf::Field> for Field {
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
         let field = if field.dict_id != 0 {
+            // https://github.com/apache/datafusion/issues/14173
+            #[allow(deprecated)]
             Self::new_dict(
                 field.name.as_str(),
                 datatype,
@@ -434,7 +436,12 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
 
                     let id = dict_batch.id();
 
-                    let fields_using_this_dictionary = schema.fields_with_dict_id(id);
+                    let fields_using_this_dictionary = {
+                        // See https://github.com/apache/datafusion/issues/14173
+                        #[allow(deprecated)]
+                        schema.fields_with_dict_id(id)
+                    };
+
                     let first_field = fields_using_this_dictionary.first().ok_or_else(|| {
                         Error::General("dictionary id not found in schema while deserializing ScalarValue::List".to_string())
                     })?;
@@ -694,6 +701,11 @@ impl From<&protobuf::ColumnStats> for ColumnStatistics {
             } else {
                 Precision::Absent
             },
+            sum_value: if let Some(sum) = &cs.sum_value {
+                sum.clone().into()
+            } else {
+                Precision::Absent
+            },
             distinct_count: if let Some(dc) = &cs.distinct_count {
                 dc.clone().into()
             } else {
@@ -780,6 +792,40 @@ impl From<protobuf::JoinSide> for JoinSide {
             protobuf::JoinSide::RightSide => JoinSide::Right,
             protobuf::JoinSide::None => JoinSide::None,
         }
+    }
+}
+
+impl From<&protobuf::Constraint> for Constraint {
+    fn from(value: &protobuf::Constraint) -> Self {
+        match &value.constraint_mode {
+            Some(protobuf::constraint::ConstraintMode::PrimaryKey(elem)) => {
+                Constraint::PrimaryKey(
+                    elem.indices.iter().map(|&item| item as usize).collect(),
+                )
+            }
+            Some(protobuf::constraint::ConstraintMode::Unique(elem)) => {
+                Constraint::Unique(
+                    elem.indices.iter().map(|&item| item as usize).collect(),
+                )
+            }
+            None => panic!("constraint_mode not set"),
+        }
+    }
+}
+
+impl TryFrom<&protobuf::Constraints> for Constraints {
+    type Error = DataFusionError;
+
+    fn try_from(
+        constraints: &protobuf::Constraints,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        Ok(Constraints::new_unverified(
+            constraints
+                .constraints
+                .iter()
+                .map(|item| item.into())
+                .collect(),
+        ))
     }
 }
 
@@ -895,6 +941,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     fn try_from(
         value: &protobuf::ParquetOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
+        #[allow(deprecated)] // max_statistics_size
         Ok(ParquetOptions {
             enable_page_index: value.enable_page_index,
             pruning: value.pruning,
@@ -972,6 +1019,7 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
     fn try_from(
         value: &protobuf::ParquetColumnOptions,
     ) -> datafusion_common::Result<Self, Self::Error> {
+        #[allow(deprecated)] // max_statistics_size
         Ok(ParquetColumnOptions {
             compression: value.compression_opt.clone().map(|opt| match opt {
                 protobuf::parquet_column_options::CompressionOpt::Compression(v) => Some(v),

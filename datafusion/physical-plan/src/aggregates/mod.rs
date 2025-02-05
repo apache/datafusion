@@ -39,13 +39,13 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::{UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Accumulator, Aggregate};
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr::{
     equivalence::ProjectionMapping, expressions::Column, physical_exprs_contains,
-    EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
+    ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, PhysicalExpr,
     PhysicalSortRequirement,
 };
 
@@ -500,7 +500,7 @@ impl AggregateExec {
         };
 
         // construct a map from the input expression to the output expression of the Aggregation group by
-        let projection_mapping =
+        let group_expr_mapping =
             ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
 
         let required_input_ordering =
@@ -509,9 +509,10 @@ impl AggregateExec {
         let cache = Self::compute_properties(
             &input,
             Arc::clone(&schema),
-            &projection_mapping,
+            &group_expr_mapping,
             &mode,
             &input_order_mode,
+            aggr_expr.as_slice(),
         );
 
         Ok(AggregateExec {
@@ -645,14 +646,45 @@ impl AggregateExec {
     pub fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
-        projection_mapping: &ProjectionMapping,
+        group_expr_mapping: &ProjectionMapping,
         mode: &AggregateMode,
         input_order_mode: &InputOrderMode,
+        aggr_exprs: &[Arc<AggregateFunctionExpr>],
     ) -> PlanProperties {
         // Construct equivalence properties:
-        let eq_properties = input
+        let mut eq_properties = input
             .equivalence_properties()
-            .project(projection_mapping, schema);
+            .project(group_expr_mapping, schema);
+
+        // If the group by is empty, then we ensure that the operator will produce
+        // only one row, and mark the generated result as a constant value.
+        if group_expr_mapping.map.is_empty() {
+            let mut constants = eq_properties.constants().to_vec();
+            let new_constants = aggr_exprs.iter().enumerate().map(|(idx, func)| {
+                ConstExpr::new(Arc::new(Column::new(func.name(), idx)))
+            });
+            constants.extend(new_constants);
+            eq_properties = eq_properties.with_constants(constants);
+        }
+
+        // Group by expression will be a distinct value after the aggregation.
+        // Add it into the constraint set.
+        let mut constraints = eq_properties.constraints().to_vec();
+        let new_constraint = Constraint::Unique(
+            group_expr_mapping
+                .map
+                .iter()
+                .filter_map(|(_, target_col)| {
+                    target_col
+                        .as_any()
+                        .downcast_ref::<Column>()
+                        .map(|c| c.index())
+                })
+                .collect(),
+        );
+        constraints.push(new_constraint);
+        eq_properties =
+            eq_properties.with_constraints(Constraints::new_unverified(constraints));
 
         // Get output partitioning:
         let input_partitioning = input.output_partitioning().clone();
@@ -661,7 +693,7 @@ impl AggregateExec {
             // but needs to respect aliases (e.g. mapping in the GROUP BY
             // expression).
             let input_eq_properties = input.equivalence_properties();
-            input_partitioning.project(projection_mapping, input_eq_properties)
+            input_partitioning.project(group_expr_mapping, input_eq_properties)
         } else {
             input_partitioning.clone()
         };
@@ -908,7 +940,7 @@ fn create_schema(
         AggregateMode::Partial => {
             // in partial mode, the fields of the accumulator's state
             for expr in aggr_expr {
-                fields.extend(expr.state_fields()?.iter().cloned())
+                fields.extend(expr.state_fields()?.iter().cloned());
             }
         }
         AggregateMode::Final
@@ -2451,25 +2483,21 @@ mod tests {
                     "labels".to_string(),
                     DataType::Struct(
                         vec![
-                            Field::new_dict(
+                            Field::new(
                                 "a".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                                0,
-                                false,
                             ),
-                            Field::new_dict(
+                            Field::new(
                                 "b".to_string(),
                                 DataType::Dictionary(
                                     Box::new(DataType::Int32),
                                     Box::new(DataType::Utf8),
                                 ),
                                 true,
-                                0,
-                                false,
                             ),
                         ]
                         .into(),
@@ -2481,15 +2509,13 @@ mod tests {
             vec![
                 Arc::new(StructArray::from(vec![
                     (
-                        Arc::new(Field::new_dict(
+                        Arc::new(Field::new(
                             "a".to_string(),
                             DataType::Dictionary(
                                 Box::new(DataType::Int32),
                                 Box::new(DataType::Utf8),
                             ),
                             true,
-                            0,
-                            false,
                         )),
                         Arc::new(
                             vec![Some("a"), None, Some("a")]
@@ -2498,15 +2524,13 @@ mod tests {
                         ) as ArrayRef,
                     ),
                     (
-                        Arc::new(Field::new_dict(
+                        Arc::new(Field::new(
                             "b".to_string(),
                             DataType::Dictionary(
                                 Box::new(DataType::Int32),
                                 Box::new(DataType::Utf8),
                             ),
                             true,
-                            0,
-                            false,
                         )),
                         Arc::new(
                             vec![Some("b"), Some("c"), Some("b")]

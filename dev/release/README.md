@@ -296,6 +296,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (cd datafusion/substrait && cargo publish)
 (cd datafusion/ffi && cargo publish)
 (cd datafusion-cli && cargo publish)
+(cd datafusion/sqllogictest && cargo publish)
 ```
 
 ### Publish datafusion-cli on Homebrew

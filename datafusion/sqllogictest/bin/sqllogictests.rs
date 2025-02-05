@@ -18,16 +18,19 @@
 use clap::Parser;
 use datafusion_common::instant::Instant;
 use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_sqllogictest::{DataFusion, TestContext};
+use datafusion_sqllogictest::{
+    df_value_validator, read_dir_recursive, setup_scratch_dir, value_normalizer,
+    DataFusion, TestContext,
+};
 use futures::stream::StreamExt;
 use indicatif::{
     HumanDuration, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle,
 };
 use itertools::Itertools;
-use log::Level::{Info, Warn};
-use log::{info, log_enabled, warn};
+use log::Level::Info;
+use log::{info, log_enabled};
 use sqllogictest::{
     parse_file, strict_column_validator, AsyncDB, Condition, Normalizer, Record,
     Validator,
@@ -38,7 +41,6 @@ use crate::postgres_container::{
     initialize_postgres_container, terminate_postgres_container,
 };
 use std::ffi::OsStr;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "postgres")]
@@ -54,14 +56,6 @@ pub fn main() -> Result<()> {
         .enable_all()
         .build()?
         .block_on(run_tests())
-}
-
-// Trailing whitespace from lines in SLT will typically be removed, but do not fail if it is not
-// If particular test wants to cover trailing whitespace on a value,
-// it should project additional non-whitespace column on the right.
-#[allow(clippy::ptr_arg)]
-fn value_normalizer(s: &String) -> String {
-    s.trim_end().to_string()
 }
 
 fn sqlite_value_validator(
@@ -91,54 +85,6 @@ fn sqlite_value_validator(
     }
 
     normalized_actual == normalized_expected
-}
-
-fn df_value_validator(
-    normalizer: Normalizer,
-    actual: &[Vec<String>],
-    expected: &[String],
-) -> bool {
-    let normalized_expected = expected.iter().map(normalizer).collect::<Vec<_>>();
-    let normalized_actual = actual
-        .iter()
-        .map(|strs| strs.iter().join(" "))
-        .map(|str| str.trim_end().to_string())
-        .collect_vec();
-
-    if log_enabled!(Warn) && normalized_actual != normalized_expected {
-        warn!("df validation failed. actual vs expected:");
-        for i in 0..normalized_actual.len() {
-            warn!("[{i}] {}<eol>", normalized_actual[i]);
-            warn!(
-                "[{i}] {}<eol>",
-                if normalized_expected.len() >= i {
-                    &normalized_expected[i]
-                } else {
-                    "No more results"
-                }
-            );
-        }
-    }
-
-    normalized_actual == normalized_expected
-}
-
-/// Sets up an empty directory at test_files/scratch/<name>
-/// creating it if needed and clearing any file contents if it exists
-/// This allows tests for inserting to external tables or copy to
-/// persist data to disk and have consistent state when running
-/// a new test
-fn setup_scratch_dir(name: &Path) -> Result<()> {
-    // go from copy.slt --> copy
-    let file_stem = name.file_stem().expect("File should have a stem");
-    let path = PathBuf::from("test_files").join("scratch").join(file_stem);
-
-    info!("Creating scratch dir in {path:?}");
-    if path.exists() {
-        fs::remove_dir_all(&path)?;
-    }
-    fs::create_dir_all(&path)?;
-    Ok(())
 }
 
 async fn run_tests() -> Result<()> {
@@ -174,7 +120,9 @@ async fn run_tests() -> Result<()> {
 
     let start = Instant::now();
 
-    let errors: Vec<_> = futures::stream::iter(read_test_files(&options)?)
+    let test_files = read_test_files(&options)?;
+    let num_tests = test_files.len();
+    let errors: Vec<_> = futures::stream::iter(test_files)
         .map(|test_file| {
             let validator = if options.include_sqlite
                 && test_file.relative_path.starts_with(SQLITE_PREFIX)
@@ -238,7 +186,11 @@ async fn run_tests() -> Result<()> {
         .collect()
         .await;
 
-    m.println(format!("Completed in {}", HumanDuration(start.elapsed())))?;
+    m.println(format!(
+        "Completed {} test files in {}",
+        num_tests,
+        HumanDuration(start.elapsed())
+    ))?;
 
     #[cfg(feature = "postgres")]
     terminate_postgres_container().await?;
@@ -545,13 +497,11 @@ impl TestFile {
     }
 }
 
-fn read_test_files<'a>(
-    options: &'a Options,
-) -> Result<Box<dyn Iterator<Item = TestFile> + 'a>> {
+fn read_test_files(options: &Options) -> Result<Vec<TestFile>> {
     let mut paths = read_dir_recursive(TEST_DIRECTORY)?
         .into_iter()
         .map(TestFile::new)
-        .filter(|f| options.check_test_file(&f.relative_path))
+        .filter(|f| options.check_test_file(&f.path))
         .filter(|f| f.is_slt_file())
         .filter(|f| f.check_tpch(options))
         .filter(|f| f.check_sqlite(options))
@@ -561,7 +511,7 @@ fn read_test_files<'a>(
         let mut sqlite_paths = read_dir_recursive(DATAFUSION_TESTING_TEST_DIRECTORY)?
             .into_iter()
             .map(TestFile::new)
-            .filter(|f| options.check_test_file(&f.relative_path))
+            .filter(|f| options.check_test_file(&f.path))
             .filter(|f| f.is_slt_file())
             .filter(|f| f.check_sqlite(options))
             .filter(|f| options.check_pg_compat_file(f.path.as_path()))
@@ -570,34 +520,7 @@ fn read_test_files<'a>(
         paths.append(&mut sqlite_paths)
     }
 
-    Ok(Box::new(paths.into_iter()))
-}
-
-fn read_dir_recursive<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
-    let mut dst = vec![];
-    read_dir_recursive_impl(&mut dst, path.as_ref())?;
-    Ok(dst)
-}
-
-/// Append all paths recursively to dst
-fn read_dir_recursive_impl(dst: &mut Vec<PathBuf>, path: &Path) -> Result<()> {
-    let entries = fs::read_dir(path)
-        .map_err(|e| exec_datafusion_err!("Error reading directory {path:?}: {e}"))?;
-    for entry in entries {
-        let path = entry
-            .map_err(|e| {
-                exec_datafusion_err!("Error reading entry in directory {path:?}: {e}")
-            })?
-            .path();
-
-        if path.is_dir() {
-            read_dir_recursive_impl(dst, &path)?;
-        } else {
-            dst.push(path);
-        }
-    }
-
-    Ok(())
+    Ok(paths)
 }
 
 /// Parsed command line options
@@ -625,10 +548,7 @@ struct Options {
     #[clap(long, env = "INCLUDE_TPCH", help = "Include tpch files")]
     include_tpch: bool,
 
-    #[clap(
-        action,
-        help = "regex like arguments passed to the program which are treated as cargo test filter (substring match on filenames)"
-    )]
+    #[clap(action, help = "test filter (substring match on filenames)")]
     filters: Vec<String>,
 
     #[clap(
@@ -675,15 +595,16 @@ impl Options {
     /// To be compatible with this, treat the command line arguments as a
     /// filter and that does a substring match on each input.  returns
     /// true f this path should be run
-    fn check_test_file(&self, relative_path: &Path) -> bool {
+    fn check_test_file(&self, path: &Path) -> bool {
         if self.filters.is_empty() {
             return true;
         }
 
         // otherwise check if any filter matches
+        let path_string = path.to_string_lossy();
         self.filters
             .iter()
-            .any(|filter| relative_path.to_string_lossy().contains(filter))
+            .any(|filter| path_string.contains(filter))
     }
 
     /// Postgres runner executes only tests in files with specific names or in

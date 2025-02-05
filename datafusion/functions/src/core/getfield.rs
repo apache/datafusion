@@ -21,14 +21,54 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, plan_datafusion_err, plan_err, ExprSchema, Result, ScalarValue,
+    exec_err, internal_err, plan_datafusion_err, Result, ScalarValue,
 };
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_OTHER;
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ExprSchemable};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+#[user_doc(
+    doc_section(label = "Other Functions"),
+    description = r#"Returns a field within a map or a struct with the given key.
+    Note: most users invoke `get_field` indirectly via field access
+    syntax such as `my_struct_col['field_name']` which results in a call to
+    `get_field(my_struct_col, 'field_name')`."#,
+    syntax_example = "get_field(expression1, expression2)",
+    sql_example = r#"```sql
+> create table t (idx varchar, v varchar) as values ('data','fusion'), ('apache', 'arrow');
+> select struct(idx, v) from t as c;
++-------------------------+
+| struct(c.idx,c.v)       |
++-------------------------+
+| {c0: data, c1: fusion}  |
+| {c0: apache, c1: arrow} |
++-------------------------+
+> select get_field((select struct(idx, v) from t), 'c0');
++-----------------------+
+| struct(t.idx,t.v)[c0] |
++-----------------------+
+| data                  |
+| apache                |
++-----------------------+
+> select get_field((select struct(idx, v) from t), 'c1');
++-----------------------+
+| struct(t.idx,t.v)[c1] |
++-----------------------+
+| fusion                |
+| arrow                 |
++-----------------------+
+```"#,
+    argument(
+        name = "expression1",
+        description = "The map or struct to retrieve a field for."
+    ),
+    argument(
+        name = "expression2",
+        description = "The field name in the map or struct to retrieve data for. Must evaluate to a string."
+    )
+)]
 #[derive(Debug)]
 pub struct GetFieldFunc {
     signature: Signature,
@@ -103,32 +143,14 @@ impl ScalarUDFImpl for GetFieldFunc {
     }
 
     fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        todo!()
+        internal_err!("return_type_from_args should be called instead")
     }
 
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        schema: &dyn ExprSchema,
-        _arg_types: &[DataType],
-    ) -> Result<DataType> {
-        if args.len() != 2 {
-            return exec_err!(
-                "get_field function requires 2 arguments, got {}",
-                args.len()
-            );
-        }
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        // Length check handled in the signature
+        debug_assert_eq!(args.scalar_arguments.len(), 2);
 
-        let name = match &args[1] {
-            Expr::Literal(name) => name,
-            _ => {
-                return exec_err!(
-                    "get_field function requires the argument field_name to be a string"
-                );
-            }
-        };
-        let data_type = args[0].get_type(schema)?;
-        match (data_type, name) {
+        match (&args.arg_types[0], args.scalar_arguments[1].as_ref()) {
             (DataType::Map(fields, _), _) => {
                 match fields.data_type() {
                     DataType::Struct(fields) if fields.len() == 2 => {
@@ -137,26 +159,23 @@ impl ScalarUDFImpl for GetFieldFunc {
                         // instead, we assume that the second column is the "value" column both here and in
                         // execution.
                         let value_field = fields.get(1).expect("fields should have exactly two members");
-                        Ok(value_field.data_type().clone())
+                        Ok(ReturnInfo::new_nullable(value_field.data_type().clone()))
                     },
-                    _ => plan_err!("Map fields must contain a Struct with exactly 2 fields"),
+                    _ => exec_err!("Map fields must contain a Struct with exactly 2 fields"),
                 }
             }
-            (DataType::Struct(fields), ScalarValue::Utf8(Some(s))) => {
-                if s.is_empty() {
-                    plan_err!(
-                        "Struct based indexed access requires a non empty string"
-                    )
-                } else {
-                    let field = fields.iter().find(|f| f.name() == s);
-                    field.ok_or(plan_datafusion_err!("Field {s} not found in struct")).map(|f| f.data_type().clone())
-                }
-            }
-            (DataType::Struct(_), _) => plan_err!(
-                "Only UTF8 strings are valid as an indexed field in a struct"
-            ),
-            (DataType::Null, _) => Ok(DataType::Null),
-            (other, _) => plan_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
+            (DataType::Struct(fields),sv) => {
+                sv.and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
+                .map_or_else(
+                    || exec_err!("Field name must be a non-empty string"),
+                    |field_name| {
+                    fields.iter().find(|f| f.name() == field_name)
+                    .ok_or(plan_datafusion_err!("Field {field_name} not found in struct"))
+                    .map(|f| ReturnInfo::new_nullable(f.data_type().to_owned()))
+                })
+            },
+            (DataType::Null, _) => Ok(ReturnInfo::new_nullable(DataType::Null)),
+            (other, _) => exec_err!("The expression to get an indexed field is only valid for `Struct`, `Map` or `Null` types, got {other}"),
         }
     }
 
@@ -241,54 +260,6 @@ impl ScalarUDFImpl for GetFieldFunc {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_getfield_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_getfield_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_OTHER,
-            r#"Returns a field within a map or a struct with the given key.
-Note: most users invoke `get_field` indirectly via field access
-syntax such as `my_struct_col['field_name']` which results in a call to
-`get_field(my_struct_col, 'field_name')`."#,
-            "get_field(expression1, expression2)")
-            .with_sql_example(r#"```sql
-> create table t (idx varchar, v varchar) as values ('data','fusion'), ('apache', 'arrow');
-> select struct(idx, v) from t as c;
-+-------------------------+
-| struct(c.idx,c.v)       |
-+-------------------------+
-| {c0: data, c1: fusion}  |
-| {c0: apache, c1: arrow} |
-+-------------------------+
-> select get_field((select struct(idx, v) from t), 'c0');
-+-----------------------+
-| struct(t.idx,t.v)[c0] |
-+-----------------------+
-| data                  |
-| apache                |
-+-----------------------+
-> select get_field((select struct(idx, v) from t), 'c1');
-+-----------------------+
-| struct(t.idx,t.v)[c1] |
-+-----------------------+
-| fusion                |
-| arrow                 |
-+-----------------------+
-```
- "#)
-            .with_argument(
-                "expression1",
-                "The map or struct to retrieve a field for."
-            )
-            .with_argument(
-                "expression2",
-                "The field name in the map or struct to retrieve data for. Must evaluate to a string."
-            )
-            .build()
-    })
 }
