@@ -37,7 +37,9 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow_array::RecordBatchOptions;
 use arrow_schema::Schema;
-use datafusion_common::{internal_err, plan_err, project_schema, Result, ScalarValue};
+use datafusion_common::{
+    internal_err, plan_err, project_schema, Constraints, Result, ScalarValue,
+};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -48,7 +50,310 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use futures::Stream;
 use parking_lot::RwLock;
 
+/// Execution plan for reading in-memory batches of data
+#[derive(Clone)]
+#[deprecated(
+    since = "46.0.0",
+    note = "use MemorySourceConfig and DataSourceExec instead"
+)]
+pub struct MemoryExec {
+    inner: DataSourceExec,
+    /// The partitions to query
+    partitions: Vec<Vec<RecordBatch>>,
+    /// Optional projection
+    projection: Option<Vec<usize>>,
+    // Sort information: one or more equivalent orderings
+    sort_information: Vec<LexOrdering>,
+    /// if partition sizes should be displayed
+    show_sizes: bool,
+}
+
+#[allow(unused, deprecated)]
+impl fmt::Debug for MemoryExec {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.inner.fmt_as(DisplayFormatType::Default, f)
+    }
+}
+
+#[allow(unused, deprecated)]
+impl DisplayAs for MemoryExec {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        self.inner.fmt_as(t, f)
+    }
+}
+
+#[allow(unused, deprecated)]
+impl ExecutionPlan for MemoryExec {
+    fn name(&self) -> &'static str {
+        "MemoryExec"
+    }
+
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        self.inner.properties()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        // This is a leaf node and has no children
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        // MemoryExec has no children
+        if children.is_empty() {
+            Ok(self)
+        } else {
+            internal_err!("Children cannot be replaced in {self:?}")
+        }
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.inner.execute(partition, context)
+    }
+
+    /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
+    fn statistics(&self) -> Result<Statistics> {
+        self.inner.statistics()
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        self.inner.try_swapping_with_projection(projection)
+    }
+}
+
+#[allow(unused, deprecated)]
+impl MemoryExec {
+    /// Create a new execution plan for reading in-memory record batches
+    /// The provided `schema` should not have the projection applied.
+    pub fn try_new(
+        partitions: &[Vec<RecordBatch>],
+        schema: SchemaRef,
+        projection: Option<Vec<usize>>,
+    ) -> Result<Self> {
+        let source = MemorySourceConfig::try_new(partitions, schema, projection.clone())?;
+        let data_source = DataSourceExec::new(Arc::new(source));
+        Ok(Self {
+            inner: data_source,
+            partitions: partitions.to_vec(),
+            projection,
+            sort_information: vec![],
+            show_sizes: true,
+        })
+    }
+
+    /// Create a new execution plan from a list of constant values (`ValuesExec`)
+    pub fn try_new_as_values(
+        schema: SchemaRef,
+        data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
+    ) -> Result<Self> {
+        if data.is_empty() {
+            return plan_err!("Values list cannot be empty");
+        }
+
+        let n_row = data.len();
+        let n_col = schema.fields().len();
+
+        // We have this single row batch as a placeholder to satisfy evaluation argument
+        // and generate a single output row
+        let placeholder_schema = Arc::new(Schema::empty());
+        let placeholder_batch = RecordBatch::try_new_with_options(
+            Arc::clone(&placeholder_schema),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+
+        // Evaluate each column
+        let arrays = (0..n_col)
+            .map(|j| {
+                (0..n_row)
+                    .map(|i| {
+                        let expr = &data[i][j];
+                        let result = expr.evaluate(&placeholder_batch)?;
+
+                        match result {
+                            ColumnarValue::Scalar(scalar) => Ok(scalar),
+                            ColumnarValue::Array(array) if array.len() == 1 => {
+                                ScalarValue::try_from_array(&array, 0)
+                            }
+                            ColumnarValue::Array(_) => {
+                                plan_err!("Cannot have array values in a values list")
+                            }
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()
+                    .and_then(ScalarValue::iter_to_array)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            arrays,
+            &RecordBatchOptions::new().with_row_count(Some(n_row)),
+        )?;
+
+        let partitions = vec![batch];
+        Self::try_new_from_batches(Arc::clone(&schema), partitions)
+    }
+
+    /// Create a new plan using the provided schema and batches.
+    ///
+    /// Errors if any of the batches don't match the provided schema, or if no
+    /// batches are provided.
+    pub fn try_new_from_batches(
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+    ) -> Result<Self> {
+        if batches.is_empty() {
+            return plan_err!("Values list cannot be empty");
+        }
+
+        for batch in &batches {
+            let batch_schema = batch.schema();
+            if batch_schema != schema {
+                return plan_err!(
+                    "Batch has invalid schema. Expected: {}, got: {}",
+                    schema,
+                    batch_schema
+                );
+            }
+        }
+
+        let partitions = vec![batches];
+        let source = MemorySourceConfig {
+            partitions: partitions.clone(),
+            schema: Arc::clone(&schema),
+            projected_schema: Arc::clone(&schema),
+            projection: None,
+            sort_information: vec![],
+            show_sizes: true,
+            fetch: None,
+        };
+        let data_source = DataSourceExec::new(Arc::new(source));
+        Ok(Self {
+            inner: data_source,
+            partitions,
+            projection: None,
+            sort_information: vec![],
+            show_sizes: true,
+        })
+    }
+
+    fn memory_source_config(&self) -> MemorySourceConfig {
+        self.inner
+            .source()
+            .as_any()
+            .downcast_ref::<MemorySourceConfig>()
+            .unwrap()
+            .clone()
+    }
+
+    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
+        self.inner = self.inner.with_constraints(constraints);
+        self
+    }
+
+    /// Set `show_sizes` to determine whether to display partition sizes
+    pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
+        let mut memory_source = self.memory_source_config();
+        memory_source.show_sizes = show_sizes;
+        self.show_sizes = show_sizes;
+        self.inner = DataSourceExec::new(Arc::new(memory_source));
+        self
+    }
+
+    /// Ref to constraints
+    pub fn constraints(&self) -> &Constraints {
+        self.properties().equivalence_properties().constraints()
+    }
+
+    /// Ref to partitions
+    pub fn partitions(&self) -> &[Vec<RecordBatch>] {
+        &self.partitions
+    }
+
+    /// Ref to projection
+    pub fn projection(&self) -> &Option<Vec<usize>> {
+        &self.projection
+    }
+
+    /// Show sizes
+    pub fn show_sizes(&self) -> bool {
+        self.show_sizes
+    }
+
+    /// Ref to sort information
+    pub fn sort_information(&self) -> &[LexOrdering] {
+        &self.sort_information
+    }
+
+    /// A memory table can be ordered by multiple expressions simultaneously.
+    /// [`EquivalenceProperties`] keeps track of expressions that describe the
+    /// global ordering of the schema. These columns are not necessarily same; e.g.
+    /// ```text
+    /// ┌-------┐
+    /// | a | b |
+    /// |---|---|
+    /// | 1 | 9 |
+    /// | 2 | 8 |
+    /// | 3 | 7 |
+    /// | 5 | 5 |
+    /// └---┴---┘
+    /// ```
+    /// where both `a ASC` and `b DESC` can describe the table ordering. With
+    /// [`EquivalenceProperties`], we can keep track of these equivalences
+    /// and treat `a ASC` and `b DESC` as the same ordering requirement.
+    ///
+    /// Note that if there is an internal projection, that projection will be
+    /// also applied to the given `sort_information`.
+    pub fn try_with_sort_information(
+        mut self,
+        sort_information: Vec<LexOrdering>,
+    ) -> Result<Self> {
+        self.sort_information = sort_information.clone();
+        let mut memory_source = self.memory_source_config();
+        memory_source = memory_source.try_with_sort_information(sort_information)?;
+        self.inner = DataSourceExec::new(Arc::new(memory_source));
+        Ok(self)
+    }
+
+    /// Arc clone of ref to original schema
+    pub fn original_schema(&self) -> SchemaRef {
+        Arc::clone(&self.inner.schema())
+    }
+
+    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    fn compute_properties(
+        schema: SchemaRef,
+        orderings: &[LexOrdering],
+        constraints: Constraints,
+        partitions: &[Vec<RecordBatch>],
+    ) -> PlanProperties {
+        PlanProperties::new(
+            EquivalenceProperties::new_with_orderings(schema, orderings)
+                .with_constraints(constraints),
+            Partitioning::UnknownPartitioning(partitions.len()),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
+    }
+}
+
 /// Data source configuration for reading in-memory batches of data
+#[derive(Clone)]
 pub struct MemorySourceConfig {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
@@ -62,6 +367,9 @@ pub struct MemorySourceConfig {
     sort_information: Vec<LexOrdering>,
     /// if partition sizes should be displayed
     show_sizes: bool,
+    /// The maximum number of records to read from this plan. If `None`,
+    /// all records after filtering are returned.
+    fetch: Option<usize>,
 }
 
 impl DataSource for MemorySourceConfig {
@@ -70,11 +378,14 @@ impl DataSource for MemorySourceConfig {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        Ok(Box::pin(MemoryStream::try_new(
-            self.partitions[partition].clone(),
-            Arc::clone(&self.projected_schema),
-            self.projection.clone(),
-        )?))
+        Ok(Box::pin(
+            MemoryStream::try_new(
+                self.partitions[partition].clone(),
+                Arc::clone(&self.projected_schema),
+                self.projection.clone(),
+            )?
+            .with_fetch(self.fetch),
+        ))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -103,16 +414,19 @@ impl DataSource for MemorySourceConfig {
                     format!(", {}", constraints)
                 };
 
+                let limit = self
+                    .fetch
+                    .map_or(String::new(), |limit| format!(", fetch={}", limit));
                 if self.show_sizes {
                     write!(
                         f,
-                        "partitions={}, partition_sizes={partition_sizes:?}{output_ordering}{constraints}",
+                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
                         partition_sizes.len(),
                     )
                 } else {
                     write!(
                         f,
-                        "partitions={}{output_ordering}{constraints}",
+                        "partitions={}{limit}{output_ordering}{constraints}",
                         partition_sizes.len(),
                     )
                 }
@@ -137,6 +451,11 @@ impl DataSource for MemorySourceConfig {
             &self.schema,
             self.projection.clone(),
         ))
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
+        let source = self.clone();
+        Some(Arc::new(source.with_limit(limit)))
     }
 
     fn try_swapping_with_projection(
@@ -180,6 +499,7 @@ impl MemorySourceConfig {
             projection,
             sort_information: vec![],
             show_sizes: true,
+            fetch: None,
         })
     }
 
@@ -279,8 +599,15 @@ impl MemorySourceConfig {
             projection: None,
             sort_information: vec![],
             show_sizes: true,
+            fetch: None,
         };
         Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+    }
+
+    /// Set the limit of the files
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.fetch = limit;
+        self
     }
 
     /// Set `show_sizes` to determine whether to display partition sizes
@@ -395,6 +722,8 @@ pub struct MemoryStream {
     projection: Option<Vec<usize>>,
     /// Index into the data
     index: usize,
+    /// The remaining number of rows to return
+    fetch: Option<usize>,
 }
 
 impl MemoryStream {
@@ -410,12 +739,19 @@ impl MemoryStream {
             schema,
             projection,
             index: 0,
+            fetch: None,
         })
     }
 
     /// Set the memory reservation for the data
     pub(super) fn with_reservation(mut self, reservation: MemoryReservation) -> Self {
         self.reservation = Some(reservation);
+        self
+    }
+
+    /// Set the number of rows to produce
+    pub(super) fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
         self
     }
 }
@@ -427,20 +763,33 @@ impl Stream for MemoryStream {
         mut self: std::pin::Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        Poll::Ready(if self.index < self.data.len() {
-            self.index += 1;
-            let batch = &self.data[self.index - 1];
+        if self.index >= self.data.len() {
+            return Poll::Ready(None);
+        }
+        self.index += 1;
+        let batch = &self.data[self.index - 1];
+        // return just the columns requested
+        let batch = match self.projection.as_ref() {
+            Some(columns) => batch.project(columns)?,
+            None => batch.clone(),
+        };
 
-            // return just the columns requested
-            let batch = match self.projection.as_ref() {
-                Some(columns) => batch.project(columns)?,
-                None => batch.clone(),
-            };
+        if self.fetch.is_none() {
+            return Poll::Ready(Some(Ok(batch)));
+        }
 
-            Some(Ok(batch))
+        let fetch = self.fetch.unwrap();
+        if fetch == 0 {
+            return Poll::Ready(None);
+        }
+
+        let batch = if batch.num_rows() > fetch {
+            batch.slice(0, fetch)
         } else {
-            None
-        })
+            batch
+        };
+        self.fetch = Some(fetch - batch.num_rows());
+        Poll::Ready(Some(Ok(batch)))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -795,7 +1144,35 @@ mod tests {
     use crate::test::{self, make_partition};
 
     use arrow_schema::{DataType, Field};
+    use datafusion_common::assert_batches_eq;
     use datafusion_common::stats::{ColumnStatistics, Precision};
+    use futures::StreamExt;
+
+    #[tokio::test]
+    async fn exec_with_limit() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let batch = make_partition(7);
+        let schema = batch.schema();
+        let batches = vec![batch.clone(), batch];
+
+        let exec = MemorySourceConfig::try_new_from_batches(schema, batches).unwrap();
+        assert_eq!(exec.fetch(), None);
+
+        let exec = exec.with_fetch(Some(4)).unwrap();
+        assert_eq!(exec.fetch(), Some(4));
+
+        let mut it = exec.execute(0, task_ctx)?;
+        let mut results = vec![];
+        while let Some(batch) = it.next().await {
+            results.push(batch?);
+        }
+
+        let expected = [
+            "+---+", "| i |", "+---+", "| 0 |", "| 1 |", "| 2 |", "| 3 |", "+---+",
+        ];
+        assert_batches_eq!(expected, &results);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
