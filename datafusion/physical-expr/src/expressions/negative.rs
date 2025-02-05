@@ -35,9 +35,8 @@ use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
 };
-use datafusion_physical_expr_common::stats_v2::StatisticsV2;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-    Bernoulli, Exponential, Gaussian, Uniform, Unknown,
+    self, Bernoulli, Exponential, Gaussian, Uniform, Unknown,
 };
 
 /// Negative expression

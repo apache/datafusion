@@ -30,25 +30,43 @@ fn get_ln_two() -> &'static ScalarValue {
     LN_TWO_LOCK.get_or_init(|| ScalarValue::Float64(Some(2_f64.ln())))
 }
 
-/// New, enhanced `Statistics` definition, represents five core definitions.
+/// New, enhanced `Statistics` definition, represents five core statistical distributions. New variants will be added over time.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StatisticsV2 {
+    /// Uniform distribution, represented by its range. For a more in-depth discussion, see:
+    ///
+    /// https://en.wikipedia.org/wiki/Continuous_uniform_distribution
     Uniform {
         interval: Interval,
     },
-    /// f(x, λ, offset) = (λe)^(-λ(x - offset)), if x >= offset
+    /// Exponential distribution with an optional shift, whose PDF is as follows:
+    /// f(x, λ, offset) = (λe)^(-λ(x - offset)), if x >= offset, 0 otherwise.
+    /// For a more in-depth discussion, see:
+    ///
+    /// https://en.wikipedia.org/wiki/Exponential_distribution
     Exponential {
         rate: ScalarValue,
         offset: ScalarValue,
     },
+    /// Gaussian (normal) distribution, represented by its mean and variance.
+    /// For a more in-depth discussion, see:
+    ///
+    /// https://en.wikipedia.org/wiki/Normal_distribution
     Gaussian {
         mean: ScalarValue,
         variance: ScalarValue,
     },
-    /// `p` always has [`DataType::Float64`]
+    /// Bernoulli distribution with success probability `p`, which always has the
+    /// data type [`DataType::Float64`]. For a more in-depth discussion, see:
+    ///
+    /// https://en.wikipedia.org/wiki/Bernoulli_distribution
     Bernoulli {
         p: ScalarValue,
     },
+    /// An unknown distribution, only containing some summary statistics.
+    /// For a more in-depth discussion, see:
+    ///
+    /// https://en.wikipedia.org/wiki/Summary_statistics
     Unknown {
         mean: Option<ScalarValue>,
         median: Option<ScalarValue>,
@@ -58,8 +76,7 @@ pub enum StatisticsV2 {
 }
 
 impl StatisticsV2 {
-    /// Constructs a new [`StatisticsV2`] with [`Uniform`] distribution from given [`Interval`],
-    /// and checks newly created statistic on validness.
+    /// Constructs a new [`StatisticsV2`] with [`Uniform`] distribution from the given [`Interval`].
     pub fn new_uniform(interval: Interval) -> Result<Self> {
         if interval.data_type().eq(&DataType::Boolean) {
             return internal_err!(
@@ -68,16 +85,11 @@ impl StatisticsV2 {
             );
         }
 
-        let stat = Uniform { interval };
-        if stat.is_valid()? {
-            Ok(stat)
-        } else {
-            internal_err!("Tried to construct invalid Uniform statistic")
-        }
+        Ok(Uniform { interval })
     }
 
-    /// Constructs a new [`StatisticsV2`] with [`Exponential`] distribution from given
-    /// rate and offset and checks newly created statistic on validness.
+    /// Constructs a new [`StatisticsV2`] with [`Exponential`] distribution from the given
+    /// rate/offset pair, and checks the newly created statistic for validity.
     pub fn new_exponential(rate: ScalarValue, offset: ScalarValue) -> Result<Self> {
         let stat = Exponential { rate, offset };
         if stat.is_valid()? {
@@ -87,8 +99,8 @@ impl StatisticsV2 {
         }
     }
 
-    /// Constructs a new [`StatisticsV2`] with [`Gaussian`] distribution from given
-    /// mean and variance and checks newly created statistic on validness.
+    /// Constructs a new [`StatisticsV2`] with [`Gaussian`] distribution from the given
+    /// mean/variance pair, and checks the newly created statistic for validity.
     pub fn new_gaussian(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
         let stat = Gaussian { mean, variance };
         if stat.is_valid()? {
@@ -98,8 +110,8 @@ impl StatisticsV2 {
         }
     }
 
-    /// Constructs a new [`StatisticsV2`] with [`Bernoulli`] distribution from given probability,
-    /// and checks newly created statistic on validness.
+    /// Constructs a new [`StatisticsV2`] with [`Bernoulli`] distribution from the given probability,
+    /// and checks the newly created statistic for validity.
     pub fn new_bernoulli(p: ScalarValue) -> Result<Self> {
         let stat = Bernoulli { p };
         if stat.is_valid()? {
@@ -109,9 +121,9 @@ impl StatisticsV2 {
         }
     }
 
-    /// Constructs a new [`StatisticsV2`] with [`Unknown`] distribution from given
-    /// mean, median, variance, which are optional and range. Additionally, constructor
-    /// checks newly created statistic on validness.
+    /// Constructs a new [`StatisticsV2`] with [`Unknown`] distribution from the given
+    /// mean (optional), median (optional), variance (optional), and range values.
+    /// Then, checks the newly created statistic for validity.
     pub fn new_unknown(
         mean: Option<ScalarValue>,
         median: Option<ScalarValue>,
@@ -139,12 +151,12 @@ impl StatisticsV2 {
         }
     }
 
-    /// Creates a new [`Unknown`] statistics instance with a given range.
-    /// It makes its best to infer mean, median and variance, if it is possible.
+    /// Constructs a new [`Unknown`] statistics instance from the given range.
+    /// It makes heuristic estimates for mean, median and variance.
     /// This builder is moved here due to original package visibility limitations.
     pub fn new_unknown_from_interval(range: &Interval) -> Result<StatisticsV2> {
-        // Note: to avoid code duplication for mean/median/variance computation, we wrap
-        // existing range in temporary uniform distribution and compute all these properties.
+        // To avoid code duplication for mean/median/variance computations, we wrap the
+        // given range in an ancillary uniform distribution and compute summary statistics from it.
         let fake_uniform = &StatisticsV2::new_uniform(range.clone())?;
 
         StatisticsV2::new_unknown(
@@ -226,13 +238,15 @@ impl StatisticsV2 {
         }
     }
 
-    /// Extract the mean value of given statistic, available for given statistic kinds:
-    /// - [`Uniform`]'s interval implicitly contains mean value, and it is calculable
-    ///   by addition of upper and lower bound and dividing the result by 2.
-    /// - [`Exponential`] distribution mean is calculable by formula: 1/λ. λ must be non-negative.
-    /// - [`Gaussian`] distribution has it explicitly.
-    /// - [`Bernoulli`] mean is `p`.
-    /// - [`Unknown`] distribution _may_ have it explicitly.
+    /// Extracts the mean value of the given statistic, depending on its distribution:
+    /// - A [`Uniform`] distribution's interval determines its mean value, which is the
+    ///   arithmetic average of the interval endpoints.
+    /// - An [`Exponential`] distribution's mean is calculable by formula `offset + 1/λ`,
+    ///   where λ is the (non-negative) rate.
+    /// - A [`Gaussian`] distribution contains the mean explicitly.
+    /// - A [`Bernoulli`] distribution's mean is equal to its success probability `p`.
+    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information may
+    ///   be absent.
     pub fn mean(&self) -> Result<Option<ScalarValue>> {
         match &self {
             Uniform { interval, .. } => {
@@ -252,12 +266,15 @@ impl StatisticsV2 {
         }
     }
 
-    /// Extract the median value of given statistic, available for given statistic kinds:
-    /// - [`Uniform`] distribution median is equals to mean: (a + b) / 2
-    /// - [`Exponential`] distribution median is calculable by formula: ln2/λ. λ must be non-negative.
-    /// - [`Gaussian`] distribution median is equals to mean, which is present explicitly.
-    /// - [`Bernoulli`] median is `1`, of `p > 0.5`, `0` otherwise.
-    /// - [`Unknown`] distribution median _may_ be present explicitly.
+    /// Extracts the median value of the given statistic, depending on its distribution:
+    /// - A [`Uniform`] distribution's interval determines its median value, which is the
+    ///   arithmetic average of the interval endpoints.
+    /// - An [`Exponential`] distribution's median is calculable by the formula `offset + ln2/λ`,
+    ///   where λ is the (non-negative) rate.
+    /// - A [`Gaussian`] distribution's median is equal to its mean, which is specified explicitly.
+    /// - A [`Bernoulli`] distribution's median is `1` if `p > 0.5` and `0` otherwise.
+    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information may
+    ///   be absent.
     pub fn median(&self) -> Result<Option<ScalarValue>> {
         match &self {
             Uniform { interval, .. } => {
@@ -280,12 +297,16 @@ impl StatisticsV2 {
         }
     }
 
-    /// Extract the variance of given statistic distribution:
-    /// - [`Uniform`]'s variance is equal to (upper-lower)^2 / 12
-    /// - [`Exponential`]'s variance is equal to mean value and calculable as 1/λ^2
-    /// - [`Gaussian`]'s variance is available explicitly
-    /// - [`Bernoulli`]'s variance is `p*(1-p)`
-    /// - [`Unknown`]'s distribution variance _may_ be present explicitly.
+    /// Extracts the variance value of the given statistic, depending on its distribution:
+    /// - A [`Uniform`] distribution's interval determines its variance value, which is calculable
+    ///   by the formula `(upper - lower) ^ 2 / 12`.
+    /// - An [`Exponential`] distribution's variance is calculable by the formula `1/(λ ^ 2)`,
+    ///   where λ is the (non-negative) rate.
+    /// - A [`Gaussian`] distribution's variance is specified explicitly.
+    /// - A [`Bernoulli`] distribution's median is given by the formula `p * (1 - p)` where `p`
+    ///   is the success probability.
+    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information may
+    ///   be absent.
     pub fn variance(&self) -> Result<Option<ScalarValue>> {
         match &self {
             Uniform { interval, .. } => {
@@ -312,13 +333,13 @@ impl StatisticsV2 {
         }
     }
 
-    /// Extract the range of given statistic distribution:
-    /// - [`Uniform`]'s range is its interval
-    /// - [`Exponential`]'s range is [offset, +inf)
-    /// - [`Bernoulli`]'s returns [`Interval::UNCERTAIN`], if p != 0 and p != 1.
-    ///   Otherwise, returns [`Interval::CERTAINLY_FALSE`] and [`Interval::CERTAINLY_TRUE`],
-    ///   respectfully.
-    /// - [`Unknown`]'s range is unbounded by default, but
+    /// Extracts the range of the given statistic, depending on its distribution:
+    /// - A [`Uniform`] distribution's range is simply its interval.
+    /// - An [`Exponential`] distribution's range is `[offset, +∞)`.
+    /// - A [`Gaussian`] distribution's range is unbounded.
+    /// - A [`Bernoulli`] distribution's range is [`Interval::UNCERTAIN`], if `p` is neither `0` nor `1`.
+    ///   Otherwise, it is [`Interval::CERTAINLY_FALSE`] and [`Interval::CERTAINLY_TRUE`], respectively.
+    /// - An [`Unknown`] distribution is unbounded by default, but more information may be present.
     pub fn range(&self) -> Result<Interval> {
         match &self {
             Uniform { interval, .. } => Ok(interval.clone()),
@@ -344,8 +365,7 @@ impl StatisticsV2 {
         }
     }
 
-    /// Returns a data type of the statistics, if present
-    /// explicitly, or able to determine implicitly.
+    /// Returns the data type of the statistics.
     pub fn data_type(&self) -> DataType {
         match &self {
             Uniform { interval, .. } => interval.data_type(),

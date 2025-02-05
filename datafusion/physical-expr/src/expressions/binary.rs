@@ -42,9 +42,8 @@ use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::binary::get_result_type;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
-use datafusion_physical_expr_common::stats_v2::StatisticsV2;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-    Bernoulli, Gaussian, Uniform, Unknown,
+    self, Bernoulli, Gaussian, Uniform, Unknown,
 };
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
@@ -410,7 +409,7 @@ impl PhysicalExpr for BinaryExpr {
         if self.op.eq(&Operator::And) {
             if interval.eq(&Interval::CERTAINLY_TRUE) {
                 // A certainly true logical conjunction can only derive from possibly
-                // true operands. Otherwise, we prove infeasability.
+                // true operands. Otherwise, we prove infeasibility.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_FALSE)
                     && !right_interval.eq(&Interval::CERTAINLY_FALSE))
                 .then(|| vec![Interval::CERTAINLY_TRUE, Interval::CERTAINLY_TRUE]))
@@ -450,7 +449,7 @@ impl PhysicalExpr for BinaryExpr {
         } else if self.op.eq(&Operator::Or) {
             if interval.eq(&Interval::CERTAINLY_FALSE) {
                 // A certainly false logical conjunction can only derive from certainly
-                // false operands. Otherwise, we prove infeasability.
+                // false operands. Otherwise, we prove infeasibility.
                 Ok((!left_interval.eq(&Interval::CERTAINLY_TRUE)
                     && !right_interval.eq(&Interval::CERTAINLY_TRUE))
                 .then(|| vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE]))
@@ -951,8 +950,6 @@ mod tests {
 
         Ok(())
     }
-
-    //region tests
 
     // runs an end-to-end test of physical type coercion:
     // 1. construct a record batch with two columns of type A and B
@@ -4500,9 +4497,6 @@ mod tests {
         )
         .unwrap();
     }
-    //endregion
-
-    //region evaluate_statistics and propagate_statistics test
 
     pub fn binary_expr(
         left: Arc<dyn PhysicalExpr>,
@@ -4817,5 +4811,4 @@ mod tests {
         }
         Ok(())
     }
-    //endregion evaluate_statistics test
 }

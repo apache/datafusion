@@ -145,17 +145,17 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         Ok(Some(vec![]))
     }
 
-    /// Finds the final statistic of the expression by combining the input statistics
-    /// in a post-order bottom-up manner (post-order DFS in statistics graph).
+    /// Computes the final statistic of the expression by combining the input statistics
+    /// via a post-order, bottom-up traversal of the statistics graph.
     fn evaluate_statistics(&self, _stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
         not_impl_err!("Not implemented for {self}")
     }
 
-    /// Updates children statistic, having a known parent statistic for this expression.
+    /// Updates children statistics using the given parent statistic for this expression.
     /// This is used to propagate constraints down through an expression tree.
     ///
     /// If statistics propagation reveals an infeasibility for any child, returns
-    /// [`None`]. If none of the children intervals change as a result of propagation,
+    /// [`None`]. If none of the children statistics change as a result of propagation,
     /// may return an empty vector instead of cloning `children`. This is the default
     /// (and conservative) return value.
     fn propagate_statistics(
