@@ -604,7 +604,7 @@ fn type_union_resolution_coercion(
 
 /// Handle type union resolution including struct type and others.
 pub fn try_type_union_resolution(data_types: &[DataType]) -> Result<Vec<DataType>> {
-    let err = match try_type_union_resolution_with_struct(data_types) {
+    let err = match try_type_union_resolution_with_struct(data_types, false) {
         Ok(struct_types) => return Ok(struct_types),
         Err(e) => Some(e),
     };
@@ -620,6 +620,7 @@ pub fn try_type_union_resolution(data_types: &[DataType]) -> Result<Vec<DataType
 // Since field name is the key of the struct, so it shouldn't be updated to the common column name like "c0" or "c1"
 pub fn try_type_union_resolution_with_struct(
     data_types: &[DataType],
+    is_unique: bool,
 ) -> Result<Vec<DataType>> {
     let mut keys_string: Option<String> = None;
     for data_type in data_types {
@@ -641,6 +642,12 @@ pub fn try_type_union_resolution_with_struct(
         }
     }
 
+    let first_fields = if let DataType::Struct(fields) = &data_types[0] {
+        fields.clone()
+    } else {
+        return internal_err!("Struct type is checked is the previous function, so this should be unreachable");
+    };
+
     let mut struct_types_map: HashMap<String, DataType> = if let DataType::Struct(
         fields,
     ) = &data_types[0]
@@ -659,7 +666,7 @@ pub fn try_type_union_resolution_with_struct(
                 let field_name = field.name();
                 if let Some(existing_type) = struct_types_map.get_mut(field_name) {
                     if let Some(coerced_type) =
-                        type_union_resolution_coercion(&field.data_type(), existing_type)
+                        type_union_resolution_coercion(field.data_type(), existing_type)
                     {
                         *existing_type = coerced_type;
                     } else {
@@ -676,6 +683,20 @@ pub fn try_type_union_resolution_with_struct(
         } else {
             return exec_err!("Expect to get struct but got {}", data_type);
         }
+    }
+
+    if is_unique {
+        let new_fields =
+            first_fields
+                .iter()
+                .map(|f| {
+                    Arc::new(Arc::unwrap_or_clone(Arc::clone(f)).with_data_type(
+                        struct_types_map.get(f.name()).unwrap().to_owned(),
+                    ))
+                })
+                .collect();
+        let unified_struct = DataType::Struct(new_fields);
+        return Ok(vec![unified_struct; data_types.len()]);
     }
 
     let mut final_struct_types = vec![];
