@@ -38,7 +38,6 @@ use datafusion::{
         MemTable,
     },
     error::Result,
-    execution::context::SessionState,
     physical_plan::ExecutionPlan,
     prelude::SessionContext,
 };

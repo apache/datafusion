@@ -59,7 +59,7 @@ use log::{debug, warn};
 /// {NUM_GROUPS groups: [[file1, file2,...], [fileN, fileM, ...], ...]}
 /// ```
 #[derive(Debug)]
-struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
+pub struct FileGroupsDisplay<'a>(pub &'a [Vec<PartitionedFile>]);
 
 impl DisplayAs for FileGroupsDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
