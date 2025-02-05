@@ -154,11 +154,11 @@ deprecate methods before removing them, according to the [deprecation guidelines
 
 ## Dependencies and `Cargo.lock`
 
-Following the [updated guidance] on committing `Cargo.lock` files, this project
-commits its `Cargo.lock` file.
+Following the [guidance] on committing `Cargo.lock` files, this project commits
+its `Cargo.lock` file.
 
 CI uses the committed `Cargo.lock` file, and dependencies are updated regularly
 using [Dependabot] PRs.
 
-[updated guidance]: https://blog.rust-lang.org/2023/08/29/committing-lockfiles.html
+[guidance]: https://blog.rust-lang.org/2023/08/29/committing-lockfiles.html
 [dependabot]: https://docs.github.com/en/code-security/dependabot/working-with-dependabot
