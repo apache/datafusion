@@ -1896,7 +1896,6 @@ mod tests {
 
     #[test]
     fn exists_correlated_unnest() -> Result<()> {
-        eprintln!("test start: exists_correlated_unnest");
         let table_scan = test_table_scan()?;
         let subquery_table_source = table_source(&Schema::new(vec![Field::new(
             "a",
