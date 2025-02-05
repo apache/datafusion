@@ -258,6 +258,11 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         })
                         .transpose()?;
                     let mut builder = ParquetExec::builder(base_config);
+
+                    if let Some(options) = scan.parquet_options.as_ref() {
+                        builder = builder.with_table_parquet_options(options.try_into()?)
+                    }
+
                     if let Some(predicate) = predicate {
                         builder = builder.with_predicate(predicate)
                     }
@@ -1654,6 +1659,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             extension_codec,
                         )?),
                         predicate,
+                        parquet_options: Some(exec.table_parquet_options().try_into()?),
                     },
                 )),
             });
