@@ -17,13 +17,13 @@
 
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
     PrimitiveArray,
 };
 use arrow::datatypes::i256;
 use arrow::record_batch::RecordBatch;
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
