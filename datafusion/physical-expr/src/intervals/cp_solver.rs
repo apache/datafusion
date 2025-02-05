@@ -816,8 +816,8 @@ mod tests {
                 let mut r = StdRng::seed_from_u64(seed);
 
                 let (left_given, right_given, left_expected, right_expected) = if ASC {
-                    let left = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
-                    let right = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
+                    let left = r.random_range((0 as $TYPE)..(1000 as $TYPE));
+                    let right = r.random_range((0 as $TYPE)..(1000 as $TYPE));
                     (
                         (Some(left), None),
                         (Some(right), None),
@@ -825,8 +825,8 @@ mod tests {
                         (Some(<$TYPE>::max(right, left + expr_right)), None),
                     )
                 } else {
-                    let left = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
-                    let right = r.gen_range((0 as $TYPE)..(1000 as $TYPE));
+                    let left = r.random_range((0 as $TYPE)..(1000 as $TYPE));
+                    let right = r.random_range((0 as $TYPE)..(1000 as $TYPE));
                     (
                         (None, Some(left)),
                         (None, Some(right)),

@@ -33,8 +33,9 @@ use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::sorts::sort::sort_batch;
 use rand::{
+    rng,
     rngs::{StdRng, ThreadRng},
-    thread_rng, Rng, SeedableRng,
+    Rng, SeedableRng,
 };
 use test_utils::{
     array_gen::{
@@ -50,7 +51,7 @@ use test_utils::{
 ///   - `columns`, you just need to define `column name`s and `column data type`s
 ///     for the test datasets, and then they will be randomly generated from the generator
 ///     when you call `generate` function
-///         
+///
 ///   - `rows_num_range`, the number of rows in the datasets will be randomly generated
 ///      within this range
 ///
@@ -110,7 +111,7 @@ impl DatasetGeneratorConfig {
 ///
 ///   - Sort the batch according to `sort_keys` in `config` to generate another
 ///     `len(sort_keys)` sorted batches.
-///   
+///
 ///   - Split each batch to multiple batches which each sub-batch in has the randomly `rows num`,
 ///     and this multiple batches will be used to create the `Dataset`.
 ///
@@ -230,9 +231,10 @@ struct RecordBatchGenerator {
 
 macro_rules! generate_string_array {
     ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE: ident) => {{
-        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
+        let null_pct_idx =
+            $BATCH_GEN_RNG.random_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
-        let max_len = $BATCH_GEN_RNG.gen_range(1..50);
+        let max_len = $BATCH_GEN_RNG.random_range(1..50);
 
         let mut generator = StringArrayGenerator {
             max_len,
@@ -253,7 +255,8 @@ macro_rules! generate_string_array {
 
 macro_rules! generate_decimal_array {
     ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT: expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $PRECISION: ident, $SCALE: ident, $ARROW_TYPE: ident) => {{
-        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
+        let null_pct_idx =
+            $BATCH_GEN_RNG.random_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
 
         let mut generator = DecimalArrayGenerator {
@@ -273,7 +276,8 @@ macro_rules! generate_decimal_array {
 macro_rules! generate_boolean_array {
     ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE: ident) => {{
         // Select a null percentage from the candidate percentages
-        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
+        let null_pct_idx =
+            $BATCH_GEN_RNG.random_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
 
         let num_distinct_booleans = if $MAX_NUM_DISTINCT >= 2 { 2 } else { 1 };
@@ -291,7 +295,8 @@ macro_rules! generate_boolean_array {
 
 macro_rules! generate_primitive_array {
     ($SELF:ident, $NUM_ROWS:ident, $MAX_NUM_DISTINCT:expr, $BATCH_GEN_RNG:ident, $ARRAY_GEN_RNG:ident, $ARROW_TYPE:ident) => {{
-        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
+        let null_pct_idx =
+            $BATCH_GEN_RNG.random_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
 
         let mut generator = PrimitiveArrayGenerator {
@@ -314,10 +319,11 @@ macro_rules! generate_binary_array {
         $ARRAY_GEN_RNG:ident,
         $ARROW_TYPE:ident
     ) => {{
-        let null_pct_idx = $BATCH_GEN_RNG.gen_range(0..$SELF.candidate_null_pcts.len());
+        let null_pct_idx =
+            $BATCH_GEN_RNG.random_range(0..$SELF.candidate_null_pcts.len());
         let null_pct = $SELF.candidate_null_pcts[null_pct_idx];
 
-        let max_len = $BATCH_GEN_RNG.gen_range(1..100);
+        let max_len = $BATCH_GEN_RNG.random_range(1..100);
 
         let mut generator = BinaryArrayGenerator {
             max_len,
@@ -349,9 +355,9 @@ impl RecordBatchGenerator {
     }
 
     fn generate(&self) -> Result<RecordBatch> {
-        let mut rng = thread_rng();
-        let num_rows = rng.gen_range(self.min_rows_nun..=self.max_rows_num);
-        let array_gen_rng = StdRng::from_seed(rng.gen());
+        let mut rng = rng();
+        let num_rows = rng.random_range(self.min_rows_nun..=self.max_rows_num);
+        let array_gen_rng = StdRng::from_seed(rng.random());
 
         // Build arrays
         let mut arrays = Vec::with_capacity(self.columns.len());
@@ -384,7 +390,7 @@ impl RecordBatchGenerator {
         array_gen_rng: StdRng,
     ) -> ArrayRef {
         let num_distinct = if num_rows > 1 {
-            batch_gen_rng.gen_range(1..num_rows)
+            batch_gen_rng.random_range(1..num_rows)
         } else {
             num_rows
         };

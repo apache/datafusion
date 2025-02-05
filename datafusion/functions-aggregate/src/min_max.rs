@@ -1714,10 +1714,10 @@ mod tests {
     use rand::Rng;
 
     fn get_random_vec_i32(len: usize) -> Vec<i32> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut input = Vec::with_capacity(len);
         for _i in 0..len {
-            input.push(rng.gen_range(0..100));
+            input.push(rng.random_range(0..100));
         }
         input
     }

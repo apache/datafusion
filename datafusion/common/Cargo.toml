@@ -74,4 +74,4 @@ web-time = "1.1.0"
 
 [dev-dependencies]
 chrono = { workspace = true }
-rand = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }

@@ -25,7 +25,7 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::ScalarValue;
 use datafusion_common::{error::Result, utils::get_available_parallelism};
 use datafusion_expr::col;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use crate::fuzz_cases::aggregation_fuzzer::data_generator::Dataset;
 
@@ -112,7 +112,7 @@ impl SessionContextGenerator {
 
     /// Randomly generate session context
     pub fn generate(&self) -> Result<SessionContextWithParams> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let schema = self.dataset.batches[0].schema();
         let batches = self.dataset.batches.clone();
         let provider = MemTable::try_new(schema, vec![batches])?;
@@ -123,17 +123,17 @@ impl SessionContextGenerator {
         //   - `skip_partial`, trigger or not trigger currently for simplicity
         //   - `sorted`, if found a sorted dataset, will or will not push down this information
         //   - `spilling`(TODO)
-        let batch_size = rng.gen_range(1..=self.max_batch_size);
+        let batch_size = rng.random_range(1..=self.max_batch_size);
 
-        let target_partitions = rng.gen_range(1..=self.max_target_partitions);
+        let target_partitions = rng.random_range(1..=self.max_target_partitions);
 
         let skip_partial_params_idx =
-            rng.gen_range(0..self.candidate_skip_partial_params.len());
+            rng.random_range(0..self.candidate_skip_partial_params.len());
         let skip_partial_params =
             self.candidate_skip_partial_params[skip_partial_params_idx];
 
         let (provider, sort_hint) =
-            if rng.gen_bool(0.5) && !self.dataset.sort_keys.is_empty() {
+            if rng.random_bool(0.5) && !self.dataset.sort_keys.is_empty() {
                 // Sort keys exist and random to push down
                 let sort_exprs = self
                     .dataset

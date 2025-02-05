@@ -45,7 +45,7 @@ datafusion-physical-expr-common = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.5"
-rand = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
 
 [[bench]]
 harness = false
