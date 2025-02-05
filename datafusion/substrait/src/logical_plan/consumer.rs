@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, OffsetBuffer};
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::buffer::OffsetBuffer;
 use async_recursion::async_recursion;
 use datafusion::arrow::array::MapArray;
 use datafusion::arrow::datatypes::{
@@ -67,7 +68,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::prelude::{lit, JoinType};
 use datafusion::{
-    error::Result, logical_expr::utils::split_conjunction, prelude::Column,
+    arrow, error::Result, logical_expr::utils::split_conjunction, prelude::Column,
     scalar::ScalarValue,
 };
 use std::collections::HashSet;
@@ -3278,7 +3279,8 @@ mod test {
         from_substrait_literal_without_names, from_substrait_rex,
         DefaultSubstraitConsumer,
     };
-    use arrow_buffer::IntervalMonthDayNano;
+    use arrow::array::types::IntervalMonthDayNano;
+    use datafusion::arrow;
     use datafusion::common::DFSchema;
     use datafusion::error::Result;
     use datafusion::execution::SessionState;

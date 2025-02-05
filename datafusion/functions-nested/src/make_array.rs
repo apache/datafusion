@@ -23,10 +23,10 @@ use std::vec;
 
 use crate::utils::make_scalar_function;
 use arrow::array::{ArrayData, Capacities, MutableArrayData};
+use arrow::buffer::OffsetBuffer;
 use arrow_array::{
     new_null_array, Array, ArrayRef, GenericListArray, NullArray, OffsetSizeTrait,
 };
-use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{List, Null};
 use arrow_schema::{DataType, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
