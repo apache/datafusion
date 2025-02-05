@@ -33,7 +33,7 @@ use arrow_array::types::{
     Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use arrow_array::{Date32Array, Date64Array, PrimitiveArray};
+use arrow_array::{ArrayRef, Date32Array, Date64Array, PrimitiveArray};
 use arrow_schema::DataType;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
@@ -526,6 +526,16 @@ impl Unparser<'_> {
             elem: args,
             named: false,
         }))
+    }
+
+    fn scalar_value_list_to_sql(&self, array: &ArrayRef) -> Result<ast::Expr> {
+        let mut elem = Vec::new();
+        for i in 0..array.len() {
+            let value = ScalarValue::try_from_array(&array, i)?;
+            elem.push(self.scalar_to_sql(&value)?);
+        }
+
+        Ok(ast::Expr::Array(Array { elem, named: false }))
     }
 
     fn array_element_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
@@ -1131,9 +1141,9 @@ impl Unparser<'_> {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
             ScalarValue::LargeBinary(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::FixedSizeList(_a) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::List(_a) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::LargeList(_a) => not_impl_err!("Unsupported scalar: {v:?}"),
+            ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
+            ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
             ScalarValue::Date32(Some(_)) => {
                 let date = v
                     .to_array()?
@@ -1261,7 +1271,7 @@ impl Unparser<'_> {
             ScalarValue::Struct(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Dictionary(..) => not_impl_err!("Unsupported scalar: {v:?}"),
+            ScalarValue::Dictionary(_k, v) => self.scalar_to_sql(v),
         }
     }
 
@@ -1636,8 +1646,9 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{any::Any, sync::Arc, vec};
 
-    use arrow::datatypes::TimeUnit;
     use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::{Int32Type, TimeUnit};
+    use arrow_array::{LargeListArray, ListArray};
     use arrow_schema::DataType::Int8;
     use ast::ObjectName;
     use datafusion_common::{Spans, TableReference};
@@ -2073,6 +2084,31 @@ mod tests {
             (
                 map(vec![lit("a"), lit("b")], vec![lit(1), lit(2)]),
                 "MAP {'a': 1, 'b': 2}",
+            ),
+            (
+                Expr::Literal(ScalarValue::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(ScalarValue::Utf8(Some("foo".into()))),
+                )),
+                "'foo'",
+            ),
+            (
+                Expr::Literal(ScalarValue::List(Arc::new(
+                    ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![
+                        Some(1),
+                        Some(2),
+                        Some(3),
+                    ])]),
+                ))),
+                "[1, 2, 3]",
+            ),
+            (
+                Expr::Literal(ScalarValue::LargeList(Arc::new(
+                    LargeListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(
+                        vec![Some(1), Some(2), Some(3)],
+                    )]),
+                ))),
+                "[1, 2, 3]",
             ),
         ];
 

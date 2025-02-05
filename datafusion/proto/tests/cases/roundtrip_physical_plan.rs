@@ -730,9 +730,14 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         Operator::Eq,
         lit("1"),
     ));
+
+    let mut options = TableParquetOptions::new();
+    options.global.pushdown_filters = true;
+
     roundtrip_test(
         ParquetExec::builder(scan_config)
             .with_predicate(predicate)
+            .with_table_parquet_options(options)
             .build_arc(),
     )
 }
