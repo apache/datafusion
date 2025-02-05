@@ -136,7 +136,7 @@ pub enum DataFusionError {
     /// human-readable messages, and locations in the source query that relate
     /// to the error in some way.
     Diagnostic(Box<Diagnostic>, Box<DataFusionError>),
-    /// Error that wrapping other [`DataFusionError`]s
+    /// A [`DataFusionError`] which shares an underlying [`DataFusionError`].
     ///
     /// This is useful when the same underlying [`DataFusionError`] is passed
     /// to multiple receivers. For example, when the source of a repartition
@@ -264,6 +264,17 @@ impl From<DataFusionError> for ArrowError {
             DataFusionError::ArrowError(e, _) => e,
             DataFusionError::External(e) => ArrowError::ExternalError(e),
             other => ArrowError::ExternalError(Box::new(other)),
+        }
+    }
+}
+
+impl From<&Arc<DataFusionError>> for DataFusionError {
+    fn from(e: &Arc<DataFusionError>) -> Self {
+        if let DataFusionError::Shared(e_inner) = e.as_ref() {
+            // don't re-wrap
+            DataFusionError::Shared(Arc::clone(e_inner))
+        } else {
+            DataFusionError::Shared(Arc::clone(e))
         }
     }
 }
