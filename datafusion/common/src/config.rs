@@ -108,6 +108,7 @@ use crate::{DataFusionError, Result};
 /// ```
 ///
 /// NB: Misplaced commas may result in nonsensical errors
+#[macro_export]
 macro_rules! config_namespace {
     (
         $(#[doc = $struct_d:tt])* // Struct-level documentation attributes
@@ -138,8 +139,8 @@ macro_rules! config_namespace {
             )*
         }
 
-        impl ConfigField for $struct_name {
-            fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        impl $crate::config::ConfigField for $struct_name {
+            fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
                 match key {
                     $(
@@ -154,13 +155,13 @@ macro_rules! config_namespace {
                             }
                         },
                     )*
-                    _ => return _config_err!(
+                    _ => return $crate::error::_config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
                     )
                 }
             }
 
-            fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+            fn visit<V: $crate::config::Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
                 $(
                     let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                     let desc = concat!($($d),*).trim();
@@ -2091,5 +2092,24 @@ mod tests {
         table_config.set("format.metadata::key_dupe", "B").unwrap();
         let parsed_metadata = table_config.parquet.key_value_metadata;
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
+    }
+}
+
+#[cfg(test)]
+mod tests_isolated {
+    // The point of this test is to check that the config_namespace! macro
+    // can compile without any surrounding `use` statements. Hence putting
+    // it into its own test module.
+    #[test]
+    fn check_config_namespace_macro() {
+        use crate::config_namespace;
+
+        config_namespace! {
+            /// A config section
+            pub struct Foo {
+                /// Some doc comments
+                pub bar: bool, default = true
+            }
+        }
     }
 }
