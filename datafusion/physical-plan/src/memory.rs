@@ -65,6 +65,8 @@ pub struct MemoryExec {
     cache: PlanProperties,
     /// if partition sizes should be displayed
     show_sizes: bool,
+    /// Maximum number of rows to return
+    fetch: Option<usize>,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -74,6 +76,7 @@ impl fmt::Debug for MemoryExec {
             .field("schema", &self.schema)
             .field("projection", &self.projection)
             .field("sort_information", &self.sort_information)
+            .field("fetch", &self.fetch)
             .finish()
     }
 }
@@ -100,16 +103,20 @@ impl DisplayAs for MemoryExec {
                     format!(", {}", constraints)
                 };
 
+                let limit = self
+                    .fetch
+                    .map_or(String::new(), |limit| format!(", limit={}", limit));
+
                 if self.show_sizes {
                     write!(
                         f,
-                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{output_ordering}{constraints}",
+                        "MemoryExec: partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
                         partition_sizes.len(),
                     )
                 } else {
                     write!(
                         f,
-                        "MemoryExec: partitions={}{output_ordering}{constraints}",
+                        "MemoryExec: partitions={}{limit}{output_ordering}{constraints}",
                         partition_sizes.len(),
                     )
                 }
@@ -154,11 +161,14 @@ impl ExecutionPlan for MemoryExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        Ok(Box::pin(MemoryStream::try_new(
-            self.partitions[partition].clone(),
-            Arc::clone(&self.projected_schema),
-            self.projection.clone(),
-        )?))
+        Ok(Box::pin(
+            MemoryStream::try_new(
+                self.partitions[partition].clone(),
+                Arc::clone(&self.projected_schema),
+                self.projection.clone(),
+            )?
+            .with_fetch(self.fetch),
+        ))
     }
 
     /// We recompute the statistics dynamically from the arrow metadata as it is pretty cheap to do so
@@ -193,6 +203,23 @@ impl ExecutionPlan for MemoryExec {
             })
             .transpose()
     }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(Self {
+            partitions: self.partitions.clone(),
+            schema: Arc::clone(&self.schema),
+            projected_schema: Arc::clone(&self.projected_schema),
+            projection: self.projection.clone(),
+            sort_information: self.sort_information.clone(),
+            cache: self.cache.clone(),
+            show_sizes: self.show_sizes,
+            fetch: limit,
+        }))
+    }
 }
 
 impl MemoryExec {
@@ -219,6 +246,7 @@ impl MemoryExec {
             sort_information: vec![],
             cache,
             show_sizes: true,
+            fetch: None,
         })
     }
 
@@ -314,6 +342,7 @@ impl MemoryExec {
             sort_information: vec![],
             cache,
             show_sizes: true,
+            fetch: None,
         })
     }
 
@@ -462,6 +491,8 @@ pub struct MemoryStream {
     projection: Option<Vec<usize>>,
     /// Index into the data
     index: usize,
+    /// The remaining number of rows to return
+    fetch: Option<usize>,
 }
 
 impl MemoryStream {
@@ -477,12 +508,19 @@ impl MemoryStream {
             schema,
             projection,
             index: 0,
+            fetch: None,
         })
     }
 
     /// Set the memory reservation for the data
     pub(super) fn with_reservation(mut self, reservation: MemoryReservation) -> Self {
         self.reservation = Some(reservation);
+        self
+    }
+
+    /// Set the number of rows to produce
+    pub(super) fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
         self
     }
 }
@@ -494,20 +532,35 @@ impl Stream for MemoryStream {
         mut self: std::pin::Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        Poll::Ready(if self.index < self.data.len() {
-            self.index += 1;
-            let batch = &self.data[self.index - 1];
+        if self.index >= self.data.len() {
+            return Poll::Ready(None);
+        }
 
-            // return just the columns requested
-            let batch = match self.projection.as_ref() {
-                Some(columns) => batch.project(columns)?,
-                None => batch.clone(),
-            };
+        self.index += 1;
+        let batch = &self.data[self.index - 1];
 
-            Some(Ok(batch))
+        // return just the columns requested
+        let batch = match self.projection.as_ref() {
+            Some(columns) => batch.project(columns)?,
+            None => batch.clone(),
+        };
+
+        if self.fetch.is_none() {
+            return Poll::Ready(Some(Ok(batch)));
+        }
+
+        let fetch = self.fetch.unwrap();
+        if fetch == 0 {
+            return Poll::Ready(None);
+        }
+
+        let batch = if batch.num_rows() > fetch {
+            batch.slice(0, fetch)
         } else {
-            None
-        })
+            batch
+        };
+        self.fetch = Some(fetch - batch.num_rows());
+        Poll::Ready(Some(Ok(batch)))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -859,7 +912,9 @@ mod tests {
     use crate::test::{self, make_partition};
 
     use arrow_schema::{DataType, Field};
+    use datafusion_common::assert_batches_eq;
     use datafusion_common::stats::{ColumnStatistics, Precision};
+    use futures::StreamExt;
 
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
@@ -942,6 +997,32 @@ mod tests {
             }
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn exec_with_limit() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let batch = make_partition(7);
+        let schema = batch.schema();
+        let batches = vec![batch.clone(), batch];
+
+        let exec = MemoryExec::try_new_from_batches(schema, batches).unwrap();
+        assert_eq!(exec.fetch(), None);
+
+        let exec = exec.with_fetch(Some(4)).unwrap();
+        assert_eq!(exec.fetch(), Some(4));
+
+        let mut it = exec.execute(0, task_ctx)?;
+        let mut results = vec![];
+        while let Some(batch) = it.next().await {
+            results.push(batch?);
+        }
+
+        let expected = [
+            "+---+", "| i |", "+---+", "| 0 |", "| 1 |", "| 2 |", "| 3 |", "+---+",
+        ];
+        assert_batches_eq!(expected, &results);
         Ok(())
     }
 }
