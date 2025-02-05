@@ -58,9 +58,7 @@ pub enum StatisticsV2 {
     /// data type [`DataType::Float64`]. For a more in-depth discussion, see:
     ///
     /// https://en.wikipedia.org/wiki/Bernoulli_distribution
-    Bernoulli {
-        p: ScalarValue,
-    },
+    Bernoulli { p: ScalarValue },
     /// An unknown distribution, only containing some summary statistics.
     /// For a more in-depth discussion, see:
     ///
