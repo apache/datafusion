@@ -43,7 +43,7 @@ use datafusion_expr::ColumnarValue;
 /// let twenty = ColumnarValue::from(ScalarValue::from(20i32));
 /// let args = vec![ten.clone()];
 /// let err = my_function(&args).unwrap_err();
-/// assert_eq!(err.to_string(), "my_function function requires 2 arguments, got 1");
+/// assert_eq!(err.to_string(), "Execution error: my_function function requires 2 arguments, got 1");
 /// // Calling the function with 2 arguments works great
 /// let args = vec![ten, twenty];
 /// my_function(&args).unwrap();
