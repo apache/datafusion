@@ -298,8 +298,7 @@ impl LogicalPlanBuilder {
             field_types.push(common_type.unwrap_or(DataType::Null));
         }
 
-        let field_nullabilities =
-            (0..n_cols).into_iter().map(|_| true).collect::<Vec<_>>();
+        let field_nullabilities = (0..n_cols).map(|_| true).collect::<Vec<_>>();
         Self::infer_inner(values, &field_types, &field_nullabilities, &schema)
     }
 
