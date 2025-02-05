@@ -24,6 +24,29 @@ use datafusion_expr::ColumnarValue;
 
 /// Converts a collection of function arguments into an fixed-size array of length N
 /// producing a reasonable error message in case of unexpected number of arguments.
+///
+/// # Example
+/// ```
+/// # use datafusion_common::ScalarValue;
+/// # use datafusion_common::Result;
+/// # use datafusion_expr_common::columnar_value::ColumnarValue;
+/// fn my_function(args: &[ColumnarValue]) -> Result<()> {
+///   // function expects 2 args, so create a 2-element array
+///   let [arg1, arg2] = take_function_args("my_function", args)?;
+///   // ... do stuff..
+///   Ok(())
+/// }
+/// 
+/// // Calling the function with 1 argument produces an error: 
+/// let ten = ColumnarValue::from(ScalarValue::from(10i32));
+/// let twenty = ColumnarValue::from(ScalarValue::from(20i32));
+/// let args = vec![ten.clone()];
+///  let err = my_function(&args).unwrap_err();
+/// assert_eq!(err.to_string(), "my_function function requires 2 arguments, got 1");
+/// // Calling the function with 2 arguments works great
+/// let args = vec![ten, twenty];
+/// my_function(&args).unwrap();
+/// ```
 pub fn take_function_args<const N: usize, T>(
     function_name: &str,
     args: impl IntoIterator<Item = T>,
