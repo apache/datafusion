@@ -19,11 +19,11 @@
 
 use crate::utils;
 use crate::utils::make_scalar_function;
+use arrow::buffer::OffsetBuffer;
 use arrow_array::cast::AsArray;
 use arrow_array::{
     new_empty_array, Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait,
 };
-use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};

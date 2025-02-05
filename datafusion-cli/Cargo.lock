@@ -1332,7 +1332,6 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ipc",
  "arrow-schema",
  "base64 0.22.1",
@@ -1442,7 +1441,6 @@ version = "45.0.0"
 dependencies = [
  "ahash",
  "arrow",
- "arrow-buffer",
  "arrow-schema",
  "datafusion-common",
  "datafusion-doc",
@@ -1474,7 +1472,6 @@ version = "45.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ord",
  "arrow-schema",
  "datafusion-common",
@@ -1560,7 +1557,6 @@ dependencies = [
  "ahash",
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
@@ -1582,7 +1578,6 @@ version = "45.0.0"
 dependencies = [
  "ahash",
  "arrow",
- "arrow-buffer",
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.14.5",
@@ -1616,7 +1611,6 @@ dependencies = [
  "ahash",
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ord",
  "arrow-schema",
  "async-trait",

@@ -37,11 +37,12 @@ use arrow::array::{
     UInt32Builder, UInt64Array,
 };
 use arrow::compute;
-use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
+use arrow::datatypes::{
+    ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
+};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use arrow_array::builder::UInt64Builder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
-use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
