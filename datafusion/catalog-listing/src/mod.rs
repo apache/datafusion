@@ -18,10 +18,10 @@
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
-pub mod helpers;
-pub mod url;
 pub mod file_scan_config;
+pub mod helpers;
 mod minmax_statistics;
+pub mod url;
 
 use chrono::TimeZone;
 use datafusion_common::Result;

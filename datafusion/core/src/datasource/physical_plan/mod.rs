@@ -289,6 +289,10 @@ mod tests {
     use super::*;
     use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
 
+    use crate::datasource::physical_plan::FileGroupDisplay;
+    use crate::datasource::schema_adapter::{
+        DefaultSchemaAdapterFactory, SchemaAdapterFactory,
+    };
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Float32Type, Float64Type, UInt32Type};
     use arrow_array::{
@@ -296,10 +300,6 @@ mod tests {
         StringArray, UInt64Array,
     };
     use arrow_schema::{Field, Schema};
-    use crate::datasource::physical_plan::FileGroupDisplay;
-    use crate::datasource::schema_adapter::{
-        DefaultSchemaAdapterFactory, SchemaAdapterFactory,
-    };
     use chrono::Utc;
 
     #[test]
