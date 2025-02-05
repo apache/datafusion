@@ -61,7 +61,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
         Field::new("name", DataType::Utf8, false),
     ]));
     let batch = RecordBatch::try_new(
-        dual_schema.clone(),
+        Arc::<Schema>::clone(&dual_schema),
         vec![
             Arc::new(Int32Array::from(vec![1])),
             Arc::new(array::StringArray::from(vec!["a"])),
@@ -244,7 +244,7 @@ pub fn table_with_sequence(
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
     let arr = Arc::new(Int32Array::from((seq_start..=seq_end).collect::<Vec<_>>()));
     let partitions = vec![vec![RecordBatch::try_new(
-        schema.clone(),
+        Arc::<Schema>::clone(&schema),
         vec![arr as ArrayRef],
     )?]];
     Ok(Arc::new(MemTable::try_new(schema, partitions)?))
