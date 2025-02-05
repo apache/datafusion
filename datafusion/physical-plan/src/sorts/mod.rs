@@ -22,9 +22,9 @@ mod cursor;
 mod index;
 mod merge;
 pub mod partial_sort;
+pub mod row_serde;
 pub mod sort;
 pub mod sort_preserving_merge;
 mod stream;
 pub mod streaming_merge;
-
 pub use index::RowIndex;
