@@ -40,6 +40,8 @@ use crate::cast::{
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::buffer::ScalarBuffer;
 use arrow::compute::kernels::numeric::*;
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{
@@ -54,7 +56,6 @@ use arrow::{
         UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use arrow_schema::{UnionFields, UnionMode};
 
 use crate::format::DEFAULT_CAST_OPTIONS;

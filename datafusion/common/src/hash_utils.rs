@@ -21,11 +21,11 @@
 use std::sync::Arc;
 
 use ahash::RandomState;
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::cast::{
