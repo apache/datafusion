@@ -155,14 +155,16 @@ impl ScalarUDFImpl for XxHash32Func {
                 Arc::new(hash_array) as Arc<dyn Array>
             }
             ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Utf8(None) 
+                | ScalarValue::Utf8View(None) 
+                | ScalarValue::LargeUtf8(None) => {
+                    let hash_array = StringArray::from(vec![String::new()]);
+                    Arc::new(hash_array) as Arc<dyn Array>
+                }
                 ScalarValue::Utf8(Some(ref v))
                 | ScalarValue::Utf8View(Some(ref v))
                 | ScalarValue::LargeUtf8(Some(ref v)) => {
-                    if v.is_empty() {
-                        return Ok(ColumnarValue::Array(Arc::new(StringArray::from(
-                            vec![""],
-                        ))));
-                    }
+
                     let hash_result = hash_value(
                         v.as_bytes(),
                         XxHash32::with_seed(seed),
@@ -322,14 +324,15 @@ impl ScalarUDFImpl for XxHash64Func {
                 Arc::new(hash_array) as Arc<dyn Array>
             }
             ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Utf8(None) 
+                | ScalarValue::Utf8View(None) 
+                | ScalarValue::LargeUtf8(None) => {
+                    let hash_array = StringArray::from(vec![String::new()]);
+                    Arc::new(hash_array) as Arc<dyn Array>
+                }
                 ScalarValue::Utf8(Some(ref v))
                 | ScalarValue::Utf8View(Some(ref v))
                 | ScalarValue::LargeUtf8(Some(ref v)) => {
-                    if v.is_empty() {
-                        return Ok(ColumnarValue::Array(Arc::new(StringArray::from(
-                            vec![""],
-                        ))));
-                    }
                     let hash_result = hash_value(
                         v.as_bytes(),
                         XxHash64::with_seed(seed),
@@ -421,10 +424,7 @@ fn process_array<T: Hasher>(
                         .unwrap()
                         .value(i)
                 };
-                if value.is_empty() {
-                    hash_results.push(String::new());
-                    continue;
-                }
+
                 hash_results.push(hash_value(
                     value.as_bytes(),
                     &mut hasher,
