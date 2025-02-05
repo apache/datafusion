@@ -106,7 +106,7 @@ fn rewrite_in_terms_of_projection(
         let mut found = None;
         for proj_expr in &proj_exprs {
             proj_expr.apply(|e| {
-                if expr_match(e, &search_col) {
+                if expr_match(&search_col, e) {
                     found = Some(e.clone());
                     return Ok(TreeNodeRecursion::Stop);
                 }
