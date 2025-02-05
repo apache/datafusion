@@ -497,11 +497,11 @@ Dml: op=[Insert Into] table=[test_decimal]
 )]
 #[case::target_column_count_mismatch(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
-    "Error during planning: Column count doesn't match insert query!"
+    "Error during planning: Inconsistent data length across values list: got 2 values in row 0 but expected 3"
 )]
 #[case::source_column_count_mismatch(
     "INSERT INTO person VALUES ($1, $2)",
-    "Error during planning: Column count doesn't match insert query!"
+    "Error during planning: Inconsistent data length across values list: got 2 values in row 0 but expected 8"
 )]
 #[case::extra_placeholder(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2, $3, $4)",
