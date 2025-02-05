@@ -1076,7 +1076,7 @@ impl<T: 'static> OnceFut<T> {
             OnceFutState::Ready(r) => Poll::Ready(
                 r.as_ref()
                     .map(|r| r.as_ref())
-                    .map_err(|e| DataFusionError::from(e)),
+                    .map_err(DataFusionError::from),
             ),
         }
     }
