@@ -155,8 +155,8 @@ impl ScalarUDFImpl for XxHash32Func {
                 Arc::new(hash_array) as Arc<dyn Array>
             }
             ColumnarValue::Scalar(scalar) => match scalar {
-                ScalarValue::Utf8(None) 
-                | ScalarValue::Utf8View(None) 
+                ScalarValue::Utf8(None)
+                | ScalarValue::Utf8View(None)
                 | ScalarValue::LargeUtf8(None) => {
                     let hash_array = StringArray::from(vec![String::new()]);
                     Arc::new(hash_array) as Arc<dyn Array>
@@ -164,7 +164,6 @@ impl ScalarUDFImpl for XxHash32Func {
                 ScalarValue::Utf8(Some(ref v))
                 | ScalarValue::Utf8View(Some(ref v))
                 | ScalarValue::LargeUtf8(Some(ref v)) => {
-
                     let hash_result = hash_value(
                         v.as_bytes(),
                         XxHash32::with_seed(seed),
@@ -324,8 +323,8 @@ impl ScalarUDFImpl for XxHash64Func {
                 Arc::new(hash_array) as Arc<dyn Array>
             }
             ColumnarValue::Scalar(scalar) => match scalar {
-                ScalarValue::Utf8(None) 
-                | ScalarValue::Utf8View(None) 
+                ScalarValue::Utf8(None)
+                | ScalarValue::Utf8View(None)
                 | ScalarValue::LargeUtf8(None) => {
                     let hash_array = StringArray::from(vec![String::new()]);
                     Arc::new(hash_array) as Arc<dyn Array>
