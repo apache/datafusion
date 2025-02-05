@@ -252,9 +252,9 @@ impl StatisticsV2 {
                     .cast_to(&DataType::Float64)?;
                 agg.div(ScalarValue::Float64(Some(2.))).map(Some)
             }
-            Exponential { rate, .. } => {
+            Exponential { rate, offset } => {
                 let one = ScalarValue::new_one(&rate.data_type())?;
-                one.div(rate).map(Some)
+                one.div(rate)?.add_checked(offset).map(Some)
             }
             Gaussian { mean, .. } => Ok(Some(mean.clone())),
             Bernoulli { p } => Ok(Some(p.clone())),
@@ -280,7 +280,9 @@ impl StatisticsV2 {
                     .cast_to(&DataType::Float64)?;
                 agg.div(ScalarValue::Float64(Some(2.))).map(Some)
             }
-            Exponential { rate, .. } => get_ln_two().div(rate).map(Some),
+            Exponential { rate, offset } => {
+                get_ln_two().div(rate)?.add_checked(offset).map(Some)
+            },
             Gaussian { mean, .. } => Ok(Some(mean.clone())),
             Bernoulli { p } => {
                 if p.gt(&ScalarValue::Float64(Some(0.5))) {
@@ -659,6 +661,13 @@ mod tests {
             ),
             Some(ScalarValue::Float64(Some(0.5))),
         ));
+        stats.push((
+            StatisticsV2::new_exponential(
+                ScalarValue::Float64(Some(2.)),
+                ScalarValue::Float64(Some(1.)),
+            ),
+            Some(ScalarValue::Float64(Some(1.5))),
+        ));
         //endregion
 
         // region gaussian
@@ -705,7 +714,6 @@ mod tests {
     #[test]
     fn median_extraction_test() {
         // The test data is placed as follows: (stat -> expected answer)
-        //region uniform
         let stats = vec![
             (
                 StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64).unwrap()),
@@ -721,6 +729,13 @@ mod tests {
                     ScalarValue::Float64(Some(0.)),
                 ),
                 Some(ScalarValue::Float64(Some(1.))),
+            ),
+            (
+                StatisticsV2::new_exponential(
+                    ScalarValue::Float64(Some(2_f64.ln())),
+                    ScalarValue::Float64(Some(1.)),
+                ),
+                Some(ScalarValue::Float64(Some(2.))),
             ),
             (
                 StatisticsV2::new_gaussian(
