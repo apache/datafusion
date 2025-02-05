@@ -59,6 +59,7 @@ url = { workspace = true }
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 
 [dev-dependencies]
+async-trait = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 
