@@ -62,8 +62,8 @@ To mark the API as deprecated, use the `#[deprecated(since = "...", note = "..."
 For example:
 
 ```rust
-    #[deprecated(since = "41.0.0", note = "Use SessionStateBuilder")]
-    pub fn new_with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self
+#[deprecated(since = "41.0.0", note = "Use new API instead")]
+pub fn api_to_deprecated(arg1: String) {}
 ```
 
 Deprecated methods will remain in the codebase for a period of 6 major versions or 6 months, whichever is longer, to provide users ample time to transition away from them.
