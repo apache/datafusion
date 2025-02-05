@@ -146,15 +146,6 @@ pub fn pushdown_limit_helper(
         global_state.skip = skip;
         global_state.fetch = fetch;
 
-        if limit_exec.input().as_any().is::<CoalescePartitionsExec>() {
-            // If the child is a `CoalescePartitionsExec`, we should not remove the limit
-            // the push_down through the `CoalescePartitionsExec` to each partition will not guarantee the limit.
-            // TODO: we may have a better solution if we can support with_fetch for limit inside CoalescePartitionsExec.
-            // Follow-up issue: https://github.com/apache/datafusion/issues/14446
-            global_state.satisfied = true;
-            return Ok((Transformed::no(pushdown_plan), global_state));
-        }
-
         // Now the global state has the most recent information, we can remove
         // the `LimitExec` plan. We will decide later if we should add it again
         // or not.

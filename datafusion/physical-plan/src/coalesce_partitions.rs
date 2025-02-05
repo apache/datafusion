@@ -31,6 +31,7 @@ use crate::execution_plan::CardinalityEffect;
 use crate::projection::{make_with_child, ProjectionExec};
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 
+use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 
@@ -43,6 +44,8 @@ pub struct CoalescePartitionsExec {
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     cache: PlanProperties,
+    /// Optional number of rows to fetch. Stops producing rows after this fetch
+    pub(crate) fetch: Option<usize>,
 }
 
 impl CoalescePartitionsExec {
@@ -53,6 +56,7 @@ impl CoalescePartitionsExec {
             input,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
+            fetch: None,
         }
     }
 
@@ -83,9 +87,12 @@ impl DisplayAs for CoalescePartitionsExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "CoalescePartitionsExec")
-            }
+            DisplayFormatType::Default | DisplayFormatType::Verbose => match self.fetch {
+                Some(fetch) => {
+                    write!(f, "CoalescePartitionsExec: fetch={fetch}")
+                }
+                None => write!(f, "CoalescePartitionsExec"),
+            },
         }
     }
 }
@@ -116,9 +123,9 @@ impl ExecutionPlan for CoalescePartitionsExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CoalescePartitionsExec::new(Arc::clone(
-            &children[0],
-        ))))
+        let mut plan = CoalescePartitionsExec::new(Arc::clone(&children[0]));
+        plan.fetch = self.fetch;
+        Ok(Arc::new(plan))
     }
 
     fn execute(
@@ -164,7 +171,11 @@ impl ExecutionPlan for CoalescePartitionsExec {
                 }
 
                 let stream = builder.build();
-                Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)))
+                Ok(Box::pin(ObservedStream::new(
+                    stream,
+                    baseline_metrics,
+                    self.fetch,
+                )))
             }
         }
     }
@@ -174,7 +185,11 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.input.statistics()
+        let mut statistics = self.input.statistics()?;
+        if let Some(fetch) = self.fetch {
+            statistics.num_rows = Precision::Exact(fetch);
+        }
+        Ok(statistics)
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -197,8 +212,28 @@ impl ExecutionPlan for CoalescePartitionsExec {
             return Ok(None);
         }
         // CoalescePartitionsExec always has a single child, so zero indexing is safe.
-        make_with_child(projection, projection.input().children()[0])
-            .map(|e| Some(Arc::new(CoalescePartitionsExec::new(e)) as _))
+        make_with_child(projection, projection.input().children()[0]).map(|e| {
+            if self.fetch.is_some() {
+                let mut plan = CoalescePartitionsExec::new(e);
+                plan.fetch = self.fetch;
+                Some(Arc::new(plan) as _)
+            } else {
+                Some(Arc::new(CoalescePartitionsExec::new(e)) as _)
+            }
+        })
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.fetch
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(CoalescePartitionsExec {
+            input: Arc::clone(&self.input),
+            fetch: limit,
+            metrics: self.metrics.clone(),
+            cache: self.cache.clone(),
+        }))
     }
 }
 
