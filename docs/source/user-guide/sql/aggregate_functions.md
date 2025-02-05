@@ -838,7 +838,7 @@ approx_percentile_cont(percentile, centroids) WITHIN GROUP (expression [ORDER BY
 Returns the weighted approximate percentile of input values using the t-digest algorithm.
 
 ```
-approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (expression [ORDER BY expression]) 
+approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (expression [ORDER BY expression])
 ```
 
 #### Arguments
