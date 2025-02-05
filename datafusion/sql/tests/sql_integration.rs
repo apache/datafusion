@@ -4536,7 +4536,7 @@ fn test_error_message_invalid_aggregate_function_signature() {
     // It might be incorrect, and we should consider keeping only one.
     error_message_test(
         "select max(9, 3)",
-        "Error during planning: Execution error: For function max user-defined coercion failed",
+        "Error during planning: Execution error: Function max user-defined coercion failed",
     );
 }
 
@@ -4544,7 +4544,7 @@ fn test_error_message_invalid_aggregate_function_signature() {
 fn test_error_message_invalid_window_function_signature() {
     error_message_test(
         "select rank(1) over()",
-        "Error during planning: The function rank expected zero argument but received 1",
+        "Error during planning: Function rank expected zero argument but received 1",
     );
 }
 
