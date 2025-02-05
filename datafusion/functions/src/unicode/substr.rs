@@ -21,7 +21,8 @@ use std::sync::Arc;
 use crate::strings::make_and_append_view;
 use crate::utils::make_scalar_function;
 use arrow::array::{
-    Array, ArrayIter, ArrayRef, AsArray, Int64Array, OffsetSizeTrait, StringArrayType, StringViewArray, StringViewBuilder
+    Array, ArrayIter, ArrayRef, AsArray, Int64Array, OffsetSizeTrait, StringArrayType,
+    StringViewArray, StringViewBuilder,
 };
 use arrow::datatypes::DataType;
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
@@ -89,6 +90,7 @@ impl ScalarUDFImpl for SubstrFunc {
         &self.signature
     }
 
+    // `SubstrFunc` always generates `Utf8View` output for its efficiency.
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8View)
     }
@@ -181,7 +183,7 @@ impl ScalarUDFImpl for SubstrFunc {
 /// substr('alphabet', 3, 2) = 'ph'
 /// The implementation uses UTF-8 code points as characters
 pub fn substr(args: &[ArrayRef]) -> Result<ArrayRef> {
-     match args[0].data_type() {
+    match args[0].data_type() {
         DataType::Utf8 => {
             let string_array = args[0].as_string::<i32>();
             string_substr::<_, i32>(string_array, &args[1..])
