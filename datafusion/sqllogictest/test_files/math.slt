@@ -134,7 +134,7 @@ SELECT abs('foo');
 query error DataFusion error: Error during planning: Function abs expects NativeType::Numeric but received NativeType::String
 select abs('-1.2');
 
-query error DataFusion error: Error during planning: Function abs expected NativeType::Numeric but received NativeType::String
+query error DataFusion error: Error during planning: Function abs expects NativeType::Numeric but received NativeType::String
 select abs(arrow_cast('-1.2', 'Utf8'));
 
 statement ok
