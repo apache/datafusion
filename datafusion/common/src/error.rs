@@ -136,10 +136,12 @@ pub enum DataFusionError {
     /// human-readable messages, and locations in the source query that relate
     /// to the error in some way.
     Diagnostic(Box<Diagnostic>, Box<DataFusionError>),
-
-    /// Errors for wrapping other errors.
-    /// This is useful when we need to share DatafusionError.
-    SharedError(Arc<DataFusionError>),
+    /// Error that wrapping other [`DataFusionError`]s
+    ///
+    /// This is useful when the same underlying [`DataFusionError`] is passed
+    /// to multiple receivers. For example, when the source of a repartition
+    /// errors and the error is propagated to multiple consumers.
+    Shared(Arc<DataFusionError>),
 }
 
 #[macro_export]
@@ -347,7 +349,7 @@ impl Error for DataFusionError {
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
             DataFusionError::Diagnostic(_, e) => Some(e.as_ref()),
-            DataFusionError::SharedError(e) => Some(e.as_ref()),
+            DataFusionError::Shared(e) => Some(e.as_ref()),
         }
     }
 }
@@ -462,7 +464,7 @@ impl DataFusionError {
             DataFusionError::Context(_, _) => "",
             DataFusionError::Substrait(_) => "Substrait error: ",
             DataFusionError::Diagnostic(_, _) => "",
-            DataFusionError::SharedError(_) => "",
+            DataFusionError::Shared(_) => "",
         }
     }
 
@@ -504,7 +506,7 @@ impl DataFusionError {
             }
             DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Diagnostic(_, ref err) => Cow::Owned(err.to_string()),
-            DataFusionError::SharedError(ref desc) => Cow::Owned(desc.to_string()),
+            DataFusionError::Shared(ref desc) => Cow::Owned(desc.to_string()),
         }
     }
 
