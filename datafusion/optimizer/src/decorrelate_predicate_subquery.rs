@@ -1615,7 +1615,6 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        // not optimized
         let expected = "Projection: customer.c_custkey [c_custkey:Int64]\
                         \n  Filter: __correlated_sq_1.mark OR customer.c_custkey = Int32(1) [c_custkey:Int64, c_name:Utf8, mark:Boolean]\
                         \n    LeftMark Join:  Filter: Boolean(true) [c_custkey:Int64, c_name:Utf8, mark:Boolean]\
