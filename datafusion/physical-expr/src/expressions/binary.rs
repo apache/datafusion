@@ -842,7 +842,6 @@ mod tests {
     use crate::expressions::{col, lit, try_cast, Column, Literal};
 
     use datafusion_common::plan_datafusion_err;
-    use datafusion_expr::type_coercion::binary::get_input_types;
     use datafusion_physical_expr_common::stats_v2::StatisticsV2::Uniform;
 
     /// Performs a binary operation, applying any type coercion necessary

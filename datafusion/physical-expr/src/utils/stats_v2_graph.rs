@@ -504,7 +504,7 @@ mod tests {
     use datafusion_expr_common::operator::Operator::{
         Eq, Gt, GtEq, Lt, LtEq, Minus, Multiply, Plus,
     };
-    use datafusion_expr_common::type_coercion::binary::get_input_types;
+    use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::stats_v2::StatisticsV2;
     use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
@@ -522,7 +522,8 @@ mod tests {
     ) -> Result<BinaryExpr> {
         let left_type = left.data_type(schema)?;
         let right_type = right.data_type(schema)?;
-        let (lhs, rhs) = get_input_types(&left_type, &op, &right_type)?;
+        let binary_type_coercer = BinaryTypeCoercer::new(&left_type, &op, &right_type);
+        let (lhs, rhs) = binary_type_coercer.get_input_types()?;
 
         let left_expr = try_cast(left, schema, lhs)?;
         let right_expr = try_cast(right, schema, rhs)?;
