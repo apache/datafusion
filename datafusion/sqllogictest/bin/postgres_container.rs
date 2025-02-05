@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![cfg(feature = "postgres")]
-
 use crate::Options;
 use datafusion_common::Result;
 use log::info;
@@ -144,8 +142,5 @@ async fn start_postgres(
 }
 
 fn is_pg_uri_set() -> bool {
-    match env::var("PG_URI") {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    env::var("PG_URI").is_ok()
 }

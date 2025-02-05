@@ -396,8 +396,7 @@ impl BatchPartitioner {
 ///
 /// The "Exchange Operator" was first described in the 1989 paper
 /// [Encapsulation of parallelism in the Volcano query processing
-/// system
-/// Paper](https://w6113.github.io/files/papers/volcanoparallelism-89.pdf)
+/// system Paper](https://dl.acm.org/doi/pdf/10.1145/93605.98720)
 /// which uses the term "Exchange" for the concept of repartitioning
 /// data across threads.
 #[derive(Debug, Clone)]
