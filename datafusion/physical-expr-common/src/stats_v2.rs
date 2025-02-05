@@ -35,13 +35,13 @@ fn get_ln_two() -> &'static ScalarValue {
 pub enum StatisticsV2 {
     /// Uniform distribution, represented by its range. For a more in-depth discussion, see:
     ///
-    /// https://en.wikipedia.org/wiki/Continuous_uniform_distribution
+    /// <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>
     Uniform { interval: Interval },
     /// Exponential distribution with an optional shift, whose PDF is as follows:
     /// f(x, λ, offset) = (λe)^(-λ(x - offset)), if x >= offset, 0 otherwise.
     /// For a more in-depth discussion, see:
     ///
-    /// https://en.wikipedia.org/wiki/Exponential_distribution
+    /// <https://en.wikipedia.org/wiki/Exponential_distribution>
     Exponential {
         rate: ScalarValue,
         offset: ScalarValue,
@@ -49,7 +49,7 @@ pub enum StatisticsV2 {
     /// Gaussian (normal) distribution, represented by its mean and variance.
     /// For a more in-depth discussion, see:
     ///
-    /// https://en.wikipedia.org/wiki/Normal_distribution
+    /// <https://en.wikipedia.org/wiki/Normal_distribution>
     Gaussian {
         mean: ScalarValue,
         variance: ScalarValue,
@@ -57,12 +57,12 @@ pub enum StatisticsV2 {
     /// Bernoulli distribution with success probability `p`, which always has the
     /// data type [`DataType::Float64`]. For a more in-depth discussion, see:
     ///
-    /// https://en.wikipedia.org/wiki/Bernoulli_distribution
+    /// <https://en.wikipedia.org/wiki/Bernoulli_distribution>
     Bernoulli { p: ScalarValue },
     /// An unknown distribution, only containing some summary statistics.
     /// For a more in-depth discussion, see:
     ///
-    /// https://en.wikipedia.org/wiki/Summary_statistics
+    /// <https://en.wikipedia.org/wiki/Summary_statistics>
     Unknown {
         mean: Option<ScalarValue>,
         median: Option<ScalarValue>,
