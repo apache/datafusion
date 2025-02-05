@@ -20,6 +20,8 @@
 
 pub mod helpers;
 pub mod url;
+pub mod file_scan_config;
+mod minmax_statistics;
 
 use chrono::TimeZone;
 use datafusion_common::Result;
