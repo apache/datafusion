@@ -591,7 +591,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::LongText
             | SQLDataType::Bit(_)
             | SQLDataType::BitVarying(_)
-            // BIG Query UDFs
+            // BigQuery UDFs
             | SQLDataType::AnyType
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
