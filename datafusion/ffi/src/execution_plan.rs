@@ -27,6 +27,7 @@ use datafusion::{
     execution::{SendableRecordBatchStream, TaskContext},
     physical_plan::{DisplayAs, ExecutionPlan, PlanProperties},
 };
+use tokio::runtime::Handle;
 
 use crate::{
     plan_properties::FFI_PlanProperties, record_batch_stream::FFI_RecordBatchStream,
@@ -71,6 +72,7 @@ unsafe impl Sync for FFI_ExecutionPlan {}
 pub struct ExecutionPlanPrivateData {
     pub plan: Arc<dyn ExecutionPlan>,
     pub context: Arc<TaskContext>,
+    pub runtime: Option<Handle>,
 }
 
 unsafe extern "C" fn properties_fn_wrapper(
@@ -88,11 +90,14 @@ unsafe extern "C" fn children_fn_wrapper(
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
     let ctx = &(*private_data).context;
+    let runtime = &(*private_data).runtime;
 
     let children: Vec<_> = plan
         .children()
         .into_iter()
-        .map(|child| FFI_ExecutionPlan::new(Arc::clone(child), Arc::clone(ctx)))
+        .map(|child| {
+            FFI_ExecutionPlan::new(Arc::clone(child), Arc::clone(ctx), runtime.clone())
+        })
         .collect();
 
     children.into()
@@ -105,9 +110,10 @@ unsafe extern "C" fn execute_fn_wrapper(
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
     let ctx = &(*private_data).context;
+    let runtime = (*private_data).runtime.clone();
 
     match plan.execute(partition, Arc::clone(ctx)) {
-        Ok(rbs) => RResult::ROk(rbs.into()),
+        Ok(rbs) => RResult::ROk(FFI_RecordBatchStream::new(rbs, runtime)),
         Err(e) => RResult::RErr(
             format!("Error occurred during FFI_ExecutionPlan execute: {}", e).into(),
         ),
@@ -129,7 +135,11 @@ unsafe extern "C" fn clone_fn_wrapper(plan: &FFI_ExecutionPlan) -> FFI_Execution
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan_data = &(*private_data);
 
-    FFI_ExecutionPlan::new(Arc::clone(&plan_data.plan), Arc::clone(&plan_data.context))
+    FFI_ExecutionPlan::new(
+        Arc::clone(&plan_data.plan),
+        Arc::clone(&plan_data.context),
+        plan_data.runtime.clone(),
+    )
 }
 
 impl Clone for FFI_ExecutionPlan {
@@ -140,8 +150,16 @@ impl Clone for FFI_ExecutionPlan {
 
 impl FFI_ExecutionPlan {
     /// This function is called on the provider's side.
-    pub fn new(plan: Arc<dyn ExecutionPlan>, context: Arc<TaskContext>) -> Self {
-        let private_data = Box::new(ExecutionPlanPrivateData { plan, context });
+    pub fn new(
+        plan: Arc<dyn ExecutionPlan>,
+        context: Arc<TaskContext>,
+        runtime: Option<Handle>,
+    ) -> Self {
+        let private_data = Box::new(ExecutionPlanPrivateData {
+            plan,
+            context,
+            runtime,
+        });
 
         Self {
             properties: properties_fn_wrapper,
@@ -357,7 +375,7 @@ mod tests {
         let original_plan = Arc::new(EmptyExec::new(schema));
         let original_name = original_plan.name().to_string();
 
-        let local_plan = FFI_ExecutionPlan::new(original_plan, ctx.task_ctx());
+        let local_plan = FFI_ExecutionPlan::new(original_plan, ctx.task_ctx(), None);
 
         let foreign_plan: ForeignExecutionPlan = (&local_plan).try_into()?;
 

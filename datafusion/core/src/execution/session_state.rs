@@ -24,15 +24,15 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::catalog::{CatalogProviderList, SchemaProvider, TableProviderFactory};
-use crate::catalog_common::information_schema::{
-    InformationSchemaProvider, INFORMATION_SCHEMA,
-};
 use crate::datasource::cte_worktable::CteWorkTable;
 use crate::datasource::file_format::{format_as_file_type, FileFormatFactory};
 use crate::datasource::provider_as_source;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::execution::SessionStateDefaults;
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
+use datafusion_catalog::information_schema::{
+    InformationSchemaProvider, INFORMATION_SCHEMA,
+};
 use datafusion_catalog::MemoryCatalogProviderList;
 
 use arrow_schema::{DataType, SchemaRef};
@@ -529,16 +529,16 @@ impl SessionState {
 
     /// Resolve all table references in the SQL statement. Does not include CTE references.
     ///
-    /// See [`catalog::resolve_table_references`] for more information.
+    /// See [`datafusion_catalog::resolve_table_references`] for more information.
     ///
-    /// [`catalog::resolve_table_references`]: crate::catalog_common::resolve_table_references
+    /// [`datafusion_catalog::resolve_table_references`]: datafusion_catalog::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        let (table_refs, _) = crate::catalog_common::resolve_table_references(
+        let (table_refs, _) = datafusion_catalog::resolve_table_references(
             statement,
             enable_ident_normalization,
         )?;
@@ -582,6 +582,7 @@ impl SessionState {
             enable_options_value_normalization: sql_parser_options
                 .enable_options_value_normalization,
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
+            collect_spans: sql_parser_options.collect_spans,
         }
     }
 

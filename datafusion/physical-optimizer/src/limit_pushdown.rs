@@ -31,7 +31,6 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
 #[derive(Default, Debug)]
@@ -147,6 +146,15 @@ pub fn pushdown_limit_helper(
         global_state.skip = skip;
         global_state.fetch = fetch;
 
+        if limit_exec.input().as_any().is::<CoalescePartitionsExec>() {
+            // If the child is a `CoalescePartitionsExec`, we should not remove the limit
+            // the push_down through the `CoalescePartitionsExec` to each partition will not guarantee the limit.
+            // TODO: we may have a better solution if we can support with_fetch for limit inside CoalescePartitionsExec.
+            // Follow-up issue: https://github.com/apache/datafusion/issues/14446
+            global_state.satisfied = true;
+            return Ok((Transformed::no(pushdown_plan), global_state));
+        }
+
         // Now the global state has the most recent information, we can remove
         // the `LimitExec` plan. We will decide later if we should add it again
         // or not.
@@ -248,7 +256,15 @@ pub fn pushdown_limit_helper(
             }
         } else {
             // Add fetch or a `LimitExec`:
-            global_state.satisfied = true;
+            // If the plan's children have limit and the child's limit < parent's limit, we shouldn't change the global state to true,
+            // because the children limit will be overridden if the global state is changed.
+            if !pushdown_plan
+                .children()
+                .iter()
+                .any(|&child| extract_limit(child).is_some())
+            {
+                global_state.satisfied = true;
+            }
             pushdown_plan = if let Some(plan_with_fetch) = maybe_fetchable {
                 if global_skip > 0 {
                     add_global_limit(plan_with_fetch, global_skip, Some(global_fetch))

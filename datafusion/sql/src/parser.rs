@@ -284,10 +284,10 @@ impl<'a> DFParser<'a> {
         dialect: &'a dyn Dialect,
     ) -> Result<Self, ParserError> {
         let mut tokenizer = Tokenizer::new(dialect, sql);
-        let tokens = tokenizer.tokenize()?;
+        let tokens = tokenizer.tokenize_with_location()?;
 
         Ok(DFParser {
-            parser: Parser::new(dialect).with_tokens(tokens),
+            parser: Parser::new(dialect).with_tokens_with_locations(tokens),
         })
     }
 
@@ -354,6 +354,14 @@ impl<'a> DFParser<'a> {
                         self.parse_create()
                     }
                     Keyword::COPY => {
+                        if let Token::Word(w) = self.parser.peek_nth_token(1).token {
+                            // use native parser for COPY INTO
+                            if w.keyword == Keyword::INTO {
+                                return Ok(Statement::Statement(Box::from(
+                                    self.parser.parse_statement()?,
+                                )));
+                            }
+                        }
                         self.parser.next_token(); // COPY
                         self.parse_copy()
                     }
@@ -877,6 +885,7 @@ mod tests {
     use super::*;
     use sqlparser::ast::Expr::Identifier;
     use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident};
+    use sqlparser::dialect::SnowflakeDialect;
     use sqlparser::tokenizer::Span;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
@@ -1400,6 +1409,23 @@ mod tests {
         });
 
         assert_eq!(verified_stmt(sql), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn skip_copy_into_snowflake() -> Result<(), ParserError> {
+        let sql = "COPY INTO foo FROM @~/staged FILE_FORMAT = (FORMAT_NAME = 'mycsv');";
+        let dialect = Box::new(SnowflakeDialect);
+        let statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
+
+        assert_eq!(
+            statements.len(),
+            1,
+            "Expected to parse exactly one statement"
+        );
+        if let Statement::CopyTo(_) = &statements[0] {
+            panic!("Expected non COPY TO statement, but was successful: {statements:?}");
+        }
         Ok(())
     }
 

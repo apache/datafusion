@@ -839,27 +839,52 @@ SELECT
 ----
 NULL true true
 
-# \ is an implicit escape character
+# Literals with different arrow types
 query BBBB
-SELECT
-    'a' LIKE '\%',
-    '\a' LIKE '\%',
-    '%' LIKE '\%',
-    '\%' LIKE '\%'
+select
+  arrow_cast('foobar', 'Utf8')                    LIKE arrow_cast('foo%', 'Utf8'),
+  arrow_cast('foobar', 'LargeUtf8')               LIKE arrow_cast('foo%', 'LargeUtf8'),
+  arrow_cast('foobar', 'Utf8View')                LIKE arrow_cast('foo%', 'Utf8View'),
+  arrow_cast('foobar', 'Dictionary(Int32, Utf8)') LIKE arrow_cast('foo%', 'Dictionary(Int32, Utf8)')
 ----
-false false true false
+true true true true
+
+# Literal with UTF8 string and different arrow types for pattern
+query BBBB
+select
+  'foobar' LIKE arrow_cast('foo%', 'Utf8'),
+  'foobar' LIKE arrow_cast('foo%', 'LargeUtf8'),
+  'foobar' LIKE arrow_cast('foo%', 'Utf8View'),
+  'foobar' LIKE arrow_cast('foo%', 'Dictionary(Int32, Utf8)')
+----
+true true true true
+
+# Escapes
 
 # \ is an implicit escape character
 query BBBBBB
 SELECT
+    'a' LIKE '\%',
+    '\a' LIKE '\%',
+    '\a' LIKE '\\%',
+    '%' LIKE '\%',
+    '\%' LIKE '\%',
+    '\%' LIKE '\\%'
+----
+false false true true false true
+
+# \ is an implicit escape character
+query BBBBBBB
+SELECT
     'a' LIKE '\_',
     '\a' LIKE '\_',
+    '\a' LIKE '\\_',
     '_' LIKE '\_',
     '\_' LIKE '\_',
     'abc' LIKE 'a_c',
     'abc' LIKE 'a\_c'
 ----
-false false true false true false
+false false true true false true false
 
 query BBBB
 SELECT
