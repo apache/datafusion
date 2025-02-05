@@ -153,6 +153,7 @@ pub enum TransactionIsolationLevel {
     ReadCommitted,
     RepeatableRead,
     Serializable,
+    Snapshot,
 }
 
 /// Indicator that the following statements should be committed or rolled back atomically
