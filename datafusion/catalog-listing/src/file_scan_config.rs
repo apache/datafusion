@@ -298,7 +298,7 @@ fn get_projected_output_ordering(
 ///
 /// Use [`wrap_partition_value_in_dict`] to wrap a [`ScalarValue`] in the same say.
 ///
-/// [`ListingTable`]: crate::datasource::listing::ListingTable
+/// [`ListingTable`]: https://github.com/apache/datafusion/blob/main/datafusion/core/src/datasource/listing/table.rs#L707
 pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
 }
@@ -317,8 +317,8 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_schema::Schema;
-/// use datafusion::datasource::listing::PartitionedFile;
-/// # use datafusion::datasource::physical_plan::FileScanConfig;
+/// # use datafusion_catalog_listing::PartitionedFile;
+/// # use datafusion_catalog_listing::file_scan_config::FileScanConfig;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # let file_schema = Arc::new(Schema::empty());
 /// // create FileScan config for reading data from file://

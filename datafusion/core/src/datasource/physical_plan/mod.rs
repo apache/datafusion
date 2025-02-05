@@ -21,12 +21,10 @@ mod arrow_file;
 mod avro;
 mod csv;
 mod file_groups;
-// mod file_scan_config;
 mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
-// mod statistics;
 
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
