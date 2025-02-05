@@ -419,6 +419,34 @@ FROM t;
 statement ok
 drop table t
 
+statement ok
+create table t as values
+(
+ { 'foo': 'baz' }, 
+ { 'xxx': arrow_cast('blarg', 'Utf8View') } 
+);
+
+query error Failed to coerce then
+select CASE WHEN 1=2 THEN column1 ELSE column2 END from t ;
+
+statement ok
+drop table t
+
+statement ok
+create table t as values
+(
+  { 'name': 'Alice', 'age': 25 },
+  { 'age': 30, 'name': 'Bob' }  
+);
+
+query ?
+select CASE WHEN 1=2 THEN column1 ELSE column2 END from t;
+----
+{age: 30, name: Bob}
+
+statement ok
+drop table t
+
 # Fix coercion of lists of structs
 # https://github.com/apache/datafusion/issues/14154
 

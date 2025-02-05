@@ -30,8 +30,8 @@ use arrow::datatypes::{
 };
 use datafusion_common::types::NativeType;
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, plan_err, Diagnostic, Result, Span,
-    Spans,
+    exec_err, internal_err, plan_datafusion_err, plan_err, Diagnostic, HashMap, Result,
+    Span, Spans,
 };
 use itertools::Itertools;
 
@@ -624,7 +624,11 @@ pub fn try_type_union_resolution_with_struct(
     let mut keys_string: Option<String> = None;
     for data_type in data_types {
         if let DataType::Struct(fields) = data_type {
-            let keys = fields.iter().map(|f| f.name().to_owned()).join(",");
+            let keys = fields
+                .iter()
+                .map(|f| f.name().to_owned())
+                .sorted()
+                .join(",");
             if let Some(ref k) = keys_string {
                 if *k != keys {
                     return exec_err!("Expect same keys for struct type but got mismatched pair {} and {}", *k, keys);
@@ -637,31 +641,36 @@ pub fn try_type_union_resolution_with_struct(
         }
     }
 
-    let mut struct_types: Vec<DataType> = if let DataType::Struct(fields) = &data_types[0]
+    let mut struct_types_map: HashMap<String, DataType> = if let DataType::Struct(
+        fields,
+    ) = &data_types[0]
     {
-        fields.iter().map(|f| f.data_type().to_owned()).collect()
+        fields
+            .iter()
+            .map(|f| (f.name().to_owned(), f.data_type().to_owned()))
+            .collect()
     } else {
         return internal_err!("Struct type is checked is the previous function, so this should be unreachable");
     };
 
     for data_type in data_types.iter().skip(1) {
         if let DataType::Struct(fields) = data_type {
-            let incoming_struct_types: Vec<DataType> =
-                fields.iter().map(|f| f.data_type().to_owned()).collect();
-            // The order of field is verified above
-            for (lhs_type, rhs_type) in
-                struct_types.iter_mut().zip(incoming_struct_types.iter())
-            {
-                if let Some(coerced_type) =
-                    type_union_resolution_coercion(lhs_type, rhs_type)
-                {
-                    *lhs_type = coerced_type;
+            for field in fields.iter() {
+                let field_name = field.name();
+                if let Some(existing_type) = struct_types_map.get_mut(field_name) {
+                    if let Some(coerced_type) =
+                        type_union_resolution_coercion(&field.data_type(), existing_type)
+                    {
+                        *existing_type = coerced_type;
+                    } else {
+                        return exec_err!(
+                            "Fail to find the coerced type for {} and {}",
+                            field.data_type(),
+                            existing_type
+                        );
+                    }
                 } else {
-                    return exec_err!(
-                        "Fail to find the coerced type for {} and {}",
-                        lhs_type,
-                        rhs_type
-                    );
+                    return exec_err!("Field {} not found in first struct", field_name);
                 }
             }
         } else {
@@ -673,15 +682,14 @@ pub fn try_type_union_resolution_with_struct(
     for s in data_types {
         let mut new_fields = vec![];
         if let DataType::Struct(fields) = s {
-            for (i, f) in fields.iter().enumerate() {
+            for f in fields.iter() {
                 let field = Arc::unwrap_or_clone(Arc::clone(f))
-                    .with_data_type(struct_types[i].to_owned());
+                    .with_data_type(struct_types_map.get(f.name()).unwrap().to_owned()); // we can unwrap here since all fields are in the map
                 new_fields.push(Arc::new(field));
             }
         }
         final_struct_types.push(DataType::Struct(new_fields.into()))
     }
-
     Ok(final_struct_types)
 }
 
@@ -980,7 +988,11 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (Struct(lhs_fields), Struct(rhs_fields)) => {
-            if lhs_fields.len() != rhs_fields.len() {
+            if lhs_fields.len() != rhs_fields.len() || {
+                let l = lhs_fields.iter().map(|f| f.name()).sorted().join(",");
+                let r = rhs_fields.iter().map(|f| f.name()).sorted().join(",");
+                l != r
+            } {
                 return None;
             }
 
