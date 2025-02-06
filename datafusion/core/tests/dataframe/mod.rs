@@ -20,7 +20,7 @@ mod dataframe_functions;
 mod describe;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
+    record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
     FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder,
     Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
     StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray,
