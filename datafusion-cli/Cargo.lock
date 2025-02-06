@@ -1219,6 +1219,7 @@ dependencies = [
  "bzip2 0.5.0",
  "chrono",
  "datafusion-catalog",
+ "datafusion-catalog-listing",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-execution",
@@ -1275,6 +1276,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-catalog-listing"
+version = "45.0.0"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "chrono",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "futures",
+ "glob",
+ "itertools 0.14.0",
+ "log",
+ "object_store",
+ "url",
+]
+
+[[package]]
 name = "datafusion-cli"
 version = "45.0.0"
 dependencies = [
@@ -1309,7 +1332,6 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ipc",
  "arrow-schema",
  "base64 0.22.1",
@@ -1419,7 +1441,6 @@ version = "45.0.0"
 dependencies = [
  "ahash",
  "arrow",
- "arrow-buffer",
  "arrow-schema",
  "datafusion-common",
  "datafusion-doc",
@@ -1451,7 +1472,6 @@ version = "45.0.0"
 dependencies = [
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ord",
  "arrow-schema",
  "datafusion-common",
@@ -1537,7 +1557,6 @@ dependencies = [
  "ahash",
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-schema",
  "datafusion-common",
  "datafusion-expr",
@@ -1559,7 +1578,6 @@ version = "45.0.0"
 dependencies = [
  "ahash",
  "arrow",
- "arrow-buffer",
  "datafusion-common",
  "datafusion-expr-common",
  "hashbrown 0.14.5",
@@ -1593,7 +1611,6 @@ dependencies = [
  "ahash",
  "arrow",
  "arrow-array",
- "arrow-buffer",
  "arrow-ord",
  "arrow-schema",
  "async-trait",
@@ -3781,11 +3798,12 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 
 [[package]]
 name = "sqlparser"
-version = "0.53.0"
+version = "0.54.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05a528114c392209b3264855ad491fcce534b94a38771b0a0b97a79379275ce8"
+checksum = "c66e3b7374ad4a6af849b08b3e7a6eda0edbd82f0fd59b57e22671bf16979899"
 dependencies = [
  "log",
+ "recursive",
  "sqlparser_derive",
 ]
 

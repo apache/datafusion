@@ -32,13 +32,14 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::collect;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
-use datafusion_physical_plan::memory::MemoryExec;
+use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
     displayable, get_plan_string, ExecutionPlan, Partitioning,
 };
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_expr::{JoinType, Operator};
@@ -212,7 +213,7 @@ async fn test_replace_multiple_input_repartition_1(
             "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -229,13 +230,13 @@ async fn test_replace_multiple_input_repartition_1(
             "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     assert_optimized_in_all_boundedness_situations!(
         expected_input_unbounded,
@@ -302,7 +303,7 @@ async fn test_with_inter_children_change_only(
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC",
+            "                  DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -328,7 +329,7 @@ async fn test_with_inter_children_change_only(
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC",
+            "                  DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC",
         ];
     let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC]",
@@ -338,7 +339,7 @@ async fn test_with_inter_children_change_only(
             "        SortPreservingMergeExec: [a@0 ASC]",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC",
+            "              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC",
         ];
     assert_optimized_in_all_boundedness_situations!(
         expected_input_unbounded,
@@ -388,7 +389,7 @@ async fn test_replace_multiple_input_repartition_2(
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -407,14 +408,14 @@ async fn test_replace_multiple_input_repartition_2(
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     assert_optimized_in_all_boundedness_situations!(
         expected_input_unbounded,
@@ -467,7 +468,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -488,7 +489,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -496,7 +497,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps(
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     assert_optimized_in_all_boundedness_situations!(
         expected_input_unbounded,
@@ -552,7 +553,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          CoalesceBatchesExec: target_batch_size=8192",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -575,7 +576,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          CoalesceBatchesExec: target_batch_size=8192",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -584,7 +585,7 @@ async fn test_replace_multiple_input_repartition_with_extra_steps_2(
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "        CoalesceBatchesExec: target_batch_size=8192",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     assert_optimized_in_all_boundedness_situations!(
         expected_input_unbounded,
@@ -635,7 +636,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -655,7 +656,7 @@ async fn test_not_replacing_when_no_need_to_preserve_sorting(
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "          DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
 
@@ -713,7 +714,7 @@ async fn test_with_multiple_replacable_repartitions(
             "        FilterExec: c@1 > 3",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -736,7 +737,7 @@ async fn test_with_multiple_replacable_repartitions(
             "        FilterExec: c@1 > 3",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "              MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "              DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
@@ -745,7 +746,7 @@ async fn test_with_multiple_replacable_repartitions(
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     assert_optimized_in_all_boundedness_situations!(
         expected_input_unbounded,
@@ -797,7 +798,7 @@ async fn test_not_replace_with_different_orderings(
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -815,7 +816,7 @@ async fn test_not_replace_with_different_orderings(
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
 
@@ -864,7 +865,7 @@ async fn test_with_lost_ordering(
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -881,13 +882,13 @@ async fn test_with_lost_ordering(
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "        DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "      MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "      DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     assert_optimized_in_all_boundedness_situations!(
         expected_input_unbounded,
@@ -954,7 +955,7 @@ async fn test_with_lost_and_kept_ordering(
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "                  DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -981,7 +982,7 @@ async fn test_with_lost_and_kept_ordering(
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                  MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "                  DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [c@1 ASC]",
@@ -992,7 +993,7 @@ async fn test_with_lost_and_kept_ordering(
             "          CoalescePartitionsExec",
             "            RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "                MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "                DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     assert_optimized_in_all_boundedness_situations!(
         expected_input_unbounded,
@@ -1069,11 +1070,11 @@ async fn test_with_multiple_child_trees(
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
 
     // Expected unbounded result (same for with and without flag)
@@ -1100,11 +1101,11 @@ async fn test_with_multiple_child_trees(
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "            MemoryExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
+            "            DataSourceExec: partitions=1, partition_sizes=[1], output_ordering=a@0 ASC NULLS LAST",
         ];
     let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
 
@@ -1259,9 +1260,11 @@ fn memory_exec_sorted(
             .map(|_| vec![make_partition(schema, rows)])
             .collect();
         let projection: Vec<usize> = vec![0, 2, 3];
-        MemoryExec::try_new(&data, schema.clone(), Some(projection))
-            .unwrap()
-            .try_with_sort_information(vec![sort_exprs])
-            .unwrap()
+        DataSourceExec::new(Arc::new(
+            MemorySourceConfig::try_new(&data, schema.clone(), Some(projection))
+                .unwrap()
+                .try_with_sort_information(vec![sort_exprs])
+                .unwrap(),
+        ))
     })
 }

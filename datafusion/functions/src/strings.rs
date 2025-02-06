@@ -19,11 +19,11 @@ use std::mem::size_of;
 
 use arrow::array::{
     make_view, Array, ArrayAccessor, ArrayDataBuilder, ArrayIter, ByteView,
-    GenericStringArray, LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray,
-    StringViewBuilder,
+    GenericStringArray, LargeStringArray, NullBufferBuilder, OffsetSizeTrait,
+    StringArray, StringViewArray, StringViewBuilder,
 };
+use arrow::buffer::{MutableBuffer, NullBuffer};
 use arrow::datatypes::DataType;
-use arrow_buffer::{MutableBuffer, NullBuffer, NullBufferBuilder};
 
 /// Abstracts iteration over different types of string arrays.
 #[deprecated(since = "45.0.0", note = "Use arrow::array::StringArrayType instead")]

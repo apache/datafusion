@@ -466,6 +466,7 @@ impl TableRelationBuilder {
             partitions: self.partitions.clone(),
             with_ordinality: false,
             json_path: None,
+            sample: None,
         })
     }
     fn create_empty() -> Self {

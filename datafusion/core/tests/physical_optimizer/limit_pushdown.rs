@@ -233,12 +233,11 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
         LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
     let expected = [
-            "GlobalLimitExec: skip=0, fetch=5",
-            "  CoalescePartitionsExec",
-            "    CoalesceBatchesExec: target_batch_size=8192, fetch=5",
-            "      FilterExec: c3@2 > 0",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+        "CoalescePartitionsExec: fetch=5",
+        "  CoalesceBatchesExec: target_batch_size=8192, fetch=5",
+        "    FilterExec: c3@2 > 0",
+        "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
         ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 
@@ -378,11 +377,10 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions() -> R
         LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
 
     let expected = [
-            "GlobalLimitExec: skip=0, fetch=5",
-            "  CoalescePartitionsExec",
-            "    FilterExec: c3@2 > 0",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
-            "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
+            "CoalescePartitionsExec: fetch=5",
+            "  FilterExec: c3@2 > 0",
+            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
         ];
     assert_eq!(get_plan_string(&after_optimize), expected);
 

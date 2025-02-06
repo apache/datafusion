@@ -19,6 +19,7 @@
 mod dataframe_functions;
 mod describe;
 
+use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{DataType, Field, Float32Type, Int32Type, Schema, UInt64Type};
 use arrow::util::pretty::pretty_format_batches;
 use arrow::{
@@ -33,7 +34,6 @@ use arrow_array::{
     record_batch, Array, BooleanArray, DictionaryArray, Float32Array, Float64Array,
     Int8Array, UnionArray,
 };
-use arrow_buffer::ScalarBuffer;
 use arrow_schema::{ArrowError, SchemaRef, UnionFields, UnionMode};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::expr_fn::{
@@ -549,7 +549,7 @@ async fn test_aggregate_with_pk() -> Result<()> {
         &df,
         vec![
             "AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
-            "  MemoryExec: partitions=1, partition_sizes=[1]",
+            "  DataSourceExec: partitions=1, partition_sizes=[1]",
         ],
     )
     .await;
@@ -593,7 +593,7 @@ async fn test_aggregate_with_pk2() -> Result<()> {
             "CoalesceBatchesExec: target_batch_size=8192",
             "  FilterExec: id@0 = 1 AND name@1 = a",
             "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
-            "      MemoryExec: partitions=1, partition_sizes=[1]",
+            "      DataSourceExec: partitions=1, partition_sizes=[1]",
         ],
     )
     .await;
@@ -642,7 +642,7 @@ async fn test_aggregate_with_pk3() -> Result<()> {
             "CoalesceBatchesExec: target_batch_size=8192",
             "  FilterExec: id@0 = 1",
             "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
-            "      MemoryExec: partitions=1, partition_sizes=[1]",
+            "      DataSourceExec: partitions=1, partition_sizes=[1]",
         ],
     )
     .await;
@@ -693,7 +693,7 @@ async fn test_aggregate_with_pk4() -> Result<()> {
             "CoalesceBatchesExec: target_batch_size=8192",
             "  FilterExec: id@0 = 1",
             "    AggregateExec: mode=Single, gby=[id@0 as id], aggr=[]",
-            "      MemoryExec: partitions=1, partition_sizes=[1]",
+            "      DataSourceExec: partitions=1, partition_sizes=[1]",
         ],
     )
     .await;

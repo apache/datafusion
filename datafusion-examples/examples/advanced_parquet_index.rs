@@ -25,18 +25,14 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
-use bytes::Bytes;
 use datafusion::catalog::Session;
 use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::{
-    ParquetAccessPlan, ParquetExecBuilder,
-};
+use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
-    parquet::ParquetFileReaderFactory, FileMeta, FileScanConfig,
+    parquet::ParquetFileReaderFactory, FileMeta, FileScanConfig, ParquetSource,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -56,6 +52,9 @@ use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
+
+use async_trait::async_trait;
+use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use object_store::ObjectStore;
@@ -83,8 +82,8 @@ use url::Url;
 /// Specifically, this example illustrates how to:
 /// 1. Use [`ParquetFileReaderFactory`] to avoid re-reading parquet metadata on each query
 /// 2. Use [`PruningPredicate`] for predicate analysis
-/// 3. Pass a row group selection to [`ParquetExec`]
-/// 4. Pass a row selection (within a row group) to [`ParquetExec`]
+/// 3. Pass a row group selection to [`ParquetSource`]
+/// 4. Pass a row selection (within a row group) to [`ParquetSource`]
 ///
 /// Note this is a *VERY* low level example for people who want to build their
 /// own custom indexes (e.g. for low latency queries). Most users should use
@@ -94,38 +93,38 @@ use url::Url;
 ///
 /// # Diagram
 ///
-/// This diagram shows how the `ParquetExec` is configured to do only a single
+/// This diagram shows how the `DataSourceExec` with `ParquetSource` is configured to do only a single
 /// (range) read from a parquet file, for the data that is needed. It does
 /// not read the file footer or any of the row groups that are not needed.
 ///
 /// ```text
 ///         ┌───────────────────────┐ The TableProvider configures the
-///         │ ┌───────────────────┐ │ ParquetExec:
+///         │ ┌───────────────────┐ │ DataSourceExec:
 ///         │ │                   │ │
 ///         │ └───────────────────┘ │
 ///         │ ┌───────────────────┐ │
 /// Row     │ │                   │ │  1. To read only specific Row
-/// Groups  │ └───────────────────┘ │  Groups (the ParquetExec tries
+/// Groups  │ └───────────────────┘ │  Groups (the DataSourceExec tries
 ///         │ ┌───────────────────┐ │  to reduce this further based
 ///         │ │                   │ │  on metadata)
-///         │ └───────────────────┘ │              ┌────────────────────┐
-///         │ ┌───────────────────┐ │              │                    │
-///         │ │                   │◀┼ ─ ─ ┐        │    ParquetExec     │
-///         │ └───────────────────┘ │              │  (Parquet Reader)  │
-///         │          ...          │     └ ─ ─ ─ ─│                    │
-///         │ ┌───────────────────┐ │              │ ╔═══════════════╗  │
-///         │ │                   │ │              │ ║ParquetMetadata║  │
-///         │ └───────────────────┘ │              │ ╚═══════════════╝  │
-///         │ ╔═══════════════════╗ │              └────────────────────┘
+///         │ └───────────────────┘ │              ┌──────────────────────┐
+///         │ ┌───────────────────┐ │              │                      │
+///         │ │                   │◀┼ ─ ─ ┐        │   DataSourceExec     │
+///         │ └───────────────────┘ │     │        │  (Parquet Reader)    │
+///         │          ...          │     └ ─ ─ ─ ─│                      │
+///         │ ┌───────────────────┐ │              │ ╔═══════════════╗    │
+///         │ │                   │ │              │ ║ParquetMetadata║    │
+///         │ └───────────────────┘ │              │ ╚═══════════════╝    │
+///         │ ╔═══════════════════╗ │              └──────────────────────┘
 ///         │ ║  Thrift metadata  ║ │
 ///         │ ╚═══════════════════╝ │      1. With cached ParquetMetadata, so
-///         └───────────────────────┘      the ParquetExec does not re-read /
+///         └───────────────────────┘      the ParquetSource does not re-read /
 ///          Parquet File                  decode the thrift footer
 ///
 /// ```
 ///
 /// Within a Row Group, Column Chunks store data in DataPages. This example also
-/// shows how to configure the ParquetExec to read a `RowSelection` (row ranges)
+/// shows how to configure the ParquetSource to read a `RowSelection` (row ranges)
 /// which will skip unneeded data pages. This requires that the Parquet file has
 /// a [Page Index].
 ///
@@ -135,15 +134,15 @@ use url::Url;
 ///         │                       │   Data Page is not fetched or decoded.
 ///         │ ┌───────────────────┐ │   Note this requires a PageIndex
 ///         │ │     ┌──────────┐  │ │
-/// Row     │ │     │DataPage 0│  │ │                 ┌────────────────────┐
-/// Groups  │ │     └──────────┘  │ │                 │                    │
-///         │ │     ┌──────────┐  │ │                 │    ParquetExec     │
-///         │ │ ... │DataPage 1│ ◀┼ ┼ ─ ─ ─           │  (Parquet Reader)  │
-///         │ │     └──────────┘  │ │      └ ─ ─ ─ ─ ─│                    │
-///         │ │     ┌──────────┐  │ │                 │ ╔═══════════════╗  │
-///         │ │     │DataPage 2│  │ │ If only rows    │ ║ParquetMetadata║  │
-///         │ │     └──────────┘  │ │ from DataPage 1 │ ╚═══════════════╝  │
-///         │ └───────────────────┘ │ are selected,   └────────────────────┘
+/// Row     │ │     │DataPage 0│  │ │                 ┌──────────────────────┐
+/// Groups  │ │     └──────────┘  │ │                 │                      │
+///         │ │     ┌──────────┐  │ │                 │   DataSourceExec     │
+///         │ │ ... │DataPage 1│ ◀┼ ┼ ─ ─ ─           │  (Parquet Reader)    │
+///         │ │     └──────────┘  │ │      └ ─ ─ ─ ─ ─│                      │
+///         │ │     ┌──────────┐  │ │                 │ ╔═══════════════╗    │
+///         │ │     │DataPage 2│  │ │ If only rows    │ ║ParquetMetadata║    │
+///         │ │     └──────────┘  │ │ from DataPage 1 │ ╚═══════════════╝    │
+///         │ └───────────────────┘ │ are selected,   └──────────────────────┘
 ///         │                       │ only DataPage 1
 ///         │          ...          │ is fetched and
 ///         │                       │ decoded
@@ -211,7 +210,7 @@ async fn main() -> Result<()> {
     // pages that must be decoded
     //
     // Note: in order to prune pages, the Page Index must be loaded and the
-    // ParquetExec will load it on demand if not present. To avoid a second IO
+    // DataSourceExec will load it on demand if not present. To avoid a second IO
     // during query, this example loaded the Page Index preemptively by setting
     // `ArrowReader::with_page_index` in `IndexedFile::try_new`
     provider.set_use_row_selection(true);
@@ -478,31 +477,34 @@ impl TableProvider for IndexTableProvider {
 
         let partitioned_file = indexed_file
             .partitioned_file()
-            // provide the starting access plan to the ParquetExec by
+            // provide the starting access plan to the DataSourceExec by
             // storing it as  "extensions" on PartitionedFile
             .with_extensions(Arc::new(access_plan) as _);
 
         // Prepare for scanning
         let schema = self.schema();
         let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let file_scan_config = FileScanConfig::new(object_store_url, schema)
-            .with_limit(limit)
-            .with_projection(projection.cloned())
-            .with_file(partitioned_file);
 
         // Configure a factory interface to avoid re-reading the metadata for each file
         let reader_factory =
             CachedParquetFileReaderFactory::new(Arc::clone(&self.object_store))
                 .with_file(indexed_file);
 
-        // Finally, put it all together into a ParquetExec
-        Ok(ParquetExecBuilder::new(file_scan_config)
-            // provide the predicate so the ParquetExec can try and prune
-            // row groups internally
-            .with_predicate(predicate)
-            // provide the factory to create parquet reader without re-reading metadata
-            .with_parquet_file_reader_factory(Arc::new(reader_factory))
-            .build_arc())
+        let file_source = Arc::new(
+            ParquetSource::default()
+                // provide the predicate so the DataSourceExec can try and prune
+                // row groups internally
+                .with_predicate(Arc::clone(&schema), predicate)
+                // provide the factory to create parquet reader without re-reading metadata
+                .with_parquet_file_reader_factory(Arc::new(reader_factory)),
+        );
+        let file_scan_config = FileScanConfig::new(object_store_url, schema, file_source)
+            .with_limit(limit)
+            .with_projection(projection.cloned())
+            .with_file(partitioned_file);
+
+        // Finally, put it all together into a DataSourceExec
+        Ok(file_scan_config.new_exec())
     }
 
     /// Tell DataFusion to push filters down to the scan method
