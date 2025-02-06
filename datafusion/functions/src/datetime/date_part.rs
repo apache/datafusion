@@ -28,6 +28,7 @@ use arrow::datatypes::DataType::{
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
+use crate::utils::take_function_args;
 use datafusion_common::not_impl_err;
 use datafusion_common::{
     cast::{
@@ -140,10 +141,9 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        // Length check handled in the signature
-        debug_assert_eq!(args.scalar_arguments.len(), 2);
+        let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
 
-        args.scalar_arguments[0]
+        field
             .and_then(|sv| {
                 sv.try_as_str()
                     .flatten()

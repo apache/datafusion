@@ -73,7 +73,7 @@ physical_plan
 07)------------CoalesceBatchesExec: target_batch_size=8192
 08)--------------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], has_header=true
+10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], file_type=csv, has_header=true
 
 query I
 INSERT INTO table_without_values SELECT
@@ -133,7 +133,7 @@ physical_plan
 06)----------CoalesceBatchesExec: target_batch_size=8192
 07)------------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-09)----------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], has_header=true
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], file_type=csv, has_header=true
 
 
 
@@ -184,7 +184,7 @@ physical_plan
 07)------------CoalesceBatchesExec: target_batch_size=8192
 08)--------------RepartitionExec: partitioning=Hash([c1@0], 8), input_partitions=8
 09)----------------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
-10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], has_header=true
+10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c4, c9], file_type=csv, has_header=true
 
 
 query I
@@ -219,7 +219,7 @@ logical_plan
 physical_plan
 01)DataSinkExec: sink=MemoryTable (partitions=1)
 02)--SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
 
 query I
 insert into table_without_values select c1 from aggregate_test_100 order by c1;

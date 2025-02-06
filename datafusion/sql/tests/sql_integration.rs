@@ -2511,6 +2511,21 @@ fn select_groupby_orderby() {
   FROM person GROUP BY person.birth_date ORDER BY birth_date;
 "#;
     quick_test(sql, expected);
+
+    // Use columnized `avg(age)` in the order by
+    let sql = r#"SELECT
+  avg(age) + avg(age),
+  date_trunc('month', person.birth_date) AS "birth_date"
+  FROM person GROUP BY person.birth_date ORDER BY avg(age) + avg(age);
+"#;
+
+    let expected =
+        "Sort: avg(person.age) + avg(person.age) ASC NULLS LAST\
+        \n  Projection: avg(person.age) + avg(person.age), date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date\
+        \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]\
+        \n      TableScan: person";
+
+    quick_test(sql, expected);
 }
 
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
@@ -4518,7 +4533,7 @@ fn error_message_test(sql: &str, err_msg_starts_with: &str) {
 fn test_error_message_invalid_scalar_function_signature() {
     error_message_test(
         "select sqrt()",
-        "Error during planning: sqrt does not support zero arguments",
+        "Error during planning: 'sqrt' does not support zero arguments",
     );
     error_message_test(
         "select sqrt(1, 2)",
@@ -4530,13 +4545,13 @@ fn test_error_message_invalid_scalar_function_signature() {
 fn test_error_message_invalid_aggregate_function_signature() {
     error_message_test(
         "select sum()",
-        "Error during planning: sum does not support zero arguments",
+        "Error during planning: 'sum' does not support zero arguments",
     );
     // We keep two different prefixes because they clarify each other.
     // It might be incorrect, and we should consider keeping only one.
     error_message_test(
         "select max(9, 3)",
-        "Error during planning: Execution error: User-defined coercion failed",
+        "Error during planning: Execution error: Function 'max' user-defined coercion failed",
     );
 }
 
@@ -4544,7 +4559,7 @@ fn test_error_message_invalid_aggregate_function_signature() {
 fn test_error_message_invalid_window_function_signature() {
     error_message_test(
         "select rank(1) over()",
-        "Error during planning: The function expected zero argument but received 1",
+        "Error during planning: The function 'rank' expected zero argument but received 1",
     );
 }
 
@@ -4552,7 +4567,7 @@ fn test_error_message_invalid_window_function_signature() {
 fn test_error_message_invalid_window_aggregate_function_signature() {
     error_message_test(
         "select sum() over()",
-        "Error during planning: sum does not support zero arguments",
+        "Error during planning: 'sum' does not support zero arguments",
     );
 }
 
