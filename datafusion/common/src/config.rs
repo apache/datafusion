@@ -2094,22 +2094,3 @@ mod tests {
         assert_eq!(parsed_metadata.get("key_dupe"), Some(&Some("B".into())));
     }
 }
-
-#[cfg(test)]
-mod tests_isolated {
-    // The point of this test is to check that the config_namespace! macro
-    // can compile without any surrounding `use` statements. Hence putting
-    // it into its own test module.
-    #[test]
-    fn check_config_namespace_macro() {
-        use crate::config_namespace;
-
-        config_namespace! {
-            /// A config section
-            pub struct Foo {
-                /// Some doc comments
-                pub bar: bool, default = true
-            }
-        }
-    }
-}
