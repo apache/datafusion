@@ -52,6 +52,9 @@ use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
 use tokio::task::JoinSet;
 
+/// Old Csv source, deprecated with DataSourceExec implementation and CsvSource
+///
+/// See examples on `CsvSource`
 #[derive(Debug, Clone)]
 #[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
 pub struct CsvExec {

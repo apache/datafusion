@@ -33,10 +33,19 @@ pub(crate) use self::json::plan_to_json;
 #[cfg(feature = "parquet")]
 pub use self::parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
-pub use self::parquet::{ParquetFileMetrics, ParquetFileReaderFactory};
+#[allow(deprecated)]
+pub use self::parquet::{
+    ParquetExec, ParquetExecBuilder, ParquetFileMetrics, ParquetFileReaderFactory,
+};
 
+#[allow(deprecated)]
+pub use arrow_file::ArrowExec;
 pub use arrow_file::ArrowSource;
+#[allow(deprecated)]
+pub use avro::AvroExec;
 pub use avro::AvroSource;
+#[allow(deprecated)]
+pub use csv::{CsvExec, CsvExecBuilder};
 pub use csv::{CsvOpener, CsvSource};
 use datafusion_expr::dml::InsertOp;
 pub use file_groups::FileGroupPartitioner;
@@ -44,6 +53,8 @@ pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
+#[allow(deprecated)]
+pub use json::NdJsonExec;
 pub use json::{JsonOpener, JsonSource};
 
 use std::{
