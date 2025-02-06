@@ -87,9 +87,15 @@ impl From<ParquetExec> for ParquetExecBuilder {
     }
 }
 
-/// [`ParquetExecBuilder`], builder for [`ParquetExec`].
+/// [`ParquetExecBuilder`], deprecated builder for [`ParquetExec`].
 ///
-/// See example on [`ParquetExec`].
+/// ParquetExec is replaced with `DataSourceExec` and it includes `ParquetSource`
+///
+/// See example on [`ParquetSource`].
+#[deprecated(
+    since = "46.0.0",
+    note = "use DataSourceExec with ParquetSource instead"
+)]
 #[allow(unused, deprecated)]
 pub struct ParquetExecBuilder {
     file_scan_config: FileScanConfig,

@@ -32,6 +32,8 @@ use datafusion_physical_plan::DisplayFormatType;
 use object_store::ObjectStore;
 
 /// Common behaviors that every file format needs to implement.
+///
+/// See initialization examples on `ParquetSource`, `CsvSource`
 pub trait FileSource: Send + Sync {
     /// Creates a `dyn FileOpener` based on given parameters
     fn create_file_opener(
