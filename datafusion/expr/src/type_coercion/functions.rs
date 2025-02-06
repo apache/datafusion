@@ -57,9 +57,9 @@ pub fn data_types_with_scalar_udf(
             return Ok(vec![]);
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments", func.name());
+            return plan_err!("'{}' does not support zero arguments. Use TypeSignature::Nullary for zero arguments", func.name());
         } else {
-            return plan_err!("{} does not support zero arguments", func.name());
+            return plan_err!("'{}' does not support zero arguments", func.name());
         }
     }
 
@@ -95,9 +95,9 @@ pub fn data_types_with_aggregate_udf(
             return Ok(vec![]);
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments", func.name());
+            return plan_err!("'{}' does not support zero arguments. Use TypeSignature::Nullary for zero arguments", func.name());
         } else {
-            return plan_err!("{} does not support zero arguments", func.name());
+            return plan_err!("'{}' does not support zero arguments", func.name());
         }
     }
 
@@ -132,9 +132,9 @@ pub fn data_types_with_window_udf(
             return Ok(vec![]);
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
-            return plan_err!("{} does not support zero arguments. Use TypeSignature::Nullary for zero arguments", func.name());
+            return plan_err!("'{}' does not support zero arguments. Use TypeSignature::Nullary for zero arguments", func.name());
         } else {
-            return plan_err!("{} does not support zero arguments", func.name());
+            return plan_err!("'{}' does not support zero arguments", func.name());
         }
     }
 
@@ -170,12 +170,12 @@ pub fn data_types(
         } else if type_signature.used_to_support_zero_arguments() {
             // Special error to help during upgrade: https://github.com/apache/datafusion/issues/13763
             return plan_err!(
-                "function {} has signature {type_signature:?} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
+                "function '{}' has signature {type_signature:?} which does not support zero arguments. Use TypeSignature::Nullary for zero arguments",
                 function_name.as_ref()
             );
         } else {
             return plan_err!(
-                "Function {} has signature {type_signature:?} which does not support zero arguments",
+                "Function '{}' has signature {type_signature:?} which does not support zero arguments",
                 function_name.as_ref()
             );
         }
@@ -248,7 +248,7 @@ fn try_coerce_types(
 
     // none possible -> Error
     plan_err!(
-        "Failed to coerce arguments to satisfy a call to {function_name} function: coercion from {current_types:?} to the signature {type_signature:?} failed"
+        "Failed to coerce arguments to satisfy a call to '{function_name}' function: coercion from {current_types:?} to the signature {type_signature:?} failed"
     )
 }
 
@@ -261,7 +261,7 @@ fn get_valid_types_with_scalar_udf(
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
             Ok(coerced_types) => Ok(vec![coerced_types]),
             Err(e) => exec_err!(
-                "Function {} user-defined coercion failed with {e:?}",
+                "Function '{}' user-defined coercion failed with {e:?}",
                 func.name()
             ),
         },
@@ -282,7 +282,7 @@ fn get_valid_types_with_scalar_udf(
             // Every signature failed, return the joined error
             if res.is_empty() {
                 internal_err!(
-                    "Function {} failed to match any signature, errors: {}",
+                    "Function '{}' failed to match any signature, errors: {}",
                     func.name(),
                     errors.join(",")
                 )
@@ -304,7 +304,7 @@ fn get_valid_types_with_aggregate_udf(
             Ok(coerced_types) => vec![coerced_types],
             Err(e) => {
                 return exec_err!(
-                    "Function {} user-defined coercion failed with {e:?}",
+                    "Function '{}' user-defined coercion failed with {e:?}",
                     func.name()
                 )
             }
@@ -332,7 +332,7 @@ fn get_valid_types_with_window_udf(
             Ok(coerced_types) => vec![coerced_types],
             Err(e) => {
                 return exec_err!(
-                    "Function {} user-defined coercion failed with {e:?}",
+                    "Function '{}' user-defined coercion failed with {e:?}",
                     func.name()
                 )
             }
@@ -414,7 +414,7 @@ fn get_valid_types(
 
         let new_base_type = new_base_type.ok_or_else(|| {
             internal_datafusion_err!(
-                "Function {function_name} does not support coercion from {array_base_type:?} to {elem_base_type:?}"
+                "Function '{function_name}' does not support coercion from {array_base_type:?} to {elem_base_type:?}"
             )
         })?;
 
@@ -465,7 +465,7 @@ fn get_valid_types(
     ) -> Result<()> {
         if length != expected_length {
             return plan_err!(
-                "Function {function_name} expects {expected_length} arguments but received {length}"
+                "Function '{function_name}' expects {expected_length} arguments but received {length}"
             );
         }
         Ok(())
@@ -489,7 +489,7 @@ fn get_valid_types(
                     new_types.push(DataType::Utf8);
                 } else {
                     return plan_err!(
-                        "Function {function_name} expects NativeType::String but received {logical_data_type}"
+                        "Function '{function_name}' expects NativeType::String but received {logical_data_type}"
                     );
                 }
             }
@@ -513,7 +513,7 @@ fn get_valid_types(
                             Ok(coerced_type)
                         } else {
                             plan_err!(
-                                "Function {function_name}: could not coerce {lhs_type} and {rhs_type} to a common string type"
+                                "Function '{function_name}' could not coerce {lhs_type} and {rhs_type} to a common string type"
                             )
                         }
                     }
@@ -549,7 +549,7 @@ fn get_valid_types(
 
                 if !logical_data_type.is_numeric() {
                     return plan_err!(
-                        "Function {function_name} expects NativeType::Numeric but received {logical_data_type}"
+                        "Function '{function_name}' expects NativeType::Numeric but received {logical_data_type}"
                     );
                 }
 
@@ -557,7 +557,7 @@ fn get_valid_types(
                     valid_type = coerced_type;
                 } else {
                     return plan_err!(
-                        "For function {function_name} {valid_type} and {t} are not coercible to a common numeric type"
+                        "For function '{function_name}' {valid_type} and {t} are not coercible to a common numeric type"
                     );
                 }
             }
@@ -570,7 +570,7 @@ fn get_valid_types(
                 valid_type = DataType::Float64;
             } else if !logical_data_type.is_numeric() {
                 return plan_err!(
-                    "Function {function_name} expects NativeType::Numeric but received {logical_data_type}"
+                    "Function '{function_name}' expects NativeType::Numeric but received {logical_data_type}"
                 );
             }
 
@@ -583,7 +583,7 @@ fn get_valid_types(
                 if let Some(dt) = comparison_coercion_numeric(&target_type, data_type) {
                     target_type = dt;
                 } else {
-                    return plan_err!("For function {function_name} {target_type} and {data_type} is not comparable");
+                    return plan_err!("For function '{function_name}' {target_type} and {data_type} is not comparable");
                 }
             }
             // Convert null to String type.
@@ -626,7 +626,7 @@ fn get_valid_types(
                         }
 
                         internal_err!(
-                            "Function {function_name} expects {target_type_class} but received {current_type}"
+                            "Function '{function_name}' expects {target_type_class} but received {current_type}"
                         )
                     }
                     // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
@@ -651,7 +651,7 @@ fn get_valid_types(
                         Ok(current_type.to_owned())
                     }
                     _ => {
-                        not_impl_err!("Function {function_name} got logical_type: {logical_type} with target_type_class: {target_type_class}")
+                        not_impl_err!("Function '{function_name}' got logical_type: {logical_type} with target_type_class: {target_type_class}")
                     }
                 }
             }
@@ -668,7 +668,7 @@ fn get_valid_types(
         }
         TypeSignature::Uniform(number, valid_types) => {
             if *number == 0 {
-                return plan_err!("The function {function_name} expected at least one argument");
+                return plan_err!("The function '{function_name}' expected at least one argument");
             }
 
             valid_types
@@ -678,13 +678,13 @@ fn get_valid_types(
         }
         TypeSignature::UserDefined => {
             return internal_err!(
-                "Function {function_name} user-defined signature should be handled by function-specific coerce_types"
+                "Function '{function_name}' user-defined signature should be handled by function-specific coerce_types"
             )
         }
         TypeSignature::VariadicAny => {
             if current_types.is_empty() {
                 return plan_err!(
-                    "Function {function_name} expected at least one argument but received 0"
+                    "Function '{function_name}' expected at least one argument but received 0"
                 );
             }
             vec![current_types.to_vec()]
@@ -746,7 +746,7 @@ fn get_valid_types(
         TypeSignature::Nullary => {
             if !current_types.is_empty() {
                 return plan_err!(
-                    "The function {function_name} expected zero argument but received {}",
+                    "The function '{function_name}' expected zero argument but received {}",
                     current_types.len()
                 );
             }
@@ -755,13 +755,13 @@ fn get_valid_types(
         TypeSignature::Any(number) => {
             if current_types.is_empty() {
                 return plan_err!(
-                    "The function {function_name} expected at least one argument but received 0"
+                    "The function '{function_name}' expected at least one argument but received 0"
                 );
             }
 
             if current_types.len() != *number {
                 return plan_err!(
-                    "The function {function_name} expected {number} arguments but received {}",
+                    "The function '{function_name}' expected {number} arguments but received {}",
                     current_types.len()
                 );
             }
@@ -1083,7 +1083,7 @@ mod tests {
         .unwrap_err();
         assert_contains!(
             got.to_string(),
-            "Function test expects NativeType::Numeric but received NativeType::String"
+            "Function 'test' expects NativeType::Numeric but received NativeType::String"
         );
 
         // Fallbacks to float64 if the arg is of type null.
@@ -1103,7 +1103,7 @@ mod tests {
         .unwrap_err();
         assert_contains!(
             got.to_string(),
-            "Function test expects NativeType::Numeric but received NativeType::Timestamp(Second, None)"
+            "Function 'test' expects NativeType::Numeric but received NativeType::Timestamp(Second, None)"
         );
 
         Ok(())
@@ -1141,7 +1141,7 @@ mod tests {
         let err = get_valid_types("test", &signature, &[]).unwrap_err();
         assert_contains!(
             err.to_string(),
-            "Function test expects 1 arguments but received 0"
+            "Function 'test' expects 1 arguments but received 0"
         );
 
         let err = get_valid_types(
@@ -1152,7 +1152,7 @@ mod tests {
         .unwrap_err();
         assert_contains!(
             err.to_string(),
-            "Function test expects 1 arguments but received 3"
+            "Function 'test' expects 1 arguments but received 3"
         );
 
         Ok(())
