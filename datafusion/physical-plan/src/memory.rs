@@ -1162,7 +1162,6 @@ mod tests {
         let exec = MemorySourceConfig::try_new_from_batches(schema, batches).unwrap();
         assert_eq!(exec.fetch(), None);
 
-        println!("{:?}", exec.source().fetch());
         let exec = exec.with_fetch(Some(4)).unwrap();
         assert_eq!(exec.fetch(), Some(4));
 

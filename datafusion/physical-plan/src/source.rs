@@ -175,9 +175,8 @@ impl DataSourceExec {
     }
 
     /// Return the source object
-    #[allow(unused)]
-    pub fn source(&self) -> Arc<dyn DataSource> {
-        Arc::clone(&self.source)
+    pub fn source(&self) -> &Arc<dyn DataSource> {
+        &self.source
     }
 
     pub fn with_source(mut self, source: Arc<dyn DataSource>) -> Self {
