@@ -19,8 +19,8 @@ use arrow::compute::kernels::length::length;
 use arrow::datatypes::DataType;
 use std::any::Any;
 
-use crate::utils::utf8_to_int_type;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use crate::utils::{take_function_args, utf8_to_int_type};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
@@ -82,14 +82,9 @@ impl ScalarUDFImpl for OctetLengthFunc {
         args: &[ColumnarValue],
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
-        if args.len() != 1 {
-            return exec_err!(
-                "octet_length function requires 1 argument, got {}",
-                args.len()
-            );
-        }
+        let [array] = take_function_args(self.name(), args)?;
 
-        match &args[0] {
+        match array {
             ColumnarValue::Array(v) => Ok(ColumnarValue::Array(length(v.as_ref())?)),
             ColumnarValue::Scalar(v) => match v {
                 ScalarValue::Utf8(v) => Ok(ColumnarValue::Scalar(ScalarValue::Int32(

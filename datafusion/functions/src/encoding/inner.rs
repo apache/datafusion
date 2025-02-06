@@ -25,6 +25,7 @@ use arrow::{
 };
 use arrow_buffer::{Buffer, OffsetBufferBuilder};
 use base64::{engine::general_purpose, Engine as _};
+use crate::utils::take_function_args;
 use datafusion_common::{
     cast::{as_generic_binary_array, as_generic_string_array},
     not_impl_err, plan_err,
@@ -111,19 +112,13 @@ impl ScalarUDFImpl for EncodeFunc {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return plan_err!(
-                "{} expects to get 2 arguments, but got {}",
-                self.name(),
-                arg_types.len()
-            );
-        }
+        let [expression, format] = take_function_args(self.name(), arg_types)?;
 
-        if arg_types[1] != DataType::Utf8 {
+        if format != &DataType::Utf8 {
             return Err(DataFusionError::Plan("2nd argument should be Utf8".into()));
         }
 
-        match arg_types[0] {
+        match expression {
             DataType::Utf8 | DataType::Utf8View | DataType::Null => {
                 Ok(vec![DataType::Utf8; 2])
             }
@@ -539,13 +534,9 @@ impl FromStr for Encoding {
 /// Second argument is the encoding to use.
 /// Standard encodings are base64 and hex.
 fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return exec_err!(
-            "{:?} args were supplied but encode takes exactly two arguments",
-            args.len()
-        );
-    }
-    let encoding = match &args[1] {
+    let [expression, format] = take_function_args("encode", args)?;
+
+    let encoding = match format {
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(Some(method)) => method.parse::<Encoding>(),
             _ => not_impl_err!(
@@ -556,20 +547,16 @@ fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported"
         ),
     }?;
-    encode_process(&args[0], encoding)
+    encode_process(&expression, encoding)
 }
 
 /// Decodes the given data, accepts Binary, LargeBinary, Utf8, Utf8View or LargeUtf8 and returns a [`ColumnarValue`].
 /// Second argument is the encoding to use.
 /// Standard encodings are base64 and hex.
 fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return exec_err!(
-            "{:?} args were supplied but decode takes exactly two arguments",
-            args.len()
-        );
-    }
-    let encoding = match &args[1] {
+    let [expression, format] = take_function_args("decode", args)?;
+
+    let encoding = match format {
         ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
             Some(Some(method))=> method.parse::<Encoding>(),
             _ => not_impl_err!(
@@ -580,5 +567,5 @@ fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported"
         ),
     }?;
-    decode_process(&args[0], encoding)
+    decode_process(&expression, encoding)
 }

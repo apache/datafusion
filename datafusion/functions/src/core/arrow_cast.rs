@@ -178,13 +178,12 @@ impl ScalarUDFImpl for ArrowCastFunc {
 
 /// Returns the requested type from the arguments
 fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
-    if args.len() != 2 {
-        return exec_err!("arrow_cast needs 2 arguments, {} provided", args.len());
-    }
-    let Expr::Literal(ScalarValue::Utf8(Some(val))) = &args[1] else {
+    let [_, type_arg] = take_function_args("arrow_cast", args)?;
+
+    let Expr::Literal(ScalarValue::Utf8(Some(val))) = type_arg else {
         return exec_err!(
             "arrow_cast requires its second argument to be a constant string, got {:?}",
-            &args[1]
+            type_arg
         );
     };
 

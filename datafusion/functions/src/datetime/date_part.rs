@@ -167,10 +167,7 @@ impl ScalarUDFImpl for DatePartFunc {
         args: &[ColumnarValue],
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
-        if args.len() != 2 {
-            return exec_err!("Expected two arguments in DATE_PART");
-        }
-        let (part, array) = (&args[0], &args[1]);
+        let [part, array] = take_function_args(self.name(), args)?;
 
         let part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = part {
             v

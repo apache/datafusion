@@ -24,7 +24,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 
-use crate::utils::utf8_to_int_type;
+use crate::utils::{take_function_args, utf8_to_int_type};
 use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -96,17 +96,9 @@ impl ScalarUDFImpl for FindInSetFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { mut args, .. } = args;
+        let ScalarFunctionArgs { args, .. } = args;
 
-        if args.len() != 2 {
-            return exec_err!(
-                "find_in_set was called with {} arguments. It requires 2.",
-                args.len()
-            );
-        }
-
-        let str_list = args.pop().unwrap();
-        let string = args.pop().unwrap();
+        let [string, str_list] = take_function_args(self.name(), args)?;
 
         match (string, str_list) {
             // both inputs are scalars
