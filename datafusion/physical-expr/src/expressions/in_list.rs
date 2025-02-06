@@ -44,8 +44,8 @@ use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::compare_with_eq;
 
 use ahash::RandomState;
-use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_common::HashMap;
+use datafusion_expr::interval_arithmetic::Interval;
 use hashbrown::hash_map::RawEntryMut;
 
 /// InList
@@ -445,9 +445,9 @@ impl PhysicalExpr for InListExpr {
     fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
         self.expr.supports_bounds_evaluation(schema)
             && self
-            .list
-            .iter()
-            .all(|expr| expr.supports_bounds_evaluation(schema))
+                .list
+                .iter()
+                .all(|expr| expr.supports_bounds_evaluation(schema))
     }
 }
 

@@ -2195,10 +2195,7 @@ mod tests {
             ),
             (
                 Interval::new(Date64(Some(1)), Date64(Some(1))),
-                Interval::new(
-                    Date64(Some(-1)),
-                    Date64(Some(-1)),
-                ),
+                Interval::new(Date64(Some(-1)), Date64(Some(-1))),
             ),
             (
                 Interval::new(
@@ -2211,14 +2208,8 @@ mod tests {
                 ),
             ),
             (
-                Interval::new(
-                    DurationSecond(Some(1)),
-                    DurationSecond(Some(10)),
-                ),
-                Interval::new(
-                    DurationSecond(Some(-10)),
-                    DurationSecond(Some(-1)),
-                ),
+                Interval::new(DurationSecond(Some(1)), DurationSecond(Some(10))),
+                Interval::new(DurationSecond(Some(-10)), DurationSecond(Some(-1))),
             ),
         ];
         for (first, second) in exactly_gt_cases {
@@ -2258,10 +2249,7 @@ mod tests {
                 )?,
             ),
             (
-                Interval::new(
-                    Date64(Some(1)),
-                    Date64(Some(10)),
-                ),
+                Interval::new(Date64(Some(1)), Date64(Some(10))),
                 Interval::new(Date64(Some(1)), Date64(Some(1))),
             ),
             (
@@ -2275,14 +2263,8 @@ mod tests {
                 ),
             ),
             (
-                Interval::new(
-                    DurationSecond(Some(1)),
-                    DurationSecond(Some(10)),
-                ),
-                Interval::new(
-                    DurationSecond(Some(1)),
-                    DurationSecond(Some(1)),
-                ),
+                Interval::new(DurationSecond(Some(1)), DurationSecond(Some(10))),
+                Interval::new(DurationSecond(Some(1)), DurationSecond(Some(1))),
             ),
         ];
         for (first, second) in possibly_gt_cases {
@@ -2322,14 +2304,8 @@ mod tests {
                 )?,
             ),
             (
-                Interval::new(
-                    Date64(Some(1)),
-                    Date64(Some(10)),
-                ),
-                Interval::new(
-                    Date64(Some(10)),
-                    Date64(Some(100)),
-                ),
+                Interval::new(Date64(Some(1)), Date64(Some(10))),
+                Interval::new(Date64(Some(10)), Date64(Some(100))),
             ),
             (
                 Interval::new(
@@ -2342,14 +2318,8 @@ mod tests {
                 ),
             ),
             (
-                Interval::new(
-                    DurationSecond(Some(-10)),
-                    DurationSecond(Some(-1)),
-                ),
-                Interval::new(
-                    DurationSecond(Some(1)),
-                    DurationSecond(Some(1)),
-                ),
+                Interval::new(DurationSecond(Some(-10)), DurationSecond(Some(-1))),
+                Interval::new(DurationSecond(Some(1)), DurationSecond(Some(1))),
             ),
         ];
         for (first, second) in not_gt_cases {
@@ -2418,14 +2388,8 @@ mod tests {
                 ),
             ),
             (
-                Interval::new(
-                    DurationSecond(Some(-10)),
-                    DurationSecond(Some(1)),
-                ),
-                Interval::new(
-                    DurationSecond(Some(-10)),
-                    DurationSecond(Some(-10)),
-                ),
+                Interval::new(DurationSecond(Some(-10)), DurationSecond(Some(1))),
+                Interval::new(DurationSecond(Some(-10)), DurationSecond(Some(-10))),
             ),
         ];
         for (first, second) in exactly_gteq_cases {
@@ -2485,14 +2449,8 @@ mod tests {
                 ),
             ),
             (
-                Interval::new(
-                    DurationSecond(Some(-10)),
-                    DurationSecond(Some(1)),
-                ),
-                Interval::new(
-                    DurationSecond(None),
-                    DurationSecond(Some(0)),
-                ),
+                Interval::new(DurationSecond(Some(-10)), DurationSecond(Some(1))),
+                Interval::new(DurationSecond(None), DurationSecond(Some(0))),
             ),
         ];
         for (first, second) in possibly_gteq_cases {
@@ -2548,14 +2506,8 @@ mod tests {
                 ),
             ),
             (
-                Interval::new(
-                    DurationSecond(None),
-                    DurationSecond(Some(-1)),
-                ),
-                Interval::new(
-                    DurationSecond(Some(0)),
-                    DurationSecond(Some(1)),
-                ),
+                Interval::new(DurationSecond(None), DurationSecond(Some(-1))),
+                Interval::new(DurationSecond(Some(0)), DurationSecond(Some(1))),
             ),
         ];
         for (first, second) in not_gteq_cases {
@@ -2586,14 +2538,8 @@ mod tests {
                 Interval::make(Some(f64::MIN), Some(f64::MIN))?,
             ),
             (
-                Interval::new(
-                    Date64(Some(1000)),
-                    Date64(Some(1000)),
-                ),
-                Interval::new(
-                    Date64(Some(1000)),
-                    Date64(Some(1000)),
-                ),
+                Interval::new(Date64(Some(1000)), Date64(Some(1000))),
+                Interval::new(Date64(Some(1000)), Date64(Some(1000))),
             ),
             (
                 Interval::new(
@@ -2606,24 +2552,12 @@ mod tests {
                 ),
             ),
             (
-                Interval::new(
-                    IntervalYearMonth(Some(10)),
-                    IntervalYearMonth(Some(10)),
-                ),
-                Interval::new(
-                    IntervalYearMonth(Some(10)),
-                    IntervalYearMonth(Some(10)),
-                ),
+                Interval::new(IntervalYearMonth(Some(10)), IntervalYearMonth(Some(10))),
+                Interval::new(IntervalYearMonth(Some(10)), IntervalYearMonth(Some(10))),
             ),
             (
-                Interval::new(
-                    DurationSecond(Some(10)),
-                    DurationSecond(Some(10)),
-                ),
-                Interval::new(
-                    DurationSecond(Some(10)),
-                    DurationSecond(Some(10)),
-                ),
+                Interval::new(DurationSecond(Some(10)), DurationSecond(Some(10))),
+                Interval::new(DurationSecond(Some(10)), DurationSecond(Some(10))),
             ),
         ];
         for (first, second) in exactly_eq_cases {
@@ -2991,14 +2925,8 @@ mod tests {
                 Interval::CERTAINLY_TRUE,
             ),
             (
-                Interval::new(
-                    DurationSecond(Some(0)),
-                    DurationSecond(Some(600)),
-                ),
-                Interval::new(
-                    DurationSecond(Some(1)),
-                    DurationSecond(Some(599)),
-                ),
+                Interval::new(DurationSecond(Some(0)), DurationSecond(Some(600))),
+                Interval::new(DurationSecond(Some(1)), DurationSecond(Some(599))),
                 Interval::CERTAINLY_TRUE,
             ),
             (

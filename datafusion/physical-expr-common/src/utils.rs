@@ -26,7 +26,7 @@ use datafusion_expr_common::sort_properties::ExprProperties;
 use crate::physical_expr::PhysicalExpr;
 use crate::sort_expr::{LexOrdering, PhysicalSortExpr};
 use crate::tree_node::ExprContext;
-use arrow::datatypes::{DataType};
+use arrow::datatypes::DataType;
 
 /// Represents a [`PhysicalExpr`] node with associated properties (order and
 /// range) in a context where properties are tracked.

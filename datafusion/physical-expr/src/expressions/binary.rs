@@ -382,7 +382,10 @@ impl PhysicalExpr for BinaryExpr {
             self.left.data_type(schema.as_ref()),
             self.right.data_type(schema.as_ref()),
         ) {
-            if BinaryTypeCoercer::new(&lhs, &self.op, &rhs).get_result_type().is_err() {
+            if BinaryTypeCoercer::new(&lhs, &self.op, &rhs)
+                .get_result_type()
+                .is_err()
+            {
                 return false;
             }
         }

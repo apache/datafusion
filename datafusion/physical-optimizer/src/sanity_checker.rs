@@ -35,8 +35,8 @@ use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
 use crate::PhysicalOptimizerRule;
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
-use itertools::izip;
 use datafusion_physical_expr_common::utils::is_supported_datatype_for_bounds_eval;
+use itertools::izip;
 
 /// The SanityCheckPlan rule rejects the following query plans:
 /// 1. Invalid plans containing nodes whose order and/or distribution requirements
@@ -113,7 +113,9 @@ pub fn check_finiteness_requirements(
 /// [`Operator`]: datafusion_expr::Operator
 fn is_prunable(join: &SymmetricHashJoinExec) -> bool {
     join.filter().is_some_and(|filter| {
-        filter.expression().supports_bounds_evaluation(&join.schema())
+        filter
+            .expression()
+            .supports_bounds_evaluation(&join.schema())
             && filter
                 .schema()
                 .fields()
