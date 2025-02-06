@@ -1030,9 +1030,10 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::memory::MemorySourceConfig;
+    use crate::source::DataSourceExec;
     use crate::{
-        common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
-        test::build_table_i32,
+        common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
 
     use arrow::datatypes::{DataType, Field};
@@ -1070,8 +1071,8 @@ pub(crate) mod tests {
             vec![batch]
         };
 
-        let mut exec =
-            MemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
+        let mut source =
+            MemorySourceConfig::try_new(&[batches], Arc::clone(&schema), None).unwrap();
         if !sorted_column_names.is_empty() {
             let mut sort_info = LexOrdering::default();
             for name in sorted_column_names {
@@ -1085,10 +1086,10 @@ pub(crate) mod tests {
                 };
                 sort_info.push(sort_expr);
             }
-            exec = exec.try_with_sort_information(vec![sort_info]).unwrap();
+            source = source.try_with_sort_information(vec![sort_info]).unwrap();
         }
 
-        Arc::new(exec)
+        Arc::new(DataSourceExec::new(Arc::new(source)))
     }
 
     fn build_left_table() -> Arc<dyn ExecutionPlan> {

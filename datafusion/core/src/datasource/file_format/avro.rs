@@ -22,6 +22,17 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+use super::file_compression_type::FileCompressionType;
+use super::FileFormat;
+use super::FileFormatFactory;
+use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
+use crate::datasource::physical_plan::{AvroSource, FileScanConfig};
+use crate::error::Result;
+use crate::execution::context::SessionState;
+use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::Statistics;
+
+use crate::datasource::data_source::FileSource;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
@@ -31,16 +42,6 @@ use datafusion_common::GetExt;
 use datafusion_common::DEFAULT_AVRO_EXTENSION;
 use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
-
-use super::file_compression_type::FileCompressionType;
-use super::FileFormat;
-use super::FileFormatFactory;
-use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
-use crate::datasource::physical_plan::{AvroExec, FileScanConfig};
-use crate::error::Result;
-use crate::execution::context::SessionState;
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::Statistics;
 
 #[derive(Default)]
 /// Factory struct used to create [AvroFormat]
@@ -147,11 +148,15 @@ impl FileFormat for AvroFormat {
     async fn create_physical_plan(
         &self,
         _state: &SessionState,
-        conf: FileScanConfig,
+        mut conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = AvroExec::new(conf);
-        Ok(Arc::new(exec))
+        conf = conf.with_source(self.file_source());
+        Ok(conf.new_exec())
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        Arc::new(AvroSource::new())
     }
 }
 
