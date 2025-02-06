@@ -33,7 +33,6 @@ use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream, TaskCon
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, NegativeExpr};
-use datafusion_physical_expr::intervals::utils::check_support;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use datafusion_physical_optimizer::join_selection::{
@@ -1072,21 +1071,21 @@ fn check_expr_supported() {
         Operator::Plus,
         Arc::new(Column::new("a", 0)),
     )) as Arc<dyn PhysicalExpr>;
-    assert!(check_support(&supported_expr, &schema));
+    assert!(&supported_expr.supports_bounds_evaluation(&schema));
     let supported_expr_2 = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
-    assert!(check_support(&supported_expr_2, &schema));
+    assert!(&supported_expr_2.supports_bounds_evaluation(&schema));
     let unsupported_expr = Arc::new(BinaryExpr::new(
         Arc::new(Column::new("a", 0)),
         Operator::Or,
         Arc::new(Column::new("a", 0)),
     )) as Arc<dyn PhysicalExpr>;
-    assert!(!check_support(&unsupported_expr, &schema));
+    assert!(!&unsupported_expr.supports_bounds_evaluation(&schema));
     let unsupported_expr_2 = Arc::new(BinaryExpr::new(
         Arc::new(Column::new("a", 0)),
         Operator::Or,
         Arc::new(NegativeExpr::new(Arc::new(Column::new("a", 0)))),
     )) as Arc<dyn PhysicalExpr>;
-    assert!(!check_support(&unsupported_expr_2, &schema));
+    assert!(!&unsupported_expr_2.supports_bounds_evaluation(&schema));
 }
 
 struct TestCase {
