@@ -141,7 +141,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     ///   CoalesceBatchesExec: target_batch_size=8192
     ///     FilterExec: a < 5
     ///       RepartitionExec: partitioning=RoundRobinBatch(16)
-    ///         CsvExec: source=...",
+    ///         DataSourceExec: source=...",
     /// ```
     pub fn indent(&self, verbose: bool) -> impl fmt::Display + 'a {
         let format_type = if verbose {

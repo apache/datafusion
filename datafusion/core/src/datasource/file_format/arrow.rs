@@ -32,7 +32,7 @@ use super::FileFormatFactory;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::physical_plan::{
-    ArrowExec, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
+    ArrowSource, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -51,11 +51,12 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 
+use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
@@ -169,11 +170,11 @@ impl FileFormat for ArrowFormat {
     async fn create_physical_plan(
         &self,
         _state: &SessionState,
-        conf: FileScanConfig,
+        mut conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = ArrowExec::new(conf);
-        Ok(Arc::new(exec))
+        conf = conf.with_source(Arc::new(ArrowSource::default()));
+        Ok(conf.new_exec())
     }
 
     async fn create_writer_physical_plan(
@@ -190,6 +191,10 @@ impl FileFormat for ArrowFormat {
         let sink = Arc::new(ArrowFileSink::new(conf));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        Arc::new(ArrowSource::default())
     }
 }
 
