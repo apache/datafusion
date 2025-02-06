@@ -1998,7 +1998,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(arrow_array::Int32Array::from(vec![
+            vec![Arc::new(arrow::array::Int32Array::from(vec![
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
             ]))],
         )?;

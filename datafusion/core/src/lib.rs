@@ -60,7 +60,7 @@
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
 //! # use datafusion::functions_aggregate::expr_fn::min;
-//! # use datafusion::arrow::record_batch::RecordBatch;
+//! # use datafusion::arrow::array::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -101,7 +101,7 @@
 //! ```
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use datafusion::arrow::record_batch::RecordBatch;
+//! # use datafusion::arrow::array::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -684,7 +684,7 @@
 //! [`PhysicalOptimizerRule`]: datafusion_physical_optimizer::PhysicalOptimizerRule
 //! [`Schema`]: arrow::datatypes::Schema
 //! [`PhysicalExpr`]: physical_plan::PhysicalExpr
-//! [`RecordBatch`]: arrow::record_batch::RecordBatch
+//! [`RecordBatch`]: arrow::array::RecordBatch
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
 

@@ -33,9 +33,8 @@ use crate::projection::{
 };
 use crate::source::{DataSource, DataSourceExec};
 
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use arrow_array::RecordBatchOptions;
 use arrow_schema::Schema;
 use datafusion_common::{
     internal_err, plan_err, project_schema, Constraints, Result, ScalarValue,

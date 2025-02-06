@@ -38,10 +38,9 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::compute::concat_batches;
 use arrow::datatypes::{Fields, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use arrow_array::RecordBatchOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, JoinType, Result, ScalarValue};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};

@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+use arrow::array::{ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use futures::{Future, FutureExt};

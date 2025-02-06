@@ -37,9 +37,8 @@ use std::sync::Arc;
 use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
+use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
 use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;

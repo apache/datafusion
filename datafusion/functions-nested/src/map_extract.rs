@@ -17,12 +17,11 @@
 
 //! [`ScalarUDFImpl`] definitions for map_extract functions.
 
-use arrow::array::{ArrayRef, Capacities, MutableArrayData};
-use arrow_array::{make_array, ListArray};
-
+use arrow::array::{
+    make_array, Array, ArrayRef, Capacities, ListArray, MapArray, MutableArrayData,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow_array::{Array, MapArray};
 use arrow_schema::Field;
 
 use datafusion_common::{cast::as_map_array, exec_err, Result};

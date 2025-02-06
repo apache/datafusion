@@ -637,7 +637,7 @@ where
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         null_builder.finish(),
     )?))
 }

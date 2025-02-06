@@ -1306,9 +1306,10 @@ mod tests {
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
-    use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow_array::types::Int32Type;
-    use arrow_array::{DictionaryArray, Int32Array, Int64Array};
+    use arrow::array::{
+        types::Int32Type, Array, ArrayRef, DictionaryArray, Int32Array, Int64Array,
+        StringArray,
+    };
     use arrow_schema::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_common::cast::{

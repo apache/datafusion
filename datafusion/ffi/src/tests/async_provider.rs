@@ -28,7 +28,7 @@
 use std::{any::Any, fmt::Debug, sync::Arc};
 
 use crate::table_provider::FFI_TableProvider;
-use arrow_array::RecordBatch;
+use arrow::array::RecordBatch;
 use arrow_schema::Schema;
 use async_trait::async_trait;
 use datafusion::{

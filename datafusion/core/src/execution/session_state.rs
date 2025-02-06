@@ -1990,7 +1990,7 @@ mod tests {
     use super::{SessionContextProvider, SessionStateBuilder};
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
-    use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+    use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;
