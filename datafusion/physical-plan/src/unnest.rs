@@ -951,9 +951,11 @@ fn repeat_arrs_from_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{
+        GenericListArray, NullBufferBuilder, OffsetSizeTrait, StringArray,
+    };
+    use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{Field, Int32Type};
-    use arrow_array::{GenericListArray, OffsetSizeTrait, StringArray};
-    use arrow_buffer::{NullBuffer, NullBufferBuilder, OffsetBuffer};
     use datafusion_common::assert_batches_eq;
 
     // Create a GenericListArray with the following list values:

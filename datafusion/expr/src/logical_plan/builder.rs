@@ -1602,7 +1602,7 @@ pub fn table_scan_with_filter_and_fetch(
     )
 }
 
-fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
+pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource { table_schema })
 }
@@ -1906,9 +1906,7 @@ pub fn unnest_with_options(
                         .extend(std::iter::repeat(index).take(transformed_columns.len()));
                     Ok(transformed_columns
                         .iter()
-                        .map(|(col, data_type)| {
-                            (col.relation.to_owned(), data_type.to_owned())
-                        })
+                        .map(|(col, field)| (col.relation.to_owned(), field.to_owned()))
                         .collect())
                 }
                 None => {

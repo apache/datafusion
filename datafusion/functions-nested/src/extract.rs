@@ -17,17 +17,12 @@
 
 //! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
-use arrow::array::Array;
-use arrow::array::ArrayRef;
-use arrow::array::ArrowNativeTypeOp;
-use arrow::array::Capacities;
-use arrow::array::GenericListArray;
-use arrow::array::Int64Array;
-use arrow::array::MutableArrayData;
-use arrow::array::OffsetSizeTrait;
+use arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, Capacities, GenericListArray, Int64Array,
+    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow_buffer::NullBufferBuilder;
 use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;

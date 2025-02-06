@@ -2870,6 +2870,47 @@ select array_concat([]);
 ----
 []
 
+# Concatenating strings arrays
+query ?
+select array_concat(
+  ['1', '2'],
+  ['3']
+);
+----
+[1, 2, 3]
+
+# Concatenating string arrays
+query ?
+select array_concat(
+  [arrow_cast('1', 'LargeUtf8'), arrow_cast('2', 'LargeUtf8')],
+  [arrow_cast('3', 'LargeUtf8')]
+);
+----
+[1, 2, 3]
+
+# Concatenating stringview
+query ?
+select array_concat(
+  [arrow_cast('1', 'Utf8View'), arrow_cast('2', 'Utf8View')],
+  [arrow_cast('3', 'Utf8View')]
+);
+----
+[1, 2, 3]
+
+# Concatenating Mixed types (doesn't work)
+query error DataFusion error: Error during planning: It is not possible to concatenate arrays of different types\. Expected: List\(Field \{ name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), got: List\(Field \{ name: "item", data_type: LargeUtf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+select array_concat(
+  [arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')],
+  [arrow_cast('3', 'LargeUtf8')]
+);
+
+# Concatenating Mixed types (doesn't work)
+query error DataFusion error: Error during planning: It is not possible to concatenate arrays of different types\. Expected: List\(Field \{ name: "item", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\), got: List\(Field \{ name: "item", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: \{\} \}\)
+select array_concat(
+  [arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')],
+  [arrow_cast('3', 'Utf8View')]
+);
+
 # array_concat error
 query error DataFusion error: Error during planning: The array_concat function can only accept list as the args\.
 select array_concat(1, 2);
@@ -6821,9 +6862,8 @@ select make_array(f0) from fixed_size_list_array
 query T
 select arrow_typeof(make_array(f0)) from fixed_size_list_array
 ----
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-List(Field { name: "item", data_type: List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
-
+List(Field { name: "item", data_type: FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+List(Field { name: "item", data_type: FixedSizeList(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, 2), nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 query ?
 select array_concat(column1, [7]) from arrays_values_v2;

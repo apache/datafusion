@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::common::plan_err;
+use datafusion::common::{plan_err, TableReference};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 use datafusion::logical_expr::{
@@ -29,7 +29,6 @@ use datafusion::optimizer::{
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
 use datafusion::sql::sqlparser::parser::Parser;
-use datafusion::sql::TableReference;
 use std::any::Any;
 use std::sync::Arc;
 

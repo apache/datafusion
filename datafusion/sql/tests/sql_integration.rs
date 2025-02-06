@@ -234,7 +234,7 @@ fn cast_to_invalid_decimal_type_precision_0() {
         let sql = "SELECT CAST(10 AS DECIMAL(0))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "1 errors, first error: Error during planning: Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
+            "Error during planning: Decimal(precision = 0, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
             err.strip_backtrace()
         );
     }
@@ -257,7 +257,7 @@ fn cast_to_invalid_decimal_type_precision_gt_76() {
         let sql = "SELECT CAST(10 AS DECIMAL(79))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "1 errors, first error: Error during planning: Decimal(precision = 79, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
+            "Error during planning: Decimal(precision = 79, scale = 0) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
             err.strip_backtrace()
         );
     }
@@ -270,7 +270,7 @@ fn cast_to_invalid_decimal_type_precision_lt_scale() {
         let sql = "SELECT CAST(10 AS DECIMAL(5, 10))";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "1 errors, first error: Error during planning: Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
+            "Error during planning: Decimal(precision = 5, scale = 10) should satisfy `0 < precision <= 76`, and `scale <= precision`.",
             err.strip_backtrace()
         );
     }
@@ -763,7 +763,7 @@ fn select_with_ambiguous_column() {
     let sql = "SELECT id FROM person a, person b";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "1 errors, first error: Schema error: Ambiguous reference to unqualified field id",
+        "Schema error: Ambiguous reference to unqualified field id",
         err.strip_backtrace()
     );
 }
@@ -1380,7 +1380,7 @@ fn select_interval_out_of_range() {
     let sql = "SELECT INTERVAL '100000000000000000 day'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "1 errors, first error: Arrow error: Invalid argument error: Unable to represent 100000000000000000 days in a signed 32-bit integer",
+        "Arrow error: Invalid argument error: Unable to represent 100000000000000000 days in a signed 32-bit integer",
         err.strip_backtrace(),
     );
 }
@@ -3641,7 +3641,7 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
 #[test]
 fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
-    let expected = "1 errors, first error: Schema error: No field named id.";
+    let expected = "Schema error: No field named id.";
     assert_eq!(logical_plan(sql).unwrap_err().strip_backtrace(), expected);
 }
 
@@ -3673,7 +3673,7 @@ fn test_non_prepare_statement_should_infer_types() {
 
 #[test]
 #[should_panic(
-    expected = "Expected: [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1"
+    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [form] NORMALIZED FROM after IS, found: $1"
 )]
 fn test_prepare_statement_to_plan_panic_is_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
@@ -4337,13 +4337,13 @@ fn test_multi_grouping_sets() {
 fn test_field_not_found_window_function() {
     let order_by_sql = "SELECT count() OVER (order by a);";
     let order_by_err = logical_plan(order_by_sql).expect_err("query should have failed");
-    let expected = "1 errors, first error: Schema error: No field named a.";
+    let expected = "Schema error: No field named a.";
     assert_eq!(order_by_err.strip_backtrace(), expected);
 
     let partition_by_sql = "SELECT count() OVER (PARTITION BY a);";
     let partition_by_err =
         logical_plan(partition_by_sql).expect_err("query should have failed");
-    let expected = "1 errors, first error: Schema error: No field named a.";
+    let expected = "Schema error: No field named a.";
     assert_eq!(partition_by_err.strip_backtrace(), expected);
 
     let qualified_sql =
