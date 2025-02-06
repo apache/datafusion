@@ -23,7 +23,8 @@ use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::types::{LogicalTypeRef, NativeType};
+use datafusion_common::Result;
+use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use itertools::Itertools;
 
 /// Constant that is used as a placeholder for any valid timezone.
@@ -217,12 +218,28 @@ pub enum TypeSignatureClass {
     Native(LogicalTypeRef),
     // TODO:
     // Numeric
-    // Integer
+    Integer,
 }
 
 impl Display for TypeSignatureClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "TypeSignatureClass::{self:?}")
+    }
+}
+
+impl TypeSignatureClass {
+    /// Return the default casted type for the given `TypeSignatureClass`
+    /// We return the largest common type for the given `TypeSignatureClass`
+    pub fn default_casted_type(&self, data_type: &DataType) -> Result<DataType> {
+        Ok(match self {
+                    TypeSignatureClass::Native(logical_type) => return logical_type.native().default_cast_for(data_type),
+                    TypeSignatureClass::Timestamp => DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    TypeSignatureClass::Date => DataType::Date64,
+                    TypeSignatureClass::Time => DataType::Time64(TimeUnit::Nanosecond),
+                    TypeSignatureClass::Interval => DataType::Interval(IntervalUnit::DayTime),
+                    TypeSignatureClass::Duration => DataType::Duration(TimeUnit::Nanosecond),
+                    TypeSignatureClass::Integer => DataType::Int64,
+                })
     }
 }
 
@@ -407,6 +424,9 @@ impl TypeSignature {
                     }
                     TypeSignatureClass::Duration => {
                         vec![DataType::Duration(TimeUnit::Nanosecond)]
+                    }
+                    TypeSignatureClass::Integer => {
+                        vec![DataType::Int64]
                     }
                 })
                 .multi_cartesian_product()

@@ -18,7 +18,6 @@
 use super::binary::{binary_numeric_coercion, comparison_coercion};
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use arrow::{
-    array::cast,
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
@@ -601,65 +600,77 @@ fn get_valid_types(
             for (current_type, param) in current_types.iter().zip(param_types.iter()) {
                 let current_logical_type: NativeType = current_type.into();
 
-                fn can_coerce_to(
-                    desired_type: &TypeSignatureClass,
+                fn is_matched_type(
+                    target_type: &TypeSignatureClass,
                     logical_type: &NativeType,
-                    current_type: &DataType,
-                ) -> Option<DataType> {
-                    match desired_type {
+                ) -> bool {
+                    match target_type {
                         TypeSignatureClass::Native(t) if t.native() == logical_type => {
-                            t.native().default_cast_for(current_type).ok()
+                            true
                         }
-                        TypeSignatureClass::Native(t)
+                        TypeSignatureClass::Native(_)
                             if logical_type == &NativeType::Null =>
                         {
-                            t.native().default_cast_for(current_type).ok()
+                            true
                         }
                         // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
                         TypeSignatureClass::Timestamp
                             if logical_type == &NativeType::String =>
                         {
-                            Some(DataType::Timestamp(TimeUnit::Nanosecond, None))
+                            true
                         }
                         TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
-                            Some(current_type.to_owned())
+                            true
                         }
-                        TypeSignatureClass::Date if logical_type.is_date() => {
-                            Some(current_type.to_owned())
-                        }
-                        TypeSignatureClass::Time if logical_type.is_time() => {
-                            Some(current_type.to_owned())
-                        }
+                        TypeSignatureClass::Date if logical_type.is_date() => true,
+                        TypeSignatureClass::Time if logical_type.is_time() => true,
                         TypeSignatureClass::Interval if logical_type.is_interval() => {
-                            Some(current_type.to_owned())
+                            true
                         }
                         TypeSignatureClass::Duration if logical_type.is_duration() => {
-                            Some(current_type.to_owned())
+                            true
                         }
-
-                        _ => None,
+                        TypeSignatureClass::Integer if logical_type.is_integer() => true,
+                        _ => false,
                     }
                 }
 
-                if let Some(casted_type) = can_coerce_to(
-                    &param.desired_type,
-                    &current_logical_type,
-                    current_type,
-                )
-                .or_else(|| {
-                    param.allowed_casts.iter().find_map(|t| {
-                        can_coerce_to(t, &current_logical_type, current_type)
-                    })
-                }) {
+                if is_matched_type(&param.desired_type, &current_logical_type)
+                    || param
+                        .allowed_casts
+                        .iter()
+                        .any(|t| is_matched_type(t, &current_logical_type))
+                {
+                    let casted_type = param.desired_type.default_casted_type(current_type)?;
                     new_types.push(casted_type);
                 } else {
                     return internal_err!(
-                        "Expect {} but received NativeType: {}, DataType: {}",
+                        "Expect {} but received {}, DataType: {}",
                         param.desired_type,
                         current_logical_type,
                         current_type
                     );
                 }
+
+                // if let Some(casted_type) = get_casted_type(
+                //     &param.desired_type,
+                //     &current_logical_type,
+                //     current_type,
+                // )
+                // .or_else(|| {
+                //     param.allowed_casts.iter().find_map(|t| {
+                //         get_casted_type(t, &current_logical_type, current_type)
+                //     })
+                // }) {
+                //     new_types.push(casted_type);
+                // } else {
+                //     return internal_err!(
+                //         "Expect {} but received NativeType: {}, DataType: {}",
+                //         param.desired_type,
+                //         current_logical_type,
+                //         current_type
+                //     );
+                // }
             }
 
             vec![new_types]

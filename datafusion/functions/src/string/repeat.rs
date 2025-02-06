@@ -30,7 +30,7 @@ use datafusion_common::types::{logical_int64, logical_string};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -65,10 +65,17 @@ impl Default for RepeatFunc {
 impl RepeatFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
+            signature: Signature::coercible_v2(
                 vec![
-                    TypeSignatureClass::Native(logical_string()),
-                    TypeSignatureClass::Native(logical_int64()),
+                    Coercion {
+                        desired_type: TypeSignatureClass::Native(logical_string()),
+                        allowed_casts: vec![],
+                    },
+                    // Accept all integer types but cast them to i64
+                    Coercion {
+                        desired_type: TypeSignatureClass::Native(logical_int64()),
+                        allowed_casts: vec![TypeSignatureClass::Integer],
+                    },
                 ],
                 Volatility::Immutable,
             ),
