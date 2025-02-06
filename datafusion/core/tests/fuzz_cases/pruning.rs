@@ -308,16 +308,10 @@ async fn execute_with_predicate(
         ParquetSource::new(
             Arc::clone(&schema),
             Some(predicate.clone()),
-            None,
             TableParquetOptions::default(),
         )
     } else {
-        ParquetSource::new(
-            Arc::clone(&schema),
-            None,
-            None,
-            TableParquetOptions::default(),
-        )
+        ParquetSource::new(Arc::clone(&schema), None, TableParquetOptions::default())
     };
     let scan = FileScanConfig::new(
         ObjectStoreUrl::parse("memory://").unwrap(),

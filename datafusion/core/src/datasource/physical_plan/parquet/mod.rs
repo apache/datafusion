@@ -214,9 +214,11 @@ impl ParquetExecBuilder {
         let mut parquet = ParquetSource::new(
             Arc::clone(&file_scan_config.file_schema),
             predicate.clone(),
-            metadata_size_hint,
             table_parquet_options,
         );
+        if let Some(metadata_size_hint) = metadata_size_hint {
+            parquet = parquet.with_metadata_size_hint(metadata_size_hint)
+        }
         if let Some(parquet_reader_factory) = parquet_file_reader_factory {
             parquet = parquet.with_parquet_file_reader_factory(parquet_reader_factory)
         }
@@ -679,7 +681,6 @@ mod tests {
             let mut source = ParquetSource::new(
                 Arc::clone(&file_schema),
                 predicate,
-                None,
                 TableParquetOptions::default(),
             );
 

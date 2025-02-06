@@ -716,7 +716,6 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let source = Arc::new(ParquetSource::new(
         Arc::clone(&file_schema),
         Some(predicate),
-        None,
         options,
     ));
 
@@ -790,7 +789,6 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
     let source = Arc::new(ParquetSource::new(
         Arc::clone(&file_schema),
         Some(custom_predicate_expr),
-        None,
         TableParquetOptions::default(),
     ));
 

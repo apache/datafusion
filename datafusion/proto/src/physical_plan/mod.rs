@@ -272,7 +272,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     let source = Arc::new(ParquetSource::new(
                         Arc::clone(&schema),
                         predicate,
-                        None,
                         options,
                     ));
                     let base_config = parse_protobuf_file_scan_config(

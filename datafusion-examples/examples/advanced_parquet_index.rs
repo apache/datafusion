@@ -497,7 +497,6 @@ impl TableProvider for IndexTableProvider {
                 // provide the predicate so the DataSourceExec can try and prune
                 // row groups internally
                 Some(predicate),
-                None,
                 TableParquetOptions::default(),
             )
             // provide the factory to create parquet reader without re-reading metadata

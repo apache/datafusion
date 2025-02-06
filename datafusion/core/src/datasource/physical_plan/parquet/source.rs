@@ -91,7 +91,6 @@ use object_store::ObjectStore;
 ///     ParquetSource::new(
 ///         Arc::clone(&file_schema),
 ///         Some(predicate),
-///         None,
 ///         TableParquetOptions::default()
 ///     )
 /// );
@@ -282,10 +281,12 @@ impl ParquetSource {
     pub fn new(
         file_schema: Arc<Schema>,
         predicate: Option<Arc<dyn PhysicalExpr>>,
-        metadata_size_hint: Option<usize>,
         table_parquet_options: TableParquetOptions,
     ) -> Self {
-        debug!("Creating ParquetSource, schema: {:?}, predicate: {:?}, metadata_size_hint: {:?}", file_schema, predicate, metadata_size_hint);
+        debug!(
+            "Creating ParquetSource, schema: {:?}, predicate: {:?}",
+            file_schema, predicate
+        );
 
         let metrics = ExecutionPlanMetricsSet::new();
         let predicate_creation_errors =
@@ -295,10 +296,6 @@ impl ParquetSource {
         conf.with_metrics(metrics);
         if let Some(predicate) = predicate.clone() {
             conf = conf.with_predicate(predicate);
-        }
-
-        if let Some(metadata_size_hint) = metadata_size_hint {
-            conf = conf.with_metadata_size_hint(metadata_size_hint);
         }
 
         let pruning_predicate = predicate

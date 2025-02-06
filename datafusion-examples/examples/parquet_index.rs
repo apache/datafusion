@@ -245,7 +245,6 @@ impl TableProvider for IndexTableProvider {
         let source = Arc::new(ParquetSource::new(
             self.schema(),
             Some(predicate),
-            None,
             TableParquetOptions::default(),
         ));
         let mut file_scan_config =

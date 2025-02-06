@@ -348,7 +348,6 @@ impl TestFull {
             Arc::new(ParquetSource::new(
                 Arc::clone(schema),
                 Some(predicate),
-                None,
                 TableParquetOptions::default(),
             ))
         } else {

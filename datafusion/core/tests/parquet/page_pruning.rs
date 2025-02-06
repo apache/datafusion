@@ -79,7 +79,6 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec 
         ParquetSource::new(
             Arc::clone(&schema),
             Some(predicate),
-            None,
             TableParquetOptions::default(),
         )
         .with_enable_page_index(true),
