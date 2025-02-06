@@ -395,7 +395,6 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     Ok(Arc::new(WindowAggExec::try_new(
                         physical_window_expr,
                         input,
-                        partition_keys,
                     )?))
                 }
             }
@@ -1876,7 +1875,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 .collect::<Result<Vec<protobuf::PhysicalWindowExprNode>>>()?;
 
             let partition_keys = exec
-                .partition_keys
+                .partition_keys()
                 .iter()
                 .map(|e| serialize_physical_expr(e, extension_codec))
                 .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;

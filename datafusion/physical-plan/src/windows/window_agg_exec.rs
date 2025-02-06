@@ -57,8 +57,6 @@ pub struct WindowAggExec {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
     schema: SchemaRef,
-    /// Partition Keys
-    pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Partition by indices that defines preset for existing ordering
@@ -73,7 +71,6 @@ impl WindowAggExec {
     pub fn try_new(
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
-        partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
@@ -85,7 +82,6 @@ impl WindowAggExec {
             input,
             window_expr,
             schema,
-            partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             ordered_partition_by_indices,
             cache,
@@ -138,6 +134,13 @@ impl WindowAggExec {
             EmissionType::Final,
             input.boundedness(),
         )
+    }
+
+    pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.window_expr
+            .iter()
+            .flat_map(|expr| expr.partition_by().to_vec())
+            .collect()
     }
 }
 
@@ -206,10 +209,10 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_keys.is_empty() {
+        if self.partition_keys().is_empty() {
             vec![Distribution::SinglePartition]
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys.clone())]
+            vec![Distribution::HashPartitioned(self.partition_keys())]
         }
     }
 
@@ -220,7 +223,6 @@ impl ExecutionPlan for WindowAggExec {
         Ok(Arc::new(WindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),
-            self.partition_keys.clone(),
         )?))
     }
 

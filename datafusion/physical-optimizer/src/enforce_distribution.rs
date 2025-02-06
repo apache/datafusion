@@ -1196,7 +1196,7 @@ pub fn ensure_distribution(
         if let Some(updated_window) = get_best_fitting_window(
             exec.window_expr(),
             exec.input(),
-            &exec.partition_keys,
+            &exec.partition_keys(),
         )? {
             plan = updated_window;
         }

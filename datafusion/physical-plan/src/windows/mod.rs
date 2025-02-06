@@ -435,11 +435,9 @@ pub fn get_best_fitting_window(
         // Effectively `WindowAggExec` works only in `Sorted` mode.
         Ok(None)
     } else {
-        Ok(Some(Arc::new(WindowAggExec::try_new(
-            window_expr,
-            Arc::clone(input),
-            physical_partition_keys.to_vec(),
-        )?) as _))
+        Ok(Some(
+            Arc::new(WindowAggExec::try_new(window_expr, Arc::clone(input))?) as _,
+        ))
     }
 }
 
@@ -663,7 +661,6 @@ mod tests {
                 false,
             )?],
             blocking_exec,
-            vec![],
         )?);
 
         let fut = collect(window_agg_exec, task_ctx);

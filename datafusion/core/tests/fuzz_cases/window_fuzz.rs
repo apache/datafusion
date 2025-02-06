@@ -662,7 +662,6 @@ async fn run_window_test(
             false,
         )?],
         exec1,
-        vec![],
     )?) as _;
     let exec2 = Arc::new(
         MemoryExec::try_new(&[input1.clone()], schema.clone(), None)?

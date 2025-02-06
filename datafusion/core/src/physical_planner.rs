@@ -639,11 +639,7 @@ impl DefaultPhysicalPlanner {
                         InputOrderMode::Sorted,
                     )?)
                 } else {
-                    Arc::new(WindowAggExec::try_new(
-                        window_expr,
-                        input_exec,
-                        physical_partition_keys,
-                    )?)
+                    Arc::new(WindowAggExec::try_new(window_expr, input_exec)?)
                 }
             }
             LogicalPlan::Aggregate(Aggregate {
