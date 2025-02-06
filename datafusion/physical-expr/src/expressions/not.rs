@@ -22,7 +22,6 @@ use std::fmt;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::utils::stats_v2_graph::{get_one, get_zero};
 use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
@@ -31,6 +30,7 @@ use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValu
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{self, Bernoulli};
+use datafusion_physical_expr_common::stats_v2::{get_one, get_zero};
 
 /// Not expression
 #[derive(Debug, Eq)]

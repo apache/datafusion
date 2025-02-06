@@ -23,7 +23,7 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::utils::stats_v2_graph::{
-    get_one, get_zero, new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
+    new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
 };
 use crate::PhysicalExpr;
 
@@ -45,6 +45,7 @@ use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nes
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
     self, Bernoulli, Gaussian, Uniform, Unknown,
 };
+use datafusion_physical_expr_common::stats_v2::{get_one, get_zero};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -498,10 +499,13 @@ impl PhysicalExpr for BinaryExpr {
         let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
 
         if self.op.is_numerical_operators() {
+            // This case is for addition and subtraction on both gaussian inputs
             if let Some(stats) = add_sub_on_gaussians(&self.op, left_stat, right_stat)? {
                 return Ok(stats);
             }
         } else if self.op.supports_propagation() {
+            // We are handling comparison operators here, so both of the inputs
+            // are either Bernoulli (boolean), or other distributions (numeric)
             return new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat);
         } else if self.op.is_logic_operator() {
             return evaluate_statistics_logical(&self.op, left_stat, right_stat);

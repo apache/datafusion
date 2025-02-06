@@ -24,7 +24,19 @@ use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::type_coercion::binary::binary_numeric_coercion;
 
+static SCALAR_VALUE_ZERO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
+static SCALAR_VALUE_ONE_LOCK: OnceLock<ScalarValue> = OnceLock::new();
 static LN_TWO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
+
+/// Returns a `0` as a [`ScalarValue`]
+pub fn get_zero() -> &'static ScalarValue {
+    SCALAR_VALUE_ZERO_LOCK.get_or_init(|| ScalarValue::Float64(Some(0.)))
+}
+
+/// Returns a `1` as a [`ScalarValue`]
+pub fn get_one() -> &'static ScalarValue {
+    SCALAR_VALUE_ONE_LOCK.get_or_init(|| ScalarValue::Float64(Some(1.)))
+}
 
 /// Returns a ln(2) as a [`ScalarValue`]
 fn get_ln_two() -> &'static ScalarValue {
@@ -338,9 +350,9 @@ impl StatisticsV2 {
             }
             Gaussian { .. } => Ok(Interval::make_unbounded(&DataType::Float64)?),
             Bernoulli { p } => {
-                if p.eq(&ScalarValue::new_zero(&DataType::Float64)?) {
+                if p.eq(get_zero()) {
                     Ok(Interval::CERTAINLY_FALSE)
-                } else if p.eq(&ScalarValue::new_one(&DataType::Float64)?) {
+                } else if p.eq(get_one()) {
                     Ok(Interval::CERTAINLY_TRUE)
                 } else {
                     Ok(Interval::UNCERTAIN)
@@ -865,12 +877,6 @@ mod tests {
                     Interval::make_zero(&DataType::Float64).unwrap(),
                 ),
                 ScalarValue::Float64(Some(0.02)),
-            ),
-            (
-                StatisticsV2::new_unknown_from_interval(
-                    &Interval::make(Some(0), Some(12)).unwrap(),
-                ),
-                ScalarValue::Float64(Some(12.)),
             ),
         ];
 

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use crate::expressions::Literal;
 use crate::intervals::cp_solver::PropagationResult;
@@ -28,10 +28,10 @@ use datafusion_expr_common::interval_arithmetic::{
     apply_operator, max_of_bounds, min_of_bounds, Interval,
 };
 use datafusion_expr_common::operator::Operator;
-use datafusion_physical_expr_common::stats_v2::StatisticsV2;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
     Exponential, Gaussian, Uniform, Unknown,
 };
+use datafusion_physical_expr_common::stats_v2::{get_one, get_zero, StatisticsV2};
 
 use log::debug;
 use petgraph::adj::DefaultIx;
@@ -44,19 +44,6 @@ use petgraph::Outgoing;
 pub struct ExprStatisticGraphNode {
     expr: Arc<dyn PhysicalExpr>,
     statistics: StatisticsV2,
-}
-
-static SCALAR_VALUE_ZERO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
-static SCALAR_VALUE_ONE_LOCK: OnceLock<ScalarValue> = OnceLock::new();
-
-/// Returns a `0` as a [`ScalarValue`]
-pub fn get_zero() -> &'static ScalarValue {
-    SCALAR_VALUE_ZERO_LOCK.get_or_init(|| ScalarValue::Float64(Some(0.)))
-}
-
-/// Returns a `1` as a [`ScalarValue`]
-pub fn get_one() -> &'static ScalarValue {
-    SCALAR_VALUE_ONE_LOCK.get_or_init(|| ScalarValue::Float64(Some(1.)))
 }
 
 impl ExprStatisticGraphNode {
@@ -253,50 +240,48 @@ pub fn new_unknown_from_binary_expr(
     )
 }
 
-/// Tries to create a new `Bernoulli` distribution, by computing the result probability,
-/// specifically, for Eq and NotEq operators with range-contained distributions.
-/// If not being able to compute a probability, returns an [`Unknown`] distribution.
+/// Tries to create a new `Bernoulli` distribution, by computing the result probability.
+/// It expects comparison operators coming up with numeric distributions.
 pub fn new_bernoulli_from_binary_expr(
     op: &Operator,
     left: &StatisticsV2,
     right: &StatisticsV2,
 ) -> Result<StatisticsV2> {
-    match op {
-        Operator::Eq | Operator::NotEq => match (left, right) {
-            (Uniform { interval: li }, Uniform { interval: ri })
-            | (Uniform { interval: li }, Unknown { range: ri, .. })
-            | (Unknown { range: li, .. }, Uniform { interval: ri })
-            | (Unknown { range: li, .. }, Unknown { range: ri, .. }) => {
-                // Note: unbounded intervals will be caught in `intersect` method.
-                if let Some(intersection) = li.intersect(ri)? {
-                    if li.data_type().is_numeric() {
-                        let overall_spread = max_of_bounds(li.upper(), ri.upper())
-                            .sub_checked(min_of_bounds(li.lower(), ri.lower()))?;
-                        let intersection_spread =
-                            intersection.upper().sub_checked(intersection.lower())?;
-
-                        let p = intersection_spread
-                            .cast_to(&DataType::Float64)?
-                            .div(overall_spread.cast_to(&DataType::Float64)?)?;
-
-                        if op == &Operator::Eq {
-                            StatisticsV2::new_bernoulli(p)
-                        } else {
-                            StatisticsV2::new_bernoulli(
-                                ScalarValue::Float64(Some(1.)).sub(p)?,
-                            )
-                        }
-                    } else {
-                        internal_err!("Cannot compute non-numeric probability")
-                    }
-                } else {
-                    new_unknown_from_binary_expr(op, left, right)
-                }
+    let (li, ri) = (left.range()?, right.range()?);
+    if matches!(op, Operator::Eq | Operator::NotEq)
+        && matches!(left, Uniform { .. })
+        && matches!(right, Uniform { .. })
+    {
+        if let Some(intersection) = li.intersect(&ri)? {
+            let overall_spread = max_of_bounds(li.upper(), ri.upper())
+                .sub_checked(min_of_bounds(li.lower(), ri.lower()))?;
+            let intersection_spread =
+                intersection.upper().sub_checked(intersection.lower())?;
+            let p = intersection_spread
+                .cast_to(&DataType::Float64)?
+                .div(overall_spread.cast_to(&DataType::Float64)?)?;
+            if op == &Operator::Eq {
+                StatisticsV2::new_bernoulli(p)
+            } else {
+                StatisticsV2::new_bernoulli(get_one().sub(p)?)
             }
-            // TODO: handle inequalities, temporarily returns [`Unknown`]
-            _ => new_unknown_from_binary_expr(op, left, right),
-        },
-        _ => new_unknown_from_binary_expr(op, left, right),
+        } else if op == &Operator::Eq {
+            StatisticsV2::new_bernoulli(get_zero().clone())
+        } else {
+            // op = Operator::NotEq
+            StatisticsV2::new_bernoulli(get_one().clone())
+        }
+    } else {
+        let range_evaluation = apply_operator(op, &li, &ri)?;
+        if range_evaluation.eq(&Interval::CERTAINLY_FALSE) {
+            StatisticsV2::new_bernoulli(get_zero().clone())
+        } else if range_evaluation.eq(&Interval::CERTAINLY_TRUE) {
+            StatisticsV2::new_bernoulli(get_one().clone())
+        } else if range_evaluation.eq(&Interval::UNCERTAIN) {
+            StatisticsV2::new_bernoulli(ScalarValue::Float64(None))
+        } else {
+            internal_err!("new_bernoulli_from_binary_expr() must be called with predicate operators")
+        }
     }
 }
 
@@ -710,12 +695,7 @@ mod tests {
             ),
         ]);
         let ev_stats = graph.evaluate_statistics()?;
-        assert_eq!(
-            ev_stats,
-            &Bernoulli {
-                p: Float64(Some(0.5))
-            }
-        );
+        assert_eq!(ev_stats, &Bernoulli { p: Float64(None) });
 
         assert_eq!(
             graph

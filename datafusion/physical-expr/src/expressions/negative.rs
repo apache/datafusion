@@ -36,6 +36,9 @@ use datafusion_expr::{
     ColumnarValue,
 };
 use datafusion_physical_expr_common::stats_v2::StatisticsV2;
+use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
+    Bernoulli, Exponential, Gaussian, Uniform, Unknown,
+};
 
 /// Negative expression
 #[derive(Debug, Eq)]
