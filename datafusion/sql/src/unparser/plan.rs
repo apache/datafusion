@@ -567,35 +567,17 @@ impl Unparser<'_> {
             LogicalPlan::Join(join) => {
                 let mut table_scan_filters = vec![];
 
-                let left_plan =
-                    match try_transform_to_simple_table_scan_with_filters(&join.left)? {
-                        Some((plan, filters)) => {
-                            table_scan_filters.extend(filters);
-                            Arc::new(plan)
-                        }
-                        None => Arc::clone(&join.left),
-                    };
-
                 self.select_to_sql_recursively(
-                    left_plan.as_ref(),
+                    join.left.as_ref(),
                     query,
                     select,
                     relation,
                 )?;
 
-                let right_plan =
-                    match try_transform_to_simple_table_scan_with_filters(&join.right)? {
-                        Some((plan, filters)) => {
-                            table_scan_filters.extend(filters);
-                            Arc::new(plan)
-                        }
-                        None => Arc::clone(&join.right),
-                    };
-
                 let mut right_relation = RelationBuilder::default();
 
                 self.select_to_sql_recursively(
-                    right_plan.as_ref(),
+                    join.right.as_ref(),
                     query,
                     select,
                     &mut right_relation,
@@ -635,7 +617,7 @@ impl Unparser<'_> {
                 )?;
 
                 self.select_to_sql_recursively(
-                    right_plan.as_ref(),
+                    join.right.as_ref(),
                     query,
                     select,
                     &mut right_relation,
@@ -658,50 +640,21 @@ impl Unparser<'_> {
                 Ok(())
             }
             LogicalPlan::SubqueryAlias(plan_alias) => {
+                println!("plan_alias {:?}", plan_alias);
                 let (plan, mut columns) =
                     subquery_alias_inner_query_and_columns(plan_alias);
-                let unparsed_table_scan = Self::unparse_table_scan_pushdown(
+
+                self.derive(
                     plan,
-                    Some(plan_alias.alias.clone()),
-                    select.already_projected(),
+                    relation,
+                    Some(
+                        self.new_table_alias(
+                            plan_alias.alias.table().to_string(),
+                            columns,
+                        ),
+                    ),
+                    false,
                 )?;
-                // if the child plan is a TableScan with pushdown operations, we don't need to
-                // create an additional subquery for it
-                if !select.already_projected() && unparsed_table_scan.is_none() {
-                    select.projection(vec![ast::SelectItem::Wildcard(
-                        ast::WildcardAdditionalOptions::default(),
-                    )]);
-                }
-                let plan = unparsed_table_scan.unwrap_or_else(|| plan.clone());
-                if !columns.is_empty()
-                    && !self.dialect.supports_column_alias_in_table_alias()
-                {
-                    // Instead of specifying column aliases as part of the outer table, inject them directly into the inner projection
-                    let rewritten_plan =
-                        match inject_column_aliases_into_subquery(plan, columns) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                return internal_err!(
-                                    "Failed to transform SubqueryAlias plan: {e}"
-                                )
-                            }
-                        };
-
-                    columns = vec![];
-
-                    self.select_to_sql_recursively(
-                        &rewritten_plan,
-                        query,
-                        select,
-                        relation,
-                    )?;
-                } else {
-                    self.select_to_sql_recursively(&plan, query, select, relation)?;
-                }
-
-                relation.alias(Some(
-                    self.new_table_alias(plan_alias.alias.table().to_string(), columns),
-                ));
 
                 Ok(())
             }

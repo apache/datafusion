@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashSet, sync::Arc};
-
 use arrow_schema::Schema;
 use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
@@ -26,6 +24,7 @@ use datafusion_common::{
 use datafusion_expr::expr::{Alias, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
 use sqlparser::ast::Ident;
+use std::{collections::HashSet, sync::Arc};
 
 /// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
 ///

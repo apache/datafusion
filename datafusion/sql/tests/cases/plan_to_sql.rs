@@ -15,8 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::common::{MockContextProvider, MockSessionState};
 use arrow_schema::{DataType, Field, Schema};
+use datafusion::datasource::MemTable;
+use datafusion::prelude::SessionContext;
 use datafusion_common::{assert_contains, DFSchema, DFSchemaRef, Result, TableReference};
+use datafusion_expr::builder::{
+    project, table_scan_with_filter_and_fetch, table_scan_with_filters,
+};
 use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
@@ -24,38 +30,34 @@ use datafusion_expr::{
     col, lit, table_scan, wildcard, EmptyRelation, Expr, Extension, LogicalPlan,
     LogicalPlanBuilder, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
+use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
+use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_nested::map::map_udf;
+use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
 use datafusion_functions_window::rank::rank_udwf;
 use datafusion_sql::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_sql::unparser::ast::{
+    DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
+};
 use datafusion_sql::unparser::dialect::{
     CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect, DefaultDialect,
     Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect, SqliteDialect,
-};
-use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
-use sqlparser::ast::Statement;
-use std::hash::Hash;
-use std::sync::Arc;
-use std::{fmt, vec};
-
-use crate::common::{MockContextProvider, MockSessionState};
-use datafusion_expr::builder::{
-    project, table_scan_with_filter_and_fetch, table_scan_with_filters,
-};
-use datafusion_functions::core::planner::CoreFunctionPlanner;
-use datafusion_functions_nested::extract::array_element_udf;
-use datafusion_functions_nested::planner::{FieldAccessPlanner, NestedFunctionPlanner};
-use datafusion_sql::unparser::ast::{
-    DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
 };
 use datafusion_sql::unparser::extension_unparser::{
     UnparseToStatementResult, UnparseWithinStatementResult,
     UserDefinedLogicalNodeUnparser,
 };
+use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
+use sqlparser::ast::Statement;
 use sqlparser::dialect::{Dialect, GenericDialect, MySqlDialect};
 use sqlparser::parser::Parser;
+use std::hash::Hash;
+use std::os::macos::raw::stat;
+use std::sync::Arc;
+use std::{fmt, vec};
 
 #[test]
 fn roundtrip_expr() {
@@ -1684,6 +1686,52 @@ fn test_unparse_optimized_multi_union() -> Result<()> {
     } else {
         panic!("Expected error")
     }
+
+    Ok(())
+}
+#[tokio::test]
+async fn test_unparse_optimized_bigquery() -> Result<()> {
+    let sql = r#"
+      select ta.j1_id
+      from j1 ta
+      join j1 tb
+      on ta.j1_id = tb.j1_id
+      where ta.j1_id > 1
+    "#;
+    let dialect = GenericDialect {};
+    let context = SessionContext::new();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "j1_id",
+        DataType::Int64,
+        false,
+    )]));
+
+    let table = MemTable::try_new(schema, vec![])?;
+    context.register_table("j1", Arc::new(table))?;
+
+    let plan = context.state().create_logical_plan(sql).await.unwrap();
+    let optimized = context.state().optimize(&plan)?;
+    println!("{:?}", optimized);
+    let unparser = Unparser::default();
+    let optimized_sql = unparser.plan_to_sql(&optimized)?;
+    println!("{:?}", optimized_sql.to_string());
+    Ok(())
+}
+#[tokio::test]
+async fn test_unparse_optimized_bigquery_2() -> Result<()> {
+    let sql = r#"
+      select ta.j1_id from j1 where ta.j1_id > 1
+    "#;
+    let dialect = GenericDialect {};
+    let statement = Parser::new(&dialect).try_with_sql(sql)?.parse_statement()?;
+    let state = MockSessionState::default().with_aggregate_function(sum_udaf());
+    let context = MockContextProvider { state };
+
+    let sql_to_rel = SqlToRel::new(&context);
+    let plan = sql_to_rel.sql_statement_to_plan(statement)?;
+    let unparser = Unparser::default();
+    let sql = unparser.plan_to_sql(&plan)?;
+    println!("{:?}", sql.to_string());
 
     Ok(())
 }
