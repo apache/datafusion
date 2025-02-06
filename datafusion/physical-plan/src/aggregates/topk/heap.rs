@@ -17,10 +17,11 @@
 
 //! A custom binary heap implementation for performant top K aggregation
 
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::i256;
 use arrow_array::cast::AsArray;
 use arrow_array::{downcast_primitive, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use arrow_schema::DataType;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;

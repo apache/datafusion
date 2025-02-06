@@ -842,7 +842,7 @@ SELECT greatest(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
 123456789
 
 
-query error greatest does not support zero arguments
+query error 'greatest' does not support zero argument
 SELECT greatest()
 
 query I
@@ -1040,7 +1040,7 @@ SELECT least(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
 -1
 
 
-query error least does not support zero arguments
+query error 'least' does not support zero arguments
 SELECT least()
 
 query I

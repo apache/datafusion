@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::utils::take_function_args;
 use arrow::array::{
     make_array, Array, Capacities, MutableArrayData, Scalar, StringArray,
 };
@@ -99,14 +100,9 @@ impl ScalarUDFImpl for GetFieldFunc {
     }
 
     fn display_name(&self, args: &[Expr]) -> Result<String> {
-        if args.len() != 2 {
-            return exec_err!(
-                "get_field function requires 2 arguments, got {}",
-                args.len()
-            );
-        }
+        let [base, field_name] = take_function_args(self.name(), args)?;
 
-        let name = match &args[1] {
+        let name = match field_name {
             Expr::Literal(name) => name,
             _ => {
                 return exec_err!(
@@ -115,7 +111,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
         };
 
-        Ok(format!("{}[{}]", args[0], name))
+        Ok(format!("{base}[{name}]"))
     }
 
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
