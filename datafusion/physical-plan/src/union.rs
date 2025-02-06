@@ -237,7 +237,11 @@ impl ExecutionPlan for UnionExec {
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, context)?;
                 debug!("Found a Union partition to execute");
-                return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
+                return Ok(Box::pin(ObservedStream::new(
+                    stream,
+                    baseline_metrics,
+                    None,
+                )));
             } else {
                 partition -= input.output_partitioning().partition_count();
             }
@@ -448,7 +452,11 @@ impl ExecutionPlan for InterleaveExec {
                 self.schema(),
                 input_stream_vec,
             ));
-            return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
+            return Ok(Box::pin(ObservedStream::new(
+                stream,
+                baseline_metrics,
+                None,
+            )));
         }
 
         warn!("Error in InterleaveExec: Partition {} not found", partition);
