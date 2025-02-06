@@ -641,7 +641,8 @@ fn get_valid_types(
                         .iter()
                         .any(|t| is_matched_type(t, &current_logical_type))
                 {
-                    let casted_type = param.desired_type.default_casted_type(current_type)?;
+                    let casted_type =
+                        param.desired_type.default_casted_type(current_type)?;
                     new_types.push(casted_type);
                 } else {
                     return internal_err!(
@@ -651,26 +652,6 @@ fn get_valid_types(
                         current_type
                     );
                 }
-
-                // if let Some(casted_type) = get_casted_type(
-                //     &param.desired_type,
-                //     &current_logical_type,
-                //     current_type,
-                // )
-                // .or_else(|| {
-                //     param.allowed_casts.iter().find_map(|t| {
-                //         get_casted_type(t, &current_logical_type, current_type)
-                //     })
-                // }) {
-                //     new_types.push(casted_type);
-                // } else {
-                //     return internal_err!(
-                //         "Expect {} but received NativeType: {}, DataType: {}",
-                //         param.desired_type,
-                //         current_logical_type,
-                //         current_type
-                //     );
-                // }
             }
 
             vec![new_types]

@@ -23,8 +23,8 @@ use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::Result;
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
+use datafusion_common::{HashSet, Result};
 use itertools::Itertools;
 
 /// Constant that is used as a placeholder for any valid timezone.
@@ -232,14 +232,18 @@ impl TypeSignatureClass {
     /// We return the largest common type for the given `TypeSignatureClass`
     pub fn default_casted_type(&self, data_type: &DataType) -> Result<DataType> {
         Ok(match self {
-                    TypeSignatureClass::Native(logical_type) => return logical_type.native().default_cast_for(data_type),
-                    TypeSignatureClass::Timestamp => DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    TypeSignatureClass::Date => DataType::Date64,
-                    TypeSignatureClass::Time => DataType::Time64(TimeUnit::Nanosecond),
-                    TypeSignatureClass::Interval => DataType::Interval(IntervalUnit::DayTime),
-                    TypeSignatureClass::Duration => DataType::Duration(TimeUnit::Nanosecond),
-                    TypeSignatureClass::Integer => DataType::Int64,
-                })
+            TypeSignatureClass::Native(logical_type) => {
+                return logical_type.native().default_cast_for(data_type)
+            }
+            TypeSignatureClass::Timestamp => {
+                DataType::Timestamp(TimeUnit::Nanosecond, None)
+            }
+            TypeSignatureClass::Date => DataType::Date64,
+            TypeSignatureClass::Time => DataType::Time64(TimeUnit::Nanosecond),
+            TypeSignatureClass::Interval => DataType::Interval(IntervalUnit::DayTime),
+            TypeSignatureClass::Duration => DataType::Duration(TimeUnit::Nanosecond),
+            TypeSignatureClass::Integer => DataType::Int64,
+        })
     }
 }
 
@@ -400,6 +404,23 @@ impl TypeSignature {
                 .cloned()
                 .map(|data_type| vec![data_type; *arg_count])
                 .collect(),
+            TypeSignature::CoercibleV2(coercions) => coercions
+                .iter()
+                .map(|c| {
+                    let mut all_types: HashSet<DataType> =
+                        get_possible_types_from_signature_classes(&c.desired_type)
+                            .into_iter()
+                            .collect();
+                    let allowed_casts: Vec<DataType> = c
+                        .allowed_casts
+                        .iter()
+                        .flat_map(|t| get_possible_types_from_signature_classes(t))
+                        .collect();
+                    all_types.extend(allowed_casts.into_iter());
+                    all_types.into_iter().collect::<Vec<_>>()
+                })
+                .multi_cartesian_product()
+                .collect(),
             TypeSignature::Coercible(types) => types
                 .iter()
                 .map(|logical_type| match logical_type {
@@ -451,8 +472,36 @@ impl TypeSignature {
             | TypeSignature::Nullary
             | TypeSignature::VariadicAny
             | TypeSignature::ArraySignature(_)
-            | TypeSignature::CoercibleV2(_)
             | TypeSignature::UserDefined => vec![],
+        }
+    }
+}
+
+fn get_possible_types_from_signature_classes(
+    signature_classes: &TypeSignatureClass,
+) -> Vec<DataType> {
+    match signature_classes {
+        TypeSignatureClass::Native(l) => get_data_types(l.native()),
+        TypeSignatureClass::Timestamp => {
+            vec![
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
+            ]
+        }
+        TypeSignatureClass::Date => {
+            vec![DataType::Date64]
+        }
+        TypeSignatureClass::Time => {
+            vec![DataType::Time64(TimeUnit::Nanosecond)]
+        }
+        TypeSignatureClass::Interval => {
+            vec![DataType::Interval(IntervalUnit::DayTime)]
+        }
+        TypeSignatureClass::Duration => {
+            vec![DataType::Duration(TimeUnit::Nanosecond)]
+        }
+        TypeSignatureClass::Integer => {
+            vec![DataType::Int64]
         }
     }
 }
