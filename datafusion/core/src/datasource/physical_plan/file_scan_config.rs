@@ -19,8 +19,8 @@
 //! file sources.
 
 use super::{
-    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
-    FileGroupsDisplay, FileStream,
+    get_projected_output_ordering, statistics::MinMaxStatistics, AvroSource,
+    FileGroupPartitioner, FileGroupsDisplay, FileStream,
 };
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
@@ -590,7 +590,7 @@ impl FileScanConfig {
 
     /// Write the data_type based on file_source
     fn fmt_file_source(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-        write!(f, ", file_type={}", self.source.file_type().to_str())?;
+        write!(f, ", file_type={}", self.source.file_type())?;
         self.source.fmt_extra(t, f)
     }
 
@@ -602,7 +602,7 @@ impl FileScanConfig {
     fn supports_repartition(&self) -> bool {
         !(self.file_compression_type.is_compressed()
             || self.new_lines_in_values
-            || self.source.file_type().is_avro())
+            || self.source.as_any().downcast_ref::<AvroSource>().is_some())
     }
 }
 

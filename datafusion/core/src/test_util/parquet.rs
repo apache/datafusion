@@ -205,7 +205,12 @@ impl TestParquetFile {
             let source = maybe_file.source();
             if let Some(maybe_parquet) = source.as_any().downcast_ref::<FileScanConfig>()
             {
-                if maybe_parquet.file_source().file_type().is_parquet() {
+                if maybe_parquet
+                    .file_source()
+                    .as_any()
+                    .downcast_ref::<ParquetSource>()
+                    .is_some()
+                {
                     return maybe_file.metrics();
                 }
             }

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use super::{calculate_range, FileScanConfig, RangeCalculation};
-use crate::datasource::data_source::{FileSource, FileType};
+use crate::datasource::data_source::FileSource;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
@@ -609,22 +609,11 @@ impl FileSource for CsvSource {
             .clone()
             .expect("projected_statistics must be set"))
     }
-    fn file_type(&self) -> Arc<dyn FileType> {
-        Arc::new(CsvFileType {})
+    fn file_type(&self) -> &str {
+        "csv"
     }
     fn fmt_extra(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, ", has_header={}", self.has_header)
-    }
-}
-
-struct CsvFileType {}
-impl FileType for CsvFileType {
-    fn to_str(&self) -> &str {
-        "csv"
-    }
-
-    fn is_csv(&self) -> bool {
-        true
     }
 }
 

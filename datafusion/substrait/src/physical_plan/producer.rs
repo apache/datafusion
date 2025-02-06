@@ -27,7 +27,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 
-use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
 use substrait::proto::expression::MaskExpression;
 use substrait::proto::r#type::{
@@ -54,7 +54,11 @@ pub fn to_substrait_rel(
     if let Some(data_source) = plan.as_any().downcast_ref::<DataSourceExec>() {
         let source = data_source.source();
         if let Some(file_config) = source.as_any().downcast_ref::<FileScanConfig>() {
-            let is_parquet = file_config.file_source().file_type().is_parquet();
+            let is_parquet = file_config
+                .file_source()
+                .as_any()
+                .downcast_ref::<ParquetSource>()
+                .is_some();
             if is_parquet {
                 let mut substrait_files = vec![];
                 for (partition_index, files) in file_config.file_groups.iter().enumerate()

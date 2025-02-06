@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::data_source::{FileSource, FileType};
+use crate::datasource::data_source::FileSource;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{
     FileMeta, FileOpenFuture, FileOpener, FileScanConfig, JsonSource,
@@ -253,14 +253,7 @@ impl FileSource for ArrowSource {
             .expect("projected_statistics must be set"))
     }
 
-    fn file_type(&self) -> Arc<dyn FileType> {
-        Arc::new(ArrowFileType {})
-    }
-}
-
-struct ArrowFileType {}
-impl FileType for ArrowFileType {
-    fn to_str(&self) -> &str {
+    fn file_type(&self) -> &str {
         "arrow"
     }
 }

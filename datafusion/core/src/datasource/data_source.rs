@@ -54,31 +54,10 @@ pub trait FileSource: Send + Sync {
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// Return projected statistics
     fn statistics(&self) -> datafusion_common::Result<Statistics>;
-    /// Returns the file type such as Arrow, Avro, Parquet, ...
-    fn file_type(&self) -> Arc<dyn FileType>;
+    /// String representation of file source such as "csv", "json", "parquet"
+    fn file_type(&self) -> &str;
     /// Format FileType specific information
     fn fmt_extra(&self, _t: DisplayFormatType, _f: &mut Formatter) -> fmt::Result {
         Ok(())
-    }
-}
-
-/// The trait that represents different file types
-pub trait FileType {
-    /// String representation of file type such as "csv", "json", "parquet"
-    fn to_str(&self) -> &str;
-
-    /// Is the file type avro?
-    fn is_avro(&self) -> bool {
-        false
-    }
-
-    /// Is the file type csv?
-    fn is_csv(&self) -> bool {
-        false
-    }
-
-    /// Is the file type parquet?
-    fn is_parquet(&self) -> bool {
-        false
     }
 }

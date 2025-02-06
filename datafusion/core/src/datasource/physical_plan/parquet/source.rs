@@ -20,7 +20,7 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::datasource::data_source::{FileSource, FileType};
+use crate::datasource::data_source::FileSource;
 use crate::datasource::physical_plan::parquet::opener::ParquetOpener;
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::DefaultParquetFileReaderFactory;
@@ -88,11 +88,8 @@ use object_store::ObjectStore;
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let predicate = lit(true);
 /// let source = Arc::new(
-///     ParquetSource::new(
-///         Arc::clone(&file_schema),
-///         Some(predicate),
-///         TableParquetOptions::default()
-///     )
+///     ParquetSource::default()
+///     .with_predicate(Arc::clone(&file_schema), predicate)
 /// );
 /// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
 /// let file_scan_config = FileScanConfig::new(object_store_url, file_schema, source)
@@ -283,50 +280,11 @@ impl ParquetSource {
         predicate: Option<Arc<dyn PhysicalExpr>>,
         table_parquet_options: TableParquetOptions,
     ) -> Self {
-        debug!(
-            "Creating ParquetSource, schema: {:?}, predicate: {:?}",
-            file_schema, predicate
-        );
-
-        let metrics = ExecutionPlanMetricsSet::new();
-        let predicate_creation_errors =
-            MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
-
-        let mut conf = ParquetSource::new_with_options(table_parquet_options);
-        conf.with_metrics(metrics);
-        if let Some(predicate) = predicate.clone() {
-            conf = conf.with_predicate(predicate);
-        }
-
-        let pruning_predicate = predicate
-            .clone()
-            .and_then(|predicate_expr| {
-                match PruningPredicate::try_new(predicate_expr, Arc::clone(&file_schema))
-                {
-                    Ok(pruning_predicate) => Some(Arc::new(pruning_predicate)),
-                    Err(e) => {
-                        debug!("Could not create pruning predicate for: {e}");
-                        predicate_creation_errors.add(1);
-                        None
-                    }
-                }
-            })
-            .filter(|p| !p.always_true());
-        if let Some(pruning_predicate) = pruning_predicate {
-            conf = conf.with_pruning_predicate(pruning_predicate);
-        }
-
-        let page_pruning_predicate = predicate
-            .as_ref()
-            .map(|predicate_expr| {
-                PagePruningAccessPlanFilter::new(predicate_expr, Arc::clone(&file_schema))
-            })
-            .map(Arc::new);
-        if let Some(page_pruning_predicate) = page_pruning_predicate {
-            conf = conf.with_page_pruning_predicate(page_pruning_predicate);
-        }
-
-        conf
+        let conf = Self::new_with_options(table_parquet_options);
+        let Some(predicate) = predicate.clone() else {
+            return conf;
+        };
+        conf.with_predicate(file_schema, predicate)
     }
 
     /// Create a new builder to read the data specified in the file scan
@@ -355,24 +313,39 @@ impl ParquetSource {
         conf
     }
 
-    fn with_predicate(&self, predicate: Arc<dyn PhysicalExpr>) -> Self {
-        let mut conf = self.clone();
-        conf.predicate = Some(predicate);
-        conf
-    }
-
-    fn with_pruning_predicate(&self, pruning_predicate: Arc<PruningPredicate>) -> Self {
-        let mut conf = self.clone();
-        conf.pruning_predicate = Some(pruning_predicate);
-        conf
-    }
-
-    fn with_page_pruning_predicate(
+    fn with_predicate(
         &self,
-        page_pruning_predicate: Arc<PagePruningAccessPlanFilter>,
+        file_schema: Arc<Schema>,
+        predicate: Arc<dyn PhysicalExpr>,
     ) -> Self {
         let mut conf = self.clone();
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let predicate_creation_errors =
+            MetricBuilder::new(&metrics).global_counter("num_predicate_creation_errors");
+
+        conf.with_metrics(metrics);
+        conf.predicate = Some(Arc::clone(&predicate));
+
+        match PruningPredicate::try_new(Arc::clone(&predicate), Arc::clone(&file_schema))
+        {
+            Ok(pruning_predicate) => {
+                if !pruning_predicate.always_true() {
+                    conf.pruning_predicate = Some(Arc::new(pruning_predicate));
+                }
+            }
+            Err(e) => {
+                debug!("Could not create pruning predicate for: {e}");
+                predicate_creation_errors.add(1);
+            }
+        };
+
+        let page_pruning_predicate = Arc::new(PagePruningAccessPlanFilter::new(
+            &predicate,
+            Arc::clone(&file_schema),
+        ));
         conf.page_pruning_predicate = Some(page_pruning_predicate);
+
         conf
     }
 
@@ -591,8 +564,8 @@ impl FileSource for ParquetSource {
         }
     }
 
-    fn file_type(&self) -> Arc<dyn FileType> {
-        Arc::new(ParquetFileType {})
+    fn file_type(&self) -> &str {
+        "parquet"
     }
 
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
@@ -623,16 +596,5 @@ impl FileSource for ParquetSource {
                 write!(f, "{}{}", predicate_string, pruning_predicate_string)
             }
         }
-    }
-}
-
-struct ParquetFileType {}
-impl FileType for ParquetFileType {
-    fn to_str(&self) -> &str {
-        "parquet"
-    }
-
-    fn is_parquet(&self) -> bool {
-        true
     }
 }
