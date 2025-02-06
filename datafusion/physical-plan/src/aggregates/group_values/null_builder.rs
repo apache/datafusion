@@ -63,7 +63,7 @@ impl MaybeNullBufferBuilder {
 
     /// return the number of heap allocated bytes used by this structure to store boolean values
     pub fn allocated_size(&self) -> usize {
-        // NullBufferBuilder builder::allocated_size returns capacity in bites
+        // NullBufferBuilder builder::allocated_size returns capacity in bits
         self.nulls.allocated_size() / 8
     }
 
