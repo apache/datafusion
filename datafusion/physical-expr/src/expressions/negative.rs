@@ -35,9 +35,7 @@ use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
 };
-use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-    self, Bernoulli, Exponential, Gaussian, Uniform, Unknown,
-};
+use datafusion_physical_expr_common::stats_v2::StatisticsV2;
 
 /// Negative expression
 #[derive(Debug, Eq)]
@@ -340,15 +338,11 @@ mod tests {
                 offset: ScalarValue::Float64(Some(1.)),
                 positive_tail: true
             }])?,
-            StatisticsV2::new_unknown(
-                ScalarValue::Null,
-                ScalarValue::Float64(None),
-                ScalarValue::UInt8(None),
-                Interval::try_new(
-                    ScalarValue::Float64(None),
-                    ScalarValue::Float64(Some(-1.))
-                )?,
-            )?
+            Exponential {
+                rate: ScalarValue::Float64(Some(1.)),
+                offset: ScalarValue::Float64(Some(1.)),
+                positive_tail: false
+            }
         );
 
         // Gaussian

@@ -156,6 +156,29 @@ impl ExprStatisticGraph {
         }
     }
 
+    /// Runs a statistics evaluation mechanism in a bottom-up manner,
+    /// to calculate a root expression statistic.
+    /// Returns a calculated root expression statistic.
+    pub fn evaluate_statistics(&mut self) -> Result<&StatisticsV2> {
+        let mut dfs = DfsPostOrder::new(&self.graph, self.root);
+        while let Some(idx) = dfs.next(&self.graph) {
+            let neighbors = self.graph.neighbors_directed(idx, Outgoing);
+            let mut children_statistics = neighbors
+                .map(|child| &self.graph[child].statistics)
+                .collect::<Vec<_>>();
+            // Note: all distributions are recognized as independent, by default.
+            if !children_statistics.is_empty() {
+                // Reverse to align with `PhysicalExpr`'s children:
+                children_statistics.reverse();
+                self.graph[idx].statistics = self.graph[idx]
+                    .expr
+                    .evaluate_statistics(&children_statistics)?;
+            }
+        }
+
+        Ok(&self.graph[self.root].statistics)
+    }
+
     /// Runs a propagation mechanism in a top-down manner to define a statistics for a leaf nodes.
     pub fn propagate_statistics(
         &mut self,
@@ -212,29 +235,6 @@ impl ExprStatisticGraph {
             }
         }
         Ok(PropagationResult::Success)
-    }
-
-    /// Runs a statistics evaluation mechanism in a bottom-up manner,
-    /// to calculate a root expression statistic.
-    /// Returns a calculated root expression statistic.
-    pub fn evaluate_statistics(&mut self) -> Result<&StatisticsV2> {
-        let mut dfs = DfsPostOrder::new(&self.graph, self.root);
-        while let Some(idx) = dfs.next(&self.graph) {
-            let neighbors = self.graph.neighbors_directed(idx, Outgoing);
-            let mut children_statistics = neighbors
-                .map(|child| &self.graph[child].statistics)
-                .collect::<Vec<_>>();
-            // Note: all distributions are recognized as independent, by default.
-            if !children_statistics.is_empty() {
-                // Reverse to align with `PhysicalExpr`'s children:
-                children_statistics.reverse();
-                self.graph[idx].statistics = self.graph[idx]
-                    .expr
-                    .evaluate_statistics(&children_statistics)?;
-            }
-        }
-
-        Ok(&self.graph[self.root].statistics)
     }
 }
 

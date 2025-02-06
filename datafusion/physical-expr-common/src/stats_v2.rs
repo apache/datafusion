@@ -24,8 +24,6 @@ use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::type_coercion::binary::binary_numeric_coercion;
 
-pub use statistics::StatisticsV2; // Re-export the enum but keep variants private.
-
 static LN_TWO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
 
 /// Returns a ln(2) as a [`ScalarValue`]
@@ -33,65 +31,61 @@ fn get_ln_two() -> &'static ScalarValue {
     LN_TWO_LOCK.get_or_init(|| ScalarValue::Float64(Some(2_f64.ln())))
 }
 
-mod statistics {
-    use super::*;
-
-    /// New, enhanced `Statistics` definition, represents five core statistical distributions. New variants will be added over time.
-    #[derive(Clone, Debug, PartialEq)]
-    pub enum StatisticsV2 {
-        /// Uniform distribution, represented by its range. For a more in-depth discussion, see:
-        ///
-        /// <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>
-        Uniform { interval: Interval },
-        /// Exponential distribution with an optional shift. The probability density function (PDF)
-        /// is defined as follows:
-        ///
-        /// For a positive tail (when `positive_tail` is `true`):
-        ///
-        /// `f(x; λ, offset) = λ exp(-λ (x - offset))    for x ≥ offset`
-        ///
-        /// For a negative tail (when `positive_tail` is `false`):
-        ///
-        /// `f(x; λ, offset) = λ exp(-λ (offset - x))    for x ≤ offset`
-        ///
-        ///
-        /// In both cases, the PDF is 0 outside the specified domain.
-        ///
-        /// For more information, see: <https://en.wikipedia.org/wiki/Exponential_distribution>
-        Exponential {
-            rate: ScalarValue,
-            offset: ScalarValue,
-            /// `true` if the exponential distribution has a positive tail (extending towards positive x),
-            /// `false` if it has a negative tail (extending towards negative x).
-            positive_tail: bool,
-        },
-        /// Gaussian (normal) distribution, represented by its mean and variance.
-        /// For a more in-depth discussion, see:
-        ///
-        /// <https://en.wikipedia.org/wiki/Normal_distribution>
-        Gaussian {
-            mean: ScalarValue,
-            variance: ScalarValue,
-        },
-        /// Bernoulli distribution with success probability `p`, which always has the
-        /// data type [`DataType::Float64`]. If `p` is a null value, the success
-        /// probability is unknown.
-        ///
-        /// For a more in-depth discussion, see:
-        ///
-        /// <https://en.wikipedia.org/wiki/Bernoulli_distribution>
-        Bernoulli { p: ScalarValue },
-        /// An unknown distribution, only containing some summary statistics.
-        /// For a more in-depth discussion, see:
-        ///
-        /// <https://en.wikipedia.org/wiki/Summary_statistics>
-        Unknown {
-            mean: ScalarValue,
-            median: ScalarValue,
-            variance: ScalarValue,
-            range: Interval,
-        },
-    }
+/// New, enhanced `Statistics` definition, represents five core statistical distributions. New variants will be added over time.
+#[derive(Clone, Debug, PartialEq)]
+pub enum StatisticsV2 {
+    /// Uniform distribution, represented by its range. For a more in-depth discussion, see:
+    ///
+    /// <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>
+    Uniform { interval: Interval },
+    /// Exponential distribution with an optional shift. The probability density function (PDF)
+    /// is defined as follows:
+    ///
+    /// For a positive tail (when `positive_tail` is `true`):
+    ///
+    /// `f(x; λ, offset) = λ exp(-λ (x - offset))    for x ≥ offset`
+    ///
+    /// For a negative tail (when `positive_tail` is `false`):
+    ///
+    /// `f(x; λ, offset) = λ exp(-λ (offset - x))    for x ≤ offset`
+    ///
+    ///
+    /// In both cases, the PDF is 0 outside the specified domain.
+    ///
+    /// For more information, see: <https://en.wikipedia.org/wiki/Exponential_distribution>
+    Exponential {
+        rate: ScalarValue,
+        offset: ScalarValue,
+        /// `true` if the exponential distribution has a positive tail (extending towards positive x),
+        /// `false` if it has a negative tail (extending towards negative x).
+        positive_tail: bool,
+    },
+    /// Gaussian (normal) distribution, represented by its mean and variance.
+    /// For a more in-depth discussion, see:
+    ///
+    /// <https://en.wikipedia.org/wiki/Normal_distribution>
+    Gaussian {
+        mean: ScalarValue,
+        variance: ScalarValue,
+    },
+    /// Bernoulli distribution with success probability `p`, which always has the
+    /// data type [`DataType::Float64`]. If `p` is a null value, the success
+    /// probability is unknown.
+    ///
+    /// For a more in-depth discussion, see:
+    ///
+    /// <https://en.wikipedia.org/wiki/Bernoulli_distribution>
+    Bernoulli { p: ScalarValue },
+    /// An unknown distribution, only containing some summary statistics.
+    /// For a more in-depth discussion, see:
+    ///
+    /// <https://en.wikipedia.org/wiki/Summary_statistics>
+    Unknown {
+        mean: ScalarValue,
+        median: ScalarValue,
+        variance: ScalarValue,
+        range: Interval,
+    },
 }
 
 impl StatisticsV2 {
