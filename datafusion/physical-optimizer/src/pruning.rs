@@ -2732,16 +2732,12 @@ mod tests {
         let expr = col("c1")
             .lt(lit(1))
             .and(col("c2").eq(lit(2)).or(col("c2").eq(lit(3))));
-        let expected_expr = "c1_null_count@1 != row_count@2 \
-            AND c1_min@0 < 1 AND (\
-                c2_null_count@5 != row_count@6 \
-                AND c2_min@3 <= 2 AND 2 <= c2_max@4 OR \
-                c2_null_count@5 != row_count@6 AND c2_min@3 <= 3 AND 3 <= c2_max@4\
-            )";
+        let expected_expr = "c1_null_count@1 != row_count@2 AND c1_min@0 < 1 AND (c2_null_count@5 != row_count@2 AND c2_min@3 <= 2 AND 2 <= c2_max@4 OR c2_null_count@5 != row_count@2 AND c2_min@3 <= 3 AND 3 <= c2_max@4)";
         let predicate_expr =
             test_build_predicate_expression(&expr, &schema, &mut required_columns);
         assert_eq!(predicate_expr.to_string(), expected_expr);
-        // c1 < 1 should add c1_min
+        println!("required_columns: {:#?}", required_columns); // for debugging assertions below
+                                                               // c1 < 1 should add c1_min
         let c1_min_field = Field::new("c1_min", DataType::Int32, false);
         assert_eq!(
             required_columns.columns[0],
@@ -2800,18 +2796,18 @@ mod tests {
                 c2_null_count_field.with_nullable(true) // could be nullable if stats are not present
             )
         );
-        // c2 = 2 should add row_count
+        // c2 = 1 should add row_count
         let row_count_field = Field::new("row_count", DataType::UInt64, false);
         assert_eq!(
-            required_columns.columns[6],
+            required_columns.columns[2],
             (
-                phys_expr::Column::new("c2", 1),
+                phys_expr::Column::new("c1", 0),
                 StatisticsType::RowCount,
                 row_count_field.with_nullable(true) // could be nullable if stats are not present
             )
         );
         // c2 = 3 shouldn't add any new statistics fields
-        assert_eq!(required_columns.columns.len(), 7);
+        assert_eq!(required_columns.columns.len(), 6);
 
         Ok(())
     }
@@ -2910,7 +2906,7 @@ mod tests {
         // test c1 in(1, 2) and c2 BETWEEN 4 AND 5
         let expr3 = expr1.and(expr2);
 
-        let expected_expr = "(c1_null_count@2 != row_count@3 AND c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_null_count@2 != row_count@3 AND c1_min@0 <= 2 AND 2 <= c1_max@1) AND c2_null_count@5 != row_count@6 AND c2_max@4 >= 4 AND c2_null_count@5 != row_count@6 AND c2_min@7 <= 5";
+        let expected_expr = "(c1_null_count@2 != row_count@3 AND c1_min@0 <= 1 AND 1 <= c1_max@1 OR c1_null_count@2 != row_count@3 AND c1_min@0 <= 2 AND 2 <= c1_max@1) AND c2_null_count@5 != row_count@3 AND c2_max@4 >= 4 AND c2_null_count@5 != row_count@3 AND c2_min@6 <= 5";
         let predicate_expr =
             test_build_predicate_expression(&expr3, &schema, &mut RequiredColumns::new());
         assert_eq!(predicate_expr.to_string(), expected_expr);
