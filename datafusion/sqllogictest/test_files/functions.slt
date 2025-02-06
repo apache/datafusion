@@ -270,7 +270,7 @@ SELECT to_TIMESTAMPS_second(v2) from test;
 query error
 SELECT counter(*) from test;
 ----
-DataFusion error: 1 errors, first error: Error during planning: Invalid function 'counter'.
+DataFusion error: Error during planning: Invalid function 'counter'.
 Did you mean 'count'?
 
 
@@ -282,7 +282,7 @@ SELECT STDEV(v1) from test;
 statement error
 SELECT COVARIA(1,1);
 ----
-DataFusion error: 1 errors, first error: Error during planning: Invalid function 'covaria'.
+DataFusion error: Error during planning: Invalid function 'covaria'.
 Did you mean 'covar'?
 
 

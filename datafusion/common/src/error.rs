@@ -442,37 +442,37 @@ impl DataFusionError {
         "".to_owned()
     }
 
-    fn error_prefix(&self) -> Cow<str> {
+    fn error_prefix(&self) -> &'static str {
         match self {
-            DataFusionError::ArrowError(_, _) => Cow::Borrowed("Arrow error: "),
+            DataFusionError::ArrowError(_, _) => "Arrow error: ",
             #[cfg(feature = "parquet")]
-            DataFusionError::ParquetError(_) => Cow::Borrowed("Parquet error: "),
+            DataFusionError::ParquetError(_) => "Parquet error: ",
             #[cfg(feature = "avro")]
-            DataFusionError::AvroError(_) => Cow::Borrowed("Avro error: "),
+            DataFusionError::AvroError(_) => "Avro error: ",
             #[cfg(feature = "object_store")]
-            DataFusionError::ObjectStore(_) => Cow::Borrowed("Object Store error: "),
-            DataFusionError::IoError(_) => Cow::Borrowed("IO error: "),
-            DataFusionError::SQL(_, _) => Cow::Borrowed("SQL error: "),
+            DataFusionError::ObjectStore(_) => "Object Store error: ",
+            DataFusionError::IoError(_) => "IO error: ",
+            DataFusionError::SQL(_, _) => "SQL error: ",
             DataFusionError::NotImplemented(_) => {
-                Cow::Borrowed("This feature is not implemented: ")
+                "This feature is not implemented: "
             }
-            DataFusionError::Internal(_) => Cow::Borrowed("Internal error: "),
-            DataFusionError::Plan(_) => Cow::Borrowed("Error during planning: "),
+            DataFusionError::Internal(_) => "Internal error: ",
+            DataFusionError::Plan(_) => "Error during planning: ",
             DataFusionError::Configuration(_) => {
-                Cow::Borrowed("Invalid or Unsupported Configuration: ")
+                "Invalid or Unsupported Configuration: "
             }
-            DataFusionError::SchemaError(_, _) => Cow::Borrowed("Schema error: "),
-            DataFusionError::Execution(_) => Cow::Borrowed("Execution error: "),
-            DataFusionError::ExecutionJoin(_) => Cow::Borrowed("ExecutionJoin error: "),
+            DataFusionError::SchemaError(_, _) => "Schema error: ",
+            DataFusionError::Execution(_) => "Execution error: ",
+            DataFusionError::ExecutionJoin(_) => "ExecutionJoin error: ",
             DataFusionError::ResourcesExhausted(_) => {
-                Cow::Borrowed("Resources exhausted: ")
+                "Resources exhausted: "
             }
-            DataFusionError::External(_) => Cow::Borrowed("External error: "),
-            DataFusionError::Context(_, _) => Cow::Borrowed(""),
-            DataFusionError::Substrait(_) => Cow::Borrowed("Substrait error: "),
-            DataFusionError::Diagnostic(_, _) => Cow::Borrowed(""),
+            DataFusionError::External(_) => "External error: ",
+            DataFusionError::Context(_, _) => "",
+            DataFusionError::Substrait(_) => "Substrait error: ",
+            DataFusionError::Diagnostic(_, _) => "",
             DataFusionError::Collection(errs) => {
-                Cow::Owned(format!("{} errors, first error: {}", errs.len(), errs.first().expect("cannot construct DataFusionError::Collection with 0 errors, but got one such case").error_prefix()))
+                errs.first().expect("cannot construct DataFusionError::Collection with 0 errors, but got one such case").error_prefix()
             }
         }
     }
@@ -600,6 +600,26 @@ impl DataFusionError {
         let mut queue = VecDeque::new();
         queue.push_back(self);
         ErrorIterator { queue }
+    }
+}
+
+pub struct DataFusionErrorBuilder(Vec<DataFusionError>);
+
+impl DataFusionErrorBuilder {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn add_error(&mut self, error: DataFusionError) {
+        self.0.push(error);
+    }
+
+    pub fn error_or<T>(self, ok: T) -> Result<T, DataFusionError> {
+        match self.0.len() {
+            0 => Ok(ok),
+            1 => Err(self.0.into_iter().next().expect("length matched 1")),
+            _ => Err(DataFusionError::Collection(self.0)),
+        }
     }
 }
 

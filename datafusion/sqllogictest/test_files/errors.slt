@@ -136,7 +136,7 @@ SELECT
    ORDER BY c9
    LIMIT 5;
 ----
-DataFusion error: 1 errors, first error: Error during planning: Invalid function 'nth_vlue'.
+DataFusion error: Error during planning: Invalid function 'nth_vlue'.
 Did you mean 'nth_value'?
 
 
@@ -148,7 +148,7 @@ SELECT
    ORDER BY c9
    LIMIT 5;
 ----
-DataFusion error: 1 errors, first error: Error during planning: Invalid function 'frst_value'.
+DataFusion error: Error during planning: Invalid function 'frst_value'.
 Did you mean 'first_value'?
 
 

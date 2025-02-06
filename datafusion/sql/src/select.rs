@@ -25,6 +25,7 @@ use crate::utils::{
     CheckColumnsSatisfyExprsPurpose,
 };
 
+use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
@@ -575,18 +576,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Expr>> {
         let mut prepared_select_exprs = vec![];
-        let mut errors = vec![];
+        let mut error_builder = DataFusionErrorBuilder::new();
         for expr in projection {
             match self.sql_select_to_rex(expr, plan, empty_from, planner_context) {
                 Ok(expr) => prepared_select_exprs.push(expr),
-                Err(err) => errors.push(err),
+                Err(err) => error_builder.add_error(err),
             }
         }
-        if !errors.is_empty() {
-            Err(DataFusionError::Collection(errors))
-        } else {
-            Ok(prepared_select_exprs)
-        }
+        error_builder.error_or(prepared_select_exprs)
     }
 
     /// Generate a relational expression from a select SQL expression

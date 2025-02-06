@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::DataFusionError;
+use datafusion_common::{assert_contains, DataFusionError};
 use datafusion_sql::planner::SqlToRel;
 use sqlparser::{dialect::GenericDialect, parser::Parser};
 
@@ -45,7 +45,7 @@ fn test_collect_select_items() {
     assert!(errors[0]
         .to_string()
         .contains("No field named first_namex."));
-    assert!(errors[1].to_string().contains("No field named last_namex."));
+    assert_contains!(errors[1].to_string(), "No field named last_namex.");
 }
 
 #[test]
@@ -54,8 +54,6 @@ fn test_collect_set_exprs() {
     let error = do_query(query);
     let errors = error.iter().collect::<Vec<_>>();
     assert_eq!(errors.len(), 2);
-    assert!(errors[0]
-        .to_string()
-        .contains("No field named first_namex."));
-    assert!(errors[1].to_string().contains("No field named last_namex."));
+    assert_contains!(errors[0].to_string(), "No field named first_namex.");
+    assert_contains!(errors[1].to_string(), "No field named last_namex.");
 }

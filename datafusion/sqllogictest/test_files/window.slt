@@ -965,7 +965,7 @@ drop table table1;
 
 
 #fn window_frame_ranges_unbounded_preceding_err
-statement error DataFusion error: 2 errors, first error: Error during planning: Invalid window frame: end bound cannot be UNBOUNDED PRECEDING
+statement error DataFusion error: Error during planning: Invalid window frame: end bound cannot be UNBOUNDED PRECEDING
 SELECT
 SUM(c2) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING),
 COUNT(*) OVER (ORDER BY c2 RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING)
@@ -1089,7 +1089,7 @@ SELECT
  COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
  FROM aggregate_test_100
 
-statement error DataFusion error: 1 errors, first error: Error during planning: GROUPS requires an ORDER BY clause
+statement error DataFusion error: Error during planning: GROUPS requires an ORDER BY clause
 SELECT
  COUNT(c1) OVER(GROUPS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)
  FROM aggregate_test_100
@@ -2378,27 +2378,27 @@ SELECT c9, rn1 FROM (SELECT c9,
 
 
 # invalid window frame. null as preceding
-statement error DataFusion error: 1 errors, first error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
 select row_number() over (rows between null preceding and current row) from (select 1 a) x
 
 # invalid window frame. null as preceding
-statement error DataFusion error: 1 errors, first error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
 select row_number() over (rows between null preceding and current row) from (select 1 a) x
 
 # invalid window frame. negative as following
-statement error DataFusion error: 1 errors, first error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
 select row_number() over (rows between current row and -1 following) from (select 1 a) x
 
 # invalid window frame. null as preceding
-statement error DataFusion error: 1 errors, first error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
 select row_number() over (order by a groups between null preceding and current row) from (select 1 a) x
 
 # invalid window frame. null as preceding
-statement error DataFusion error: 1 errors, first error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
 select row_number() over (order by a groups between null preceding and current row) from (select 1 a) x
 
 # invalid window frame. negative as following
-statement error DataFusion error: 1 errors, first error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
+statement error DataFusion error: Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers
 select row_number() over (order by a groups between current row and -1 following) from (select 1 a) x
 
 # interval for rows
@@ -3092,13 +3092,13 @@ SELECT a, b, c,
 # In window expressions, aggregate functions should not have an ordering requirement, such requirements
 # should be defined in the window frame. Therefore, the query below should generate an error. Note that
 # PostgreSQL also behaves this way.
-statement error DataFusion error: 1 errors, first error: Error during planning: Aggregate ORDER BY is not implemented for window functions
+statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
 SELECT SUM(b ORDER BY a ASC) OVER() as sum1
        FROM annotated_data_infinite2
 
 # Even if, requirement of window clause and aggregate function match;
 # we should raise an error, when an ordering requirement is given to aggregate functions in window clauses.
-statement error DataFusion error: 1 errors, first error: Error during planning: Aggregate ORDER BY is not implemented for window functions
+statement error DataFusion error: Error during planning: Aggregate ORDER BY is not implemented for window functions
 EXPLAIN SELECT a, b, LAST_VALUE(c ORDER BY a ASC) OVER (order by a ASC) as last_c
        FROM annotated_data_infinite2
 
@@ -3782,7 +3782,7 @@ statement ok
 DROP TABLE score_board;
 
 # Regularize RANGE frame
-query error DataFusion error: 1 errors, first error: Error during planning: RANGE requires exactly one ORDER BY column
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
 select a,
        rank() over (order by a, a + 1 RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
        from (select 1 a union select 2 a) q ORDER BY a
@@ -3795,7 +3795,7 @@ select a,
 1 1
 2 2
 
-query error DataFusion error: 1 errors, first error: Error during planning: RANGE requires exactly one ORDER BY column
+query error DataFusion error: Error during planning: RANGE requires exactly one ORDER BY column
 select a,
        rank() over (RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING) rnk
        from (select 1 a union select 2 a) q ORDER BY a

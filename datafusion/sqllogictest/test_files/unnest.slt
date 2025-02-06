@@ -82,7 +82,7 @@ select * from unnest(struct(1,2,3)),unnest([4,5,6]);
 
 
 ## Unnest null in select list
-query error DataFusion error: 1 errors, first error: This feature is not implemented: unnest\(\) does not support null yet
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
 select unnest(null);
 
 ## Unnest null in from clause
@@ -221,7 +221,7 @@ NULL 12
 NULL 42
 NULL NULL
 
-query error DataFusion error: 1 errors, first error: Error during planning: unnest\(\) can only be applied to array, struct and null
+query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest('foo');
 
 query ?II
@@ -239,7 +239,7 @@ select array_remove(column1, 4), unnest(column2), column3 * 10 from unnest_table
 
 
 ## Unnest doesn't work with untyped nulls
-query error DataFusion error: 1 errors, first error: This feature is not implemented: unnest\(\) does not support null yet
+query error DataFusion error: This feature is not implemented: unnest\(\) does not support null yet
 select unnest(null) from unnest_table;
 
 ## Multiple unnest functions in selection
@@ -282,7 +282,7 @@ NULL 44 NULL NULL
 NULL NULL NULL NULL
 
 ## Unnest scalar in select list
-query error DataFusion error: 1 errors, first error: Error during planning: unnest\(\) can only be applied to array, struct and null
+query error DataFusion error: Error during planning: unnest\(\) can only be applied to array, struct and null
 select unnest(1);
 
 ## Unnest scalar in from clause
@@ -291,7 +291,7 @@ select * from unnest(1);
 
 
 ## Unnest empty expression in select list
-query error DataFusion error: 1 errors, first error: Error during planning: unnest\(\) requires exactly one argument
+query error DataFusion error: Error during planning: unnest\(\) requires exactly one argument
 select unnest();
 
 ## Unnest empty expression in from clause
@@ -300,7 +300,7 @@ select * from unnest();
 
 
 ## Unnest multiple expressions in select list. This form is only allowed in a query's FROM clause.
-query error DataFusion error: 1 errors, first error: Error during planning: unnest\(\) requires exactly one argument
+query error DataFusion error: Error during planning: unnest\(\) requires exactly one argument
 select unnest([1,2], [2,3]);
 
 ## Unnest multiple expressions in from clause
