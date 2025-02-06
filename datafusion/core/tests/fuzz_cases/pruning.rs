@@ -27,7 +27,6 @@ use datafusion::{
     },
     prelude::*,
 };
-use datafusion_common::config::TableParquetOptions;
 use datafusion_common::DFSchema;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_physical_expr::PhysicalExpr;
@@ -305,13 +304,9 @@ async fn execute_with_predicate(
     ctx: &SessionContext,
 ) -> Vec<String> {
     let parquet_source = if prune_stats {
-        ParquetSource::new(
-            Arc::clone(&schema),
-            Some(predicate.clone()),
-            TableParquetOptions::default(),
-        )
+        ParquetSource::default().with_predicate(Arc::clone(&schema), predicate.clone())
     } else {
-        ParquetSource::new(Arc::clone(&schema), None, TableParquetOptions::default())
+        ParquetSource::default()
     };
     let scan = FileScanConfig::new(
         ObjectStoreUrl::parse("memory://").unwrap(),

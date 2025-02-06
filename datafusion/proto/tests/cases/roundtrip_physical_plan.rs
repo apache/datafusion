@@ -713,11 +713,9 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let mut options = TableParquetOptions::new();
     options.global.pushdown_filters = true;
 
-    let source = Arc::new(ParquetSource::new(
-        Arc::clone(&file_schema),
-        Some(predicate),
-        options,
-    ));
+    let source = Arc::new(
+        ParquetSource::new(options).with_predicate(Arc::clone(&file_schema), predicate),
+    );
 
     let scan_config = FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
@@ -786,11 +784,10 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         inner: Arc::new(Column::new("col", 1)),
     });
 
-    let source = Arc::new(ParquetSource::new(
-        Arc::clone(&file_schema),
-        Some(custom_predicate_expr),
-        TableParquetOptions::default(),
-    ));
+    let source = Arc::new(
+        ParquetSource::default()
+            .with_predicate(Arc::clone(&file_schema), custom_predicate_expr),
+    );
 
     let scan_config = FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),

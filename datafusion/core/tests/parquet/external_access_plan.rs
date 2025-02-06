@@ -30,7 +30,6 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::{ParquetAccessPlan, RowGroupAccess};
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::prelude::SessionContext;
-use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{assert_contains, DFSchema};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_expr::{col, lit, Expr};
@@ -345,11 +344,9 @@ impl TestFull {
         let source = if let Some(predicate) = predicate {
             let df_schema = DFSchema::try_from(schema.clone())?;
             let predicate = ctx.create_physical_expr(predicate, &df_schema)?;
-            Arc::new(ParquetSource::new(
-                Arc::clone(schema),
-                Some(predicate),
-                TableParquetOptions::default(),
-            ))
+            Arc::new(
+                ParquetSource::default().with_predicate(Arc::clone(&schema), predicate),
+            )
         } else {
             Arc::new(ParquetSource::default())
         };

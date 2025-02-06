@@ -29,7 +29,6 @@ use datafusion::execution::context::SessionState;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{ScalarValue, ToDFSchema};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
@@ -76,12 +75,9 @@ async fn get_parquet_exec(state: &SessionState, filter: Expr) -> DataSourceExec 
     let predicate = create_physical_expr(&filter, &df_schema, &execution_props).unwrap();
 
     let source = Arc::new(
-        ParquetSource::new(
-            Arc::clone(&schema),
-            Some(predicate),
-            TableParquetOptions::default(),
-        )
-        .with_enable_page_index(true),
+        ParquetSource::default()
+            .with_predicate(Arc::clone(&schema), predicate)
+            .with_enable_page_index(true),
     );
     let base_config =
         FileScanConfig::new(object_store_url, schema, source).with_file(partitioned_file);

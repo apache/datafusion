@@ -273,23 +273,10 @@ pub struct ParquetSource {
 }
 
 impl ParquetSource {
-    /// Initialize a ParquetSource, if default values are going to be used,
-    /// use `ParguetConfig::default()` instead
-    pub fn new(
-        file_schema: Arc<Schema>,
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        table_parquet_options: TableParquetOptions,
-    ) -> Self {
-        let conf = Self::new_with_options(table_parquet_options);
-        let Some(predicate) = predicate.clone() else {
-            return conf;
-        };
-        conf.with_predicate(file_schema, predicate)
-    }
-
-    /// Create a new builder to read the data specified in the file scan
+    /// Create a new ParquetSource to read the data specified in the file scan
     /// configuration with the provided `TableParquetOptions`.
-    pub fn new_with_options(table_parquet_options: TableParquetOptions) -> Self {
+    /// if default values are going to be used, use `ParguetConfig::default()` instead
+    pub fn new(table_parquet_options: TableParquetOptions) -> Self {
         Self {
             table_parquet_options,
             ..Self::default()
@@ -313,7 +300,8 @@ impl ParquetSource {
         conf
     }
 
-    fn with_predicate(
+    /// Set predicate information, also sets pruning_predicate and page_pruning_predicate attributes
+    pub fn with_predicate(
         &self,
         file_schema: Arc<Schema>,
         predicate: Arc<dyn PhysicalExpr>,

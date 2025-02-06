@@ -211,11 +211,11 @@ impl ParquetExecBuilder {
             parquet_file_reader_factory,
             schema_adapter_factory,
         } = self;
-        let mut parquet = ParquetSource::new(
-            Arc::clone(&file_scan_config.file_schema),
-            predicate.clone(),
-            table_parquet_options,
-        );
+        let mut parquet = ParquetSource::new(table_parquet_options);
+        if let Some(predicate) = predicate.clone() {
+            parquet = parquet
+                .with_predicate(Arc::clone(&file_scan_config.file_schema), predicate);
+        }
         if let Some(metadata_size_hint) = metadata_size_hint {
             parquet = parquet.with_metadata_size_hint(metadata_size_hint)
         }
@@ -678,11 +678,10 @@ mod tests {
             // set up predicate (this is normally done by a layer higher up)
             let predicate = predicate.map(|p| logical2physical(&p, &file_schema));
 
-            let mut source = ParquetSource::new(
-                Arc::clone(&file_schema),
-                predicate,
-                TableParquetOptions::default(),
-            );
+            let mut source = ParquetSource::default();
+            if let Some(predicate) = predicate {
+                source = source.with_predicate(Arc::clone(&file_schema), predicate);
+            }
 
             if pushdown_predicate {
                 source = source

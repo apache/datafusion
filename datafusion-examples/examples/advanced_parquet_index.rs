@@ -492,15 +492,12 @@ impl TableProvider for IndexTableProvider {
                 .with_file(indexed_file);
 
         let file_source = Arc::new(
-            ParquetSource::new(
-                Arc::clone(&schema),
+            ParquetSource::default()
                 // provide the predicate so the DataSourceExec can try and prune
                 // row groups internally
-                Some(predicate),
-                TableParquetOptions::default(),
-            )
-            // provide the factory to create parquet reader without re-reading metadata
-            .with_parquet_file_reader_factory(Arc::new(reader_factory)),
+                .with_predicate(Arc::clone(&schema), predicate)
+                // provide the factory to create parquet reader without re-reading metadata
+                .with_parquet_file_reader_factory(Arc::new(reader_factory)),
         );
         let file_scan_config = FileScanConfig::new(object_store_url, schema, file_source)
             .with_limit(limit)
