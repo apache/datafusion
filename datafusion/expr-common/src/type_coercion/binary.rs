@@ -1485,7 +1485,7 @@ fn null_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 mod tests {
     use super::*;
     use arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
-
+    use arrow::datatypes::TimeUnit::Nanosecond;
     use datafusion_common::assert_contains;
 
     #[test]
@@ -1665,7 +1665,7 @@ mod tests {
     #[test]
     fn test_date_timestamp_arithmetic_error() -> Result<()> {
         let (lhs, rhs) = BinaryTypeCoercer::new(
-            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            &DataType::Timestamp(Nanosecond, None),
             &Operator::Minus,
             &DataType::Timestamp(TimeUnit::Millisecond, None),
         )
@@ -1760,33 +1760,33 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
-            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Time64(Nanosecond),
             Operator::Eq,
-            DataType::Time64(TimeUnit::Nanosecond)
+            DataType::Time64(Nanosecond)
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
             DataType::Timestamp(TimeUnit::Second, None),
             Operator::Lt,
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
+            DataType::Timestamp(Nanosecond, None)
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
             DataType::Timestamp(TimeUnit::Millisecond, None),
             Operator::Lt,
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
+            DataType::Timestamp(Nanosecond, None)
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
             DataType::Timestamp(TimeUnit::Microsecond, None),
             Operator::Lt,
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
+            DataType::Timestamp(Nanosecond, None)
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(Nanosecond, None),
             Operator::Lt,
-            DataType::Timestamp(TimeUnit::Nanosecond, None)
+            DataType::Timestamp(Nanosecond, None)
         );
         test_coercion_binary_rule!(
             DataType::Utf8,
@@ -1885,9 +1885,9 @@ mod tests {
         );
         test_coercion_binary_rule!(
             DataType::Duration(TimeUnit::Second),
-            DataType::Duration(TimeUnit::Nanosecond),
+            DataType::Duration(Nanosecond),
             Operator::Plus,
-            DataType::Duration(TimeUnit::Nanosecond)
+            DataType::Interval(MonthDayNano)
         );
         test_coercion_binary_rule!(
             DataType::Interval(YearMonth),
