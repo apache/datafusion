@@ -328,7 +328,7 @@ pub fn compute_mean(
 /// Computes a median value for a given binary operator and two statistics.
 /// The median is calculable only between:
 /// [`Uniform`] and [`Uniform`] distributions,
-/// [`Unknown`] and [`Unknown`] distributions,
+/// [`Gaussian`] and [`Gaussian`] distributions,
 /// and only for addition/subtraction.
 pub fn compute_median(
     op: &Operator,
