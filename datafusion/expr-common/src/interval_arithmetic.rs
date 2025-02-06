@@ -18,7 +18,7 @@
 //! Interval arithmetic library
 
 use crate::operator::Operator;
-use crate::type_coercion::binary::{BinaryTypeCoercer, comparison_coercion_numeric};
+use crate::type_coercion::binary::{comparison_coercion_numeric, BinaryTypeCoercer};
 use std::borrow::Borrow;
 use std::fmt::{self, Display, Formatter};
 

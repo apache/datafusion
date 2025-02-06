@@ -28,7 +28,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{
@@ -155,27 +155,23 @@ impl PhysicalExpr for NegativeExpr {
                 variance,
                 range,
             } => StatisticsV2::new_unknown(
-                mean.as_ref().map(|mn| mn.arithmetic_negate()).transpose()?,
-                median
-                    .as_ref()
-                    .map(|md| md.arithmetic_negate())
-                    .transpose()?,
+                mean.arithmetic_negate()?,
+                median.arithmetic_negate()?,
                 variance.clone(),
                 self.evaluate_bounds(&[range])?,
             ),
             Bernoulli { .. } => {
                 internal_err!("NegativeExpr cannot operate on Boolean datatype")
             }
-            Exponential { offset, .. } => {
-                let exp_lower = offset.clone();
-                let exp_upper = ScalarValue::try_from(exp_lower.data_type())?;
-                Ok(StatisticsV2::new_unknown(
-                    None,
-                    None,
-                    None,
-                    Interval::try_new(exp_upper, exp_lower.arithmetic_negate()?)?,
-                )?)
-            }
+            Exponential {
+                offset,
+                rate,
+                positive_tail,
+            } => Ok(StatisticsV2::new_exponential(
+                rate.clone(),
+                offset.clone(),
+                !positive_tail,
+            )?),
             Gaussian { mean, variance } => Ok(StatisticsV2::new_gaussian(
                 mean.arithmetic_negate()?,
                 variance.clone(),
@@ -266,7 +262,7 @@ mod tests {
     use arrow::datatypes::*;
     use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
     use datafusion_common::cast::as_primitive_array;
-    use datafusion_common::DataFusionError;
+    use datafusion_common::{DataFusionError, ScalarValue};
 
     use paste::paste;
 
@@ -342,11 +338,12 @@ mod tests {
             negative_expr.evaluate_statistics(&[&Exponential {
                 rate: ScalarValue::Float64(Some(1.)),
                 offset: ScalarValue::Float64(Some(1.)),
+                positive_tail: true
             }])?,
             StatisticsV2::new_unknown(
-                None,
-                None,
-                None,
+                ScalarValue::Null,
+                ScalarValue::Float64(None),
+                ScalarValue::UInt8(None),
                 Interval::try_new(
                     ScalarValue::Float64(None),
                     ScalarValue::Float64(Some(-1.))
@@ -369,15 +366,15 @@ mod tests {
         // Unknown
         assert_eq!(
             negative_expr.evaluate_statistics(&[&StatisticsV2::new_unknown(
-                Some(ScalarValue::Int32(Some(15))),
-                Some(ScalarValue::Int32(Some(15))),
-                Some(ScalarValue::Int32(Some(10))),
+                ScalarValue::Int32(Some(15)),
+                ScalarValue::Int32(Some(15)),
+                ScalarValue::Int32(Some(10)),
                 Interval::make(Some(10), Some(20))?
             )?])?,
             StatisticsV2::new_unknown(
-                Some(ScalarValue::Int32(Some(-15))),
-                Some(ScalarValue::Int32(Some(-15))),
-                Some(ScalarValue::Int32(Some(10))),
+                ScalarValue::Int32(Some(-15)),
+                ScalarValue::Int32(Some(-15)),
+                ScalarValue::Int32(Some(10)),
                 Interval::make(Some(-20), Some(-10))?
             )?
         );
@@ -413,9 +410,9 @@ mod tests {
                 interval: original_child_interval.clone(),
             }],
             vec![Unknown {
-                mean: Some(ScalarValue::Float64(Some(0.5))),
-                median: Some(ScalarValue::Float64(Some(0.5))),
-                variance: None,
+                mean: ScalarValue::Float64(Some(0.5)),
+                median: ScalarValue::Float64(Some(0.5)),
+                variance: ScalarValue::Null,
                 range: original_child_interval.clone(),
             }],
         ];

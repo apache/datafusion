@@ -23,7 +23,6 @@ use crate::physical_expr::PhysicalExpr;
 use crate::utils::{build_dag, ExprTreeNode};
 
 use arrow::datatypes::{DataType, Schema};
-use datafusion_common::ScalarValue::Float64;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{
     apply_operator, max_of_bounds, min_of_bounds, Interval,
@@ -52,12 +51,12 @@ static SCALAR_VALUE_ONE_LOCK: OnceLock<ScalarValue> = OnceLock::new();
 
 /// Returns a `0` as a [`ScalarValue`]
 pub fn get_zero() -> &'static ScalarValue {
-    SCALAR_VALUE_ZERO_LOCK.get_or_init(|| Float64(Some(0.)))
+    SCALAR_VALUE_ZERO_LOCK.get_or_init(|| ScalarValue::Float64(Some(0.)))
 }
 
 /// Returns a `1` as a [`ScalarValue`]
 pub fn get_one() -> &'static ScalarValue {
-    SCALAR_VALUE_ONE_LOCK.get_or_init(|| Float64(Some(1.)))
+    SCALAR_VALUE_ONE_LOCK.get_or_init(|| ScalarValue::Float64(Some(1.)))
 }
 
 impl ExprStatisticGraphNode {
@@ -109,7 +108,7 @@ impl ExprStatisticGraphNode {
     fn new_bernoulli(expr: Arc<dyn PhysicalExpr>) -> Result<Self> {
         Ok(ExprStatisticGraphNode {
             expr,
-            statistics: StatisticsV2::new_bernoulli(Float64(Some(0.5)))?,
+            statistics: StatisticsV2::new_bernoulli(ScalarValue::Float64(None))?,
         })
     }
 
@@ -118,9 +117,9 @@ impl ExprStatisticGraphNode {
         Ok(ExprStatisticGraphNode {
             expr,
             statistics: StatisticsV2::new_unknown(
-                None,
-                None,
-                None,
+                ScalarValue::try_from(dt)?,
+                ScalarValue::try_from(dt)?,
+                ScalarValue::try_from(dt)?,
                 Interval::make_unbounded(dt)?,
             )?,
         })
@@ -148,10 +147,6 @@ impl ExprStatisticGraph {
             ExprStatisticGraphNode::make_node(node, schema)
         })?;
         Ok(Self { graph, root })
-    }
-
-    pub fn assign_statistic(&mut self, idx: usize, stats: StatisticsV2) {
-        self.graph[NodeIndex::from(idx as DefaultIx)].statistics = stats;
     }
 
     pub fn assign_statistics(&mut self, assignments: &[(usize, StatisticsV2)]) {
@@ -258,7 +253,6 @@ pub fn new_unknown_from_binary_expr(
     )
 }
 
-//noinspection DuplicatedCode
 /// Tries to create a new `Bernoulli` distribution, by computing the result probability,
 /// specifically, for Eq and NotEq operators with range-contained distributions.
 /// If not being able to compute a probability, returns an [`Unknown`] distribution.
@@ -288,7 +282,9 @@ pub fn new_bernoulli_from_binary_expr(
                         if op == &Operator::Eq {
                             StatisticsV2::new_bernoulli(p)
                         } else {
-                            StatisticsV2::new_bernoulli(Float64(Some(1.)).sub(p)?)
+                            StatisticsV2::new_bernoulli(
+                                ScalarValue::Float64(Some(1.)).sub(p)?,
+                            )
                         }
                     } else {
                         internal_err!("Cannot compute non-numeric probability")
@@ -310,58 +306,57 @@ pub fn compute_mean(
     op: &Operator,
     left_stat: &StatisticsV2,
     right_stat: &StatisticsV2,
-) -> Result<Option<ScalarValue>> {
-    if let (Some(l_mean), Some(r_mean)) = (left_stat.mean()?, right_stat.mean()?) {
-        match op {
-            Operator::Plus => Ok(Some(l_mean.add_checked(r_mean)?)),
-            Operator::Minus => Ok(Some(l_mean.sub_checked(r_mean)?)),
-            Operator::Multiply => Ok(Some(l_mean.mul_checked(r_mean)?)),
-            Operator::Divide => {
-                // ((l_lower + l_upper) (log[r_lower] - log[r_upper)) / 2(c-d)
-                debug!("Division is not supported for mean computation; log() for ScalarValue is not supported");
-                Ok(None)
-            }
-            _ => {
-                debug!("Unsupported operator {op} for mean computation");
-                Ok(None)
-            }
+) -> Result<ScalarValue> {
+    let (left_mean, right_mean) = (left_stat.mean()?, right_stat.mean()?);
+
+    match op {
+        Operator::Plus => left_mean.add_checked(right_mean),
+        Operator::Minus => left_mean.sub_checked(right_mean),
+        Operator::Multiply => left_mean.mul_checked(right_mean),
+        Operator::Divide => {
+            // ((l_lower + l_upper) (log[r_lower] - log[r_upper)) / 2(c-d)
+            debug!("Division is not supported for mean computation; log() for ScalarValue is not supported");
+            Ok(ScalarValue::Null)
         }
-    } else {
-        Ok(None)
+        _ => {
+            debug!("Unsupported operator {op} for mean computation");
+            Ok(ScalarValue::Null)
+        }
     }
 }
 
 /// Computes a median value for a given binary operator and two statistics.
 /// The median is calculable only between:
 /// [`Uniform`] and [`Uniform`] distributions,
-/// [`Gaussian`] and [`Gaussian`] distributions,
+/// [`Unknown`] and [`Unknown`] distributions,
 /// and only for addition/subtraction.
 pub fn compute_median(
     op: &Operator,
     left_stat: &StatisticsV2,
     right_stat: &StatisticsV2,
-) -> Result<Option<ScalarValue>> {
+) -> Result<ScalarValue> {
+    let (left_median, right_median) = (left_stat.median()?, right_stat.median()?);
+    let target_type = StatisticsV2::target_type(&[&left_median, &right_median])?;
+
     match (left_stat, right_stat) {
         (Uniform { .. }, Uniform { .. }) => {
-            if let (Some(l_median), Some(r_median)) =
-                (left_stat.median()?, right_stat.median()?)
-            {
-                match op {
-                    Operator::Plus => Ok(Some(l_median.add_checked(r_median)?)),
-                    Operator::Minus => Ok(Some(l_median.sub_checked(r_median)?)),
-                    _ => Ok(None),
-                }
+            if left_median.is_null() || right_median.is_null() {
+                Ok(ScalarValue::try_from(target_type)?)
             } else {
-                Ok(None)
+                match op {
+                    Operator::Plus => left_median.add_checked(right_median),
+                    Operator::Minus => left_median.sub_checked(right_median),
+                    _ => Ok(ScalarValue::try_from(target_type)?),
+                }
             }
         }
         (Gaussian { mean: l_mean, .. }, Gaussian { mean: r_mean, .. }) => match op {
-            Operator::Plus => Ok(Some(l_mean.add_checked(r_mean)?)),
-            Operator::Minus => Ok(Some(l_mean.sub_checked(r_mean)?)),
-            _ => Ok(None),
+            Operator::Plus => l_mean.add_checked(r_mean),
+            Operator::Minus => l_mean.sub_checked(r_mean),
+            _ => Ok(ScalarValue::try_from(target_type)?),
         },
         // Any
-        _ => Ok(None),
+        _ => Ok(ScalarValue::try_from(target_type)?),
     }
 }
 
@@ -370,86 +365,81 @@ pub fn compute_variance(
     op: &Operator,
     left_stat: &StatisticsV2,
     right_stat: &StatisticsV2,
-) -> Result<Option<ScalarValue>> {
+) -> Result<ScalarValue> {
+    let (left_variance, right_variance) = (left_stat.variance()?, right_stat.variance()?);
+    let target_type = StatisticsV2::target_type(&[&left_variance, &right_variance])?;
+
     match (left_stat, right_stat) {
         (Uniform { .. }, Uniform { .. }) => {
-            if let (Some(l_variance), Some(r_variance)) =
-                (left_stat.variance()?, right_stat.variance()?)
-            {
-                match op {
-                    Operator::Plus | Operator::Minus => {
-                        Ok(Some(l_variance.add_checked(r_variance)?))
-                    }
-                    Operator::Multiply => {
-                        // TODO: the formula is giga-giant, skipping for now.
-                        debug!("Multiply operator is not supported for variance computation yet");
-                        Ok(None)
-                    }
-                    _ => {
-                        // Note: mod and div are not supported for any distribution combination pair
-                        debug!(
-                            "Operator {op} cannot be supported for variance computation"
-                        );
-                        Ok(None)
-                    }
+            match op {
+                Operator::Plus | Operator::Minus => {
+                    left_variance.add_checked(right_variance)
                 }
-            } else {
-                Ok(None)
+                Operator::Multiply => {
+                    // TODO: the formula is giga-giant, skipping for now.
+                    debug!(
+                        "Multiply operator is not supported for variance computation yet"
+                    );
+                    ScalarValue::try_from(target_type)
+                }
+                _ => {
+                    // Note: mod and div are not supported for any distribution combination pair
+                    debug!("Operator {op} cannot be supported for variance computation");
+                    ScalarValue::try_from(target_type)
+                }
             }
         }
         (Uniform { interval }, Exponential { rate, .. })
         | (Exponential { rate, .. }, Uniform { interval }) => {
-            if let (Some(l_variance), Some(r_variance)) =
-                (left_stat.mean()?, right_stat.mean()?)
-            {
-                match op {
-                    Operator::Plus | Operator::Minus => {
-                        Ok(Some(l_variance.add_checked(r_variance)?))
-                    }
-                    Operator::Multiply => {
-                        // (5 * lower^2 + 2 * lower * upper + 5 * upper^2) / 12 * λ^2
-                        let five = &Float64(Some(5.));
-                        // 5 * lower^2
-                        let interval_lower_sq = interval
-                            .lower()
-                            .mul_checked(interval.lower())?
-                            .cast_to(&DataType::Float64)?
-                            .mul_checked(five)?;
-                        // 5 * upper^2
-                        let interval_upper_sq = interval
-                            .upper()
-                            .mul_checked(interval.upper())?
-                            .cast_to(&DataType::Float64)?
-                            .mul_checked(five)?;
-                        // 2 * lower * upper
-                        let middle = interval
-                            .upper()
-                            .mul_checked(interval.lower())?
-                            .cast_to(&DataType::Float64)?
-                            .mul_checked(Float64(Some(2.)))?;
+            let (left_variance, right_variance) = (left_stat.mean()?, right_stat.mean()?);
+            let target_type =
+                StatisticsV2::target_type(&[&left_variance, &right_variance])?;
 
-                        let numerator = interval_lower_sq
-                            .add_checked(interval_upper_sq)?
-                            .add_checked(middle)?
-                            .cast_to(&DataType::Float64)?;
-
-                        let f_rate = &rate.cast_to(&DataType::Float64)?;
-                        let denominator =
-                            Float64(Some(12.)).mul_checked(f_rate.mul(f_rate)?)?;
-
-                        numerator.div(denominator).map(Some)
-                    }
-                    _ => {
-                        // Note: mod and div are not supported for any distribution combination pair
-                        debug!("Unsupported operator {op} for variance computation");
-                        Ok(None)
-                    }
+            match op {
+                Operator::Plus | Operator::Minus => {
+                    left_variance.add_checked(right_variance)
                 }
-            } else {
-                Ok(None)
+                Operator::Multiply => {
+                    // (5 * lower^2 + 2 * lower * upper + 5 * upper^2) / 12 * λ^2
+                    let five = &ScalarValue::Float64(Some(5.));
+                    // 5 * lower^2
+                    let interval_lower_sq = interval
+                        .lower()
+                        .mul_checked(interval.lower())?
+                        .cast_to(&DataType::Float64)?
+                        .mul_checked(five)?;
+                    // 5 * upper^2
+                    let interval_upper_sq = interval
+                        .upper()
+                        .mul_checked(interval.upper())?
+                        .cast_to(&DataType::Float64)?
+                        .mul_checked(five)?;
+                    // 2 * lower * upper
+                    let middle = interval
+                        .upper()
+                        .mul_checked(interval.lower())?
+                        .cast_to(&DataType::Float64)?
+                        .mul_checked(ScalarValue::Float64(Some(2.)))?;
+
+                    let numerator = interval_lower_sq
+                        .add_checked(interval_upper_sq)?
+                        .add_checked(middle)?
+                        .cast_to(&DataType::Float64)?;
+
+                    let f_rate = &rate.cast_to(&DataType::Float64)?;
+                    let denominator = ScalarValue::Float64(Some(12.))
+                        .mul_checked(f_rate.mul(f_rate)?)?;
+
+                    numerator.div(denominator)
+                }
+                _ => {
+                    // Note: mod and div are not supported for any distribution combination pair
+                    debug!("Unsupported operator {op} for variance computation");
+                    ScalarValue::try_from(target_type)
+                }
             }
         }
-        (_, _) => Ok(None),
+        (_, _) => ScalarValue::try_from(target_type),
     }
 }
 
@@ -511,8 +501,8 @@ mod tests {
         Bernoulli, Uniform, Unknown,
     };
 
-    type Actual = Option<ScalarValue>;
-    type Expected = Option<ScalarValue>;
+    type Actual = ScalarValue;
+    type Expected = ScalarValue;
 
     pub fn binary_expr(
         left: Arc<dyn PhysicalExpr>,
@@ -540,37 +530,28 @@ mod tests {
 
         let test_data: Vec<(Actual, Expected)> = vec![
             // mean
-            (
-                compute_mean(&Plus, &stat_a, &stat_b)?,
-                Some(Float64(Some(30.))),
-            ),
-            (
-                compute_mean(&Minus, &stat_a, &stat_b)?,
-                Some(Float64(Some(-18.))),
-            ),
+            (compute_mean(&Plus, &stat_a, &stat_b)?, Float64(Some(30.))),
+            (compute_mean(&Minus, &stat_a, &stat_b)?, Float64(Some(-18.))),
             (
                 compute_mean(&Multiply, &stat_a, &stat_b)?,
-                Some(Float64(Some(144.))),
+                Float64(Some(144.)),
             ),
             // median
-            (
-                compute_median(&Plus, &stat_a, &stat_b)?,
-                Some(Float64(Some(30.))),
-            ),
+            (compute_median(&Plus, &stat_a, &stat_b)?, Float64(Some(30.))),
             (
                 compute_median(&Minus, &stat_a, &stat_b)?,
-                Some(Float64(Some(-18.))),
+                Float64(Some(-18.)),
             ),
             // FYI: median of combined distributions for mul, div and mod ops doesn't exist.
 
             // variance
             (
                 compute_variance(&Plus, &stat_a, &stat_b)?,
-                Some(Float64(Some(60.))),
+                Float64(Some(60.)),
             ),
             (
                 compute_variance(&Minus, &stat_a, &stat_b)?,
-                Some(Float64(Some(60.))),
+                Float64(Some(60.)),
             ),
             // (compute_variance(&Operator::Multiply, &stat_a, &stat_b), Some(Float64(Some(9216.)))),
         ];
@@ -594,22 +575,13 @@ mod tests {
 
         let test_data: Vec<(Actual, Expected)> = vec![
             // mean
-            (
-                compute_mean(&Plus, &stat_a, &stat_b)?,
-                Some(Float64(Some(30.))),
-            ),
-            (
-                compute_mean(&Minus, &stat_a, &stat_b)?,
-                Some(Float64(Some(-10.))),
-            ),
+            (compute_mean(&Plus, &stat_a, &stat_b)?, Float64(Some(30.))),
+            (compute_mean(&Minus, &stat_a, &stat_b)?, Float64(Some(-10.))),
             // median
-            (
-                compute_median(&Plus, &stat_a, &stat_b)?,
-                Some(Float64(Some(30.))),
-            ),
+            (compute_median(&Plus, &stat_a, &stat_b)?, Float64(Some(30.))),
             (
                 compute_median(&Minus, &stat_a, &stat_b)?,
-                Some(Float64(Some(-10.))),
+                Float64(Some(-10.)),
             ),
         ];
         for (actual, expected) in test_data {
@@ -625,7 +597,7 @@ mod tests {
     fn test_compute_range_where_present() -> Result<()> {
         let a = &Interval::make(Some(0.), Some(12.0))?;
         let b = &Interval::make(Some(0.), Some(12.0))?;
-        let _mean = Some(Float64(Some(6.0)));
+        let mean = Float64(Some(6.0));
         for (stat_a, stat_b) in [
             (
                 Uniform {
@@ -637,9 +609,9 @@ mod tests {
             ),
             (
                 Unknown {
-                    mean: _mean.clone(),
-                    median: _mean.clone(),
-                    variance: None,
+                    mean: mean.clone(),
+                    median: mean.clone(),
+                    variance: ScalarValue::Null,
                     range: a.clone(),
                 },
                 Uniform {
@@ -651,23 +623,23 @@ mod tests {
                     interval: a.clone(),
                 },
                 Unknown {
-                    mean: _mean.clone(),
-                    median: _mean.clone(),
-                    variance: None,
+                    mean: mean.clone(),
+                    median: mean.clone(),
+                    variance: ScalarValue::Null,
                     range: b.clone(),
                 },
             ),
             (
                 Unknown {
-                    mean: _mean.clone(),
-                    median: _mean.clone(),
-                    variance: None,
+                    mean: mean.clone(),
+                    median: mean.clone(),
+                    variance: ScalarValue::Null,
                     range: a.clone(),
                 },
                 Unknown {
-                    mean: _mean.clone(),
-                    median: _mean.clone(),
-                    variance: None,
+                    mean: mean.clone(),
+                    median: mean.clone(),
+                    variance: ScalarValue::Null,
                     range: b.clone(),
                 },
             ),
@@ -745,12 +717,6 @@ mod tests {
             }
         );
 
-        graph.assign_statistic(
-            6,
-            Bernoulli {
-                p: ScalarValue::from(Some(0.5)),
-            },
-        );
         assert_eq!(
             graph
                 .propagate_statistics(StatisticsV2::new_bernoulli(get_one().clone())?)?,

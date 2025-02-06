@@ -128,6 +128,8 @@ impl PhysicalExpr for NotExpr {
                     StatisticsV2::new_bernoulli(get_one().clone())
                 } else if p.eq(get_one()) {
                     StatisticsV2::new_bernoulli(get_zero().clone())
+                } else if p.is_null() {
+                    Ok(stats[0].clone())
                 } else {
                     StatisticsV2::new_bernoulli(get_one().sub_checked(p)?)
                 }
@@ -208,10 +210,7 @@ mod tests {
         expected_interval: Interval,
     ) -> Result<()> {
         let not_expr = not(col("a", &schema())?)?;
-        assert_eq!(
-            not_expr.evaluate_bounds(&[&interval]).unwrap(),
-            expected_interval
-        );
+        assert_eq!(not_expr.evaluate_bounds(&[&interval])?, expected_interval);
         Ok(())
     }
 
@@ -232,7 +231,8 @@ mod tests {
         assert!(expr
             .evaluate_statistics(&[&Exponential {
                 rate: ScalarValue::new_one(&DataType::Float64)?,
-                offset: ScalarValue::new_one(&DataType::Float64)?
+                offset: ScalarValue::new_one(&DataType::Float64)?,
+                positive_tail: true
             }])
             .is_err());
 
@@ -268,9 +268,9 @@ mod tests {
 
         assert!(expr
             .evaluate_statistics(&[&Unknown {
-                mean: Some(ScalarValue::Boolean(Some(true))),
-                median: Some(ScalarValue::Boolean(Some(true))),
-                variance: Some(ScalarValue::Boolean(Some(true))),
+                mean: ScalarValue::Boolean(Some(true)),
+                median: ScalarValue::Boolean(Some(true)),
+                variance: ScalarValue::Boolean(Some(true)),
                 range: Interval::CERTAINLY_TRUE
             }])
             .is_err());
@@ -278,9 +278,9 @@ mod tests {
         // Unknown with non-boolean interval as range
         assert!(expr
             .evaluate_statistics(&[&Unknown {
-                mean: None,
-                median: None,
-                variance: None,
+                mean: ScalarValue::Null,
+                median: ScalarValue::Float64(None),
+                variance: ScalarValue::UInt32(None),
                 range: Interval::make_unbounded(&DataType::Float64)?
             }])
             .is_err());

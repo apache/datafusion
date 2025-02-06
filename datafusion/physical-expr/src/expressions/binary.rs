@@ -23,7 +23,7 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::utils::stats_v2_graph::{
-    new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
+    get_one, get_zero, new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
 };
 use crate::PhysicalExpr;
 
@@ -36,8 +36,8 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{ColumnarValue, Operator};
@@ -790,13 +790,32 @@ fn evaluate_statistics_logical(
     right_stat: &StatisticsV2,
 ) -> Result<StatisticsV2> {
     match (left_stat, right_stat) {
-        (Bernoulli { p: p_left }, Bernoulli { p: p_right }) => {
+        (Bernoulli { p:p_left }, Bernoulli { p:p_right }) => {
             if *op == Operator::And {
-                StatisticsV2::new_bernoulli(p_left.mul_checked(p_right)?)
+                match (p_left.is_null(), p_right.is_null()) {
+                    (false, false) => {
+                        StatisticsV2::new_bernoulli(p_left.mul_checked(p_right)?)
+                    }
+                    (false, true) if p_left.eq(get_zero()) => {
+                        Ok(left_stat.clone())
+                    }
+                    (true, false) if p_right.eq(get_zero()) => {
+                        Ok(right_stat.clone())
+                    }
+                    _ => StatisticsV2::new_bernoulli(ScalarValue::Float64(None)),
+                }
             } else if *op == Operator::Or {
-                StatisticsV2::new_bernoulli(
-                    ScalarValue::Float64(Some(1.)).sub(p_left.mul_checked(p_right)?)?,
-                )
+                match (p_left.is_null(), p_right.is_null()) {
+                    (false, false) => StatisticsV2::new_bernoulli(
+                        ScalarValue::Float64(Some(1.))
+                            .sub(p_left.mul_checked(p_right)?)?,
+                    ),
+                    (false, true)  if p_left.eq(get_one()) => Ok(left_stat.clone()),
+                    (true, false)  if p_right.eq(get_one()) => {
+                        Ok(right_stat.clone())
+                    }
+                    _ => StatisticsV2::new_bernoulli(ScalarValue::Float64(None)),
+                }
             } else {
                 not_impl_err!(
                     "Only AND and OR operator are handled for statistical evaluation"
@@ -804,7 +823,7 @@ fn evaluate_statistics_logical(
             }
         }
         (_, _) => internal_err!(
-            "Only boolean datatypes can be evaluated with a logical operator"
+            "Only statistics with Bernoulli distribution can be evaluated with a logical operator"
         ),
     }
 }
@@ -4534,9 +4553,9 @@ mod tests {
             ],
             vec![
                 Unknown {
-                    mean: Some(left_mean.clone()),
-                    median: Some(left_med.clone()),
-                    variance: None,
+                    mean: left_mean.clone(),
+                    median: left_med.clone(),
+                    variance: ScalarValue::Null,
                     range: left_interval.clone(),
                 },
                 Uniform {
@@ -4548,23 +4567,23 @@ mod tests {
                     interval: right_interval.clone(),
                 },
                 Unknown {
-                    mean: Some(right_mean.clone()),
-                    median: Some(right_med.clone()),
-                    variance: None,
+                    mean: right_mean.clone(),
+                    median: right_med.clone(),
+                    variance: ScalarValue::Float64(None),
                     range: right_interval.clone(),
                 },
             ],
             vec![
                 Unknown {
-                    mean: Some(left_mean.clone()),
-                    median: Some(left_med.clone()),
-                    variance: None,
+                    mean: left_mean.clone(),
+                    median: left_med.clone(),
+                    variance: ScalarValue::Float64(None),
                     range: left_interval.clone(),
                 },
                 Unknown {
-                    mean: Some(right_mean.clone()),
-                    median: Some(right_med.clone()),
-                    variance: None,
+                    mean: right_mean.clone(),
+                    median: right_med.clone(),
+                    variance: ScalarValue::Float64(None),
                     range: right_interval.clone(),
                 },
             ],
@@ -4664,9 +4683,9 @@ mod tests {
             ],
             vec![
                 Unknown {
-                    mean: Some(ScalarValue::Float64(Some(6.))),
-                    median: Some(ScalarValue::Float64(Some(6.))),
-                    variance: None,
+                    mean: ScalarValue::Float64(Some(6.)),
+                    median: ScalarValue::Float64(Some(6.)),
+                    variance: ScalarValue::Null,
                     range: left_interval.clone(),
                 },
                 Uniform {
@@ -4678,23 +4697,23 @@ mod tests {
                     interval: left_interval.clone(),
                 },
                 Unknown {
-                    mean: Some(ScalarValue::Float64(Some(12.))),
-                    median: Some(ScalarValue::Float64(Some(12.))),
-                    variance: None,
+                    mean: ScalarValue::Float64(Some(12.)),
+                    median: ScalarValue::Float32(Some(12.)),
+                    variance: ScalarValue::Int64(None),
                     range: right_interval.clone(),
                 },
             ],
             vec![
                 Unknown {
-                    mean: Some(ScalarValue::Float64(Some(6.))),
-                    median: Some(ScalarValue::Float64(Some(6.))),
-                    variance: None,
+                    mean: ScalarValue::Float32(Some(6.)),
+                    median: ScalarValue::Float64(Some(6.)),
+                    variance: ScalarValue::Null,
                     range: left_interval.clone(),
                 },
                 Unknown {
-                    mean: Some(ScalarValue::Float64(Some(12.))),
-                    median: Some(ScalarValue::Float64(Some(12.))),
-                    variance: None,
+                    mean: ScalarValue::Float64(Some(12.)),
+                    median: ScalarValue::Float64(Some(12.)),
+                    variance: ScalarValue::Int16(None),
                     range: right_interval.clone(),
                 },
             ],
@@ -4749,9 +4768,9 @@ mod tests {
                 ],
                 vec![
                     Unknown {
-                        mean: Some(ScalarValue::Float64(Some(6.))),
-                        median: Some(ScalarValue::Float64(Some(6.))),
-                        variance: None,
+                        mean: ScalarValue::Float64(Some(6.)),
+                        median: ScalarValue::Float64(Some(6.)),
+                        variance: ScalarValue::Null,
                         range: left_interval.clone(),
                     },
                     Uniform {
@@ -4763,23 +4782,23 @@ mod tests {
                         interval: left_interval.clone(),
                     },
                     Unknown {
-                        mean: Some(ScalarValue::Float64(Some(12.))),
-                        median: Some(ScalarValue::Float64(Some(12.))),
-                        variance: None,
+                        mean: ScalarValue::Float64(Some(12.)),
+                        median: ScalarValue::Float64(Some(12.)),
+                        variance: ScalarValue::Null,
                         range: right_interval.clone(),
                     },
                 ],
                 vec![
                     Unknown {
-                        mean: Some(ScalarValue::Float64(Some(6.))),
-                        median: Some(ScalarValue::Float64(Some(6.))),
-                        variance: None,
+                        mean: ScalarValue::Float64(Some(6.)),
+                        median: ScalarValue::Float64(Some(6.)),
+                        variance: ScalarValue::UInt64(None),
                         range: left_interval.clone(),
                     },
                     Unknown {
-                        mean: Some(ScalarValue::Float64(Some(12.))),
-                        median: Some(ScalarValue::Float64(Some(12.))),
-                        variance: None,
+                        mean: ScalarValue::Float64(Some(12.)),
+                        median: ScalarValue::Float64(Some(12.)),
+                        variance: ScalarValue::Null,
                         range: right_interval.clone(),
                     },
                 ],
