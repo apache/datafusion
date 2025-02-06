@@ -1850,15 +1850,11 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0,
 [] []
 
 # array_slice scalar function #11 (with NULL-NULL)
-query ??
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL);
-----
-NULL NULL
 
-query ??
+query error
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL);
-----
-NULL NULL
 
 # array_slice scalar function #12 (with zero and negative number)
 query ??
