@@ -164,7 +164,8 @@ use object_store::ObjectStore;
 ///
 /// # fn parquet_exec() -> DataSourceExec { unimplemented!() }
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
-/// let source = parquet_exec().source();
+/// let exec = parquet_exec();
+/// let source = exec.source();
 /// let base_config = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
 /// let existing_file_groups = &base_config.file_groups;
 /// let new_execs = existing_file_groups
