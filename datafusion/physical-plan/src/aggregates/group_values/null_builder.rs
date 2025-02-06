@@ -38,8 +38,11 @@ impl MaybeNullBufferBuilder {
 
     /// Return true if the row at index `row` is null
     pub fn is_null(&self, row: usize) -> bool {
-        // validity mask means a unset bit is NULL
-        !self.nulls.is_valid(row)
+        match self.nulls.as_slice() {
+            // validity mask means a unset bit is NULL
+            Some(_) => !self.nulls.is_valid(row),
+            None => false,
+        }
     }
 
     /// Set the nullness of the next row to `is_null`
@@ -60,8 +63,8 @@ impl MaybeNullBufferBuilder {
 
     /// return the number of heap allocated bytes used by this structure to store boolean values
     pub fn allocated_size(&self) -> usize {
-        // NullBufferBuilder builder::allocated_size returns capacity in bytes
-        self.nulls.allocated_size()
+        // NullBufferBuilder builder::allocated_size returns capacity in bites
+        self.nulls.allocated_size() / 8
     }
 
     /// Return a NullBuffer representing the accumulated nulls so far
