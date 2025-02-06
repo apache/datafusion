@@ -170,3 +170,12 @@ INSERT INTO tab0 VALUES(83,0,38);
 
 query error DataFusion error: Arrow error: Divide by zero error
 SELECT DISTINCT - 84 FROM tab0 AS cor0 WHERE NOT + 96 / + col1 <= NULL GROUP BY col1, col0;
+
+statement ok
+create table a(timestamp int, birthday int);
+
+query error DataFusion error: Schema error: No field named timetamp\. Did you mean 'a\.timestamp'\?\.
+select timetamp from a;
+
+query error DataFusion error: Schema error: No field named dadsada\. Valid fields are a\.timestamp, a\.birthday\.
+select dadsada from a;

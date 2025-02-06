@@ -1069,7 +1069,7 @@ mod tests {
             Column names are case sensitive. \
             You can use double quotes to refer to the \"\"t1.c0\"\" column \
             or set the datafusion.sql_parser.enable_ident_normalization configuration. \
-            Valid fields are t1.c0, t1.c1.";
+            Did you mean 't1.c0'?.";
         assert_eq!(err.strip_backtrace(), expected);
         Ok(())
     }

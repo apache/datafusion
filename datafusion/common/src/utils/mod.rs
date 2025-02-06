@@ -736,6 +736,27 @@ pub mod datafusion_strsim {
     pub fn levenshtein(a: &str, b: &str) -> usize {
         generic_levenshtein(&StringWrapper(a), &StringWrapper(b))
     }
+
+    /// Calculates the normalized Levenshtein distance between two strings.
+    /// The normalized distance is a value between 0.0 and 1.0, where 1.0 indicates
+    /// that the strings are identical and 0.0 indicates no similarity.
+    ///
+    /// ```
+    /// use datafusion_common::utils::datafusion_strsim::normalized_levenshtein;
+    ///
+    /// assert!((normalized_levenshtein("kitten", "sitting") - 0.57142).abs() < 0.00001);
+    ///
+    /// assert!(normalized_levenshtein("", "second").abs() < 0.00001);
+    ///
+    /// assert!((normalized_levenshtein("kitten", "sitten") - 0.833).abs() < 0.001);
+    /// ```
+    pub fn normalized_levenshtein(a: &str, b: &str) -> f64 {
+        if a.is_empty() && b.is_empty() {
+            return 1.0;
+        }
+        1.0 - (levenshtein(a, b) as f64)
+            / (a.chars().count().max(b.chars().count()) as f64)
+    }
 }
 
 /// Merges collections `first` and `second`, removes duplicates and sorts the

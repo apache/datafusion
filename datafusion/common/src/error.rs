@@ -26,6 +26,7 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
+use crate::utils::datafusion_strsim::normalized_levenshtein;
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, Diagnostic, TableReference};
 #[cfg(feature = "avro")]
@@ -182,6 +183,11 @@ impl Display for SchemaError {
                     .iter()
                     .map(|column| column.flat_name().to_lowercase())
                     .collect::<Vec<String>>();
+
+                let valid_fields_names = valid_fields
+                    .iter()
+                    .map(|column| column.flat_name())
+                    .collect::<Vec<String>>();
                 if lower_valid_fields.contains(&field.flat_name().to_lowercase()) {
                     write!(
                         f,
@@ -190,7 +196,15 @@ impl Display for SchemaError {
                         field.quoted_flat_name()
                     )?;
                 }
-                if !valid_fields.is_empty() {
+                let field_name = field.name();
+                if let Some(matched) = valid_fields_names
+                    .iter()
+                    .filter(|str| normalized_levenshtein(str, field_name) > 0.5)
+                    .collect::<Vec<&String>>()
+                    .first()
+                {
+                    write!(f, ". Did you mean '{matched}'?")?;
+                } else if !valid_fields.is_empty() {
                     write!(
                         f,
                         ". Valid fields are {}",
