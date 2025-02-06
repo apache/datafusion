@@ -31,6 +31,7 @@ mod nested_loop_join;
 mod sort_merge_join;
 mod stream_join_utils;
 mod symmetric_hash_join;
+mod with_hash_stream;
 pub mod utils;
 
 mod join_filter;
