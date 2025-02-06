@@ -18,6 +18,7 @@
 use super::binary::{binary_numeric_coercion, comparison_coercion};
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use arrow::{
+    array::cast,
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
@@ -592,6 +593,76 @@ fn get_valid_types(
             } else {
                 vec![vec![target_type; *num]]
             }
+        }
+        TypeSignature::CoercibleV2(param_types) => {
+            function_length_check(current_types.len(), param_types.len())?;
+
+            let mut new_types = Vec::with_capacity(current_types.len());
+            for (current_type, param) in current_types.iter().zip(param_types.iter()) {
+                let current_logical_type: NativeType = current_type.into();
+
+                fn can_coerce_to(
+                    desired_type: &TypeSignatureClass,
+                    logical_type: &NativeType,
+                    current_type: &DataType,
+                ) -> Option<DataType> {
+                    match desired_type {
+                        TypeSignatureClass::Native(t) if t.native() == logical_type => {
+                            t.native().default_cast_for(current_type).ok()
+                        }
+                        TypeSignatureClass::Native(t)
+                            if logical_type == &NativeType::Null =>
+                        {
+                            t.native().default_cast_for(current_type).ok()
+                        }
+                        // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
+                        TypeSignatureClass::Timestamp
+                            if logical_type == &NativeType::String =>
+                        {
+                            Some(DataType::Timestamp(TimeUnit::Nanosecond, None))
+                        }
+                        TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
+                            Some(current_type.to_owned())
+                        }
+                        TypeSignatureClass::Date if logical_type.is_date() => {
+                            Some(current_type.to_owned())
+                        }
+                        TypeSignatureClass::Time if logical_type.is_time() => {
+                            Some(current_type.to_owned())
+                        }
+                        TypeSignatureClass::Interval if logical_type.is_interval() => {
+                            Some(current_type.to_owned())
+                        }
+                        TypeSignatureClass::Duration if logical_type.is_duration() => {
+                            Some(current_type.to_owned())
+                        }
+
+                        _ => None,
+                    }
+                }
+
+                if let Some(casted_type) = can_coerce_to(
+                    &param.desired_type,
+                    &current_logical_type,
+                    current_type,
+                )
+                .or_else(|| {
+                    param.allowed_casts.iter().find_map(|t| {
+                        can_coerce_to(t, &current_logical_type, current_type)
+                    })
+                }) {
+                    new_types.push(casted_type);
+                } else {
+                    return internal_err!(
+                        "Expect {} but received NativeType: {}, DataType: {}",
+                        param.desired_type,
+                        current_logical_type,
+                        current_type
+                    );
+                }
+            }
+
+            vec![new_types]
         }
         TypeSignature::Coercible(target_types) => {
             function_length_check(

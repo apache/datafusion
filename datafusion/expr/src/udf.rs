@@ -26,6 +26,7 @@ use crate::{
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::signature::FunctionSignature;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;

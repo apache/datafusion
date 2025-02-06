@@ -133,6 +133,7 @@ pub enum TypeSignature {
     ///
     /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`].
     Coercible(Vec<TypeSignatureClass>),
+    CoercibleV2(Vec<Coercion>),
     /// One or more arguments coercible to a single, comparable type.
     ///
     /// Each argument will be coerced to a single type using the
@@ -313,6 +314,10 @@ impl TypeSignature {
             TypeSignature::Coercible(types) => {
                 vec![Self::join_types(types, ", ")]
             }
+            TypeSignature::CoercibleV2(param_types) => {
+                // todo!("123")
+                vec![Self::join_types(param_types, ", ")]
+            }
             TypeSignature::Exact(types) => {
                 vec![Self::join_types(types, ", ")]
             }
@@ -426,6 +431,7 @@ impl TypeSignature {
             | TypeSignature::Nullary
             | TypeSignature::VariadicAny
             | TypeSignature::ArraySignature(_)
+            | TypeSignature::CoercibleV2(_)
             | TypeSignature::UserDefined => vec![],
         }
     }
@@ -457,6 +463,46 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
         }
         // TODO: support other native types
         _ => vec![],
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FunctionSignature {
+    pub parameters: Vec<ParameterSignature>,
+    /// The volatility of the function. See [Volatility] for more information.
+    pub volatility: Volatility,
+}
+
+pub type ParameterSignature = Vec<Coercion>;
+
+#[derive(Debug, Clone, Eq, PartialOrd, Hash)]
+pub struct Coercion {
+    pub desired_type: TypeSignatureClass,
+    pub allowed_casts: Vec<TypeSignatureClass>,
+}
+
+impl Display for Coercion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ParameterType({}", self.desired_type)?;
+        if !self.allowed_casts.is_empty() {
+            write!(
+                f,
+                ", allowed_casts=[{}]",
+                self.allowed_casts
+                    .iter()
+                    .map(|cast| cast.to_string())
+                    .join(", ")
+            )
+        } else {
+            write!(f, ")")
+        }
+    }
+}
+
+impl PartialEq for Coercion {
+    fn eq(&self, other: &Self) -> bool {
+        self.desired_type == other.desired_type
+            && self.allowed_casts == other.allowed_casts
     }
 }
 
@@ -543,6 +589,14 @@ impl Signature {
     ) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
+            volatility,
+        }
+    }
+
+    /// Target coerce types in order
+    pub fn coercible_v2(target_types: Vec<Coercion>, volatility: Volatility) -> Self {
+        Self {
+            type_signature: TypeSignature::CoercibleV2(target_types),
             volatility,
         }
     }
