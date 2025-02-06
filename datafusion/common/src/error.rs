@@ -199,7 +199,7 @@ impl Display for SchemaError {
                 let field_name = field.name();
                 if let Some(matched) = valid_fields_names
                     .iter()
-                    .filter(|str| normalized_levenshtein(str, field_name) > 0.5)
+                    .filter(|str| normalized_levenshtein(str, field_name) >= 0.5)
                     .collect::<Vec<&String>>()
                     .first()
                 {
