@@ -24,7 +24,8 @@ use std::num::NonZeroUsize;
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
-use datafusion_common::{HashSet, Result};
+use datafusion_common::Result;
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 /// Constant that is used as a placeholder for any valid timezone.
@@ -230,19 +231,21 @@ impl Display for TypeSignatureClass {
 impl TypeSignatureClass {
     /// Return the default casted type for the given `TypeSignatureClass`
     /// We return the largest common type for the given `TypeSignatureClass`
-    pub fn default_casted_type(&self, data_type: &DataType) -> Result<DataType> {
+    pub fn default_casted_type(
+        &self,
+        logical_type: &NativeType,
+        data_type: &DataType,
+    ) -> Result<DataType> {
         Ok(match self {
+            // TODO: Able to elimnate this special case?
+            // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
+            TypeSignatureClass::Timestamp if logical_type == &NativeType::String => {
+                DataType::Timestamp(TimeUnit::Nanosecond, None)
+            }
             TypeSignatureClass::Native(logical_type) => {
                 return logical_type.native().default_cast_for(data_type)
             }
-            TypeSignatureClass::Timestamp => {
-                DataType::Timestamp(TimeUnit::Nanosecond, None)
-            }
-            TypeSignatureClass::Date => DataType::Date64,
-            TypeSignatureClass::Time => DataType::Time64(TimeUnit::Nanosecond),
-            TypeSignatureClass::Interval => DataType::Interval(IntervalUnit::DayTime),
-            TypeSignatureClass::Duration => DataType::Duration(TimeUnit::Nanosecond),
-            TypeSignatureClass::Integer => DataType::Int64,
+            _ => data_type.clone(),
         })
     }
 }
@@ -407,7 +410,7 @@ impl TypeSignature {
             TypeSignature::CoercibleV2(coercions) => coercions
                 .iter()
                 .map(|c| {
-                    let mut all_types: HashSet<DataType> =
+                    let mut all_types: IndexSet<DataType> =
                         get_possible_types_from_signature_classes(&c.desired_type)
                             .into_iter()
                             .collect();

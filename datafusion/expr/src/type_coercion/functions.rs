@@ -209,6 +209,7 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
             | TypeSignature::Numeric(_)
             | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
+            | TypeSignature::CoercibleV2(_)
             | TypeSignature::Any(_)
             | TypeSignature::Nullary
             | TypeSignature::Comparable(_)
@@ -641,8 +642,9 @@ fn get_valid_types(
                         .iter()
                         .any(|t| is_matched_type(t, &current_logical_type))
                 {
-                    let casted_type =
-                        param.desired_type.default_casted_type(current_type)?;
+                    let casted_type = param
+                        .desired_type
+                        .default_casted_type(&current_logical_type, current_type)?;
                     new_types.push(casted_type);
                 } else {
                     return internal_err!(

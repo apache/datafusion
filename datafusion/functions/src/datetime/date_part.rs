@@ -45,7 +45,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
-use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -95,25 +95,55 @@ impl DatePartFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Timestamp,
+                    TypeSignature::CoercibleV2(vec![
+                        Coercion {
+                            desired_type: TypeSignatureClass::Native(logical_string()),
+                            allowed_casts: vec![],
+                        },
+                        Coercion {
+                            desired_type: TypeSignatureClass::Timestamp,
+                            allowed_casts: vec![],
+                        },
                     ]),
-                    TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Date,
+                    TypeSignature::CoercibleV2(vec![
+                        Coercion {
+                            desired_type: TypeSignatureClass::Native(logical_string()),
+                            allowed_casts: vec![],
+                        },
+                        Coercion {
+                            desired_type: TypeSignatureClass::Date,
+                            allowed_casts: vec![],
+                        },
                     ]),
-                    TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Time,
+                    TypeSignature::CoercibleV2(vec![
+                        Coercion {
+                            desired_type: TypeSignatureClass::Native(logical_string()),
+                            allowed_casts: vec![],
+                        },
+                        Coercion {
+                            desired_type: TypeSignatureClass::Time,
+                            allowed_casts: vec![],
+                        },
                     ]),
-                    TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Interval,
+                    TypeSignature::CoercibleV2(vec![
+                        Coercion {
+                            desired_type: TypeSignatureClass::Native(logical_string()),
+                            allowed_casts: vec![],
+                        },
+                        Coercion {
+                            desired_type: TypeSignatureClass::Interval,
+                            allowed_casts: vec![],
+                        },
                     ]),
-                    TypeSignature::Coercible(vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Duration,
+                    TypeSignature::CoercibleV2(vec![
+                        Coercion {
+                            desired_type: TypeSignatureClass::Native(logical_string()),
+                            allowed_casts: vec![],
+                        },
+                        Coercion {
+                            desired_type: TypeSignatureClass::Duration,
+                            allowed_casts: vec![],
+                        },
                     ]),
                 ],
                 Volatility::Immutable,
