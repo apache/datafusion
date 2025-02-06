@@ -431,7 +431,7 @@ logical_plan
 06)--------TableScan: t2 projection=[]
 physical_plan
 01)NestedLoopJoinExec: join_type=LeftSemi
-02)--MemoryExec: partitions=1, partition_sizes=[0]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
 03)--ProjectionExec: expr=[]
 04)----PlaceholderRowExec
 
