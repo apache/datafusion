@@ -55,50 +55,30 @@ pub trait FileSource: Send + Sync {
     /// Return projected statistics
     fn statistics(&self) -> datafusion_common::Result<Statistics>;
     /// Returns the file type such as Arrow, Avro, Parquet, ...
-    fn file_type(&self) -> FileType;
+    fn file_type(&self) -> Arc<dyn FileType>;
     /// Format FileType specific information
     fn fmt_extra(&self, _t: DisplayFormatType, _f: &mut Formatter) -> fmt::Result {
         Ok(())
     }
 }
 
-/// Determines file types
-pub enum FileType {
-    /// Arrow File
-    Arrow,
-    /// Avro File
-    Avro,
-    /// CSV File
-    Csv,
-    /// JSON File
-    Json,
-    /// Parquet File
-    Parquet,
-}
-
-impl FileType {
-    pub(crate) fn to_str(&self) -> &str {
-        match self {
-            FileType::Arrow => "arrow",
-            FileType::Avro => "avro",
-            FileType::Csv => "csv",
-            FileType::Json => "json",
-            FileType::Parquet => "parquet",
-        }
-    }
+/// The trait that represents different file types
+pub trait FileType {
+    /// String representation of file type such as "csv", "json", "parquet"
+    fn to_str(&self) -> &str;
 
     /// Is the file type avro?
-    pub fn is_avro(&self) -> bool {
-        matches!(self, FileType::Avro)
+    fn is_avro(&self) -> bool {
+        false
     }
 
     /// Is the file type csv?
-    pub fn is_csv(&self) -> bool {
-        matches!(self, FileType::Csv)
+    fn is_csv(&self) -> bool {
+        false
     }
 
     /// Is the file type parquet?
-    pub fn is_parquet(&self) -> bool {
-        matches!(self, FileType::Parquet)
+    fn is_parquet(&self) -> bool {
+        false
     }
 }

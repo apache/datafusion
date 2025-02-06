@@ -609,11 +609,22 @@ impl FileSource for CsvSource {
             .clone()
             .expect("projected_statistics must be set"))
     }
-    fn file_type(&self) -> FileType {
-        FileType::Csv
+    fn file_type(&self) -> Arc<dyn FileType> {
+        Arc::new(CsvFileType {})
     }
     fn fmt_extra(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, ", has_header={}", self.has_header)
+    }
+}
+
+struct CsvFileType {}
+impl FileType for CsvFileType {
+    fn to_str(&self) -> &str {
+        "csv"
+    }
+
+    fn is_csv(&self) -> bool {
+        true
     }
 }
 

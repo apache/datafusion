@@ -252,8 +252,19 @@ impl FileSource for AvroSource {
             .expect("projected_statistics must be set"))
     }
 
-    fn file_type(&self) -> FileType {
-        FileType::Avro
+    fn file_type(&self) -> Arc<dyn FileType> {
+        Arc::new(AvroFileType {})
+    }
+}
+
+struct AvroFileType {}
+impl FileType for AvroFileType {
+    fn to_str(&self) -> &str {
+        "avro"
+    }
+
+    fn is_avro(&self) -> bool {
+        true
     }
 }
 

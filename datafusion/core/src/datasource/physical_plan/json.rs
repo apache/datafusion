@@ -310,8 +310,15 @@ impl FileSource for JsonSource {
             .expect("projected_statistics must be set to call"))
     }
 
-    fn file_type(&self) -> FileType {
-        FileType::Json
+    fn file_type(&self) -> Arc<dyn FileType> {
+        Arc::new(JsonFileType {})
+    }
+}
+
+struct JsonFileType {}
+impl FileType for JsonFileType {
+    fn to_str(&self) -> &str {
+        "json"
     }
 }
 

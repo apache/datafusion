@@ -253,8 +253,15 @@ impl FileSource for ArrowSource {
             .expect("projected_statistics must be set"))
     }
 
-    fn file_type(&self) -> FileType {
-        FileType::Arrow
+    fn file_type(&self) -> Arc<dyn FileType> {
+        Arc::new(ArrowFileType {})
+    }
+}
+
+struct ArrowFileType {}
+impl FileType for ArrowFileType {
+    fn to_str(&self) -> &str {
+        "arrow"
     }
 }
 

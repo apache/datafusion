@@ -594,8 +594,8 @@ impl FileSource for ParquetSource {
         }
     }
 
-    fn file_type(&self) -> FileType {
-        FileType::Parquet
+    fn file_type(&self) -> Arc<dyn FileType> {
+        Arc::new(ParquetFileType {})
     }
 
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
@@ -626,5 +626,16 @@ impl FileSource for ParquetSource {
                 write!(f, "{}{}", predicate_string, pruning_predicate_string)
             }
         }
+    }
+}
+
+struct ParquetFileType {}
+impl FileType for ParquetFileType {
+    fn to_str(&self) -> &str {
+        "parquet"
+    }
+
+    fn is_parquet(&self) -> bool {
+        true
     }
 }
