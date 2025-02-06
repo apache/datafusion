@@ -384,6 +384,19 @@ ORDER BY time;
 2 2022-01-01T01:00:00
 3 2022-01-02T00:00:00
 
+# Tests for https://github.com/apache/datafusion/issues/14459
+query PI
+select
+  date_trunc('minute',time) AS "time",
+  sum(value) + sum(value)
+FROM t
+GROUP BY time
+ORDER BY sum(value) + sum(value);
+----
+2022-01-01T00:00:00 2
+2022-01-01T01:00:00 4
+2022-01-02T00:00:00 6
+
 ## SORT BY  is not supported
 statement error DataFusion error: This feature is not implemented: SORT BY
 select * from t SORT BY time;
