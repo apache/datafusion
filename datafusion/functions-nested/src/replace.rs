@@ -27,7 +27,8 @@ use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -91,7 +92,18 @@ impl Default for ArrayReplace {
 impl ArrayReplace {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(3, Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Element,
+                        ],
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_replace")],
         }
     }
@@ -160,7 +172,19 @@ pub(super) struct ArrayReplaceN {
 impl ArrayReplaceN {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(4, Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Index,
+                        ],
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_replace_n")],
         }
     }
@@ -228,7 +252,18 @@ pub(super) struct ArrayReplaceAll {
 impl ArrayReplaceAll {
     pub fn new() -> Self {
         Self {
-            signature: Signature::any(3, Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Element,
+                        ],
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_replace_all")],
         }
     }

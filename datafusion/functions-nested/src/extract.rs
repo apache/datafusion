@@ -34,13 +34,14 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
     DataFusionError, Result,
 };
-use datafusion_expr::{ArrayFunctionSignature, Expr, TypeSignature};
+use datafusion_expr::{
+    ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -330,16 +331,21 @@ impl ArraySlice {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::ArraySignature(
-                        ArrayFunctionSignature::ArrayAndIndexes(
-                            NonZeroUsize::new(2).expect("2 is non-zero"),
-                        ),
-                    ),
-                    TypeSignature::ArraySignature(
-                        ArrayFunctionSignature::ArrayAndIndexes(
-                            NonZeroUsize::new(3).expect("3 is non-zero"),
-                        ),
-                    ),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                            ArrayFunctionArgument::Index,
+                        ],
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                            ArrayFunctionArgument::Index,
+                            ArrayFunctionArgument::Index,
+                        ],
+                    }),
                 ],
                 Volatility::Immutable,
             ),

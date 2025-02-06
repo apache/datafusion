@@ -19,7 +19,6 @@
 //! and return types of functions in DataFusion.
 
 use std::fmt::Display;
-use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
@@ -227,25 +226,11 @@ impl Display for TypeSignatureClass {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum ArrayFunctionSignature {
-    /// Specialized Signature for ArrayAppend and similar functions
-    /// The first argument should be List/LargeList/FixedSizedList, and the second argument should be non-list or list.
-    /// The second argument's list dimension should be one dimension less than the first argument's list dimension.
-    /// List dimension of the List/LargeList is equivalent to the number of List.
-    /// List dimension of the non-list is 0.
-    ArrayAndElement,
-    /// Specialized Signature for ArrayPrepend and similar functions
-    /// The first argument should be non-list or list, and the second argument should be List/LargeList.
-    /// The first argument's list dimension should be one dimension less than the second argument's list dimension.
-    ElementAndArray,
-    /// Specialized Signature for Array functions of the form (List/LargeList, Index+)
-    /// The first argument should be List/LargeList/FixedSizedList, and the next n arguments should be Int64.
-    ArrayAndIndexes(NonZeroUsize),
-    /// Specialized Signature for Array functions of the form (List/LargeList, Element, Optional Index)
-    ArrayAndElementAndOptionalIndex,
-    /// Specialized Signature for ArrayEmpty and similar functions
-    /// The function takes a single argument that must be a List/LargeList/FixedSizeList
-    /// or something that can be coerced to one of those types.
-    Array,
+    /// A function takes at least one List/LargeList/FixedSizeList argument.
+    Array {
+        /// A full list of the arguments accepted by this function.
+        arguments: Vec<ArrayFunctionArgument>,
+    },
     /// A function takes a single argument that must be a List/LargeList/FixedSizeList
     /// which gets coerced to List, with element type recursively coerced to List too if it is list-like.
     RecursiveArray,
@@ -257,30 +242,48 @@ pub enum ArrayFunctionSignature {
 impl Display for ArrayFunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ArrayFunctionSignature::ArrayAndElement => {
-                write!(f, "array, element")
-            }
-            ArrayFunctionSignature::ArrayAndElementAndOptionalIndex => {
-                write!(f, "array, element, [index]")
-            }
-            ArrayFunctionSignature::ElementAndArray => {
-                write!(f, "element, array")
-            }
-            ArrayFunctionSignature::ArrayAndIndexes(count) => {
-                write!(f, "array")?;
-                for _ in 0..count.get() {
-                    write!(f, ", index")?;
+            ArrayFunctionSignature::Array { arguments } => {
+                for (idx, argument) in arguments.iter().enumerate() {
+                    write!(f, "{argument}")?;
+                    if idx != arguments.len() - 1 {
+                        write!(f, ", ")?;
+                    }
                 }
                 Ok(())
-            }
-            ArrayFunctionSignature::Array => {
-                write!(f, "array")
             }
             ArrayFunctionSignature::RecursiveArray => {
                 write!(f, "recursive_array")
             }
             ArrayFunctionSignature::MapArray => {
                 write!(f, "map_array")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum ArrayFunctionArgument {
+    /// A non-list or list argument. The list dimensions should be one less than the Array's list
+    /// dimensions.
+    Element,
+    /// An Int64 index argument.
+    Index,
+    /// An argument of type List/LargeList/FixedSizeList. All Array arguments must be coercible
+    /// to the same type.
+    Array,
+}
+
+impl Display for ArrayFunctionArgument {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArrayFunctionArgument::Element => {
+                write!(f, "element")
+            }
+            ArrayFunctionArgument::Index => {
+                write!(f, "index")
+            }
+            ArrayFunctionArgument::Array => {
+                write!(f, "array")
             }
         }
     }
@@ -580,7 +583,12 @@ impl Signature {
     pub fn array_and_element(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ArrayAndElement,
+                ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Array,
+                        ArrayFunctionArgument::Element,
+                    ],
+                },
             ),
             volatility,
         }
@@ -588,9 +596,21 @@ impl Signature {
     /// Specialized Signature for Array functions with an optional index
     pub fn array_and_element_and_optional_index(volatility: Volatility) -> Self {
         Signature {
-            type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ArrayAndElementAndOptionalIndex,
-            ),
+            type_signature: TypeSignature::OneOf(vec![
+                TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Array,
+                        ArrayFunctionArgument::Element,
+                    ],
+                }),
+                TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Array,
+                        ArrayFunctionArgument::Element,
+                        ArrayFunctionArgument::Index,
+                    ],
+                }),
+            ]),
             volatility,
         }
     }
@@ -598,20 +618,26 @@ impl Signature {
     pub fn element_and_array(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ElementAndArray,
+                ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Element,
+                        ArrayFunctionArgument::Array,
+                    ],
+                },
             ),
             volatility,
         }
     }
     /// Specialized Signature for ArrayElement and similar functions
     pub fn array_and_index(volatility: Volatility) -> Self {
-        Self::array_and_indexes(volatility, NonZeroUsize::new(1).expect("1 is non-zero"))
-    }
-    /// Specialized Signature for ArraySlice and similar functions
-    pub fn array_and_indexes(volatility: Volatility, count: NonZeroUsize) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ArrayAndIndexes(count),
+                ArrayFunctionSignature::Array {
+                    arguments: vec![
+                        ArrayFunctionArgument::Array,
+                        ArrayFunctionArgument::Index,
+                    ],
+                },
             ),
             volatility,
         }
@@ -619,7 +645,11 @@ impl Signature {
     /// Specialized Signature for ArrayEmpty and similar functions
     pub fn array(volatility: Volatility) -> Self {
         Signature {
-            type_signature: TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
+            type_signature: TypeSignature::ArraySignature(
+                ArrayFunctionSignature::Array {
+                    arguments: vec![ArrayFunctionArgument::Array],
+                },
+            ),
             volatility,
         }
     }
