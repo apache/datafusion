@@ -1245,7 +1245,12 @@ pub async fn from_aggregate_rel(
             };
             aggr_exprs.push(agg_func?.as_ref().clone());
         }
-        input.aggregate(group_exprs, aggr_exprs)?.build()
+
+        // Do not include implicit group by expressions (from functional dependencies) when building plans from Substrait.
+        // Otherwise, the ordinal-based emits applied later will point to incorrect expressions.
+        input
+            .aggregate_without_implicit_group_by_exprs(group_exprs, aggr_exprs)?
+            .build()
     } else {
         not_impl_err!("Aggregate without an input is not valid")
     }

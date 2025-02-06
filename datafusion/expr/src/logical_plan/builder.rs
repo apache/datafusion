@@ -1090,11 +1090,31 @@ impl LogicalPlanBuilder {
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        let group_expr = normalize_cols(group_expr, &self.plan)?;
+        self._aggregate(group_expr, aggr_expr, true)
+    }
+
+    pub fn aggregate_without_implicit_group_by_exprs(
+        self,
+        group_expr: impl IntoIterator<Item = impl Into<Expr>>,
+        aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
+    ) -> Result<Self> {
+        self._aggregate(group_expr, aggr_expr, false)
+    }
+
+    fn _aggregate(
+        self,
+        group_expr: impl IntoIterator<Item = impl Into<Expr>>,
+        aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
+        include_implicit_group_by_exprs: bool,
+    ) -> Result<Self> {
+        let mut group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
 
-        let group_expr =
-            add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
+        if include_implicit_group_by_exprs {
+            group_expr =
+                add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
+        }
+
         Aggregate::try_new(self.plan, group_expr, aggr_expr)
             .map(LogicalPlan::Aggregate)
             .map(Self::new)
@@ -1235,7 +1255,7 @@ impl LogicalPlanBuilder {
             .map(|(l, r)| {
                 let left_key = l.into();
                 let right_key = r.into();
-                let mut left_using_columns  = HashSet::new();
+                let mut left_using_columns = HashSet::new();
                 expr_to_columns(&left_key, &mut left_using_columns)?;
                 let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
@@ -1253,12 +1273,12 @@ impl LogicalPlanBuilder {
 
                 // find valid equijoin
                 find_valid_equijoin_key_pair(
-                        &normalized_left_key,
-                        &normalized_right_key,
-                        self.plan.schema(),
-                        right.schema(),
-                    )?.ok_or_else(||
-                        plan_datafusion_err!(
+                    &normalized_left_key,
+                    &normalized_right_key,
+                    self.plan.schema(),
+                    right.schema(),
+                )?.ok_or_else(||
+                    plan_datafusion_err!(
                             "can't create join plan, join key should belong to one input, error key: ({normalized_left_key},{normalized_right_key})"
                         ))
             })
@@ -1495,7 +1515,7 @@ pub fn validate_unique_names<'a>(
             None => {
                 unique_names.insert(name, (position, expr));
                 Ok(())
-            },
+            }
             Some((existing_position, existing_expr)) => {
                 plan_err!("{node_name} require unique expression names \
                              but the expression \"{existing_expr}\" at position {existing_position} and \"{expr}\" \
@@ -1962,7 +1982,6 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};

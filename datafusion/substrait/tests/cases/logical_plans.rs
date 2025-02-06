@@ -91,4 +91,22 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn multilayer_aggregate() -> Result<()> {
+        let proto_plan =
+            read_json("tests/testdata/test_plans/multilayer_aggregate.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_eq!(
+            format!("{}", plan),
+            "Projection: lower(sales.product) AS lower(product), sum(count(sales.product)) AS product_count\
+            \n  Aggregate: groupBy=[[sales.product]], aggr=[[sum(count(sales.product))]]\
+            \n    Aggregate: groupBy=[[sales.product]], aggr=[[count(sales.product)]]\
+            \n      TableScan: sales"
+        );
+
+        Ok(())
+    }
 }
