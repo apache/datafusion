@@ -807,11 +807,21 @@ impl RequiredColumns {
         column: &phys_expr::Column,
         statistics_type: StatisticsType,
     ) -> Option<usize> {
-        self.columns
-            .iter()
-            .enumerate()
-            .find(|(_i, (c, t, _f))| c == column && t == &statistics_type)
-            .map(|(i, (_c, _t, _f))| i)
+        match statistics_type {
+            StatisticsType::RowCount => {
+                // Use the first row count we find, if any
+                self.columns
+                    .iter()
+                    .enumerate()
+                    .find(|(_i, (_c, t, _f))| t == &statistics_type)
+                    .map(|(i, (_c, _t, _f))| i)
+            }
+            _ => self.columns
+                .iter()
+                .enumerate()
+                .find(|(_i, (c, t, _f))| c == column && t == &statistics_type)
+                .map(|(i, (_c, _t, _f))| i)
+        }
     }
 
     /// Rewrites column_expr so that all appearances of column
@@ -2186,6 +2196,38 @@ mod tests {
             _values: &HashSet<ScalarValue>,
         ) -> Option<BooleanArray> {
             None
+        }
+    }
+
+    /// Row count should only be referenced once in the pruning expression, even if we need the row count
+    /// for multiple columns.
+    #[test]
+    fn test_unique_row_count_field_and_column() {
+        // c1 = 100 AND c2 = 200
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Int32, true),
+        ]));
+        let expr = col("c1").eq(lit(100)).and(col("c2").eq(lit(200)));
+        let expr = logical2physical(&expr, &schema);
+        let p = PruningPredicate::try_new(expr, Arc::clone(&schema)).unwrap();
+        // note pruning expression refers to row_count twice
+        assert_eq!(
+            "c1_null_count@2 != row_count@3 AND c1_min@0 <= 100 AND 100 <= c1_max@1 AND c2_null_count@6 != row_count@3 AND c2_min@4 <= 200 AND 200 <= c2_max@5",
+            p.predicate_expr.to_string()
+        );
+
+        // Fields in required schema should be unique, otherwise when creating batches
+        // it will fail because of duplicate field names
+        let mut fields = HashSet::new();
+        for (col, ty, field) in p.required_columns().iter() {
+            let was_new = fields.insert(field);
+            if !was_new {
+                panic!(
+                    "Duplicate field in required schema: {:?}. Previous fields:\n{:#?}",
+                    field, fields
+                );
+            }
         }
     }
 
