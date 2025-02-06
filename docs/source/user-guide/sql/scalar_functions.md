@@ -3788,6 +3788,10 @@ _Alias of [array_to_string](#array_to_string)._
 
 _Alias of [array_length](#array_length)._
 
+### `list_max`
+
+_Alias of [array_max](#array_max)._
+
 ### `list_ndims`
 
 _Alias of [array_ndims](#array_ndims)._
