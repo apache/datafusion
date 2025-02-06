@@ -24,7 +24,7 @@ use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use datafusion_common::cast::as_list_array;
 use datafusion_common::exec_err;
 use datafusion_doc::Documentation;
-use datafusion_expr::{ColumnarValue, Expr, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
@@ -84,27 +84,6 @@ impl ScalarUDFImpl for ArrayMax {
         "array_max"
     }
 
-    fn display_name(&self, args: &[Expr]) -> datafusion_common::Result<String> {
-        let args_name = args.iter().map(ToString::to_string).collect::<Vec<_>>();
-        if args_name.len() != 1 {
-            return exec_err!("expects 1 arg, got {}", args_name.len());
-        }
-
-        Ok(format!("{}", args_name[0]))
-    }
-
-    fn schema_name(&self, args: &[Expr]) -> datafusion_common::Result<String> {
-        let args_name = args
-            .iter()
-            .map(|e| e.schema_name().to_string())
-            .collect::<Vec<_>>();
-        if args_name.len() != 1 {
-            return exec_err!("expects 1 arg, got {}", args_name.len());
-        }
-
-        Ok(format!("{}", args_name[0]))
-    }
-
     fn signature(&self) -> &Signature {
         &self.signature
     }
@@ -152,7 +131,7 @@ pub fn array_max_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef>
     match &args[0].data_type() {
         List(_) | LargeList(_) | FixedSizeList(_, _) => {
             let new_args = vec![
-                args[0].clone(),
+                Arc::<dyn Array>::clone(&args[0]),
                 Arc::new(StringArray::from_iter(vec![Some("DESC")])),
                 Arc::new(StringArray::from_iter(vec![Some("NULLS LAST")])),
             ];
