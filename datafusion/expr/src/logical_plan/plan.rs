@@ -18,7 +18,7 @@
 //! Logical plan types
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
@@ -705,6 +705,13 @@ impl LogicalPlan {
                     // If inputs are not pruned do not change schema
                     Ok(LogicalPlan::Union(Union { inputs, schema }))
                 } else {
+                    // A note on `Union`s constructed via `try_new_by_name`:
+                    //
+                    // At this point, the schema for each input should have
+                    // the same width. Thus, we do not need to save whether a
+                    // `Union` was created `BY NAME`, and can safely rely on the
+                    // `try_new` initializer to derive the new schema based on
+                    // column positions.
                     Ok(LogicalPlan::Union(Union::try_new(inputs)?))
                 }
             }
@@ -2648,7 +2655,7 @@ pub struct Union {
 impl Union {
     /// Constructs new Union instance deriving schema from inputs.
     fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
-        let schema = Self::derive_schema_from_inputs(&inputs, false)?;
+        let schema = Self::derive_schema_from_inputs(&inputs, false, false)?;
         Ok(Union { inputs, schema })
     }
 
@@ -2657,21 +2664,145 @@ impl Union {
     /// take type from the first input.
     // TODO (https://github.com/apache/datafusion/issues/14380): Avoid creating uncoerced union at all.
     pub fn try_new_with_loose_types(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
-        let schema = Self::derive_schema_from_inputs(&inputs, true)?;
+        let schema = Self::derive_schema_from_inputs(&inputs, true, false)?;
         Ok(Union { inputs, schema })
+    }
+
+    /// Constructs a new Union instance that combines rows from different tables by name,
+    /// instead of by position. This means that the specified inputs need not have schemas
+    /// that are all the same width.
+    pub fn try_new_by_name(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+        let schema = Self::derive_schema_from_inputs(&inputs, true, true)?;
+        let inputs = Self::rewrite_inputs_from_schema(&schema, inputs)?;
+
+        Ok(Union { inputs, schema })
+    }
+
+    /// When constructing a `UNION BY NAME`, we may need to wrap inputs
+    /// in an additional `Projection` to account for absence of columns
+    /// in input schemas.
+    fn rewrite_inputs_from_schema(
+        schema: &DFSchema,
+        inputs: Vec<Arc<LogicalPlan>>,
+    ) -> Result<Vec<Arc<LogicalPlan>>> {
+        let schema_width = schema.iter().count();
+        let mut wrapped_inputs = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            // If the input plan's schema contains the same number of fields
+            // as the derived schema, then it does not to be wrapped in an
+            // additional `Projection`.
+            if input.schema().iter().count() == schema_width {
+                wrapped_inputs.push(input);
+                continue;
+            }
+
+            // Any columns that exist within the derived schema but do not exist
+            // within an input's schema should be replaced with `NULL` aliased
+            // to the appropriate column in the derived schema.
+            let mut expr = Vec::with_capacity(schema_width);
+            for column in schema.columns() {
+                if input
+                    .schema()
+                    .has_column_with_unqualified_name(column.name())
+                {
+                    expr.push(Expr::Column(column));
+                } else {
+                    expr.push(Expr::Literal(ScalarValue::Null).alias(column.name()));
+                }
+            }
+            wrapped_inputs.push(Arc::new(LogicalPlan::Projection(Projection::try_new(
+                expr, input,
+            )?)));
+        }
+
+        Ok(wrapped_inputs)
     }
 
     /// Constructs new Union instance deriving schema from inputs.
     ///
-    /// `loose_types` if true, inputs do not have to have matching types and produced schema will
-    /// take type from the first input. TODO (<https://github.com/apache/datafusion/issues/14380>) this is not necessarily reasonable behavior.
+    /// If `loose_types` is true, inputs do not need to have matching types and
+    /// the produced schema will use the type from the first input.
+    /// TODO (<https://github.com/apache/datafusion/issues/14380>): This is not necessarily reasonable behavior.
+    ///
+    /// If `by_name` is `true`, input schemas need not be the same width. That is,
+    /// the constructed schema follows `UNION BY NAME` semantics.
     fn derive_schema_from_inputs(
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
+        by_name: bool,
     ) -> Result<DFSchemaRef> {
         if inputs.len() < 2 {
             return plan_err!("UNION requires at least two inputs");
         }
+
+        if by_name {
+            Self::derive_schema_from_inputs_by_name(inputs, loose_types)
+        } else {
+            Self::derive_schema_from_inputs_by_position(inputs, loose_types)
+        }
+    }
+
+    fn derive_schema_from_inputs_by_name(
+        inputs: &[Arc<LogicalPlan>],
+        loose_types: bool,
+    ) -> Result<DFSchemaRef> {
+        // Prefer `BTreeMap` as it produces items in order by key when iterated over
+        let mut cols: BTreeMap<&str, (&DataType, bool, Vec<&HashMap<String, String>>)> =
+            BTreeMap::new();
+        for input in inputs.iter() {
+            for field in input.schema().fields() {
+                match cols.entry(&field.name()) {
+                    std::collections::btree_map::Entry::Occupied(mut occupied) => {
+                        let (data_type, is_nullable, metadata) = occupied.get_mut();
+                        if !loose_types {
+                            if *data_type != field.data_type() {
+                                return plan_err!(
+                                    "Found different types for field {}",
+                                    field.name()
+                                );
+                            }
+                        }
+
+                        metadata.push(field.metadata());
+                        // If the field is nullable in any one of the inputs,
+                        // then the field in the final schema is also nullable.
+                        *is_nullable |= field.is_nullable();
+                    }
+                    std::collections::btree_map::Entry::Vacant(vacant) => {
+                        vacant.insert((
+                            field.data_type(),
+                            field.is_nullable(),
+                            vec![field.metadata()],
+                        ));
+                    }
+                }
+            }
+        }
+
+        let union_fields = cols
+            .into_iter()
+            .map(|(name, (data_type, is_nullable, unmerged_metadata))| {
+                let mut field = Field::new(name, data_type.clone(), is_nullable);
+                field.set_metadata(intersect_maps(unmerged_metadata));
+
+                (None, Arc::new(field))
+            })
+            .collect::<Vec<(Option<TableReference>, _)>>();
+
+        let union_schema_metadata =
+            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+
+        // Functional Dependencies are not preserved after UNION operation
+        let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
+        let schema = Arc::new(schema);
+
+        Ok(schema)
+    }
+
+    fn derive_schema_from_inputs_by_position(
+        inputs: &[Arc<LogicalPlan>],
+        loose_types: bool,
+    ) -> Result<DFSchemaRef> {
         let first_schema = inputs[0].schema();
         let fields_count = first_schema.fields().len();
         for input in inputs.iter().skip(1) {
@@ -2727,7 +2858,7 @@ impl Union {
         let union_schema_metadata =
             intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
 
-        // Functional Dependencies doesn't preserve after UNION operation
+        // Functional Dependencies are not preserved after UNION operation
         let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
         let schema = Arc::new(schema);
 
