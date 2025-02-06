@@ -386,8 +386,8 @@ impl TreeNodeRewriter for PushdownChecker<'_> {
 
 type ProjectionAndExpr = (BTreeSet<usize>, Arc<dyn PhysicalExpr>);
 
-// Checks if a given expression can be pushed down into `ParquetExec` as opposed to being evaluated
-// post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns returns all the
+// Checks if a given expression can be pushed down into `DataSourceExec` as opposed to being evaluated
+// post-parquet-scan in a `FilterExec`. If it can be pushed down, this returns all the
 // columns in the given expression so that they can be used in the parquet scanning, along with the
 // expression rewritten as defined in [`PushdownChecker::f_up`]
 fn pushdown_columns(

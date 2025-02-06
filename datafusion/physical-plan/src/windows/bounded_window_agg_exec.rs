@@ -1171,7 +1171,9 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::Duration;
 
+    use crate::common::collect;
     use crate::expressions::PhysicalSortExpr;
+    use crate::memory::MemorySourceConfig;
     use crate::projection::ProjectionExec;
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::windows::{
@@ -1196,11 +1198,9 @@ mod tests {
     use datafusion_functions_window::nth_value::last_value_udwf;
     use datafusion_functions_window::nth_value::nth_value_udwf;
     use datafusion_physical_expr::expressions::{col, Column, Literal};
+    use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
-    use crate::common::collect;
-    use crate::memory::MemoryExec;
-    use datafusion_physical_expr::window::StandardWindowExpr;
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
     use itertools::Itertools;
@@ -1531,12 +1531,11 @@ mod tests {
             vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
-        let memory_exec = MemoryExec::try_new(
+        let memory_exec = MemorySourceConfig::try_new_exec(
             &[vec![batch.clone(), batch.clone(), batch.clone()]],
             Arc::clone(&schema),
             None,
-        )
-        .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
+        )?;
         let col_a = col("a", &schema)?;
         let nth_value_func1 = create_udwf_window_expr(
             &nth_value_udwf(),
@@ -1618,7 +1617,7 @@ mod tests {
 
         let expected = vec![
             "BoundedWindowAggExec: wdw=[last: Ok(Field { name: \"last\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }, nth_value(-1): Ok(Field { name: \"nth_value(-1)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }, nth_value(-2): Ok(Field { name: \"nth_value(-2)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }], mode=[Sorted]",
-            "  MemoryExec: partitions=1, partition_sizes=[3]",
+            "  DataSourceExec: partitions=1, partition_sizes=[3]",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);
