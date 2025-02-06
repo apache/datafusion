@@ -23,7 +23,6 @@ use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow::util::pretty::pretty_format_batches;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::config::TableParquetOptions;
 use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };

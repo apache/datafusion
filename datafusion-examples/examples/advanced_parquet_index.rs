@@ -26,7 +26,6 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
-use datafusion::common::config::TableParquetOptions;
 use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
