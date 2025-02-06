@@ -1819,13 +1819,12 @@ pub(super) fn swap_join_projection(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::pin::Pin;
 
-    use super::*;
-
+    use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
-    use arrow::array::Int32Array;
     use arrow_schema::SortOptions;
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
