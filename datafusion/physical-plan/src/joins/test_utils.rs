@@ -28,12 +28,12 @@ use crate::repartition::RepartitionExec;
 use crate::source::DataSourceExec;
 use crate::{common, ExecutionPlan, ExecutionPlanProperties, Partitioning};
 
+use arrow::array::types::IntervalDayTime;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_array::{
     ArrayRef, Float64Array, Int32Array, IntervalDayTimeArray, RecordBatch,
     TimestampMillisecondArray,
 };
-use arrow_buffer::IntervalDayTime;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::TaskContext;

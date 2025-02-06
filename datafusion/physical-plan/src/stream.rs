@@ -444,17 +444,43 @@ impl Stream for EmptyRecordBatchStream {
 pub(crate) struct ObservedStream {
     inner: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
+    fetch: Option<usize>,
+    produced: usize,
 }
 
 impl ObservedStream {
     pub fn new(
         inner: SendableRecordBatchStream,
         baseline_metrics: BaselineMetrics,
+        fetch: Option<usize>,
     ) -> Self {
         Self {
             inner,
             baseline_metrics,
+            fetch,
+            produced: 0,
         }
+    }
+
+    fn limit_reached(
+        &mut self,
+        poll: Poll<Option<Result<RecordBatch>>>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        let Some(fetch) = self.fetch else { return poll };
+
+        if self.produced >= fetch {
+            return Poll::Ready(None);
+        }
+
+        if let Poll::Ready(Some(Ok(batch))) = &poll {
+            if self.produced + batch.num_rows() > fetch {
+                let batch = batch.slice(0, fetch.saturating_sub(self.produced));
+                self.produced += batch.num_rows();
+                return Poll::Ready(Some(Ok(batch)));
+            };
+            self.produced += batch.num_rows()
+        }
+        poll
     }
 }
 
@@ -471,7 +497,10 @@ impl Stream for ObservedStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let poll = self.inner.poll_next_unpin(cx);
+        let mut poll = self.inner.poll_next_unpin(cx);
+        if self.fetch.is_some() {
+            poll = self.limit_reached(poll);
+        }
         self.baseline_metrics.record_poll(poll)
     }
 }

@@ -22,6 +22,7 @@ members = [
     "datafusion/common",
     "datafusion/common-runtime",
     "datafusion/catalog",
+    "datafusion/catalog-listing",
     "datafusion/core",
     "datafusion/expr",
     "datafusion/expr-common",
@@ -100,6 +101,7 @@ ctor = "0.2.9"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "45.0.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "45.0.0" }
+datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "45.0.0" }
 datafusion-common = { path = "datafusion/common", version = "45.0.0", default-features = false }
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "45.0.0" }
 datafusion-doc = { path = "datafusion/doc", version = "45.0.0" }
@@ -148,7 +150,7 @@ recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.24.0"
 serde_json = "1"
-sqlparser = { version = "0.53.0", features = ["visitor"] }
+sqlparser = { version = "0.54.0", features = ["visitor"] }
 tempfile = "3"
 tokio = { version = "1.43", features = ["macros", "rt", "sync"] }
 url = "2.5.4"

@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
+use arrow::array::BooleanBufferBuilder;
+use arrow::buffer::NullBuffer;
 
 /// Builder for an (optional) null mask
 ///

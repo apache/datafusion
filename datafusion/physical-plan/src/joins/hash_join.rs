@@ -1645,9 +1645,9 @@ mod tests {
     };
 
     use arrow::array::{Date32Array, Int32Array};
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
     use arrow_array::StructArray;
-    use arrow_buffer::NullBuffer;
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
         ScalarValue,

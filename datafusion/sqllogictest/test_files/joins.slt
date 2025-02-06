@@ -2623,6 +2623,10 @@ SELECT t1.c1, t2.c2 FROM test_partition_table t1 JOIN test_partition_table t2 US
 0 9
 0 10
 
+# left_join_using_qualified (snowflake syntax)
+query error DataFusion error: This feature is not implemented: Invalid identifier in USING clause\. Expected single identifier, got t2\.c2
+SELECT t1.c1, t2.c2 FROM test_partition_table t1 JOIN test_partition_table t2 USING (t2.c2) ORDER BY t2.c2;
+
 # left_join_using_join_key_projection
 query III
 SELECT t1.c1, t1.c2, t2.c2 FROM test_partition_table t1 JOIN test_partition_table t2 USING (c2) ORDER BY t2.c2

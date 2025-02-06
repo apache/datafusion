@@ -121,12 +121,11 @@ logical_plan
 02)--Filter: sink_table.c3 > Int16(0)
 03)----TableScan: sink_table projection=[c1, c2, c3]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--CoalescePartitionsExec
-03)----CoalesceBatchesExec: target_batch_size=8192, fetch=5
-04)------FilterExec: c3@2 > 0
-05)--------RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
-06)----------StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
+01)CoalescePartitionsExec: fetch=5
+02)--CoalesceBatchesExec: target_batch_size=8192, fetch=5
+03)----FilterExec: c3@2 > 0
+04)------RepartitionExec: partitioning=RoundRobinBatch(3), input_partitions=1
+05)--------StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
 
 # Start repratition on empty column test.
 # See https://github.com/apache/datafusion/issues/12057

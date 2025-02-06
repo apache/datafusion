@@ -571,7 +571,7 @@ impl<'a> DFParser<'a> {
 
         loop {
             if let Token::Word(_) = self.parser.peek_token().token {
-                let identifier = self.parser.parse_identifier(false)?;
+                let identifier = self.parser.parse_identifier()?;
                 partitions.push(identifier.to_string());
             } else {
                 return self.expected("partition name", self.parser.peek_token());
@@ -674,7 +674,7 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_column_def(&mut self) -> Result<ColumnDef, ParserError> {
-        let name = self.parser.parse_identifier(false)?;
+        let name = self.parser.parse_identifier()?;
         let data_type = self.parser.parse_data_type()?;
         let collation = if self.parser.parse_keyword(Keyword::COLLATE) {
             Some(self.parser.parse_object_name(false)?)
@@ -684,7 +684,7 @@ impl<'a> DFParser<'a> {
         let mut options = vec![];
         loop {
             if self.parser.parse_keyword(Keyword::CONSTRAINT) {
-                let name = Some(self.parser.parse_identifier(false)?);
+                let name = Some(self.parser.parse_identifier()?);
                 if let Some(option) = self.parser.parse_optional_column_option()? {
                     options.push(ColumnOptionDef { name, option });
                 } else {

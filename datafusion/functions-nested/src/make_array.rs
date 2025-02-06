@@ -23,10 +23,10 @@ use std::vec;
 
 use crate::utils::make_scalar_function;
 use arrow::array::{ArrayData, Capacities, MutableArrayData};
+use arrow::buffer::OffsetBuffer;
 use arrow_array::{
     new_null_array, Array, ArrayRef, GenericListArray, NullArray, OffsetSizeTrait,
 };
-use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{List, Null};
 use arrow_schema::{DataType, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
@@ -136,10 +136,7 @@ impl ScalarUDFImpl for MakeArray {
         }
 
         if let Some(new_type) = type_union_resolution(arg_types) {
-            // TODO: Move FixedSizeList to List in type_union_resolution
-            if let DataType::FixedSizeList(field, _) = new_type {
-                Ok(vec![List(field); arg_types.len()])
-            } else if new_type.is_null() {
+            if new_type.is_null() {
                 Ok(vec![DataType::Int64; arg_types.len()])
             } else {
                 Ok(vec![new_type; arg_types.len()])

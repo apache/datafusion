@@ -18,6 +18,7 @@
 use std::cmp::Ordering;
 
 use arrow::buffer::ScalarBuffer;
+use arrow::buffer::{Buffer, OffsetBuffer};
 use arrow::compute::SortOptions;
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::Rows;
@@ -25,7 +26,6 @@ use arrow_array::types::ByteArrayType;
 use arrow_array::{
     Array, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait, PrimitiveArray,
 };
-use arrow_buffer::{Buffer, OffsetBuffer};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 /// A comparable collection of values for use with [`Cursor`]
