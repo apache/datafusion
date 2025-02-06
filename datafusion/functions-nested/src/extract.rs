@@ -331,11 +331,6 @@ impl ArraySlice {
                 vec![
                     TypeSignature::ArraySignature(
                         ArrayFunctionSignature::ArrayAndIndexes(
-                            NonZeroUsize::new(1).expect("1 is non-zero"),
-                        ),
-                    ),
-                    TypeSignature::ArraySignature(
-                        ArrayFunctionSignature::ArrayAndIndexes(
                             NonZeroUsize::new(2).expect("2 is non-zero"),
                         ),
                     ),
