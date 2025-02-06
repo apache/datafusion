@@ -816,11 +816,12 @@ impl RequiredColumns {
                     .find(|(_i, (_c, t, _f))| t == &statistics_type)
                     .map(|(i, (_c, _t, _f))| i)
             }
-            _ => self.columns
+            _ => self
+                .columns
                 .iter()
                 .enumerate()
                 .find(|(_i, (c, t, _f))| c == column && t == &statistics_type)
-                .map(|(i, (_c, _t, _f))| i)
+                .map(|(i, (_c, _t, _f))| i),
         }
     }
 
@@ -2220,7 +2221,7 @@ mod tests {
         // Fields in required schema should be unique, otherwise when creating batches
         // it will fail because of duplicate field names
         let mut fields = HashSet::new();
-        for (col, ty, field) in p.required_columns().iter() {
+        for (_col, _ty, field) in p.required_columns().iter() {
             let was_new = fields.insert(field);
             if !was_new {
                 panic!(
