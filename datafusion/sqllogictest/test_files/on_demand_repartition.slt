@@ -56,7 +56,7 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
 04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
 05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
-06)----------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2], file_type=parquet
 
 # Disable on-demand repartitioning
 statement ok
@@ -74,7 +74,7 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
 04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[sum(parquet_table.column2)]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/repartition/parquet_table/2.parquet]]}, projection=[column1, column2], file_type=parquet
 
 # Cleanup
 statement ok
@@ -125,7 +125,7 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
 04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[]
 05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/quote.csv]]}, projection=[column1], has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/quote.csv]]}, projection=[column1], file_type=csv, has_header=true
 
 query TT
 EXPLAIN SELECT column1 FROM csv_with_escape GROUP BY column1;
@@ -139,7 +139,7 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
 04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[]
 05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/escape.csv]]}, projection=[column1], has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/escape.csv]]}, projection=[column1], file_type=csv, has_header=true
 
 statement ok
 DROP TABLE csv_with_quote;
@@ -171,7 +171,7 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([column1@0], 4), input_partitions=4
 04)------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[]
 05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
-06)----------ArrowExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow]]}, projection=[column1]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/example.arrow]]}, projection=[column1], file_type=arrow
 
 statement ok
 DROP TABLE arrow_simple;
@@ -275,7 +275,7 @@ physical_plan
 03)----RepartitionExec: partitioning=Hash([column1@0], 3), input_partitions=3
 04)------OnDemandRepartitionExec: partitioning=OnDemand(3), input_partitions=1
 05)--------AggregateExec: mode=Partial, gby=[column1@0 as column1], aggr=[]
-06)----------MemoryExec: partitions=1, partition_sizes=[1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE memory_table;
@@ -330,11 +330,11 @@ physical_plan
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-06)----------MemoryExec: partitions=1, partition_sizes=[1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 07)----CoalesceBatchesExec: target_batch_size=2
 08)------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
 09)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-10)----------MemoryExec: partitions=1, partition_sizes=[1]
+10)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # right join
 query TT
@@ -353,11 +353,11 @@ physical_plan
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-06)----------MemoryExec: partitions=1, partition_sizes=[1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 07)----CoalesceBatchesExec: target_batch_size=2
 08)------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
 09)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-10)----------MemoryExec: partitions=1, partition_sizes=[1]
+10)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # inner join
 query TT
@@ -376,11 +376,11 @@ physical_plan
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------RepartitionExec: partitioning=Hash([t1_id@0], 2), input_partitions=2
 05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-06)----------MemoryExec: partitions=1, partition_sizes=[1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 07)----CoalesceBatchesExec: target_batch_size=2
 08)------RepartitionExec: partitioning=Hash([t2_id@0], 2), input_partitions=2
 09)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-10)----------MemoryExec: partitions=1, partition_sizes=[1]
+10)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 DROP TABLE join_t1;
@@ -442,4 +442,4 @@ physical_plan
 09)----------------CoalesceBatchesExec: target_batch_size=4096
 10)------------------RepartitionExec: partitioning=Hash([c1@0, c2@1], 2), input_partitions=2
 11)--------------------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
-12)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c4], has_header=true
+12)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c4], file_type=csv, has_header=true
