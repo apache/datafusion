@@ -23,8 +23,8 @@ use arrow::{
 };
 use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
-    types::{LogicalType, NativeType},
+    exec_err, internal_datafusion_err, internal_err, plan_err,
+    types::NativeType,
     utils::list_ndims,
     Result,
 };
@@ -209,7 +209,6 @@ fn is_well_supported_signature(type_signature: &TypeSignature) -> bool {
             | TypeSignature::Numeric(_)
             | TypeSignature::String(_)
             | TypeSignature::Coercible(_)
-            | TypeSignature::CoercibleV2(_)
             | TypeSignature::Any(_)
             | TypeSignature::Nullary
             | TypeSignature::Comparable(_)
@@ -594,7 +593,7 @@ fn get_valid_types(
                 vec![vec![target_type; *num]]
             }
         }
-        TypeSignature::CoercibleV2(param_types) => {
+        TypeSignature::Coercible(param_types) => {
             function_length_check(function_name, current_types.len(), param_types.len())?;
 
             let mut new_types = Vec::with_capacity(current_types.len());
@@ -646,79 +645,6 @@ fn get_valid_types(
                         current_type
                     );
                 }
-            }
-
-            vec![new_types]
-        }
-        TypeSignature::Coercible(target_types) => {
-            function_length_check(
-                function_name,
-                current_types.len(),
-                target_types.len(),
-            )?;
-
-            // Aim to keep this logic as SIMPLE as possible!
-            // Make sure the corresponding test is covered
-            // If this function becomes COMPLEX, create another new signature!
-            fn can_coerce_to(
-                function_name: &str,
-                current_type: &DataType,
-                target_type_class: &TypeSignatureClass,
-            ) -> Result<DataType> {
-                let logical_type: NativeType = current_type.into();
-
-                match target_type_class {
-                    TypeSignatureClass::Native(native_type) => {
-                        let target_type = native_type.native();
-                        if &logical_type == target_type {
-                            return target_type.default_cast_for(current_type);
-                        }
-
-                        if logical_type == NativeType::Null {
-                            return target_type.default_cast_for(current_type);
-                        }
-
-                        if target_type.is_integer() && logical_type.is_integer() {
-                            return target_type.default_cast_for(current_type);
-                        }
-
-                        internal_err!(
-                            "Function '{function_name}' expects {target_type_class} but received {current_type}"
-                        )
-                    }
-                    // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
-                    TypeSignatureClass::Timestamp
-                        if logical_type == NativeType::String =>
-                    {
-                        Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
-                    }
-                    TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
-                        Ok(current_type.to_owned())
-                    }
-                    TypeSignatureClass::Date if logical_type.is_date() => {
-                        Ok(current_type.to_owned())
-                    }
-                    TypeSignatureClass::Time if logical_type.is_time() => {
-                        Ok(current_type.to_owned())
-                    }
-                    TypeSignatureClass::Interval if logical_type.is_interval() => {
-                        Ok(current_type.to_owned())
-                    }
-                    TypeSignatureClass::Duration if logical_type.is_duration() => {
-                        Ok(current_type.to_owned())
-                    }
-                    _ => {
-                        not_impl_err!("Function '{function_name}' got logical_type: {logical_type} with target_type_class: {target_type_class}")
-                    }
-                }
-            }
-
-            let mut new_types = Vec::with_capacity(current_types.len());
-            for (current_type, target_type_class) in
-                current_types.iter().zip(target_types.iter())
-            {
-                let target_type = can_coerce_to(function_name, current_type, target_type_class)?;
-                new_types.push(target_type);
             }
 
             vec![new_types]

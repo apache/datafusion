@@ -131,14 +131,12 @@ pub enum TypeSignature {
     /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
     Exact(Vec<DataType>),
     /// One or more arguments belonging to the [`TypeSignatureClass`], in order.
-    ///
-    /// For example, `Coercible(vec![logical_float64()])` accepts
-    /// arguments like `vec![Int32]` or `vec![Float32]`
-    /// since i32 and f32 can be cast to f64
+    /// 
+    /// [`Coercion`] contains not only the desired type but also the allowed casts.
+    /// For example, if you expect a function has string type, but you also allow it to be casted from binary type.
     ///
     /// For functions that take no arguments (e.g. `random()`) see [`TypeSignature::Nullary`].
-    Coercible(Vec<TypeSignatureClass>),
-    CoercibleV2(Vec<Coercion>),
+    Coercible(Vec<Coercion>),
     /// One or more arguments coercible to a single, comparable type.
     ///
     /// Each argument will be coerced to a single type using the
@@ -355,10 +353,7 @@ impl TypeSignature {
             TypeSignature::Comparable(num) => {
                 vec![format!("Comparable({num})")]
             }
-            TypeSignature::Coercible(types) => {
-                vec![Self::join_types(types, ", ")]
-            }
-            TypeSignature::CoercibleV2(param_types) => {
+            TypeSignature::Coercible(param_types) => {
                 vec![Self::join_types(param_types, ", ")]
             }
             TypeSignature::Exact(types) => {
@@ -426,7 +421,7 @@ impl TypeSignature {
                 .cloned()
                 .map(|data_type| vec![data_type; *arg_count])
                 .collect(),
-            TypeSignature::CoercibleV2(coercions) => coercions
+            TypeSignature::Coercible(coercions) => coercions
                 .iter()
                 .map(|c| {
                     let mut all_types: IndexSet<DataType> =
@@ -440,37 +435,6 @@ impl TypeSignature {
                         .collect();
                     all_types.extend(allowed_casts);
                     all_types.into_iter().collect::<Vec<_>>()
-                })
-                .multi_cartesian_product()
-                .collect(),
-            TypeSignature::Coercible(types) => types
-                .iter()
-                .map(|logical_type| match logical_type {
-                    TypeSignatureClass::Native(l) => get_data_types(l.native()),
-                    TypeSignatureClass::Timestamp => {
-                        vec![
-                            DataType::Timestamp(TimeUnit::Nanosecond, None),
-                            DataType::Timestamp(
-                                TimeUnit::Nanosecond,
-                                Some(TIMEZONE_WILDCARD.into()),
-                            ),
-                        ]
-                    }
-                    TypeSignatureClass::Date => {
-                        vec![DataType::Date64]
-                    }
-                    TypeSignatureClass::Time => {
-                        vec![DataType::Time64(TimeUnit::Nanosecond)]
-                    }
-                    TypeSignatureClass::Interval => {
-                        vec![DataType::Interval(IntervalUnit::DayTime)]
-                    }
-                    TypeSignatureClass::Duration => {
-                        vec![DataType::Duration(TimeUnit::Nanosecond)]
-                    }
-                    TypeSignatureClass::Integer => {
-                        vec![DataType::Int64]
-                    }
                 })
                 .multi_cartesian_product()
                 .collect(),
@@ -671,21 +635,11 @@ impl Signature {
             volatility,
         }
     }
-    /// Target coerce types in order
-    pub fn coercible(
-        target_types: Vec<TypeSignatureClass>,
-        volatility: Volatility,
-    ) -> Self {
-        Self {
-            type_signature: TypeSignature::Coercible(target_types),
-            volatility,
-        }
-    }
 
     /// Target coerce types in order
     pub fn coercible_v2(target_types: Vec<Coercion>, volatility: Volatility) -> Self {
         Self {
-            type_signature: TypeSignature::CoercibleV2(target_types),
+            type_signature: TypeSignature::Coercible(target_types),
             volatility,
         }
     }
@@ -882,8 +836,14 @@ mod tests {
         );
 
         let type_signature = TypeSignature::Coercible(vec![
-            TypeSignatureClass::Native(logical_string()),
-            TypeSignatureClass::Native(logical_int64()),
+            Coercion {
+                desired_type: TypeSignatureClass::Native(logical_string()),
+                allowed_casts: vec![],
+            },
+            Coercion {
+                desired_type: TypeSignatureClass::Native(logical_int64()),
+                allowed_casts: vec![],
+            },
         ]);
         let possible_types = type_signature.get_possible_types();
         assert_eq!(

@@ -95,7 +95,7 @@ impl DatePartFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::CoercibleV2(vec![
+                    TypeSignature::Coercible(vec![
                         Coercion {
                             desired_type: TypeSignatureClass::Native(logical_string()),
                             allowed_casts: vec![],
@@ -108,7 +108,7 @@ impl DatePartFunc {
                             )],
                         },
                     ]),
-                    TypeSignature::CoercibleV2(vec![
+                    TypeSignature::Coercible(vec![
                         Coercion {
                             desired_type: TypeSignatureClass::Native(logical_string()),
                             allowed_casts: vec![],
@@ -118,7 +118,7 @@ impl DatePartFunc {
                             allowed_casts: vec![],
                         },
                     ]),
-                    TypeSignature::CoercibleV2(vec![
+                    TypeSignature::Coercible(vec![
                         Coercion {
                             desired_type: TypeSignatureClass::Native(logical_string()),
                             allowed_casts: vec![],
@@ -128,7 +128,7 @@ impl DatePartFunc {
                             allowed_casts: vec![],
                         },
                     ]),
-                    TypeSignature::CoercibleV2(vec![
+                    TypeSignature::Coercible(vec![
                         Coercion {
                             desired_type: TypeSignatureClass::Native(logical_string()),
                             allowed_casts: vec![],
@@ -138,7 +138,7 @@ impl DatePartFunc {
                             allowed_casts: vec![],
                         },
                     ]),
-                    TypeSignature::CoercibleV2(vec![
+                    TypeSignature::Coercible(vec![
                         Coercion {
                             desired_type: TypeSignatureClass::Native(logical_string()),
                             allowed_casts: vec![],
