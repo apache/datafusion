@@ -161,3 +161,12 @@ create table records (timestamp timestamp, value float) as values (
     '2021-01-01 00:00:00', 1.0,
     '2021-01-01 00:00:00', 2.0
 );
+
+statement ok
+CREATE TABLE tab0(col0 INTEGER, col1 INTEGER, col2 INTEGER);
+
+statement ok
+INSERT INTO tab0 VALUES(83,0,38);
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT DISTINCT - 84 FROM tab0 AS cor0 WHERE NOT + 96 / + col1 <= NULL GROUP BY col1, col0;

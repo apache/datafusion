@@ -911,11 +911,12 @@ impl RepartitionExec {
             }
             // Error from running input task
             Ok(Err(e)) => {
+                // send the same Arc'd error to all output partitions
                 let e = Arc::new(e);
 
                 for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
-                    let err = Err(DataFusionError::External(Box::new(Arc::clone(&e))));
+                    let err = Err(DataFusionError::from(&e));
                     tx.send(Some(err)).await.ok();
                 }
             }
