@@ -4422,10 +4422,17 @@ fn plan_create_index() {
     }
 }
 
-fn assert_field_not_found(err: DataFusionError, name: &str) {
-    let err = match err {
-        DataFusionError::Diagnostic(_, err) => *err,
-        err => err,
+fn assert_field_not_found(mut err: DataFusionError, name: &str) {
+    let err = loop {
+        match err {
+            DataFusionError::Diagnostic(_, wrapped_err) => {
+                err = *wrapped_err;
+            }
+            DataFusionError::Collection(errs) => {
+                err = errs.into_iter().next().unwrap();
+            }
+            err => break err,
+        }
     };
     match err {
         DataFusionError::SchemaError { .. } => {
