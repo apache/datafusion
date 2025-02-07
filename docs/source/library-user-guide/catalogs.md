@@ -231,17 +231,17 @@ impl SchemaProvider for Schema {
 
 ## Implementing `MemoryCatalogProvider`
 
-As mentioned, the `CatalogProvider` can manage the schemas in a catalog, and the `MemoryCatalogProvider` is a simple implementation of the `CatalogProvider` trait. It stores schemas in a `DashMap`.
+As mentioned, the `CatalogProvider` can manage the schemas in a catalog, and the `MemoryCatalogProvider` is a simple implementation of the `CatalogProvider` trait. It stores schemas in a `DashMap`. With that the `CatalogProvider` trait can be implemented.
 
-```tofix
+```rust
+use std::any::Any;
+use dashmap::DashMap;
+use datafusion::catalog::SchemaProvider;
+
 pub struct MemoryCatalogProvider {
     schemas: DashMap<String, Arc<dyn SchemaProvider>>,
 }
-```
 
-With that the `CatalogProvider` trait can be implemented.
-
-```tofix
 impl CatalogProvider for MemoryCatalogProvider {
     fn as_any(&self) -> &dyn Any {
         self
