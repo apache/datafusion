@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
-use datafusion_common::error::add_possible_column_notes;
+use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
     SchemaError,
@@ -389,7 +389,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 col.spans().first(),
                             )
                         };
-                        add_possible_column_notes(&mut diagnostic, field, valid_fields);
+                        add_possible_columns_to_diag(
+                            &mut diagnostic,
+                            field,
+                            valid_fields,
+                        );
                         err.with_diagnostic(diagnostic)
                     }
                     _ => err,

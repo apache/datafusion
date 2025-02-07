@@ -752,7 +752,7 @@ pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionE
     })
 }
 
-pub fn add_possible_column_notes(
+pub fn add_possible_columns_to_diag(
     diagnostic: &mut Diagnostic,
     field: &Column,
     valid_fields: &[Column],

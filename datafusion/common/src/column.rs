@@ -17,7 +17,7 @@
 
 //! Column
 
-use crate::error::{_schema_err, add_possible_column_notes};
+use crate::error::{_schema_err, add_possible_columns_to_diag};
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{
     DFSchema, DataFusionError, Diagnostic, Result, SchemaError, Spans, TableReference,
@@ -310,10 +310,10 @@ impl Column {
                 _,
             ) => {
                 let mut diagnostic = Diagnostic::new_error(
-                    format!("column '{}' is ambiguous", &field.name()),
+                    format!("column '{}' not found", &field.name()),
                     field.spans().first(),
                 );
-                add_possible_column_notes(&mut diagnostic, field, valid_fields);
+                add_possible_columns_to_diag(&mut diagnostic, field, valid_fields);
                 e.with_diagnostic(diagnostic)
             }
             _ => e,
