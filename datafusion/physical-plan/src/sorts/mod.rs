@@ -19,7 +19,6 @@
 
 mod builder;
 mod cursor;
-mod index;
 mod merge;
 pub mod partial_sort;
 pub mod sort;
