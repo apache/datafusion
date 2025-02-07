@@ -247,9 +247,10 @@ impl TypeSignatureClass {
             TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
                 Ok(origin_type.to_owned())
             }
-            TypeSignatureClass::Timestamp => {
-                // TODO: Consider allowing the user to specify the default timestamp type instead of having it predefined in DataFusion when we have such use case
-                // Use default timestamp type with nanosecond precision and no timezone
+            // This is an existing use case for casting string to timestamp, since we don't have specific unit and timezone from string,
+            // so we use the default timestamp type with nanosecond precision and no timezone
+            // TODO: Consider allowing the user to specify the default timestamp type instead of having it predefined in DataFusion when we have more use cases
+            TypeSignatureClass::Timestamp if logical_type == &NativeType::String => {
                 logical_timestamp().default_cast_for(origin_type)
             }
             TypeSignatureClass::Date if logical_type.is_date() => {
