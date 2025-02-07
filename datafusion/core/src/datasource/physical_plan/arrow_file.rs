@@ -257,8 +257,8 @@ impl FileSource for ArrowSource {
         "arrow"
     }
 
-    fn supports_repartition(&self, _config: &FileScanConfig) -> bool {
-        false
+    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
+        !(config.file_compression_type.is_compressed() || config.new_lines_in_values)
     }
 }
 
