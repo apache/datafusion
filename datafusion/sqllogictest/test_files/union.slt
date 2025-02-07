@@ -850,3 +850,13 @@ FROM (
 ----
 NULL false
 foo true
+
+query T
+SELECT combined
+FROM (
+  SELECT concat('A', 'B') AS combined UNION ALL
+  SELECT concat('A', 'B') AS combined
+)
+GROUP BY combined
+----
+AB

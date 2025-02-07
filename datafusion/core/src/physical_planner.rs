@@ -89,6 +89,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
+use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
@@ -659,7 +660,10 @@ impl DefaultPhysicalPlanner {
                 let physical_input_schema_from_logical = logical_input_schema.inner();
 
                 if !options.execution.skip_physical_aggregate_schema_check
-                    && &physical_input_schema != physical_input_schema_from_logical
+                    && !schema_satisfied_by(
+                        physical_input_schema_from_logical,
+                        &physical_input_schema,
+                    )
                 {
                     let mut differences = Vec::new();
                     if physical_input_schema.fields().len()
@@ -688,7 +692,7 @@ impl DefaultPhysicalPlanner {
                         if physical_field.data_type() != logical_field.data_type() {
                             differences.push(format!("field data type at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.data_type(), logical_field.data_type()));
                         }
-                        if physical_field.is_nullable() != logical_field.is_nullable() {
+                        if physical_field.is_nullable() && !logical_field.is_nullable() {
                             differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
                         }
                     }
