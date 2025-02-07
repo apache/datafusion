@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, BinaryArray, LargeBinaryArray, LargeStringArray, StringArray};
+use arrow::array::{Array, AsArray, BinaryArray, LargeBinaryArray, LargeStringArray, StringArray, StringBuilder};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Binary, Int64, LargeBinary, LargeUtf8, Utf8, Utf8View};
-use datafusion_common::DataFusionError;
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{plan_err,exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
@@ -32,7 +31,7 @@ use twox_hash::{XxHash32, XxHash64};
 #[user_doc(
     doc_section(label = "Hashing Functions"),
     description = "Computes the XXHash32 hash of a binary string.",
-    syntax_example = "xxhash32(expression)",
+    syntax_example = "xxhash32(expression [,seed])",
     sql_example = r#"```sql
 > select xxhash32('foo');
 +-------------------------------------------+
@@ -106,14 +105,14 @@ impl ScalarUDFImpl for XxHash32Func {
                 Null => Null,
                 _ => {
                     return plan_err!(
-                        "the xxhash32 can only accept strings but got {:?}",
+                        "The xxhash32 can only accept Utf8, Utf8View, LargeUtf8, Binary and LargeBinary but got {:?}",
                         **t
                     );
                 }
             },
             other => {
                 return plan_err!(
-                    "The xxhash32 function can only accept strings. Got {other}"
+                    "The xxhash32 can only accept Utf8, Utf8View, LargeUtf8, Binary and LargeBinary but got {other}"
                 );
             }
         })
@@ -131,17 +130,17 @@ impl ScalarUDFImpl for XxHash32Func {
                 if *seed >= 0 && *seed <= u32::MAX as i64 {
                     *seed as u32
                 } else {
-                    return Err(DataFusionError::Execution(format!(
+                    return exec_err!(
                         "Seed value out of range for UInt32: {}",
                         seed
-                    )));
+                    );
                 }
             } else {
                 let actual_type = format!("{:?}", &args[1]);
-                return Err(DataFusionError::Execution(format!(
+                return exec_err!(
                     "Expected a Int64 seed value, but got {}",
                     actual_type
-                )));
+                );
             }
         } else {
             0 // Default seed value
@@ -180,11 +179,7 @@ impl ScalarUDFImpl for XxHash32Func {
                     Arc::new(hash_array) as Arc<dyn Array>
                 }
                 _ => {
-                    let actual_type = format!("{:?}", scalar);
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported scalar type: {}",
-                        actual_type
-                    )));
+                    return internal_err!("Unsupported scalar type: {:?}", scalar);
                 }
             },
         };
@@ -200,7 +195,7 @@ impl ScalarUDFImpl for XxHash32Func {
 #[user_doc(
     doc_section(label = "Hashing Functions"),
     description = "Computes the XXHash64 hash of a binary string.",
-    syntax_example = "xxhash64(expression)",
+    syntax_example = "xxhash64(expression [,seed])",
     sql_example = r#"```sql
 > select xxhash64('foo');
 +-------------------------------------------+
@@ -274,14 +269,14 @@ impl ScalarUDFImpl for XxHash64Func {
                 Null => Null,
                 _ => {
                     return plan_err!(
-                        "the xxhash64 can only accept strings but got {:?}",
+                        "The xxhash64 can only accept Utf8, Utf8View, LargeUtf8, Binary and LargeBinary but got {:?}",
                         **t
                     );
                 }
             },
             other => {
                 return plan_err!(
-                    "The xxhash64 function can only accept strings. Got {other}"
+                    "The xxhash64 can only accept Utf8, Utf8View, LargeUtf8, Binary and LargeBinary but {other}"
                 );
             }
         })
@@ -299,17 +294,17 @@ impl ScalarUDFImpl for XxHash64Func {
                 if *seed >= 0 {
                     *seed as u64
                 } else {
-                    return Err(DataFusionError::Execution(format!(
+                    return exec_err!(
                         "Seed value out of range for UInt64: {}",
                         seed
-                    )));
+                    );
                 }
             } else {
                 let actual_type = format!("{:?}", &args[1]);
-                return Err(DataFusionError::Execution(format!(
+                return exec_err!(
                     "Expected a Int64 seed value, but got {}",
                     actual_type
-                )));
+                );
             }
         } else {
             0 // Default seed value
@@ -349,10 +344,10 @@ impl ScalarUDFImpl for XxHash64Func {
                 }
                 _ => {
                     let actual_type = format!("{:?}", scalar);
-                    return Err(DataFusionError::Internal(format!(
+                    return exec_err!(
                         "Unsupported scalar type: {}",
                         actual_type
-                    )));
+                    );
                 }
             },
         };
@@ -377,7 +372,7 @@ fn hash_value<T: Hasher>(
     value_bytes: &[u8],
     mut hasher: T,
     hash_type: HashType,
-) -> Result<String, DataFusionError> {
+) -> Result<String> {
     hasher.write(value_bytes);
     let hash = hasher.finish();
     match hash_type {
@@ -396,35 +391,51 @@ fn process_array<T: Hasher>(
     array: &dyn Array,
     mut hasher: T,
     hash_type: HashType,
-) -> Result<Vec<String>> {
-    let mut hash_results: Vec<String> = Vec::with_capacity(array.len());
+) -> Result<StringArray> {
+    let mut hash_results = StringBuilder::new();
 
     match array.data_type() {
-        Utf8 | Utf8View | LargeUtf8 => {
-            let string_array: &dyn Array =
-                if array.data_type() == &Utf8 || array.data_type() == &Utf8View {
-                    array.as_any().downcast_ref::<StringArray>().unwrap()
-                } else {
-                    array.as_any().downcast_ref::<LargeStringArray>().unwrap()
-                };
+        Utf8View => {
+            let string_view_array = array.as_string_view();
             for i in 0..array.len() {
                 if array.is_null(i) {
-                    hash_results.push(String::new()); // Handle null values
+                    hash_results.append_value(String::new());
                     continue;
                 }
-                let value = if let Some(string_array) =
-                    string_array.as_any().downcast_ref::<StringArray>()
-                {
-                    string_array.value(i)
-                } else {
-                    string_array
-                        .as_any()
-                        .downcast_ref::<LargeStringArray>()
-                        .unwrap()
-                        .value(i)
-                };
+                let value = string_view_array.value(i);
+                hash_results.append_value(hash_value(
+                    value.as_bytes(),
+                    &mut hasher,
+                    hash_type.clone(),
+                )?);
+            }
+        }
+        
+        Utf8 => {
+            let string_array = array.as_any().downcast_ref::<StringArray>().unwrap();
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    hash_results.append_value(String::new());
+                    continue;
+                }
+                let value = string_array.value(i);
+                hash_results.append_value(hash_value(
+                    value.as_bytes(),
+                    &mut hasher,
+                    hash_type.clone(),
+                )?);
+            }
+        }
 
-                hash_results.push(hash_value(
+        LargeUtf8 => {
+            let large_string_array = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    hash_results.append_value(String::new());
+                    continue;
+                }
+                let value = large_string_array.value(i);
+                hash_results.append_value(hash_value(
                     value.as_bytes(),
                     &mut hasher,
                     hash_type.clone(),
@@ -440,7 +451,7 @@ fn process_array<T: Hasher>(
             };
             for i in 0..array.len() {
                 if array.is_null(i) {
-                    hash_results.push(String::new()); // Handle null values
+                    hash_results.append_value(String::new());
                     continue;
                 }
                 let value = if let Some(binary_array) =
@@ -454,23 +465,20 @@ fn process_array<T: Hasher>(
                         .unwrap()
                         .value(i)
                 };
-                hash_results.push(hash_value(value, &mut hasher, hash_type.clone())?);
+                hash_results.append_value(hash_value(value, &mut hasher, hash_type.clone())?);
             }
         }
 
         DataType::Null => {
             for _ in 0..array.len() {
-                hash_results.push(String::new()); // Handle null values
+                hash_results.append_value(String::new());
             }
         }
         _ => {
             let actual_type = format!("{:?}", array.data_type());
-            return Err(DataFusionError::Internal(format!(
-                "Unsupported array type: {}",
-                actual_type
-            )));
+            return exec_err!("Unsupported array type: {}", actual_type);
         }
     }
 
-    Ok(hash_results)
+    Ok(hash_results.finish())
 }

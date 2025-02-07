@@ -14,6 +14,14 @@ b6855437
 01543429
 b30d56b4
 
+# Test xxhash32 with Utf8View array input
+query T
+WITH input_data AS (SELECT arrow_cast(column1, 'Utf8View') as utf8view_value FROM (VALUES ('foobar1'),('foobar2'),('foobar3')) AS t(column1)) SELECT xxhash32(utf8view_value) as hash_value FROM input_data;
+----
+2b0d1874
+9925f907
+df748f36
+
 query T
 SELECT xxhash32(NULL) AS hash_value;
 ----
@@ -71,6 +79,14 @@ b7b41276360564d4
 3c697d223fa7e885
 d8316e61d84f6ba4
 c6f2d2dd0ad64fb6
+
+# Test xxhash64 with Utf8View array input
+query T
+WITH input_data AS (SELECT arrow_cast(column1, 'Utf8View') as utf8view_value FROM (VALUES ('foobar1'),('foobar2'),('foobar3')) AS t(column1)) SELECT xxhash64(utf8view_value) as hash_value FROM input_data;
+----
+36425528f43b829c
+b24f52e2956da1a9
+5e75bd6e3aac89a9
 
 query T
 SELECT xxhash64(NULL) AS hash_value;
