@@ -27,8 +27,8 @@ use std::sync::Arc;
 use crate::optimizer::PhysicalOptimizerRule;
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
-    add_sort_above_with_check, is_coalesce_partitions, is_repartition,
-    is_sort_preserving_merge,
+    add_sort_above_with_check, is_coalesce_partitions, is_on_demand_repartition,
+    is_repartition, is_sort_preserving_merge,
 };
 
 use arrow::compute::SortOptions;
@@ -417,6 +417,10 @@ pub fn adjust_input_keys_ordering(
             requirements.data.clear();
         }
     } else if plan.as_any().downcast_ref::<RepartitionExec>().is_some()
+        || plan
+            .as_any()
+            .downcast_ref::<OnDemandRepartitionExec>()
+            .is_some()
         || plan
             .as_any()
             .downcast_ref::<CoalescePartitionsExec>()
@@ -870,6 +874,32 @@ fn add_roundrobin_on_top(
     }
 }
 
+fn add_on_demand_on_top(
+    input: DistributionContext,
+    n_target: usize,
+) -> Result<DistributionContext> {
+    // Adding repartition is helpful:
+    if input.plan.output_partitioning().partition_count() < n_target {
+        // When there is an existing ordering, we preserve ordering
+        // during repartition. This will be un-done in the future
+        // If any of the following conditions is true
+        // - Preserving ordering is not helpful in terms of satisfying ordering requirements
+        // - Usage of order preserving variants is not desirable
+        // (determined by flag `config.optimizer.prefer_existing_sort`)
+        let partitioning = Partitioning::OnDemand(n_target);
+        let repartition =
+            OnDemandRepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
+                .with_preserve_order();
+
+        let new_plan = Arc::new(repartition) as _;
+
+        Ok(DistributionContext::new(new_plan, true, vec![input]))
+    } else {
+        // Partition is not helpful, we already have desired number of partitions.
+        Ok(input)
+    }
+}
+
 /// Adds a hash repartition operator:
 /// - to increase parallelism, and/or
 /// - to satisfy requirements of the subsequent operators.
@@ -989,6 +1019,7 @@ fn remove_dist_changing_operators(
     mut distribution_context: DistributionContext,
 ) -> Result<DistributionContext> {
     while is_repartition(&distribution_context.plan)
+        || is_on_demand_repartition(&distribution_context.plan)
         || is_coalesce_partitions(&distribution_context.plan)
         || is_sort_preserving_merge(&distribution_context.plan)
     {
@@ -1043,6 +1074,18 @@ fn replace_order_preserving_variants(
     {
         if repartition.preserve_order() {
             context.plan = Arc::new(RepartitionExec::try_new(
+                Arc::clone(&context.children[0].plan),
+                repartition.partitioning().clone(),
+            )?);
+            return Ok(context);
+        }
+    } else if let Some(repartition) = context
+        .plan
+        .as_any()
+        .downcast_ref::<OnDemandRepartitionExec>()
+    {
+        if repartition.preserve_order() {
+            context.plan = Arc::new(OnDemandRepartitionExec::try_new(
                 Arc::clone(&context.children[0].plan),
                 repartition.partitioning().clone(),
             )?);
@@ -1303,7 +1346,11 @@ pub fn ensure_distribution(
                     if add_roundrobin {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
-                        child = add_roundrobin_on_top(child, target_partitions)?;
+                        child = if prefer_round_robin_repartition {
+                            add_roundrobin_on_top(child, target_partitions)?
+                        } else {
+                            add_on_demand_on_top(child, target_partitions)?
+                        };
                     }
                     // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
@@ -1315,7 +1362,11 @@ pub fn ensure_distribution(
                     if add_roundrobin {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
-                        child = add_roundrobin_on_top(child, target_partitions)?;
+                        child = if prefer_round_robin_repartition {
+                            add_roundrobin_on_top(child, target_partitions)?
+                        } else {
+                            add_on_demand_on_top(child, target_partitions)?
+                        }
                     }
                 }
             };
@@ -1450,5 +1501,6 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
     dist_context.data = false;
     Ok(dist_context)
 }
+// See tests in datafusion/core/tests/physical_optimizer
 
 // See tests in datafusion/core/tests/physical_optimizer

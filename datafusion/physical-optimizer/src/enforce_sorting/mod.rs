@@ -48,7 +48,8 @@ use crate::enforce_sorting::sort_pushdown::{
 };
 use crate::utils::{
     add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_limit,
-    is_repartition, is_sort, is_sort_preserving_merge, is_union, is_window,
+    is_on_demand_repartition, is_repartition, is_sort, is_sort_preserving_merge,
+    is_union, is_window,
 };
 use crate::PhysicalOptimizerRule;
 
@@ -591,8 +592,9 @@ fn remove_bottleneck_in_subplan(
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
         let mut new_child_node = children[0].children.swap_remove(0);
         while new_child_node.plan.output_partitioning() == plan.output_partitioning()
-            && is_repartition(&new_child_node.plan)
-            && is_repartition(plan)
+            && ((is_repartition(&new_child_node.plan)
+                || is_on_demand_repartition(&new_child_node.plan))
+                && (is_repartition(plan) || is_on_demand_repartition(plan)))
         {
             new_child_node = new_child_node.children.swap_remove(0)
         }
@@ -702,6 +704,13 @@ fn remove_corresponding_sort_from_sub_plan(
             node.plan.as_any().downcast_ref::<RepartitionExec>()
         {
             node.plan = Arc::new(RepartitionExec::try_new(
+                Arc::clone(&node.children[0].plan),
+                repartition.properties().output_partitioning().clone(),
+            )?) as _;
+        } else if let Some(repartition) =
+            node.plan.as_any().downcast_ref::<OnDemandRepartitionExec>()
+        {
+            node.plan = Arc::new(OnDemandRepartitionExec::try_new(
                 Arc::clone(&node.children[0].plan),
                 repartition.properties().output_partitioning().clone(),
             )?) as _;
