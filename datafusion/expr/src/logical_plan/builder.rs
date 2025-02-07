@@ -54,8 +54,7 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, Result, ScalarValue, TableReference, ToDFSchema,
-    UnnestOptions,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -243,9 +242,10 @@ impl LogicalPlanBuilder {
         schema: &DFSchema,
     ) -> Result<Self> {
         let n_cols = values[0].len();
-        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+        let mut fields = ValuesFields::new();
         for j in 0..n_cols {
             let field_type = schema.field(j).data_type();
+            let field_nullable = schema.field(j).is_nullable();
             for row in values.iter() {
                 let value = &row[j];
                 let data_type = value.get_type(schema)?;
@@ -261,17 +261,17 @@ impl LogicalPlanBuilder {
                     }
                 }
             }
-            field_types.push(field_type.to_owned());
+            fields.push(field_type.to_owned(), field_nullable);
         }
 
-        Self::infer_inner(values, &field_types, schema)
+        Self::infer_inner(values, fields, schema)
     }
 
     fn infer_data(values: Vec<Vec<Expr>>) -> Result<Self> {
         let n_cols = values[0].len();
         let schema = DFSchema::empty();
+        let mut fields = ValuesFields::new();
 
-        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
             let mut common_type: Option<DataType> = None;
             for (i, row) in values.iter().enumerate() {
@@ -294,20 +294,21 @@ impl LogicalPlanBuilder {
             }
             // assuming common_type was not set, and no error, therefore the type should be NULL
             // since the code loop skips NULL
-            field_types.push(common_type.unwrap_or(DataType::Null));
+            fields.push(common_type.unwrap_or(DataType::Null), true);
         }
 
-        Self::infer_inner(values, &field_types, &schema)
+        Self::infer_inner(values, fields, &schema)
     }
 
     fn infer_inner(
         mut values: Vec<Vec<Expr>>,
-        field_types: &[DataType],
+        fields: ValuesFields,
         schema: &DFSchema,
     ) -> Result<Self> {
+        let fields = fields.into_fields();
         // wrap cast if data type is not same as common type.
         for row in &mut values {
-            for (j, field_type) in field_types.iter().enumerate() {
+            for (j, field_type) in fields.iter().map(|f| f.data_type()).enumerate() {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
                     row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
                 } else {
@@ -315,16 +316,8 @@ impl LogicalPlanBuilder {
                 }
             }
         }
-        let fields = field_types
-            .iter()
-            .enumerate()
-            .map(|(j, data_type)| {
-                // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
-                let name = &format!("column{}", j + 1);
-                Field::new(name, data_type.clone(), true)
-            })
-            .collect::<Vec<_>>();
-        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let dfschema = DFSchema::from_unqualified_fields(fields, HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
 
         Ok(Self::new(LogicalPlan::Values(Values { schema, values })))
@@ -1321,6 +1314,29 @@ impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
     }
 }
 
+/// Container used when building fields for a `VALUES` node.
+#[derive(Default)]
+struct ValuesFields {
+    inner: Vec<Field>,
+}
+
+impl ValuesFields {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, data_type: DataType, nullable: bool) {
+        // Naming follows the convention described here:
+        // https://www.postgresql.org/docs/current/queries-values.html
+        let name = format!("column{}", self.inner.len() + 1);
+        self.inner.push(Field::new(name, data_type, nullable));
+    }
+
+    pub fn into_fields(self) -> Fields {
+        self.inner.into()
+    }
+}
+
 pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
     let mut name_map = HashMap::new();
     fields
@@ -1518,27 +1534,10 @@ pub fn validate_unique_names<'a>(
 /// [`TypeCoercionRewriter::coerce_union`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/struct.TypeCoercionRewriter.html#method.coerce_union
 /// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
-    if left_plan.schema().fields().len() != right_plan.schema().fields().len() {
-        return plan_err!(
-            "UNION queries have different number of columns: \
-            left has {} columns whereas right has {} columns",
-            left_plan.schema().fields().len(),
-            right_plan.schema().fields().len()
-        );
-    }
-
-    // Temporarily use the schema from the left input and later rely on the analyzer to
-    // coerce the two schemas into a common one.
-
-    // Functional Dependencies doesn't preserve after UNION operation
-    let schema = (**left_plan.schema()).clone();
-    let schema =
-        Arc::new(schema.with_functional_dependencies(FunctionalDependencies::empty())?);
-
-    Ok(LogicalPlan::Union(Union {
-        inputs: vec![Arc::new(left_plan), Arc::new(right_plan)],
-        schema,
-    }))
+    Ok(LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+        Arc::new(left_plan),
+        Arc::new(right_plan),
+    ])?))
 }
 
 /// Create Projection
@@ -1620,7 +1619,7 @@ pub fn table_scan_with_filter_and_fetch(
     )
 }
 
-fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
+pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource { table_schema })
 }
@@ -1924,9 +1923,7 @@ pub fn unnest_with_options(
                         .extend(std::iter::repeat(index).take(transformed_columns.len()));
                     Ok(transformed_columns
                         .iter()
-                        .map(|(col, data_type)| {
-                            (col.relation.to_owned(), data_type.to_owned())
-                        })
+                        .map(|(col, field)| (col.relation.to_owned(), field.to_owned()))
                         .collect())
                 }
                 None => {
@@ -2212,6 +2209,7 @@ mod tests {
                         Column {
                             relation: Some(TableReference::Bare { table }),
                             name,
+                            spans: _,
                         },
                 },
                 _,

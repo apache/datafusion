@@ -28,6 +28,7 @@ use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, DurationFormat, FormatOptions};
 
+use crate::utils::take_function_args;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
@@ -140,28 +141,23 @@ impl ScalarUDFImpl for ToCharFunc {
         args: &[ColumnarValue],
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
-        if args.len() != 2 {
-            return exec_err!(
-                "to_char function requires 2 arguments, got {}",
-                args.len()
-            );
-        }
+        let [date_time, format] = take_function_args(self.name(), args)?;
 
-        match &args[1] {
+        match format {
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
             | ColumnarValue::Scalar(ScalarValue::Null) => {
-                _to_char_scalar(args[0].clone(), None)
+                _to_char_scalar(date_time.clone(), None)
             }
             // constant format
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
                 // invoke to_char_scalar with the known string, without converting to array
-                _to_char_scalar(args[0].clone(), Some(format))
+                _to_char_scalar(date_time.clone(), Some(format))
             }
             ColumnarValue::Array(_) => _to_char_array(args),
             _ => {
                 exec_err!(
                     "Format for `to_char` must be non-null Utf8, received {:?}",
-                    args[1].data_type()
+                    format.data_type()
                 )
             }
         }

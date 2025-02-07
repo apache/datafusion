@@ -2545,6 +2545,7 @@ _Alias of [current_date](#current_date)._
 - [array_sort](#array_sort)
 - [array_to_string](#array_to_string)
 - [array_union](#array_union)
+- [arrays_overlap](#arrays_overlap)
 - [cardinality](#cardinality)
 - [empty](#empty)
 - [flatten](#flatten)
@@ -2929,6 +2930,7 @@ array_has_any(array, sub-array)
 #### Aliases
 
 - list_has_any
+- arrays_overlap
 
 ### `array_indexof`
 
@@ -3572,6 +3574,10 @@ array_union(array1, array2)
 #### Aliases
 
 - list_union
+
+### `arrays_overlap`
+
+_Alias of [array_has_any](#array_has_any)._
 
 ### `cardinality`
 

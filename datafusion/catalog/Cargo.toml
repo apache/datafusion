@@ -28,13 +28,19 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-arrow-schema = { workspace = true }
+arrow = { workspace = true }
 async-trait = { workspace = true }
+dashmap = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+datafusion-sql = { workspace = true }
+futures = { workspace = true }
+itertools = { workspace = true }
+log = { workspace = true }
 parking_lot = { workspace = true }
+sqlparser = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

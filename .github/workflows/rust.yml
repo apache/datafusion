@@ -45,7 +45,7 @@ jobs:
     name: Check License Header
     steps:
       - uses: actions/checkout@v4
-      - uses: korandoru/hawkeye@v5
+      - uses: korandoru/hawkeye@v6
 
   # Check crate compiles and base cargo check passes
   linux-build-lib:
@@ -60,7 +60,7 @@ jobs:
         with:
           rust-version: stable
       - name: Prepare cargo build
-        run: cargo check --profile ci --all-targets
+        run: cargo check --profile ci --all-targets --features integration-tests
 
   # cargo check common, functions and substrait with no default features
   linux-cargo-check-no-default-features:
@@ -92,8 +92,8 @@ jobs:
       - name: Check workspace in debug mode
         run: cargo check --profile ci --all-targets --workspace
 
-      - name: Check workspace with avro,json features
-        run: cargo check --profile ci --workspace --benches --features avro,json
+      - name: Check workspace with additional features
+        run: cargo check --profile ci --workspace --benches --features avro,json,integration-tests
 
       - name: Check Cargo.lock for datafusion-cli
         run: |
@@ -185,7 +185,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run tests (excluding doctests)
-        run: cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace
+        run: cargo test --profile ci --exclude datafusion-examples --exclude ffi_example_table_provider --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -417,7 +417,7 @@ jobs:
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo test --profile ci --lib --tests --bins --features avro,json,backtrace
+          cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
           cd datafusion-cli
           cargo test --profile ci --lib --tests --bins --all-features
 

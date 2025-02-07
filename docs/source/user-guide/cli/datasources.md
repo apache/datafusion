@@ -243,18 +243,16 @@ $ datafusion-cli
 
 Supported configuration options are:
 
-| Environment Variable                     | Configuration Option    | Description                                               |
-| ---------------------------------------- | ----------------------- | --------------------------------------------------------- |
-| `AWS_ACCESS_KEY_ID`                      | `aws.access_key_id`     |                                                           |
-| `AWS_SECRET_ACCESS_KEY`                  | `aws.secret_access_key` |                                                           |
-| `AWS_DEFAULT_REGION`                     | `aws.region`            |                                                           |
-| `AWS_ENDPOINT`                           | `aws.endpoint`          |                                                           |
-| `AWS_SESSION_TOKEN`                      | `aws.token`             |                                                           |
-| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` |                         | See [IAM Roles]                                           |
-| `AWS_ALLOW_HTTP`                         |                         | set to "true" to permit HTTP connections without TLS      |
-| `AWS_PROFILE`                            |                         | Support for using a [named profile] to supply credentials |
+| Environment Variable                     | Configuration Option    | Description                                          |
+| ---------------------------------------- | ----------------------- | ---------------------------------------------------- |
+| `AWS_ACCESS_KEY_ID`                      | `aws.access_key_id`     |                                                      |
+| `AWS_SECRET_ACCESS_KEY`                  | `aws.secret_access_key` |                                                      |
+| `AWS_DEFAULT_REGION`                     | `aws.region`            |                                                      |
+| `AWS_ENDPOINT`                           | `aws.endpoint`          |                                                      |
+| `AWS_SESSION_TOKEN`                      | `aws.token`             |                                                      |
+| `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` |                         | See [IAM Roles]                                      |
+| `AWS_ALLOW_HTTP`                         |                         | set to "true" to permit HTTP connections without TLS |
 
-[named profile]: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
 [iam roles]: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html
 
 ## OSS

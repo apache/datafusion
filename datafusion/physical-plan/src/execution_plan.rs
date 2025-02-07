@@ -15,41 +15,44 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::fmt::Debug;
-use std::sync::Arc;
+pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
+pub use crate::metrics::Metric;
+pub use crate::ordering::InputOrderMode;
+pub use crate::stream::EmptyRecordBatchStream;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
-use futures::stream::{StreamExt, TryStreamExt};
-use tokio::task::JoinSet;
-
-use datafusion_common::config::ConfigOptions;
 pub use datafusion_common::hash_utils;
 pub use datafusion_common::utils::project_schema;
-use datafusion_common::{exec_err, Constraints, Result};
 pub use datafusion_common::{internal_err, ColumnStatistics, Statistics};
-use datafusion_execution::TaskContext;
 pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
     expressions, udf, Distribution, Partitioning, PhysicalExpr,
 };
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+
+use std::any::Any;
+use std::fmt::Debug;
+use std::sync::Arc;
 
 use crate::coalesce_partitions::CoalescePartitionsExec;
 use crate::display::DisplayableExecutionPlan;
-pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDisplay};
-pub use crate::metrics::Metric;
 use crate::metrics::MetricsSet;
-pub use crate::ordering::InputOrderMode;
+use crate::projection::ProjectionExec;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
-pub use crate::stream::EmptyRecordBatchStream;
 use crate::stream::RecordBatchStreamAdapter;
+
+use arrow::datatypes::SchemaRef;
+use arrow::record_batch::RecordBatch;
+use arrow_array::Array;
+use datafusion_common::config::ConfigOptions;
+use datafusion_common::{exec_err, Constraints, Result};
+use datafusion_execution::TaskContext;
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
+
+use futures::stream::{StreamExt, TryStreamExt};
+use tokio::task::JoinSet;
 
 /// Represent nodes in the DataFusion Physical Plan.
 ///
@@ -71,7 +74,7 @@ use crate::stream::RecordBatchStreamAdapter;
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
-    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
     /// Implementation note: this method can just proxy to
     /// [`static_name`](ExecutionPlan::static_name) if no special action is
@@ -80,7 +83,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// range of use cases.
     fn name(&self) -> &str;
 
-    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
     fn static_name() -> &'static str
     where
@@ -431,6 +434,21 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Unknown
     }
+
+    /// Attempts to push down the given projection into the input of this `ExecutionPlan`.
+    ///
+    /// If the operator supports this optimization, the resulting plan will be:
+    /// `self_new <- projection <- source`, starting from `projection <- self <- source`.
+    /// Otherwise, it returns the current `ExecutionPlan` as-is.
+    ///
+    /// Returns `Ok(Some(...))` if pushdown is applied, `Ok(None)` if it is not supported
+    /// or not possible, or `Err` on failure.
+    fn try_swapping_with_projection(
+        &self,
+        _projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
 }
 
 /// [`ExecutionPlan`] Invariant Level
@@ -582,10 +600,10 @@ impl Boundedness {
 ///     |_ on: [col1 ASC]
 ///     FilterExec [EmissionType::Incremental]
 ///       |_ pred: col2 > 100
-///       CsvExec [EmissionType::Incremental]
+///       DataSourceExec [EmissionType::Incremental]
 ///         |_ file: "data.csv"
 /// ```
-/// - CsvExec emits records incrementally as it reads from the file
+/// - DataSourceExec emits records incrementally as it reads from the file
 /// - FilterExec processes and emits filtered records incrementally as they arrive
 /// - SortExec must wait for all input records before it can emit the sorted result,
 ///   since it needs to see all values to determine their final order
@@ -760,7 +778,7 @@ impl PlanProperties {
     }
 
     /// Get schema of the node.
-    fn schema(&self) -> &SchemaRef {
+    pub(crate) fn schema(&self) -> &SchemaRef {
         self.eq_properties.schema()
     }
 }

@@ -22,10 +22,10 @@ use crate::strings::make_and_append_view;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     Array, ArrayIter, ArrayRef, AsArray, GenericStringBuilder, Int64Array,
-    OffsetSizeTrait, StringArrayType, StringViewArray,
+    NullBufferBuilder, OffsetSizeTrait, StringArrayType, StringViewArray,
 };
+use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::DataType;
-use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{

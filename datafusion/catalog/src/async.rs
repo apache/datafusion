@@ -430,7 +430,7 @@ mod tests {
         },
     };
 
-    use arrow_schema::SchemaRef;
+    use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
     use datafusion_common::{error::Result, Statistics, TableReference};
     use datafusion_execution::config::SessionConfig;

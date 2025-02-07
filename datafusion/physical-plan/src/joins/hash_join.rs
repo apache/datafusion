@@ -33,6 +33,11 @@ use super::{
     PartitionMode, SharedBitmapBuilder,
 };
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::projection::{
+    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
+    ProjectionExec,
+};
+use crate::spill::get_record_batch_memory_size;
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
@@ -69,15 +74,14 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 use datafusion_physical_expr::PhysicalExprRef;
-
-use crate::spill::get_record_batch_memory_size;
-use ahash::RandomState;
-use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+
+use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -864,6 +868,47 @@ impl ExecutionPlan for HashJoinExec {
         // Project statistics if there is a projection
         Ok(stats.project(self.projection.as_ref()))
     }
+
+    /// Tries to push `projection` down through `hash_join`. If possible, performs the
+    /// pushdown and returns a new [`HashJoinExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+        if self.contains_projection() {
+            return Ok(None);
+        }
+
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            join_on,
+        }) = try_pushdown_through_join(
+            projection,
+            self.left(),
+            self.right(),
+            self.on(),
+            self.schema(),
+            self.filter(),
+        )? {
+            Ok(Some(Arc::new(HashJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_on,
+                join_filter,
+                self.join_type(),
+                // Returned early if projection is not None
+                None,
+                *self.partition_mode(),
+                self.null_equals_null,
+            )?)))
+        } else {
+            try_embed_projection(projection, self)
+        }
+    }
 }
 
 /// Reads the left (build) side of the input, buffering it in memory, to build a
@@ -1584,18 +1629,25 @@ impl Stream for HashJoinStream {
     }
 }
 
+impl EmbeddedProjection for HashJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::MemorySourceConfig;
     use crate::{
-        common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
-        test::build_table_i32, test::exec::MockExec,
+        common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
+        test::exec::MockExec,
     };
 
     use arrow::array::{Date32Array, Int32Array};
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
     use arrow_array::StructArray;
-    use arrow_buffer::NullBuffer;
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
         ScalarValue,
@@ -1605,7 +1657,6 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::PhysicalExpr;
-
     use hashbrown::raw::RawTable;
     use rstest::*;
     use rstest_reuse::*;
@@ -1630,7 +1681,7 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
-        Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
+        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     fn join(
@@ -2032,9 +2083,9 @@ mod tests {
         let batch2 =
             build_table_i32(("a1", &vec![2]), ("b2", &vec![2]), ("c1", &vec![9]));
         let schema = batch1.schema();
-        let left = Arc::new(
-            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
-        );
+        let left =
+            MemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+                .unwrap();
 
         let right = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -2104,9 +2155,9 @@ mod tests {
         );
         let schema = batch1.schema();
 
-        let left = Arc::new(
-            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
-        );
+        let left =
+            MemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+                .unwrap();
         let right = build_table(
             ("a2", &vec![20, 30, 10]),
             ("b2", &vec![5, 6, 4]),
@@ -2158,9 +2209,9 @@ mod tests {
         let batch2 =
             build_table_i32(("a2", &vec![30]), ("b1", &vec![5]), ("c2", &vec![90]));
         let schema = batch1.schema();
-        let right = Arc::new(
-            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
-        );
+        let right =
+            MemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+                .unwrap();
 
         let on = vec![(
             Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
@@ -2238,9 +2289,8 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
-        Arc::new(
-            MemoryExec::try_new(&[vec![batch.clone(), batch]], schema, None).unwrap(),
-        )
+        MemorySourceConfig::try_new_exec(&[vec![batch.clone(), batch]], schema, None)
+            .unwrap()
     }
 
     #[apply(batch_sizes)]
@@ -2345,7 +2395,8 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
-        let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
+        let right =
+            MemorySourceConfig::try_new_exec(&[vec![right]], schema, None).unwrap();
         let join = join(left, right, on, &JoinType::Left, false).unwrap();
 
         let columns = columns(&join.schema());
@@ -2382,7 +2433,8 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
-        let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
+        let right =
+            MemorySourceConfig::try_new_exec(&[vec![right]], schema, None).unwrap();
         let join = join(left, right, on, &JoinType::Full, false).unwrap();
 
         let columns = columns(&join.schema());
@@ -3686,15 +3738,14 @@ mod tests {
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19107, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
-        let left = Arc::new(
-            MemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None).unwrap(),
-        );
-
+        let left =
+            MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+                .unwrap();
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19108, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
-        let right = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
-
+        let right =
+            MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
         let on = vec![(
             Arc::new(Column::new_with_schema("date", &left.schema()).unwrap()) as _,
             Arc::new(Column::new_with_schema("date", &right.schema()).unwrap()) as _,
@@ -3963,7 +4014,7 @@ mod tests {
             // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
             );
 
             assert_contains!(
@@ -3984,27 +4035,23 @@ mod tests {
             ("b1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
             ("c1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
         );
-        let left = Arc::new(
-            MemoryExec::try_new(
-                &[vec![left_batch.clone()], vec![left_batch.clone()]],
-                left_batch.schema(),
-                None,
-            )
-            .unwrap(),
-        );
+        let left = MemorySourceConfig::try_new_exec(
+            &[vec![left_batch.clone()], vec![left_batch.clone()]],
+            left_batch.schema(),
+            None,
+        )
+        .unwrap();
         let right_batch = build_table_i32(
             ("a2", &vec![10, 11]),
             ("b2", &vec![12, 13]),
             ("c2", &vec![14, 15]),
         );
-        let right = Arc::new(
-            MemoryExec::try_new(
-                &[vec![right_batch.clone()], vec![right_batch.clone()]],
-                right_batch.schema(),
-                None,
-            )
-            .unwrap(),
-        );
+        let right = MemorySourceConfig::try_new_exec(
+            &[vec![right_batch.clone()], vec![right_batch.clone()]],
+            right_batch.schema(),
+            None,
+        )
+        .unwrap();
         let on = vec![(
             Arc::new(Column::new_with_schema("b1", &left_batch.schema())?) as _,
             Arc::new(Column::new_with_schema("b2", &right_batch.schema())?) as _,
@@ -4048,7 +4095,7 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
 
             );
 
@@ -4084,7 +4131,7 @@ mod tests {
         )
         .unwrap();
         let schema_ref = batch.schema();
-        Arc::new(MemoryExec::try_new(&[vec![batch]], schema_ref, None).unwrap())
+        MemorySourceConfig::try_new_exec(&[vec![batch]], schema_ref, None).unwrap()
     }
 
     #[tokio::test]

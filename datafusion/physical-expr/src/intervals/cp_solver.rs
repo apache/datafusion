@@ -722,8 +722,8 @@ mod tests {
     use crate::expressions::{BinaryExpr, Column};
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
 
+    use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
     use arrow::datatypes::TimeUnit;
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_schema::Field;
     use datafusion_common::ScalarValue;
 

@@ -34,7 +34,10 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 /// Execution plan for values list based relation (produces constant rows)
-#[deprecated(since = "45.0.0", note = "Use `MemoryExec::try_new_as_values` instead")]
+#[deprecated(
+    since = "45.0.0",
+    note = "Use `MemorySourceConfig::try_new_as_values` instead"
+)]
 #[derive(Debug, Clone)]
 pub struct ValuesExec {
     /// The schema
@@ -48,6 +51,7 @@ pub struct ValuesExec {
 #[allow(deprecated)]
 impl ValuesExec {
     /// Create a new values exec from data as expr
+    #[deprecated(since = "45.0.0", note = "Use `MemoryExec::try_new` instead")]
     pub fn try_new(
         schema: SchemaRef,
         data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
@@ -101,6 +105,10 @@ impl ValuesExec {
     ///
     /// Errors if any of the batches don't match the provided schema, or if no
     /// batches are provided.
+    #[deprecated(
+        since = "45.0.0",
+        note = "Use `MemoryExec::try_new_from_batches` instead"
+    )]
     pub fn try_new_from_batches(
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
@@ -307,6 +315,7 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                 },],
             }
         );

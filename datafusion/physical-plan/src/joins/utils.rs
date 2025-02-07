@@ -37,11 +37,12 @@ use arrow::array::{
     UInt32Builder, UInt64Array,
 };
 use arrow::compute;
-use arrow::datatypes::{Field, Schema, SchemaBuilder, UInt32Type, UInt64Type};
+use arrow::datatypes::{
+    ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
+};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use arrow_array::builder::UInt64Builder;
 use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
-use arrow_buffer::ArrowNativeType;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -1076,7 +1077,7 @@ impl<T: 'static> OnceFut<T> {
             OnceFutState::Ready(r) => Poll::Ready(
                 r.as_ref()
                     .map(|r| r.as_ref())
-                    .map_err(|e| DataFusionError::External(Box::new(Arc::clone(e)))),
+                    .map_err(DataFusionError::from),
             ),
         }
     }
@@ -1090,10 +1091,9 @@ impl<T: 'static> OnceFut<T> {
 
         match &self.state {
             OnceFutState::Pending(_) => unreachable!(),
-            OnceFutState::Ready(r) => Poll::Ready(
-                r.clone()
-                    .map_err(|e| DataFusionError::External(Box::new(e))),
-            ),
+            OnceFutState::Ready(r) => {
+                Poll::Ready(r.clone().map_err(DataFusionError::Shared))
+            }
         }
     }
 }
@@ -2026,6 +2026,7 @@ mod tests {
             distinct_count,
             min_value: min.map(ScalarValue::from),
             max_value: max.map(ScalarValue::from),
+            sum_value: Absent,
             null_count,
         }
     }

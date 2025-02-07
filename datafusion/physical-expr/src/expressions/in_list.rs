@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::physical_expr::physical_exprs_bag_equal;
 use crate::PhysicalExpr;
 
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::boolean::{not, or_kleene};
@@ -32,7 +33,6 @@ use arrow::compute::take;
 use arrow::datatypes::*;
 use arrow::util::bit_iterator::BitIndexIterator;
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
 use datafusion_common::cast::{
     as_boolean_array, as_generic_binary_array, as_string_array,
 };

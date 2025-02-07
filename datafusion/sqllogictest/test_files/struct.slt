@@ -124,7 +124,7 @@ logical_plan
 02)--TableScan: values projection=[a, b, c]
 physical_plan
 01)ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # error on 0 arguments
 query error
@@ -459,14 +459,14 @@ create table t as values({r: 'a', c: 1}), ({r: 'b', c: 2.3});
 query ?
 select * from t;
 ----
-{c0: a, c1: 1.0}
-{c0: b, c1: 2.3}
+{r: a, c: 1.0}
+{r: b, c: 2.3}
 
 query T
 select arrow_typeof(column1) from t;
 ----
-Struct([Field { name: "c0", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c1", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "c0", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c1", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
 
 statement ok
 drop table t;

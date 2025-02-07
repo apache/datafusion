@@ -15,7 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! End to end test for `ParquetExec` and related components
-
-/// Run all tests that are found in the `parquet` directory
-mod parquet;
+mod memory;
