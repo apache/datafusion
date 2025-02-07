@@ -234,7 +234,7 @@ fn test_field_not_found_suggestion() -> Result<()> {
     let diag = do_query(query);
     assert_eq!(diag.message, "column 'first_na' not found");
     assert_eq!(diag.span, Some(spans["whole"]));
-    assert!(diag.notes.len() > 0);
+    assert_eq!(diag.notes.len(), 1);
 
     let mut suggested_fields: Vec<String> = diag
         .notes
