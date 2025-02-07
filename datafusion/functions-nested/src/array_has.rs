@@ -27,7 +27,8 @@ use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionMutability, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -94,7 +95,10 @@ impl Default for ArrayHas {
 impl ArrayHas {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(Volatility::Immutable),
+            signature: Signature::array_and_element(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Immutable,
+            ),
             aliases: vec![
                 String::from("list_has"),
                 String::from("array_contains"),

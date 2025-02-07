@@ -33,7 +33,8 @@ use datafusion_common::{
     utils::{list_ndims, take_function_args},
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionMutability, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -80,7 +81,10 @@ impl Default for ArrayAppend {
 impl ArrayAppend {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(Volatility::Immutable),
+            signature: Signature::array_and_element(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Mutable,
+            ),
             aliases: vec![
                 String::from("list_append"),
                 String::from("array_push_back"),
@@ -165,7 +169,10 @@ impl Default for ArrayPrepend {
 impl ArrayPrepend {
     pub fn new() -> Self {
         Self {
-            signature: Signature::element_and_array(Volatility::Immutable),
+            signature: Signature::element_and_array(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Mutable,
+            ),
             aliases: vec![
                 String::from("list_prepend"),
                 String::from("array_push_front"),

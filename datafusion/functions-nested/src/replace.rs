@@ -27,8 +27,8 @@ use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionMutability, ArrayFunctionSignature,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -100,6 +100,7 @@ impl ArrayReplace {
                             ArrayFunctionArgument::Element,
                             ArrayFunctionArgument::Element,
                         ],
+                        mutability: ArrayFunctionMutability::Mutable,
                     },
                 ),
                 volatility: Volatility::Immutable,
@@ -181,6 +182,7 @@ impl ArrayReplaceN {
                             ArrayFunctionArgument::Element,
                             ArrayFunctionArgument::Index,
                         ],
+                        mutability: ArrayFunctionMutability::Mutable,
                     },
                 ),
                 volatility: Volatility::Immutable,
@@ -260,6 +262,7 @@ impl ArrayReplaceAll {
                             ArrayFunctionArgument::Element,
                             ArrayFunctionArgument::Element,
                         ],
+                        mutability: ArrayFunctionMutability::Mutable,
                     },
                 ),
                 volatility: Volatility::Immutable,

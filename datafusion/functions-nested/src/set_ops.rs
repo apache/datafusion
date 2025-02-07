@@ -28,7 +28,8 @@ use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionMutability, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -254,7 +255,10 @@ pub(super) struct ArrayDistinct {
 impl ArrayDistinct {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::array(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Mutable,
+            ),
             aliases: vec!["list_distinct".to_string()],
         }
     }

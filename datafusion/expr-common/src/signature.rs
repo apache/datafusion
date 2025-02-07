@@ -230,6 +230,8 @@ pub enum ArrayFunctionSignature {
     Array {
         /// A full list of the arguments accepted by this function.
         arguments: Vec<ArrayFunctionArgument>,
+        /// Whether any of the input arrays are modified.
+        mutability: ArrayFunctionMutability,
     },
     /// A function takes a single argument that must be a List/LargeList/FixedSizeList
     /// which gets coerced to List, with element type recursively coerced to List too if it is list-like.
@@ -242,7 +244,7 @@ pub enum ArrayFunctionSignature {
 impl Display for ArrayFunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ArrayFunctionSignature::Array { arguments } => {
+            ArrayFunctionSignature::Array { arguments, .. } => {
                 for (idx, argument) in arguments.iter().enumerate() {
                     write!(f, "{argument}")?;
                     if idx != arguments.len() - 1 {
@@ -287,6 +289,14 @@ impl Display for ArrayFunctionArgument {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum ArrayFunctionMutability {
+    /// The array function does not modify the array.
+    Immutable,
+    /// The array function does modify the array.
+    Mutable,
 }
 
 impl TypeSignature {
@@ -580,7 +590,10 @@ impl Signature {
         }
     }
     /// Specialized Signature for ArrayAppend and similar functions
-    pub fn array_and_element(volatility: Volatility) -> Self {
+    pub fn array_and_element(
+        volatility: Volatility,
+        mutability: ArrayFunctionMutability,
+    ) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
@@ -588,13 +601,17 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
                     ],
+                    mutability,
                 },
             ),
             volatility,
         }
     }
     /// Specialized Signature for Array functions with an optional index
-    pub fn array_and_element_and_optional_index(volatility: Volatility) -> Self {
+    pub fn array_and_element_and_optional_index(
+        volatility: Volatility,
+        mutability: ArrayFunctionMutability,
+    ) -> Self {
         Signature {
             type_signature: TypeSignature::OneOf(vec![
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
@@ -602,6 +619,7 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
                     ],
+                    mutability: mutability.clone(),
                 }),
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                     arguments: vec![
@@ -609,13 +627,17 @@ impl Signature {
                         ArrayFunctionArgument::Element,
                         ArrayFunctionArgument::Index,
                     ],
+                    mutability,
                 }),
             ]),
             volatility,
         }
     }
     /// Specialized Signature for ArrayPrepend and similar functions
-    pub fn element_and_array(volatility: Volatility) -> Self {
+    pub fn element_and_array(
+        volatility: Volatility,
+        mutability: ArrayFunctionMutability,
+    ) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
@@ -623,13 +645,17 @@ impl Signature {
                         ArrayFunctionArgument::Element,
                         ArrayFunctionArgument::Array,
                     ],
+                    mutability,
                 },
             ),
             volatility,
         }
     }
     /// Specialized Signature for ArrayElement and similar functions
-    pub fn array_and_index(volatility: Volatility) -> Self {
+    pub fn array_and_index(
+        volatility: Volatility,
+        mutability: ArrayFunctionMutability,
+    ) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
@@ -637,17 +663,19 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Index,
                     ],
+                    mutability,
                 },
             ),
             volatility,
         }
     }
     /// Specialized Signature for ArrayEmpty and similar functions
-    pub fn array(volatility: Volatility) -> Self {
+    pub fn array(volatility: Volatility, mutability: ArrayFunctionMutability) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
                     arguments: vec![ArrayFunctionArgument::Array],
+                    mutability,
                 },
             ),
             volatility,

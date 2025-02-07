@@ -28,7 +28,7 @@ use datafusion_common::{
     utils::list_ndims,
     Result,
 };
-use datafusion_expr_common::signature::ArrayFunctionArgument;
+use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionMutability};
 use datafusion_expr_common::{
     signature::{
         ArrayFunctionSignature, TypeSignatureClass, FIXED_SIZE_LIST_WILDCARD,
@@ -362,6 +362,7 @@ fn get_valid_types(
         function_name: &str,
         current_types: &[DataType],
         arguments: &[ArrayFunctionArgument],
+        mutability: &ArrayFunctionMutability,
     ) -> Result<Vec<Vec<DataType>>> {
         if current_types.len() != arguments.len() {
             return Ok(vec![vec![]]);
@@ -386,23 +387,21 @@ fn get_valid_types(
         let mut new_base_type = datafusion_common::utils::base_type(&array_type);
         for (current_type, argument_type) in current_types.iter().zip(arguments.iter()) {
             match argument_type {
-                ArrayFunctionArgument::Element => {
+                ArrayFunctionArgument::Element | ArrayFunctionArgument::Array => {
                     new_base_type =
                         coerce_array_types(function_name, current_type, &new_base_type)?;
                 }
                 ArrayFunctionArgument::Index => {}
-                ArrayFunctionArgument::Array => {
-                    let Some(current_type) = array(current_type) else {
-                        return Ok(vec![vec![]]);
-                    };
-                    new_base_type =
-                        coerce_array_types(function_name, &current_type, &new_base_type)?;
-                }
             }
         }
+        let mutable = match mutability {
+            ArrayFunctionMutability::Immutable => false,
+            ArrayFunctionMutability::Mutable => true,
+        };
         let new_array_type = datafusion_common::utils::coerced_type_with_base_type_only(
             &array_type,
             &new_base_type,
+            mutable,
         );
 
         let new_elem_type = match new_array_type {
@@ -418,10 +417,14 @@ fn get_valid_types(
                 ArrayFunctionArgument::Element => new_elem_type.clone(),
                 ArrayFunctionArgument::Index => DataType::Int64,
                 ArrayFunctionArgument::Array => {
+                    let Some(current_type) = array(current_type) else {
+                        return Ok(vec![vec![]]);
+                    };
                     let new_type =
                         datafusion_common::utils::coerced_type_with_base_type_only(
-                            current_type,
+                            &current_type,
                             &new_base_type,
+                            mutable,
                         );
                     // All array arguments must be coercible to the same type
                     if new_type != new_array_type {
@@ -704,8 +707,8 @@ fn get_valid_types(
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
         TypeSignature::ArraySignature(ref function_signature) => {
             match function_signature {
-                ArrayFunctionSignature::Array { arguments } => {
-                    array_valid_types(function_name, current_types, arguments)?
+                ArrayFunctionSignature::Array { arguments, mutability } => {
+                    array_valid_types(function_name, current_types, arguments, mutability)?
                 }
                 ArrayFunctionSignature::RecursiveArray => {
                     if current_types.len() != 1 {

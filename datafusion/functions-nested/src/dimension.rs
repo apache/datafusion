@@ -32,7 +32,8 @@ use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionMutability, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -77,7 +78,10 @@ impl Default for ArrayDims {
 impl ArrayDims {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::array(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Immutable,
+            ),
             aliases: vec!["list_dims".to_string()],
         }
     }
@@ -157,7 +161,10 @@ pub(super) struct ArrayNdims {
 impl ArrayNdims {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::array(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Immutable,
+            ),
             aliases: vec![String::from("list_ndims")],
         }
     }

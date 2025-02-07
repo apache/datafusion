@@ -35,7 +35,8 @@ use datafusion_common::{
     DataFusionError, Result,
 };
 use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
+    ArrayFunctionArgument, ArrayFunctionMutability, ArrayFunctionSignature, Expr,
+    TypeSignature,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -117,7 +118,10 @@ impl Default for ArrayElement {
 impl ArrayElement {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_index(Volatility::Immutable),
+            signature: Signature::array_and_index(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Immutable,
+            ),
             aliases: vec![
                 String::from("array_extract"),
                 String::from("list_element"),
@@ -337,6 +341,7 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
                         ],
+                        mutability: ArrayFunctionMutability::Immutable,
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                         arguments: vec![
@@ -345,6 +350,7 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
                         ],
+                        mutability: ArrayFunctionMutability::Immutable,
                     }),
                 ],
                 Volatility::Immutable,
@@ -671,7 +677,10 @@ pub(super) struct ArrayPopFront {
 impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::array(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Mutable,
+            ),
             aliases: vec![String::from("list_pop_front")],
         }
     }
@@ -771,7 +780,10 @@ pub(super) struct ArrayPopBack {
 impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::array(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Mutable,
+            ),
             aliases: vec![String::from("list_pop_back")],
         }
     }
@@ -872,7 +884,10 @@ pub(super) struct ArrayAnyValue {
 impl ArrayAnyValue {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::array(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Immutable,
+            ),
             aliases: vec![String::from("list_any_value")],
         }
     }

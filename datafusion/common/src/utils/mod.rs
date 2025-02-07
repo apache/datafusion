@@ -600,16 +600,17 @@ pub fn base_type(data_type: &DataType) -> DataType {
 ///
 /// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// let base_type = DataType::Float64;
-/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type);
+/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type, true);
 /// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))));
 pub fn coerced_type_with_base_type_only(
     data_type: &DataType,
     base_type: &DataType,
+    mutable: bool,
 ) -> DataType {
     match data_type {
-        DataType::List(field) | DataType::FixedSizeList(field, _) => {
+        DataType::List(field) => {
             let field_type =
-                coerced_type_with_base_type_only(field.data_type(), base_type);
+                coerced_type_with_base_type_only(field.data_type(), base_type, mutable);
 
             DataType::List(Arc::new(Field::new(
                 field.name(),
@@ -617,9 +618,28 @@ pub fn coerced_type_with_base_type_only(
                 field.is_nullable(),
             )))
         }
+        DataType::FixedSizeList(field, _) if mutable => {
+            let field_type =
+                coerced_type_with_base_type_only(field.data_type(), base_type, mutable);
+
+            DataType::List(Arc::new(Field::new(
+                field.name(),
+                field_type,
+                field.is_nullable(),
+            )))
+        }
+        DataType::FixedSizeList(field, len) if !mutable => {
+            let field_type =
+                coerced_type_with_base_type_only(field.data_type(), base_type, mutable);
+
+            DataType::FixedSizeList(
+                Arc::new(Field::new(field.name(), field_type, field.is_nullable())),
+                *len,
+            )
+        }
         DataType::LargeList(field) => {
             let field_type =
-                coerced_type_with_base_type_only(field.data_type(), base_type);
+                coerced_type_with_base_type_only(field.data_type(), base_type, mutable);
 
             DataType::LargeList(Arc::new(Field::new(
                 field.name(),

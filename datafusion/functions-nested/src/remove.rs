@@ -28,7 +28,8 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionMutability, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -78,7 +79,10 @@ impl Default for ArrayRemove {
 impl ArrayRemove {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(Volatility::Immutable),
+            signature: Signature::array_and_element(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Mutable,
+            ),
             aliases: vec!["list_remove".to_string()],
         }
     }
@@ -235,7 +239,10 @@ pub(super) struct ArrayRemoveAll {
 impl ArrayRemoveAll {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(Volatility::Immutable),
+            signature: Signature::array_and_element(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Mutable,
+            ),
             aliases: vec!["list_remove_all".to_string()],
         }
     }

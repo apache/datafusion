@@ -23,7 +23,8 @@ use arrow::datatypes::{
     Field,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionMutability, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -94,6 +95,7 @@ impl ArrayPosition {
         Self {
             signature: Signature::array_and_element_and_optional_index(
                 Volatility::Immutable,
+                ArrayFunctionMutability::Immutable,
             ),
             aliases: vec![
                 String::from("list_position"),
@@ -252,7 +254,10 @@ pub(super) struct ArrayPositions {
 impl ArrayPositions {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(Volatility::Immutable),
+            signature: Signature::array_and_element(
+                Volatility::Immutable,
+                ArrayFunctionMutability::Immutable,
+            ),
             aliases: vec![String::from("list_positions")],
         }
     }
