@@ -623,6 +623,12 @@ impl DataFusionErrorBuilder {
     }
 }
 
+impl Default for DataFusionErrorBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Unwrap an `Option` if possible. Otherwise return an `DataFusionError::Internal`.
 /// In normal usage of DataFusion the unwrap should always succeed.
 ///
