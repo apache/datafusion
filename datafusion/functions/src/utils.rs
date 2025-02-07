@@ -55,9 +55,10 @@ pub fn take_function_args<const N: usize, T>(
     let args = args.into_iter().collect::<Vec<_>>();
     args.try_into().map_err(|v: Vec<T>| {
         exec_datafusion_err!(
-            "{} function requires {} arguments, got {}",
+            "{} function requires {} {}, got {}",
             function_name,
             N,
+            if N == 1 { "argument" } else { "arguments" },
             v.len()
         )
     })
