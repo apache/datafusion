@@ -879,7 +879,7 @@ mod tests {
         let expected_plan = [
             "CoalescePartitionsExec",
             "  OnDemandRepartitionExec: partitioning=OnDemand(3), input_partitions=2",
-            "    MemoryExec: partitions=2, partition_sizes=[2, 2]",
+            "    DataSourceExec: partitions=2, partition_sizes=[2, 2]",
         ];
         assert_plan!(expected_plan, coalesce_exec.clone());
 
@@ -1213,8 +1213,8 @@ mod tests {
         let expected_plan = [
             "OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC",
             "  UnionExec",
-            "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
-            "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
@@ -1250,7 +1250,7 @@ mod tests {
         )));
 
         // output has multiple partitions, and is sorted
-        let union = UnionExec::new(vec![source.clone(), source]);
+        let union = UnionExec::new(vec![Arc::<DataSourceExec>::clone(&source), source]);
         let repartition_exec =
             OnDemandRepartitionExec::try_new(Arc::new(union), Partitioning::OnDemand(5))
                 .unwrap()
@@ -1307,7 +1307,7 @@ mod tests {
         // Repartition should not preserve order
         let expected_plan = [
             "OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
-            "  MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
+            "  DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
@@ -1329,8 +1329,8 @@ mod tests {
         let expected_plan = [
             "OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=2",
             "  UnionExec",
-            "    MemoryExec: partitions=1, partition_sizes=[0]",
-            "    MemoryExec: partitions=1, partition_sizes=[0]",
+            "    DataSourceExec: partitions=1, partition_sizes=[0]",
+            "    DataSourceExec: partitions=1, partition_sizes=[0]",
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
