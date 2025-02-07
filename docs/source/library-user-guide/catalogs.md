@@ -44,7 +44,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use datafusion::catalog::{TableProvider, SchemaProvider};
 
-## [derive(Debug)]
+#[derive(Debug)]
 pub struct MemorySchemaProvider {
     tables: DashMap<String, Arc<dyn TableProvider>>,
 }
@@ -54,20 +54,20 @@ pub struct MemorySchemaProvider {
 
 Then we implement the `SchemaProvider` trait for `MemorySchemaProvider`.
 
-```rust
+```fixed
 # use std::sync::Arc;
 # use dashmap::DashMap;
 # use datafusion::catalog::TableProvider;
+#
+# #[derive(Debug)]
+# pub struct MemorySchemaProvider {
+#     tables: DashMap<String, Arc<dyn TableProvider>>,
+# }
 
 use std::any::Any;
 use datafusion::catalog::SchemaProvider;
 use async_trait::async_trait;
 use datafusion::common::{Result, exec_err};
-
-##[derive(Debug)]
-pub struct MemorySchemaProvider {
-    tables: DashMap<String, Arc<dyn TableProvider>>,
-}
 
 #[async_trait]
 impl SchemaProvider for MemorySchemaProvider {
@@ -111,13 +111,93 @@ impl SchemaProvider for MemorySchemaProvider {
 
 Without getting into a `CatalogProvider` implementation, we can create a `MemorySchemaProvider` and register `TableProvider`s with it.
 
-```tofix
+```rust
+# use std::sync::Arc;
+# use dashmap::DashMap;
+# use datafusion::catalog::TableProvider;
+#
+# #[derive(Debug)]
+# pub struct MemorySchemaProvider {
+#     tables: DashMap<String, Arc<dyn TableProvider>>,
+# }
+#
+# use std::any::Any;
+# use datafusion::catalog::SchemaProvider;
+# use async_trait::async_trait;
+# use datafusion::common::{Result, exec_err};
+#
+# #[async_trait]
+# impl SchemaProvider for MemorySchemaProvider {
+#     fn as_any(&self) -> &dyn Any {
+#         self
+#     }
+#
+#     fn table_names(&self) -> Vec<String> {
+#         self.tables
+#             .iter()
+#             .map(|table| table.key().clone())
+#             .collect()
+#     }
+#
+#     async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+#         Ok(self.tables.get(name).map(|table| table.value().clone()))
+#     }
+#
+#     fn register_table(
+#         &self,
+#         name: String,
+#         table: Arc<dyn TableProvider>,
+#     ) -> Result<Option<Arc<dyn TableProvider>>> {
+#         if self.table_exist(name.as_str()) {
+#             return exec_err!(
+#                 "The table {name} already exists"
+#             );
+#         }
+#         Ok(self.tables.insert(name, table))
+#     }
+#
+#     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+#         Ok(self.tables.remove(name).map(|(_, table)| table))
+#     }
+#
+#     fn table_exist(&self, name: &str) -> bool {
+#         self.tables.contains_key(name)
+#     }
+# }
+
+
+impl MemorySchemaProvider {
+    /// Instantiates a new MemorySchemaProvider with an empty collection of tables.
+    pub fn new() -> Self {
+        Self {
+            tables: DashMap::new(),
+        }
+    }
+}
+
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use crate::datasource::MemTable;
+use datafusion::catalog::TableProvider;
 let schema_provider = Arc::new(MemorySchemaProvider::new());
-let table_provider = _; // create a table provider
+let table_provider = create_table_provider(1, 1).unwrap();
 
-schema_provider.register_table("table_name".to_string(), table_provider);
+pub fn create_table_provider(
+    seq_start: i32,
+    seq_end: i32,
+) -> Result<Arc<dyn TableProvider>> {
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+    let arr = Arc::new(Int32Array::from((seq_start..=seq_end).collect::<Vec<_>>()));
+    let partitions = vec![vec![RecordBatch::try_new(
+        schema.clone(),
+        vec![arr as ArrayRef],
+    )?]];
+    Ok(Arc::new(MemTable::try_new(schema, partitions)?))
+}
 
-let table = schema_provider.table("table_name").unwrap();
+schema_provider.register_table("users".to_string(), table_provider);
+
+let table = schema_provider.table("users").unwrap();
 ```
 
 ### Asynchronous `SchemaProvider`
