@@ -63,7 +63,7 @@ impl Default for AsciiFunc {
 impl AsciiFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible_v2(
+            signature: Signature::coercible(
                 vec![Coercion {
                     desired_type: TypeSignatureClass::Native(logical_string()),
                     allowed_casts: vec![TypeSignatureClass::Native(logical_binary())],

@@ -65,7 +65,7 @@ impl Default for RepeatFunc {
 impl RepeatFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible_v2(
+            signature: Signature::coercible(
                 vec![
                     Coercion {
                         desired_type: TypeSignatureClass::Native(logical_string()),

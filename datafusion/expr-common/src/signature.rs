@@ -353,8 +353,8 @@ impl TypeSignature {
             TypeSignature::Comparable(num) => {
                 vec![format!("Comparable({num})")]
             }
-            TypeSignature::Coercible(param_types) => {
-                vec![Self::join_types(param_types, ", ")]
+            TypeSignature::Coercible(coercions) => {
+                vec![Self::join_types(coercions, ", ")]
             }
             TypeSignature::Exact(types) => {
                 vec![Self::join_types(types, ", ")]
@@ -637,7 +637,7 @@ impl Signature {
     }
 
     /// Target coerce types in order
-    pub fn coercible_v2(target_types: Vec<Coercion>, volatility: Volatility) -> Self {
+    pub fn coercible(target_types: Vec<Coercion>, volatility: Volatility) -> Self {
         Self {
             type_signature: TypeSignature::Coercible(target_types),
             volatility,
