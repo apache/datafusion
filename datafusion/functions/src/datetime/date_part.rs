@@ -102,7 +102,10 @@ impl DatePartFunc {
                         },
                         Coercion {
                             desired_type: TypeSignatureClass::Timestamp,
-                            allowed_casts: vec![],
+                            // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
+                            allowed_casts: vec![TypeSignatureClass::Native(
+                                logical_string(),
+                            )],
                         },
                     ]),
                     TypeSignature::CoercibleV2(vec![

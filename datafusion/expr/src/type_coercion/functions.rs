@@ -605,19 +605,12 @@ fn get_valid_types(
                     target_type: &TypeSignatureClass,
                     logical_type: &NativeType,
                 ) -> bool {
+                    if logical_type == &NativeType::Null {
+                        return true;
+                    }
+
                     match target_type {
                         TypeSignatureClass::Native(t) if t.native() == logical_type => {
-                            true
-                        }
-                        TypeSignatureClass::Native(_)
-                            if logical_type == &NativeType::Null =>
-                        {
-                            true
-                        }
-                        // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
-                        TypeSignatureClass::Timestamp
-                            if logical_type == &NativeType::String =>
-                        {
                             true
                         }
                         TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
@@ -636,8 +629,7 @@ fn get_valid_types(
                     }
                 }
 
-                if is_matched_type(&param.desired_type, &current_logical_type)
-                    || param
+                if is_matched_type(&param.desired_type, &current_logical_type) || param
                         .allowed_casts
                         .iter()
                         .any(|t| is_matched_type(t, &current_logical_type))

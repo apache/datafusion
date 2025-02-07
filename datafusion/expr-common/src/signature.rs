@@ -24,8 +24,10 @@ use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
-use datafusion_common::Result;
+use datafusion_common::types::{
+    logical_timestamp, LogicalType, LogicalTypeRef, NativeType,
+};
+use datafusion_common::{not_impl_err, Result};
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -230,24 +232,40 @@ impl Display for TypeSignatureClass {
 }
 
 impl TypeSignatureClass {
-    /// Return the default casted type for the given `TypeSignatureClass`
-    /// We return the largest common type for the given `TypeSignatureClass`
+    /// Returns the default cast type for the given `TypeSignatureClass`.  
+    /// Be cautious to avoid adding specialized logic here, as this function is public and intended for general use.
     pub fn default_casted_type(
         &self,
         logical_type: &NativeType,
-        data_type: &DataType,
+        origin_type: &DataType,
     ) -> Result<DataType> {
-        Ok(match self {
-            // TODO: Able to elimnate this special case?
-            // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
-            TypeSignatureClass::Timestamp if logical_type == &NativeType::String => {
-                DataType::Timestamp(TimeUnit::Nanosecond, None)
-            }
+        match self {
             TypeSignatureClass::Native(logical_type) => {
-                return logical_type.native().default_cast_for(data_type)
+                logical_type.native().default_cast_for(origin_type)
             }
-            _ => data_type.clone(),
-        })
+            // If the given type is already a timestamp, we don't change the unit and timezone
+            TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Timestamp => {
+                // TODO: Consider allowing the user to specify the default timestamp type instead of having it predefined in DataFusion when we have such use case
+                // Use default timestamp type with nanosecond precision and no timezone
+                logical_timestamp().default_cast_for(origin_type)
+            }
+            TypeSignatureClass::Date if logical_type.is_date() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Time if logical_type.is_time() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Interval if logical_type.is_interval() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Duration if logical_type.is_duration() => {
+                Ok(origin_type.to_owned())
+            }
+            _ => not_impl_err!("Other cases are not implemented yet"),
+        }
     }
 }
 
