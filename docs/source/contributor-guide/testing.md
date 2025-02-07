@@ -70,7 +70,6 @@ portions of the entire [sqlite test suite].
 [extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
 [sqlite test suite]: https://www.sqlite.org/sqllogictest/dir?ci=tip
 
-
 ## Rust Integration Tests
 
 There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/datafusion/tree/main/datafusion/core/tests) directory.
