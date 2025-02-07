@@ -1193,19 +1193,15 @@ pub fn ensure_distribution(
     } = remove_dist_changing_operators(dist_context)?;
 
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
-        if let Some(updated_window) = get_best_fitting_window(
-            exec.window_expr(),
-            exec.input(),
-            &exec.partition_keys(),
-        )? {
+        if let Some(updated_window) =
+            get_best_fitting_window(exec.window_expr(), exec.input())?
+        {
             plan = updated_window;
         }
     } else if let Some(exec) = plan.as_any().downcast_ref::<BoundedWindowAggExec>() {
-        if let Some(updated_window) = get_best_fitting_window(
-            exec.window_expr(),
-            exec.input(),
-            &exec.partition_keys,
-        )? {
+        if let Some(updated_window) =
+            get_best_fitting_window(exec.window_expr(), exec.input())?
+        {
             plan = updated_window;
         }
     };

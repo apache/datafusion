@@ -78,8 +78,6 @@ pub struct BoundedWindowAggExec {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
     schema: SchemaRef,
-    /// Partition Keys
-    pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Describes how the input is ordered relative to the partition keys
@@ -100,7 +98,6 @@ impl BoundedWindowAggExec {
     pub fn try_new(
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
-        partition_keys: Vec<Arc<dyn PhysicalExpr>>,
         input_order_mode: InputOrderMode,
     ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &window_expr)?;
@@ -128,7 +125,6 @@ impl BoundedWindowAggExec {
             input,
             window_expr,
             schema,
-            partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode,
             ordered_partition_by_indices,
@@ -209,6 +205,13 @@ impl BoundedWindowAggExec {
             input.boundedness(),
         )
     }
+
+    pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        self.window_expr
+            .iter()
+            .flat_map(|expr| expr.partition_by().to_vec())
+            .collect()
+    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -269,11 +272,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_keys.is_empty() {
+        if self.partition_keys().is_empty() {
             debug!("No partition defined for BoundedWindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys.clone())]
+            vec![Distribution::HashPartitioned(self.partition_keys().clone())]
         }
     }
 
@@ -288,7 +291,6 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Ok(Arc::new(BoundedWindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),
-            self.partition_keys.clone(),
             self.input_order_mode.clone(),
         )?))
     }
@@ -1327,7 +1329,6 @@ mod tests {
                 false,
             )?],
             input,
-            partitionby_exprs,
             input_order_mode,
         )?))
     }
@@ -1609,7 +1610,6 @@ mod tests {
         let physical_plan = BoundedWindowAggExec::try_new(
             window_exprs,
             memory_exec,
-            vec![],
             InputOrderMode::Sorted,
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;

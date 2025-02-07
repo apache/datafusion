@@ -304,7 +304,6 @@ fn roundtrip_udwf() -> Result<()> {
     roundtrip_test(Arc::new(BoundedWindowAggExec::try_new(
         vec![udwf_expr],
         input,
-        vec![col("a", &schema)?],
         InputOrderMode::Sorted,
     )?))
 }
@@ -1149,7 +1148,6 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     let window = Arc::new(BoundedWindowAggExec::try_new(
         vec![udwf_expr],
         input,
-        vec![col("b", &schema)?],
         InputOrderMode::Sorted,
     )?);
 

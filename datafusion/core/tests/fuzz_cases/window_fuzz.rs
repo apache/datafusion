@@ -295,7 +295,6 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
                     vec![window_expr],
                     memory_exec.clone(),
-                    vec![],
                     Linear,
                 )?);
                 let task_ctx = ctx.task_ctx();
@@ -679,7 +678,6 @@ async fn run_window_test(
             false,
         )?],
         exec2,
-        vec![],
         search_mode.clone(),
     )?) as _;
     let task_ctx = ctx.task_ctx();

@@ -232,7 +232,6 @@ pub fn bounded_window_exec_with_partition(
         BoundedWindowAggExec::try_new(
             vec![window_expr],
             Arc::clone(&input),
-            vec![],
             InputOrderMode::Sorted,
         )
         .unwrap(),
@@ -261,7 +260,6 @@ pub fn bounded_window_exec_non_set_monotonic(
             )
             .unwrap()],
             Arc::clone(&input),
-            vec![],
             InputOrderMode::Sorted,
         )
         .unwrap(),

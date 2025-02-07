@@ -86,7 +86,6 @@ use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
-use datafusion_sql::utils::window_expr_common_partition_keys;
 
 use async_trait::async_trait;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -558,33 +557,12 @@ impl DefaultPhysicalPlanner {
                     return exec_err!("Table '{table_name}' does not exist");
                 }
             }
-            LogicalPlan::Window(Window {
-                input, window_expr, ..
-            }) => {
+            LogicalPlan::Window(Window { window_expr, .. }) => {
                 if window_expr.is_empty() {
                     return internal_err!("Impossibly got empty window expression");
                 }
 
                 let input_exec = children.one()?;
-
-                // at this moment we are guaranteed by the logical planner
-                // to have all the window_expr to have equal sort key
-                let partition_keys = window_expr_common_partition_keys(window_expr)?;
-
-                let can_repartition = !partition_keys.is_empty()
-                    && session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_window_functions();
-
-                let physical_partition_keys = if can_repartition {
-                    partition_keys
-                        .iter()
-                        .map(|e| {
-                            self.create_physical_expr(e, input.schema(), session_state)
-                        })
-                        .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?
-                } else {
-                    vec![]
-                };
 
                 let get_sort_keys = |expr: &Expr| match expr {
                     Expr::WindowFunction(WindowFunction {
@@ -635,7 +613,6 @@ impl DefaultPhysicalPlanner {
                     Arc::new(BoundedWindowAggExec::try_new(
                         window_expr,
                         input_exec,
-                        physical_partition_keys,
                         InputOrderMode::Sorted,
                     )?)
                 } else {
