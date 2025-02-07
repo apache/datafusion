@@ -277,7 +277,7 @@ pub trait JoinHashMapType {
             }
         }
 
-        // iterate the next items 
+        // iterate the next items
         while let Some((input_index, match_row_idx)) = todo.pop_front() {
             input_indices.push(input_index as u32);
             match_indices.push(match_row_idx);
