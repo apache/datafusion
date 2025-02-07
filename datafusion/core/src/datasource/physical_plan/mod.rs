@@ -20,14 +20,12 @@
 mod arrow_file;
 mod avro;
 mod csv;
-mod file_groups;
 mod file_scan_config;
 mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
 mod statistics;
-
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
 #[cfg(feature = "parquet")]
@@ -37,7 +35,6 @@ pub use self::parquet::source::ParquetSource;
 pub use self::parquet::{
     ParquetExec, ParquetExecBuilder, ParquetFileMetrics, ParquetFileReaderFactory,
 };
-
 #[allow(deprecated)]
 pub use arrow_file::ArrowExec;
 pub use arrow_file::ArrowSource;
@@ -47,8 +44,8 @@ pub use avro::AvroSource;
 #[allow(deprecated)]
 pub use csv::{CsvExec, CsvExecBuilder};
 pub use csv::{CsvOpener, CsvSource};
+pub use datafusion_catalog_listing::file_groups::FileGroupPartitioner;
 use datafusion_expr::dml::InsertOp;
-pub use file_groups::FileGroupPartitioner;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
