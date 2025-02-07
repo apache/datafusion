@@ -547,7 +547,7 @@ fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             "Second argument to encode must be a constant: Encode using dynamically decided method is not yet supported"
         ),
     }?;
-    encode_process(&expression, encoding)
+    encode_process(expression, encoding)
 }
 
 /// Decodes the given data, accepts Binary, LargeBinary, Utf8, Utf8View or LargeUtf8 and returns a [`ColumnarValue`].
@@ -567,5 +567,5 @@ fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             "Second argument to decode must be a utf8 constant: Decode using dynamically decided method is not yet supported"
         ),
     }?;
-    decode_process(&expression, encoding)
+    decode_process(expression, encoding)
 }
