@@ -111,7 +111,7 @@ impl SchemaProvider for MemorySchemaProvider {
 
 Without getting into a `CatalogProvider` implementation, we can create a `MemorySchemaProvider` and register `TableProvider`s with it.
 
-```rust
+```fixed
 # use std::sync::Arc;
 # use dashmap::DashMap;
 # use datafusion::catalog::TableProvider;
@@ -165,6 +165,10 @@ Without getting into a `CatalogProvider` implementation, we can create a `Memory
 #     }
 # }
 
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use datafusion::datasource::MemTable;
+use arrow::array::{self, Array, ArrayRef, Int32Array};
 
 impl MemorySchemaProvider {
     /// Instantiates a new MemorySchemaProvider with an empty collection of tables.
@@ -174,11 +178,6 @@ impl MemorySchemaProvider {
         }
     }
 }
-
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use datafusion::datasource::MemTable;
-use arrow::array::{self, Array, ArrayRef, Int32Array};
 
 pub fn create_table_provider(
     seq_start: i32,
@@ -207,12 +206,26 @@ It's often useful to fetch metadata about which tables are in a schema, from a r
 
 The trait is roughly the same except for the `table` method, and the addition of the `#[async_trait]` attribute.
 
-```tofix
+```fixed
+# use async_trait::async_trait;
+# use std::sync::Arc;
+# use datafusion::catalog::{TableProvider, SchemaProvider};
+# use datafusion::common::Result;
+#
+# type OriginSchema = arrow::datatypes::Schema;
+#
+# #[derive(Debug)]
+# struct Schema(OriginSchema);
+
 #[async_trait]
 impl SchemaProvider for Schema {
-    async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        // fetch metadata from remote source
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+#       todo!();
     }
+
+#    fn as_any(&self) -> &(dyn std::any::Any + 'static) { todo!() }
+#    fn table_names(&self) -> Vec<std::string::String> { todo!() }
+#    fn table_exist(&self, _: &str) -> bool { todo!() }
 }
 ```
 
