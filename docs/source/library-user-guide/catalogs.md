@@ -177,10 +177,8 @@ impl MemorySchemaProvider {
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use crate::datasource::MemTable;
-use datafusion::catalog::TableProvider;
-let schema_provider = Arc::new(MemorySchemaProvider::new());
-let table_provider = create_table_provider(1, 1).unwrap();
+use datafusion::datasource::MemTable;
+use arrow::array::{self, Array, ArrayRef, Int32Array};
 
 pub fn create_table_provider(
     seq_start: i32,
@@ -195,9 +193,12 @@ pub fn create_table_provider(
     Ok(Arc::new(MemTable::try_new(schema, partitions)?))
 }
 
+let schema_provider = Arc::new(MemorySchemaProvider::new());
+let table_provider = create_table_provider(1, 1).unwrap();
+
 schema_provider.register_table("users".to_string(), table_provider);
 
-let table = schema_provider.table("users").unwrap();
+let table = schema_provider.table("users");
 ```
 
 ### Asynchronous `SchemaProvider`
