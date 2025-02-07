@@ -33,7 +33,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{ArrayFunctionSignature, Expr, TypeSignature};
 use datafusion_expr::{
-    ColumnarValue, Documentation, NullHandling, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -385,10 +385,6 @@ impl ScalarUDFImpl for ArraySlice {
         Ok(arg_types[0].clone())
     }
 
-    fn null_handling(&self) -> NullHandling {
-        NullHandling::Propagate
-    }
-
     fn invoke_batch(
         &self,
         args: &[ColumnarValue],
@@ -690,10 +686,6 @@ impl ScalarUDFImpl for ArrayPopFront {
         Ok(arg_types[0].clone())
     }
 
-    fn null_handling(&self) -> NullHandling {
-        NullHandling::Propagate
-    }
-
     fn invoke_batch(
         &self,
         args: &[ColumnarValue],
@@ -792,10 +784,6 @@ impl ScalarUDFImpl for ArrayPopBack {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
-    }
-
-    fn null_handling(&self) -> NullHandling {
-        NullHandling::Propagate
     }
 
     fn invoke_batch(

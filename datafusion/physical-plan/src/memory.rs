@@ -725,7 +725,7 @@ pub struct MemoryStream {
     projection: Option<Vec<usize>>,
     /// Index into the data
     index: usize,
-    /// The remaining number of rows to return
+    /// The remaining number of rows to return. If None, all rows are returned
     fetch: Option<usize>,
 }
 
@@ -777,11 +777,9 @@ impl Stream for MemoryStream {
             None => batch.clone(),
         };
 
-        if self.fetch.is_none() {
+        let Some(&fetch) = self.fetch.as_ref() else {
             return Poll::Ready(Some(Ok(batch)));
-        }
-
-        let fetch = self.fetch.unwrap();
+        };
         if fetch == 0 {
             return Poll::Ready(None);
         }

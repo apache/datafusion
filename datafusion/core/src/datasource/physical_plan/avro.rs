@@ -255,6 +255,11 @@ impl FileSource for AvroSource {
     fn file_type(&self) -> &str {
         "avro"
     }
+    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
+        !(config.file_compression_type.is_compressed()
+            || config.new_lines_in_values
+            || self.as_any().downcast_ref::<AvroSource>().is_some())
+    }
 }
 
 #[cfg(feature = "avro")]

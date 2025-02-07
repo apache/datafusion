@@ -17,7 +17,7 @@
 
 //! Logic for managing groups of [`PartitionedFile`]s in DataFusion
 
-use crate::datasource::listing::{FileRange, PartitionedFile};
+use crate::{FileRange, PartitionedFile};
 use itertools::Itertools;
 use std::cmp::min;
 use std::collections::BinaryHeap;

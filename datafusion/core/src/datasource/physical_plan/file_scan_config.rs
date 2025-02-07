@@ -19,8 +19,8 @@
 //! file sources.
 
 use super::{
-    get_projected_output_ordering, statistics::MinMaxStatistics, AvroSource,
-    FileGroupPartitioner, FileGroupsDisplay, FileStream,
+    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
+    FileGroupsDisplay, FileStream,
 };
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
@@ -210,7 +210,7 @@ impl DataSource for FileScanConfig {
         repartition_file_min_size: usize,
         output_ordering: Option<LexOrdering>,
     ) -> Result<Option<Arc<dyn DataSource>>> {
-        if !self.supports_repartition() {
+        if !self.source.supports_repartition(self) {
             return Ok(None);
         }
 
@@ -598,12 +598,6 @@ impl FileScanConfig {
     /// Returns the file_source
     pub fn file_source(&self) -> &Arc<dyn FileSource> {
         &self.source
-    }
-
-    fn supports_repartition(&self) -> bool {
-        !(self.file_compression_type.is_compressed()
-            || self.new_lines_in_values
-            || self.source.as_any().downcast_ref::<AvroSource>().is_some())
     }
 }
 
