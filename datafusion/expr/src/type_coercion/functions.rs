@@ -23,10 +23,8 @@ use arrow::{
 };
 use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, plan_err,
-    types::NativeType,
-    utils::list_ndims,
-    Result,
+    exec_err, internal_datafusion_err, internal_err, plan_err, types::NativeType,
+    utils::list_ndims, Result,
 };
 use datafusion_expr_common::{
     signature::{

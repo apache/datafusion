@@ -131,7 +131,7 @@ pub enum TypeSignature {
     /// For functions that take no arguments (e.g. `random()`) use [`TypeSignature::Nullary`].
     Exact(Vec<DataType>),
     /// One or more arguments belonging to the [`TypeSignatureClass`], in order.
-    /// 
+    ///
     /// [`Coercion`] contains not only the desired type but also the allowed casts.
     /// For example, if you expect a function has string type, but you also allow it to be casted from binary type.
     ///
