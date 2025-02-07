@@ -416,7 +416,7 @@ impl OnDemandRepartitionExec {
             partition_channels: Default::default(),
         })
     }
-
+    // Executes the input plan and poll stream into the buffer, records fetch_time and buffer_time metrics
     async fn process_input(
         input: Arc<dyn ExecutionPlan>,
         partition: usize,
@@ -440,20 +440,20 @@ impl OnDemandRepartitionExec {
             let batch = stream.next().await;
             timer.done();
 
-            // send the batch to the buffer channel
-            if let Some(batch) = batch {
-                let timer = send_buffer_time.timer();
-                buffer_tx.send(batch?).await.map_err(|e| {
-                    internal_datafusion_err!(
-                        "Error sending batch to buffer channel for partition {}: {}",
-                        partition,
-                        e
-                    )
-                })?;
-                timer.done();
-            } else {
+            let Some(batch) = batch else {
                 break;
-            }
+            };
+            let timer = send_buffer_time.timer();
+            // Feed the buffer with batch, since the buffer channel has limited capacity
+            // The process waits here until one is consumed
+            buffer_tx.send(batch?).await.map_err(|e| {
+                internal_datafusion_err!(
+                    "Error sending batch to buffer channel for partition {}: {}",
+                    partition,
+                    e
+                )
+            })?;
+            timer.done();
         }
 
         Ok(())
@@ -465,7 +465,7 @@ impl OnDemandRepartitionExec {
     /// txs hold the output sending channels for each output partition
     pub(crate) async fn pull_from_input(
         input: Arc<dyn ExecutionPlan>,
-        partition: usize,
+        input_partition: usize,
         mut output_channels: HashMap<
             usize,
             (DistributionSender<MaybeBatch>, SharedMemoryReservation),
@@ -475,27 +475,29 @@ impl OnDemandRepartitionExec {
         metrics: OnDemandRepartitionMetrics,
         context: Arc<TaskContext>,
     ) -> Result<()> {
-        // execute the child operator in a separate task
+        // initialize buffer channel so that we can pre-fetch from input
         let (buffer_tx, buffer_rx) = async_channel::bounded::<RecordBatch>(2);
+        // execute the child operator in a separate task
+        // that pushes batches into buffer channel with limited capacity
         let processing_task = SpawnedTask::spawn(Self::process_input(
             Arc::clone(&input),
-            partition,
+            input_partition,
             buffer_tx,
             Arc::clone(&context),
             metrics.fetch_time.clone(),
             metrics.send_buffer_time.clone(),
         ));
 
-        // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioning.partition_count();
+        // When the input is done, break the loop
         while !output_channels.is_empty() {
-            // When the input is done, break the loop
+            // Fetch the batch from the buffer, ideally this should reduce the time gap between the requester and the input stream
             let batch = match buffer_rx.recv().await {
                 Ok(batch) => batch,
                 _ => break,
             };
 
-            // Get the partition number from the output partition
+            // Wait until a partition is requested, then get the output partition information
             let partition = output_partition_rx.recv().await.map_err(|e| {
                 internal_datafusion_err!(
                     "Error receiving partition number from output partition: {}",
