@@ -46,9 +46,11 @@ fn get_ln_two() -> &'static ScalarValue {
 /// New, enhanced `Statistics` definition, represents five core statistical distributions. New variants will be added over time.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StatisticsV2 {
-    /// Uniform distribution, represented by its range. For a more in-depth discussion, see:
+    /// Uniform distribution, represented by its range. If the given range extends towards infinity,
+    /// the distribution will be improper -- which is OK. For a more in-depth discussion, see:
     ///
     /// <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>
+    /// <https://en.wikipedia.org/wiki/Prior_probability#Improper_priors>    
     Uniform { interval: Interval },
     /// Exponential distribution with an optional shift. The probability density function (PDF)
     /// is defined as follows:
@@ -68,8 +70,8 @@ pub enum StatisticsV2 {
     Exponential {
         rate: ScalarValue,
         offset: ScalarValue,
-        /// `true` if the exponential distribution has a positive tail (extending towards positive x),
-        /// `false` if it has a negative tail (extending towards negative x).
+        /// Indicates whether the exponential distribution has a positive tail; i.e. it extends
+        /// towards positive infinity.
         positive_tail: bool,
     },
     /// Gaussian (normal) distribution, represented by its mean and variance.
@@ -105,8 +107,8 @@ impl StatisticsV2 {
     pub fn new_uniform(interval: Interval) -> Result<Self> {
         if interval.data_type().eq(&DataType::Boolean) {
             return internal_err!(
-                "Construction of boolean Uniform statistic is prohibited.\
-             Create Bernoulli statistic instead."
+                "Construction of a boolean `Uniform` statistic is prohibited.\
+             Create a `Bernoulli` statistic instead."
             );
         }
 
