@@ -107,8 +107,7 @@ impl StatisticsV2 {
     pub fn new_uniform(interval: Interval) -> Result<Self> {
         if interval.data_type().eq(&DataType::Boolean) {
             return internal_err!(
-                "Construction of a boolean `Uniform` statistic is prohibited.\
-             Create a `Bernoulli` statistic instead."
+                "Construction of a boolean `Uniform` statistic is prohibited, create a `Bernoulli` statistic instead."
             );
         }
 
@@ -127,7 +126,7 @@ impl StatisticsV2 {
                 "Offset argument of the Exponential distribution must be non-null"
             )
         } else if !is_valid_exponential(&rate)? {
-            internal_err!("Tried to construct invalid Exponential statistic")
+            internal_err!("Tried to construct an invalid Exponential statistic")
         } else {
             Ok(Exponential {
                 rate,
@@ -144,7 +143,7 @@ impl StatisticsV2 {
             if valid {
                 Ok(Gaussian { mean, variance })
             } else {
-                internal_err!("Tried to construct invalid Gaussian statistic")
+                internal_err!("Tried to construct an invalid Gaussian statistic")
             }
         })
     }
@@ -156,7 +155,7 @@ impl StatisticsV2 {
             if valid {
                 Ok(Bernoulli { p })
             } else {
-                internal_err!("Tried to construct invalid Bernoulli statistic")
+                internal_err!("Tried to construct an invalid Bernoulli statistic")
             }
         })
     }
@@ -172,11 +171,10 @@ impl StatisticsV2 {
     ) -> Result<Self> {
         if range.data_type().eq(&DataType::Boolean) {
             internal_err!(
-                "Usage of boolean range during Unknown statistic construction \
-            is prohibited. Create Bernoulli statistic instead."
+                "Construction of a boolean `Unknown` statistic is prohibited, create a `Bernoulli` statistic instead."
             )
         } else if !is_valid_unknown(&mean, &median, &variance, &range)? {
-            internal_err!("Tried to construct invalid Unknown statistic")
+            internal_err!("Tried to construct an invalid Unknown statistic")
         } else {
             Ok(Unknown {
                 mean,
@@ -205,7 +203,7 @@ impl StatisticsV2 {
         match &self {
             Exponential { rate, .. } => is_valid_exponential(rate),
             Gaussian { variance, .. } => is_valid_gaussian(variance),
-            Bernoulli { p } => is_valid_gaussian(p),
+            Bernoulli { p } => is_valid_bernoulli(p),
             Unknown {
                 mean,
                 median,
