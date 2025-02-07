@@ -80,6 +80,7 @@ ahash = { version = "0.8", default-features = false, features = [
 ] }
 arrow = { version = "54.1.0", features = [
     "prettyprint",
+    "chrono-tz",
 ] }
 arrow-array = { version = "54.1.0", default-features = false, features = [
     "chrono-tz",
