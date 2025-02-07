@@ -233,11 +233,14 @@ impl SchemaProvider for Schema {
 
 As mentioned, the `CatalogProvider` can manage the schemas in a catalog, and the `MemoryCatalogProvider` is a simple implementation of the `CatalogProvider` trait. It stores schemas in a `DashMap`. With that the `CatalogProvider` trait can be implemented.
 
-```rust
+```fixed
 use std::any::Any;
+use std::sync::Arc;
 use dashmap::DashMap;
-use datafusion::catalog::SchemaProvider;
+use datafusion::catalog::{CatalogProvider, SchemaProvider};
+use datafusion::common::Result;
 
+#[derive(Debug)]
 pub struct MemoryCatalogProvider {
     schemas: DashMap<String, Arc<dyn SchemaProvider>>,
 }
