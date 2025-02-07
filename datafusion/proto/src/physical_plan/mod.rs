@@ -376,11 +376,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         physical_window_expr,
                         input,
                         input_order_mode,
+                        true,
                     )?))
                 } else {
                     Ok(Arc::new(WindowAggExec::try_new(
                         physical_window_expr,
                         input,
+                        true,
                     )?))
                 }
             }

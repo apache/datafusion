@@ -91,6 +91,8 @@ pub struct BoundedWindowAggExec {
     ordered_partition_by_indices: Vec<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// If `can_rerepartition` is false, partition_keys is always empty.
+    can_repartition: bool,
 }
 
 impl BoundedWindowAggExec {
@@ -99,6 +101,7 @@ impl BoundedWindowAggExec {
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
         input_order_mode: InputOrderMode,
+        can_repartition: bool,
     ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
@@ -129,6 +132,7 @@ impl BoundedWindowAggExec {
             input_order_mode,
             ordered_partition_by_indices,
             cache,
+            can_repartition,
         })
     }
 
@@ -207,10 +211,14 @@ impl BoundedWindowAggExec {
     }
 
     pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.window_expr
-            .iter()
-            .flat_map(|expr| expr.partition_by().to_vec())
-            .collect()
+        if !self.can_repartition {
+            vec![]
+        } else {
+            self.window_expr
+                .iter()
+                .min_by_key(|s| s.partition_by().len())
+                .map_or_else(Vec::new, |expr| expr.partition_by().to_vec())
+        }
     }
 }
 
@@ -292,6 +300,7 @@ impl ExecutionPlan for BoundedWindowAggExec {
             self.window_expr.clone(),
             Arc::clone(&children[0]),
             self.input_order_mode.clone(),
+            self.can_repartition,
         )?))
     }
 
@@ -1330,6 +1339,7 @@ mod tests {
             )?],
             input,
             input_order_mode,
+            true,
         )?))
     }
 
@@ -1611,6 +1621,7 @@ mod tests {
             window_exprs,
             memory_exec,
             InputOrderMode::Sorted,
+            true,
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
 

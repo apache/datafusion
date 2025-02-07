@@ -305,6 +305,7 @@ fn roundtrip_udwf() -> Result<()> {
         vec![udwf_expr],
         input,
         InputOrderMode::Sorted,
+        true,
     )?))
 }
 
@@ -380,6 +381,7 @@ fn roundtrip_window() -> Result<()> {
     roundtrip_test(Arc::new(WindowAggExec::try_new(
         vec![plain_aggr_window_expr, sliding_aggr_window_expr, udwf_expr],
         input,
+        true,
     )?))
 }
 
@@ -1094,6 +1096,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
+        true,
     )?);
 
     let aggregate = Arc::new(AggregateExec::try_new(
@@ -1149,6 +1152,7 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
         vec![udwf_expr],
         input,
         InputOrderMode::Sorted,
+        true,
     )?);
 
     let ctx = SessionContext::new();
@@ -1200,6 +1204,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
+        true,
     )?);
 
     let aggr_expr = AggregateExprBuilder::new(udaf, aggr_args.clone())

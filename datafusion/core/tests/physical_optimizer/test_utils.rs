@@ -32,6 +32,7 @@ use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{JoinType, Result};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_expr::utils::can_hash;
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
@@ -233,6 +234,7 @@ pub fn bounded_window_exec_with_partition(
             vec![window_expr],
             Arc::clone(&input),
             InputOrderMode::Sorted,
+            false,
         )
         .unwrap(),
     )
@@ -261,6 +263,7 @@ pub fn bounded_window_exec_non_set_monotonic(
             .unwrap()],
             Arc::clone(&input),
             InputOrderMode::Sorted,
+            false,
         )
         .unwrap(),
     )

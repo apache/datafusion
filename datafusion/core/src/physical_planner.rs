@@ -605,6 +605,9 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
+                let can_repartition = session_state.config().target_partitions() > 1
+                    && session_state.config().repartition_window_functions();
+
                 let uses_bounded_memory =
                     window_expr.iter().all(|e| e.uses_bounded_memory());
                 // If all window expressions can run with bounded memory,
@@ -614,9 +617,14 @@ impl DefaultPhysicalPlanner {
                         window_expr,
                         input_exec,
                         InputOrderMode::Sorted,
+                        can_repartition,
                     )?)
                 } else {
-                    Arc::new(WindowAggExec::try_new(window_expr, input_exec)?)
+                    Arc::new(WindowAggExec::try_new(
+                        window_expr,
+                        input_exec,
+                        can_repartition,
+                    )?)
                 }
             }
             LogicalPlan::Aggregate(Aggregate {

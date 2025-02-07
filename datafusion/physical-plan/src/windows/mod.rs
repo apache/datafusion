@@ -422,6 +422,7 @@ pub fn get_best_fitting_window(
             window_expr,
             Arc::clone(input),
             input_order_mode,
+            true,
         )?) as _))
     } else if input_order_mode != InputOrderMode::Sorted {
         // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
@@ -430,9 +431,11 @@ pub fn get_best_fitting_window(
         // Effectively `WindowAggExec` works only in `Sorted` mode.
         Ok(None)
     } else {
-        Ok(Some(
-            Arc::new(WindowAggExec::try_new(window_expr, Arc::clone(input))?) as _,
-        ))
+        Ok(Some(Arc::new(WindowAggExec::try_new(
+            window_expr,
+            Arc::clone(input),
+            true,
+        )?) as _))
     }
 }
 
@@ -656,6 +659,7 @@ mod tests {
                 false,
             )?],
             blocking_exec,
+            false,
         )?);
 
         let fut = collect(window_agg_exec, task_ctx);

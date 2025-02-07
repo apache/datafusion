@@ -64,6 +64,8 @@ pub struct WindowAggExec {
     ordered_partition_by_indices: Vec<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// If `can_partition` is false, partition_keys is always empty.
+    can_repartition: bool,
 }
 
 impl WindowAggExec {
@@ -71,6 +73,7 @@ impl WindowAggExec {
     pub fn try_new(
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
+        can_repartition: bool,
     ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
@@ -85,6 +88,7 @@ impl WindowAggExec {
             metrics: ExecutionPlanMetricsSet::new(),
             ordered_partition_by_indices,
             cache,
+            can_repartition,
         })
     }
 
@@ -137,10 +141,14 @@ impl WindowAggExec {
     }
 
     pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        self.window_expr
-            .iter()
-            .flat_map(|expr| expr.partition_by().to_vec())
-            .collect()
+        if !self.can_repartition {
+            vec![]
+        } else {
+            self.window_expr
+                .iter()
+                .min_by_key(|s| s.partition_by().len())
+                .map_or_else(Vec::new, |expr| expr.partition_by().to_vec())
+        }
     }
 }
 
@@ -223,6 +231,7 @@ impl ExecutionPlan for WindowAggExec {
         Ok(Arc::new(WindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),
+            true,
         )?))
     }
 

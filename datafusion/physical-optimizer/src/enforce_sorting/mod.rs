@@ -492,9 +492,14 @@ fn adjust_window_sort_removal(
                 window_expr.to_vec(),
                 child_plan,
                 InputOrderMode::Sorted,
+                false,
             )?) as _
         } else {
-            Arc::new(WindowAggExec::try_new(window_expr.to_vec(), child_plan)?) as _
+            Arc::new(WindowAggExec::try_new(
+                window_expr.to_vec(),
+                child_plan,
+                true,
+            )?) as _
         }
     };
 
