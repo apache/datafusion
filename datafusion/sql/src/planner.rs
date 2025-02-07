@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
+use datafusion_common::error::add_possible_column_notes;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
     SchemaError,
@@ -368,10 +369,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 .map_err(|err: DataFusionError| match &err {
                     DataFusionError::SchemaError(
-                        SchemaError::FieldNotFound { .. },
+                        SchemaError::FieldNotFound {
+                            field,
+                            valid_fields,
+                        },
                         _,
                     ) => {
-                        let diagnostic = if let Some(relation) = &col.relation {
+                        let mut diagnostic = if let Some(relation) = &col.relation {
                             Diagnostic::new_error(
                                 format!(
                                     "column '{}' not found in '{}'",
@@ -385,6 +389,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 col.spans().first(),
                             )
                         };
+                        add_possible_column_notes(&mut diagnostic, field, valid_fields);
                         err.with_diagnostic(diagnostic)
                     }
                     _ => err,

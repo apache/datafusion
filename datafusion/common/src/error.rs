@@ -752,6 +752,27 @@ pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionE
     })
 }
 
+pub fn add_possible_column_notes(
+    diagnostic: &mut Diagnostic,
+    field: &Column,
+    valid_fields: &[Column],
+) {
+    let field_names: Vec<String> = valid_fields
+        .iter()
+        .filter_map(|f| {
+            if normalized_levenshtein(f.name(), field.name()) >= 0.5 {
+                Some(f.flat_name())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for name in field_names {
+        diagnostic.add_note(format!("possible column {}", name), None);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::sync::Arc;

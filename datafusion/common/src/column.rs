@@ -17,9 +17,11 @@
 
 //! Column
 
-use crate::error::_schema_err;
+use crate::error::{_schema_err, add_possible_column_notes};
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
+use crate::{
+    DFSchema, DataFusionError, Diagnostic, Result, SchemaError, Spans, TableReference,
+};
 use arrow_schema::{Field, FieldRef};
 use std::collections::HashSet;
 use std::convert::Infallible;
@@ -298,6 +300,23 @@ impl Column {
                 .flat_map(|s| s.iter())
                 .flat_map(|s| s.columns())
                 .collect(),
+        })
+        .map_err(|e| match &e {
+            DataFusionError::SchemaError(
+                SchemaError::FieldNotFound {
+                    field,
+                    valid_fields,
+                },
+                _,
+            ) => {
+                let mut diagnostic = Diagnostic::new_error(
+                    format!("column '{}' is ambiguous", &field.name()),
+                    field.spans().first(),
+                );
+                add_possible_column_notes(&mut diagnostic, field, valid_fields);
+                e.with_diagnostic(diagnostic)
+            }
+            _ => e,
         })
     }
 
