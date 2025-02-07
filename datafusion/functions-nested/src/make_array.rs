@@ -128,7 +128,7 @@ impl ScalarUDFImpl for MakeArray {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         let mut errors = vec![];
-        match try_type_union_resolution_with_struct(arg_types) {
+        match try_type_union_resolution_with_struct(arg_types, true) {
             Ok(r) => return Ok(r),
             Err(e) => {
                 errors.push(e);

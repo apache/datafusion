@@ -438,3 +438,26 @@ Date32
 
 statement ok
 drop table test
+
+
+statement ok
+create table t as values
+(
+  { 'name': 'Alice', 'age': 20, 'id': 1},
+  { 'age': 30, 'id': 2, 'name': 'Bob'},
+  { 'name': 'Carol', 'id': 3, 'age': 22},
+  { 'name': 'Carol', 'id': 3, 'age': 22, 'name':'test'}
+);
+
+query ?
+select coalesce(column1, column2, column3) from t;
+----
+{name: Alice, age: 20, id: 1}
+
+query ?
+select coalesce(column1, column3) from t;
+----
+{name: Alice, age: 20, id: 1}
+
+query error User-defined coercion failed
+select coalesce(column1, column4) from t;
