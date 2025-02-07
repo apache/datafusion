@@ -20,6 +20,7 @@
 use std::backtrace::{Backtrace, BacktraceStatus};
 
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
@@ -136,6 +137,13 @@ pub enum DataFusionError {
     /// human-readable messages, and locations in the source query that relate
     /// to the error in some way.
     Diagnostic(Box<Diagnostic>, Box<DataFusionError>),
+    /// A collection of one or more [`DataFusionError`]. Useful in cases where
+    /// DataFusion can recover from an erroneous state, and produce more errors
+    /// before terminating. e.g. when planning a SELECT clause, DataFusion can
+    /// synchronize to the next `SelectItem` if the previous one had errors. The
+    /// end result is that the user can see errors about all `SelectItem`,
+    /// instead of just the first one.
+    Collection(Vec<DataFusionError>),
     /// A [`DataFusionError`] which shares an underlying [`DataFusionError`].
     ///
     /// This is useful when the same underlying [`DataFusionError`] is passed
@@ -360,6 +368,14 @@ impl Error for DataFusionError {
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
             DataFusionError::Diagnostic(_, e) => Some(e.as_ref()),
+            // Can't really make a Collection fit into the mold of "an error has
+            // at most one source", but returning the first one is probably good
+            // idea. Especially since `DataFusionError::Collection` is mostly
+            // meant for consumption by the end user, so shouldn't interfere
+            // with programmatic usage too much. Plus, having 1 or 5 errors
+            // doesn't really change the fact that the query is invalid and
+            // can't be executed.
+            DataFusionError::Collection(errs) => errs.first().map(|e| e as &dyn Error),
             DataFusionError::Shared(e) => Some(e.as_ref()),
         }
     }
@@ -463,18 +479,27 @@ impl DataFusionError {
             DataFusionError::ObjectStore(_) => "Object Store error: ",
             DataFusionError::IoError(_) => "IO error: ",
             DataFusionError::SQL(_, _) => "SQL error: ",
-            DataFusionError::NotImplemented(_) => "This feature is not implemented: ",
+            DataFusionError::NotImplemented(_) => {
+                "This feature is not implemented: "
+            }
             DataFusionError::Internal(_) => "Internal error: ",
             DataFusionError::Plan(_) => "Error during planning: ",
-            DataFusionError::Configuration(_) => "Invalid or Unsupported Configuration: ",
+            DataFusionError::Configuration(_) => {
+                "Invalid or Unsupported Configuration: "
+            }
             DataFusionError::SchemaError(_, _) => "Schema error: ",
             DataFusionError::Execution(_) => "Execution error: ",
             DataFusionError::ExecutionJoin(_) => "ExecutionJoin error: ",
-            DataFusionError::ResourcesExhausted(_) => "Resources exhausted: ",
+            DataFusionError::ResourcesExhausted(_) => {
+                "Resources exhausted: "
+            }
             DataFusionError::External(_) => "External error: ",
             DataFusionError::Context(_, _) => "",
             DataFusionError::Substrait(_) => "Substrait error: ",
             DataFusionError::Diagnostic(_, _) => "",
+            DataFusionError::Collection(errs) => {
+                errs.first().expect("cannot construct DataFusionError::Collection with 0 errors, but got one such case").error_prefix()
+            }
             DataFusionError::Shared(_) => "",
         }
     }
@@ -517,6 +542,13 @@ impl DataFusionError {
             }
             DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Diagnostic(_, ref err) => Cow::Owned(err.to_string()),
+            // Returning the message of the first error is probably fine enough,
+            // and makes `DataFusionError::Collection` a transparent wrapped,
+            // unless the end user explicitly calls `DataFusionError::iter`.
+            DataFusionError::Collection(ref errs) => errs
+                .first()
+                .expect("cannot construct DataFusionError::Collection with 0 errors")
+                .message(),
             DataFusionError::Shared(ref desc) => Cow::Owned(desc.to_string()),
         }
     }
@@ -568,6 +600,63 @@ impl DataFusionError {
         }
 
         DiagnosticsIterator { head: self }.next()
+    }
+
+    /// Sometimes DataFusion is able to collect multiple errors in a SQL query
+    /// before terminating, e.g. across different expressions in a SELECT
+    /// statements or different sides of a UNION. This method returns an
+    /// iterator over all the errors in the collection.
+    ///
+    /// For this to work, the top-level error must be a
+    /// `DataFusionError::Collection`, not something that contains it.
+    pub fn iter(&self) -> impl Iterator<Item = &DataFusionError> {
+        struct ErrorIterator<'a> {
+            queue: VecDeque<&'a DataFusionError>,
+        }
+
+        impl<'a> Iterator for ErrorIterator<'a> {
+            type Item = &'a DataFusionError;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                loop {
+                    let popped = self.queue.pop_front()?;
+                    match popped {
+                        DataFusionError::Collection(errs) => self.queue.extend(errs),
+                        _ => return Some(popped),
+                    }
+                }
+            }
+        }
+
+        let mut queue = VecDeque::new();
+        queue.push_back(self);
+        ErrorIterator { queue }
+    }
+}
+
+pub struct DataFusionErrorBuilder(Vec<DataFusionError>);
+
+impl DataFusionErrorBuilder {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn add_error(&mut self, error: DataFusionError) {
+        self.0.push(error);
+    }
+
+    pub fn error_or<T>(self, ok: T) -> Result<T, DataFusionError> {
+        match self.0.len() {
+            0 => Ok(ok),
+            1 => Err(self.0.into_iter().next().expect("length matched 1")),
+            _ => Err(DataFusionError::Collection(self.0)),
+        }
+    }
+}
+
+impl Default for DataFusionErrorBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -953,5 +1042,21 @@ mod test {
         // DataFusionError does not implement Eq, so we use a string comparison + some cheap "same variant" test instead
         assert_eq!(e.strip_backtrace(), exp.strip_backtrace());
         assert_eq!(std::mem::discriminant(e), std::mem::discriminant(&exp),)
+    }
+
+    #[test]
+    fn test_iter() {
+        let err = DataFusionError::Collection(vec![
+            DataFusionError::Plan("a".to_string()),
+            DataFusionError::Collection(vec![
+                DataFusionError::Plan("b".to_string()),
+                DataFusionError::Plan("c".to_string()),
+            ]),
+        ]);
+        let errs = err.iter().collect::<Vec<_>>();
+        assert_eq!(errs.len(), 3);
+        assert_eq!(errs[0].strip_backtrace(), "Error during planning: a");
+        assert_eq!(errs[1].strip_backtrace(), "Error during planning: b");
+        assert_eq!(errs[2].strip_backtrace(), "Error during planning: c");
     }
 }
