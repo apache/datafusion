@@ -20,9 +20,11 @@
 use std::sync::Arc;
 use std::{any::Any, cmp::Ordering};
 
-use arrow::array::{Capacities, MutableArrayData};
-use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
+use arrow::array::{
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullBufferBuilder,
+    OffsetSizeTrait,
+};
+use arrow::buffer::OffsetBuffer;
 use arrow_schema::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_common::{

@@ -29,7 +29,7 @@ use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{Expr, TableType};
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_plan::memory::MemoryExec;
+use datafusion::physical_plan::memory::MemorySourceConfig;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use std::fs::File;
@@ -120,11 +120,11 @@ impl TableProvider for LocalCsvTable {
         } else {
             self.batches.clone()
         };
-        Ok(Arc::new(MemoryExec::try_new(
+        Ok(MemorySourceConfig::try_new_exec(
             &[batches],
             TableProvider::schema(self),
             projection.cloned(),
-        )?))
+        )?)
     }
 }
 

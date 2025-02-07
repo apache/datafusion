@@ -115,12 +115,12 @@ pub fn is_not_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> 
 mod tests {
     use super::*;
     use crate::expressions::col;
+    use arrow::buffer::ScalarBuffer;
     use arrow::{
         array::{BooleanArray, StringArray},
         datatypes::*,
     };
     use arrow_array::{Array, Float64Array, Int32Array, UnionArray};
-    use arrow_buffer::ScalarBuffer;
     use datafusion_common::cast::as_boolean_array;
 
     #[test]

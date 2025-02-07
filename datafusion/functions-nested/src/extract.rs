@@ -17,17 +17,12 @@
 
 //! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
-use arrow::array::Array;
-use arrow::array::ArrayRef;
-use arrow::array::ArrowNativeTypeOp;
-use arrow::array::Capacities;
-use arrow::array::GenericListArray;
-use arrow::array::Int64Array;
-use arrow::array::MutableArrayData;
-use arrow::array::OffsetSizeTrait;
+use arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, Capacities, GenericListArray, Int64Array,
+    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow_buffer::NullBufferBuilder;
 use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
@@ -336,11 +331,6 @@ impl ArraySlice {
                 vec![
                     TypeSignature::ArraySignature(
                         ArrayFunctionSignature::ArrayAndIndexes(
-                            NonZeroUsize::new(1).expect("1 is non-zero"),
-                        ),
-                    ),
-                    TypeSignature::ArraySignature(
-                        ArrayFunctionSignature::ArrayAndIndexes(
                             NonZeroUsize::new(2).expect("2 is non-zero"),
                         ),
                     ),
@@ -487,7 +477,17 @@ where
         // 0 ~ len - 1
         let adjusted_zero_index = if index < 0 {
             if let Ok(index) = index.try_into() {
-                index + len
+                // When index < 0 and -index > length, index is clamped to the beginning of the list.
+                // Otherwise, when index < 0, the index is counted from the end of the list.
+                //
+                // Note, we actually test the contrapositive, index < -length, because negating a
+                // negative will panic if the negative is equal to the smallest representable value
+                // while negating a positive is always safe.
+                if index < (O::zero() - O::one()) * len {
+                    O::zero()
+                } else {
+                    index + len
+                }
             } else {
                 return exec_err!("array_slice got invalid index: {}", index);
             }
@@ -575,7 +575,7 @@ where
                     "array_slice got invalid stride: {:?}, it cannot be 0",
                     stride
                 );
-            } else if (from <= to && stride.is_negative())
+            } else if (from < to && stride.is_negative())
                 || (from > to && stride.is_positive())
             {
                 // return empty array
@@ -587,7 +587,7 @@ where
                 internal_datafusion_err!("array_slice got invalid stride: {}", stride)
             })?;
 
-            if from <= to {
+            if from <= to && stride > O::zero() {
                 assert!(start + to <= end);
                 if stride.eq(&O::one()) {
                     // stride is default to 1
