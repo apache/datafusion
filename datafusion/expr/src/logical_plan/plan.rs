@@ -2746,21 +2746,19 @@ impl Union {
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
+        type FieldData<'a> = (&'a DataType, bool, Vec<&'a HashMap<String, String>>);
         // Prefer `BTreeMap` as it produces items in order by key when iterated over
-        let mut cols: BTreeMap<&str, (&DataType, bool, Vec<&HashMap<String, String>>)> =
-            BTreeMap::new();
+        let mut cols: BTreeMap<&str, FieldData> = BTreeMap::new();
         for input in inputs.iter() {
             for field in input.schema().fields() {
-                match cols.entry(&field.name()) {
+                match cols.entry(field.name()) {
                     std::collections::btree_map::Entry::Occupied(mut occupied) => {
                         let (data_type, is_nullable, metadata) = occupied.get_mut();
-                        if !loose_types {
-                            if *data_type != field.data_type() {
-                                return plan_err!(
-                                    "Found different types for field {}",
-                                    field.name()
-                                );
-                            }
+                        if !loose_types && *data_type != field.data_type() {
+                            return plan_err!(
+                                "Found different types for field {}",
+                                field.name()
+                            );
                         }
 
                         metadata.push(field.metadata());
