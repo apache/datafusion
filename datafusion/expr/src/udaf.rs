@@ -119,9 +119,12 @@ impl AggregateUDF {
     where
         F: AggregateUDFImpl + 'static,
     {
-        Self {
-            inner: Arc::new(fun),
-        }
+        Self::new_from_shared_impl(Arc::new(fun))
+    }
+
+    /// Create a new `AggregateUDF` from a `[AggregateUDFImpl]` trait object
+    pub fn new_from_shared_impl(fun: Arc<dyn AggregateUDFImpl>) -> AggregateUDF {
+        Self { inner: fun }
     }
 
     /// Return the underlying [`AggregateUDFImpl`] trait object for this function
