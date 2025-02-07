@@ -1054,6 +1054,12 @@ mod tests {
             unimplemented!()
         }
 
+        fn ordered_set_aggregate_functions(
+            &self,
+        ) -> &std::collections::HashMap<String, Arc<AggregateUDF>> {
+            unimplemented!()
+        }
+
         fn window_functions(&self) -> &std::collections::HashMap<String, Arc<WindowUDF>> {
             unimplemented!()
         }

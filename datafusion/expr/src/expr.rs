@@ -290,7 +290,7 @@ pub enum Expr {
     /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Calls an aggregate function with arguments, and optional
-    /// `ORDER BY`, `FILTER`, `DISTINCT` and `NULL TREATMENT`.
+    /// `ORDER BY`, `FILTER`, `DISTINCT`, `NULL TREATMENT`, and `WITHIN GROUP`.
     ///
     /// See also [`ExprFunctionExt`] to set these fields.
     ///
@@ -705,6 +705,8 @@ pub struct AggregateFunction {
     /// Optional ordering
     pub order_by: Option<Vec<Sort>>,
     pub null_treatment: Option<NullTreatment>,
+    /// Optional WITHIN GROUP for ordered-set aggregate functions
+    pub within_group: Option<Vec<Sort>>,
 }
 
 impl AggregateFunction {
@@ -716,6 +718,7 @@ impl AggregateFunction {
         filter: Option<Box<Expr>>,
         order_by: Option<Vec<Sort>>,
         null_treatment: Option<NullTreatment>,
+        within_group: Option<Vec<Sort>>,
     ) -> Self {
         Self {
             func,
@@ -724,6 +727,7 @@ impl AggregateFunction {
             filter,
             order_by,
             null_treatment,
+            within_group,
         }
     }
 }
@@ -869,6 +873,8 @@ pub struct AggregateUDF {
     pub filter: Option<Box<Expr>>,
     /// Optional ORDER BY applied prior to aggregating
     pub order_by: Option<Vec<Expr>>,
+    /// Optional WITHIN GROUP for ordered-set aggregate functions
+    pub within_group: Option<Vec<Expr>>,
 }
 
 impl AggregateUDF {
@@ -878,12 +884,14 @@ impl AggregateUDF {
         args: Vec<Expr>,
         filter: Option<Box<Expr>>,
         order_by: Option<Vec<Expr>>,
+        within_group: Option<Vec<Expr>>,
     ) -> Self {
         Self {
             fun,
             args,
             filter,
             order_by,
+            within_group,
         }
     }
 }
@@ -1869,6 +1877,7 @@ impl NormalizeEq for Expr {
                     filter: self_filter,
                     order_by: self_order_by,
                     null_treatment: self_null_treatment,
+                    within_group: self_within_group,
                 }),
                 Expr::AggregateFunction(AggregateFunction {
                     func: other_func,
@@ -1877,6 +1886,7 @@ impl NormalizeEq for Expr {
                     filter: other_filter,
                     order_by: other_order_by,
                     null_treatment: other_null_treatment,
+                    within_group: other_within_group,
                 }),
             ) => {
                 self_func.name() == other_func.name()
@@ -1903,6 +1913,19 @@ impl NormalizeEq for Expr {
                                     && a.nulls_first == b.nulls_first
                                     && a.expr.normalize_eq(&b.expr)
                             }),
+                        (None, None) => true,
+                        _ => false,
+                    }
+                    && match (self_within_group, other_within_group) {
+                        (Some(self_within_group), Some(other_within_group)) => {
+                            self_within_group.iter().zip(other_within_group.iter()).all(
+                                |(a, b)| {
+                                    a.asc == b.asc
+                                        && a.nulls_first == b.nulls_first
+                                        && a.expr.normalize_eq(&b.expr)
+                                },
+                            )
+                        }
                         (None, None) => true,
                         _ => false,
                     }
@@ -2159,6 +2182,7 @@ impl HashNode for Expr {
                 filter: _filter,
                 order_by: _order_by,
                 null_treatment,
+                within_group: _within_group,
             }) => {
                 func.hash(state);
                 distinct.hash(state);
@@ -2271,6 +2295,7 @@ impl Display for SchemaDisplay<'_> {
                 filter,
                 order_by,
                 null_treatment,
+                within_group,
             }) => {
                 write!(
                     f,
@@ -2290,6 +2315,14 @@ impl Display for SchemaDisplay<'_> {
 
                 if let Some(order_by) = order_by {
                     write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
+                };
+
+                if let Some(within_group) = within_group {
+                    write!(
+                        f,
+                        " WITHIN GROUP [{}]",
+                        schema_name_from_sorts(within_group)?
+                    )?;
                 };
 
                 Ok(())
@@ -2660,7 +2693,7 @@ impl Display for Expr {
                 filter,
                 order_by,
                 null_treatment,
-                ..
+                within_group,
             }) => {
                 fmt_function(f, func.name(), *distinct, args, true)?;
                 if let Some(nt) = null_treatment {
@@ -2671,6 +2704,9 @@ impl Display for Expr {
                 }
                 if let Some(ob) = order_by {
                     write!(f, " ORDER BY [{}]", expr_vec_fmt!(ob))?;
+                }
+                if let Some(wg) = within_group {
+                    write!(f, " WITHIN GROUP [{}]", expr_vec_fmt!(wg))?;
                 }
                 Ok(())
             }

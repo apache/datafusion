@@ -73,9 +73,10 @@ fn is_single_distinct_agg(aggr_expr: &[Expr]) -> Result<bool> {
             filter,
             order_by,
             null_treatment: _,
+            within_group,
         }) = expr
         {
-            if filter.is_some() || order_by.is_some() {
+            if filter.is_some() || order_by.is_some() || within_group.is_some() {
                 return Ok(false);
             }
             aggregate_count += 1;
@@ -200,6 +201,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     None,
                                     None,
                                     None,
+                                    None,
                                 )))
                                 // if the aggregate function is not distinct, we need to rewrite it like two phase aggregation
                             } else {
@@ -213,6 +215,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         None,
                                         None,
                                         None,
+                                        None,
                                     ))
                                     .alias(&alias_str),
                                 );
@@ -220,6 +223,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     func,
                                     vec![col(&alias_str)],
                                     false,
+                                    None,
                                     None,
                                     None,
                                     None,
@@ -292,6 +296,7 @@ mod tests {
             max_udaf(),
             vec![expr],
             true,
+            None,
             None,
             None,
             None,
@@ -576,6 +581,7 @@ mod tests {
             Some(Box::new(col("a").gt(lit(5)))),
             None,
             None,
+            None,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![expr, count_distinct(col("b"))])?
@@ -618,6 +624,7 @@ mod tests {
             false,
             None,
             Some(vec![col("a").sort(true, false)]),
+            None,
             None,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)

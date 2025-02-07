@@ -970,8 +970,12 @@ async fn roundtrip_expr_api() -> Result<()> {
         stddev_pop(lit(2.2)),
         approx_distinct(lit(2)),
         approx_median(lit(2)),
-        approx_percentile_cont(lit(2), lit(0.5), None),
-        approx_percentile_cont(lit(2), lit(0.5), Some(lit(50))),
+        approx_percentile_cont(Some(vec![lit(2).sort(true, false)]), lit(0.5), None),
+        approx_percentile_cont(
+            Some(vec![lit(2).sort(true, false)]),
+            lit(0.5),
+            Some(lit(50)),
+        ),
         approx_percentile_cont_with_weight(lit(2), lit(1), lit(0.5)),
         grouping(lit(1)),
         bit_and(lit(2)),
@@ -2236,6 +2240,7 @@ fn roundtrip_aggregate_udf() {
         vec![lit(1.0_f64)],
         false,
         Some(Box::new(lit(true))),
+        None,
         None,
         None,
     ));

@@ -76,6 +76,10 @@ pub trait ContextProvider {
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
+    /// Getter for a ordered-set UDAF description
+    ///
+    /// Note : ordered_set_aggregate_meta is a subset of aggregate_meta.
+    fn get_ordered_set_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
     /// Getter for a UDWF
     fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>>;
     /// Getter for system/user-defined variable type

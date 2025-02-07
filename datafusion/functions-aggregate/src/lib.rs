@@ -174,6 +174,16 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
     ]
 }
 
+/// Returns all default ordered set aggregate functions
+///
+/// Note : all_default_ordered_set_aggregate_functions are a subset of all_default_aggregate_functions.
+pub fn all_default_ordered_set_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
+    vec![
+        approx_percentile_cont_udaf(),
+        approx_percentile_cont_with_weight_udaf(),
+    ]
+}
+
 /// Registers all enabled packages with a [`FunctionRegistry`]
 pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
     let functions: Vec<Arc<AggregateUDF>> = all_default_aggregate_functions();

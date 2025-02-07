@@ -1220,7 +1220,8 @@ pub async fn from_aggregate_rel(
                         _ if f.invocation == AggregationInvocation::All as i32 => false,
                         _ => false,
                     };
-                    let order_by = if !f.sorts.is_empty() {
+
+                    let sorts = if !f.sorts.is_empty() {
                         Some(
                             from_substrait_sorts(consumer, &f.sorts, input.schema())
                                 .await?,
@@ -1234,7 +1235,7 @@ pub async fn from_aggregate_rel(
                         f,
                         input.schema(),
                         filter,
-                        order_by,
+                        sorts,
                         distinct,
                     )
                     .await
@@ -1918,7 +1919,7 @@ pub async fn from_substrait_agg_func(
     f: &AggregateFunction,
     input_schema: &DFSchema,
     filter: Option<Box<Expr>>,
-    order_by: Option<Vec<SortExpr>>,
+    sorts: Option<Vec<SortExpr>>,
     distinct: bool,
 ) -> Result<Arc<Expr>> {
     let Some(fn_signature) = consumer
@@ -1951,8 +1952,22 @@ pub async fn from_substrait_agg_func(
         args
     };
 
+    let (within_group, order_by) =
+        match consumer.get_function_registry().ordered_set_udaf(fn_name) {
+            Ok(_) => (sorts, None),
+            Err(_) => (None, sorts),
+        };
+
     Ok(Arc::new(Expr::AggregateFunction(
-        expr::AggregateFunction::new_udf(udaf, args, distinct, filter, order_by, None),
+        expr::AggregateFunction::new_udf(
+            udaf,
+            args,
+            distinct,
+            filter,
+            order_by,
+            None,
+            within_group,
+        ),
     )))
 }
 

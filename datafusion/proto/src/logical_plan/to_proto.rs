@@ -353,6 +353,7 @@ pub fn serialize_expr(
             ref filter,
             ref order_by,
             null_treatment: _,
+            ref within_group,
         }) => {
             let mut buf = Vec::new();
             let _ = codec.try_encode_udaf(func, &mut buf);
@@ -371,6 +372,10 @@ pub fn serialize_expr(
                             None => vec![],
                         },
                         fun_definition: (!buf.is_empty()).then_some(buf),
+                        within_group: match within_group {
+                            Some(e) => serialize_sorts(e, codec)?,
+                            None => vec![],
+                        },
                     },
                 ))),
             }

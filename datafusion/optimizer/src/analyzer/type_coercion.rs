@@ -511,6 +511,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 filter,
                 order_by,
                 null_treatment,
+                within_group,
             }) => {
                 let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
                     args,
@@ -525,6 +526,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         filter,
                         order_by,
                         null_treatment,
+                        within_group,
                     ),
                 )))
             }
@@ -1339,6 +1341,7 @@ mod test {
             None,
             None,
             None,
+            None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
         let expected = "Projection: MY_AVG(CAST(Int64(10) AS Float64))\n  EmptyRelation";
@@ -1368,6 +1371,7 @@ mod test {
             None,
             None,
             None,
+            None,
         ));
 
         let err = Projection::try_new(vec![udaf], empty).err().unwrap();
@@ -1387,6 +1391,7 @@ mod test {
             None,
             None,
             None,
+            None,
         ));
         let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
         let expected = "Projection: avg(Float64(12))\n  EmptyRelation";
@@ -1397,6 +1402,7 @@ mod test {
             avg_udaf(),
             vec![cast(col("a"), DataType::Float64)],
             false,
+            None,
             None,
             None,
             None,
@@ -1414,6 +1420,7 @@ mod test {
             avg_udaf(),
             vec![lit("1")],
             false,
+            None,
             None,
             None,
             None,

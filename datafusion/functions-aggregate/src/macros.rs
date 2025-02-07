@@ -29,6 +29,7 @@ macro_rules! make_udaf_expr {
                 None,
                 None,
                 None,
+                None,
             ))
         }
     };
@@ -49,6 +50,7 @@ macro_rules! make_udaf_expr_and_func {
                 $AGGREGATE_UDF_FN(),
                 args,
                 false,
+                None,
                 None,
                 None,
                 None,

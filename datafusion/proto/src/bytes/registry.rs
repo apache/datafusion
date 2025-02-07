@@ -40,6 +40,10 @@ impl FunctionRegistry for NoRegistry {
         plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Aggregate Function '{name}'")
     }
 
+    fn ordered_set_udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
+        plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Ordered Set Aggregate Function '{name}'")
+    }
+
     fn udwf(&self, name: &str) -> Result<Arc<WindowUDF>> {
         plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Window Function '{name}'")
     }
@@ -48,6 +52,12 @@ impl FunctionRegistry for NoRegistry {
         udaf: Arc<AggregateUDF>,
     ) -> Result<Option<Arc<AggregateUDF>>> {
         plan_err!("No function registry provided to deserialize, so can not register User Defined Aggregate Function '{}'", udaf.inner().name())
+    }
+    fn register_ordered_set_udaf(
+        &mut self,
+        ordered_set_udaf: Arc<AggregateUDF>,
+    ) -> Result<Option<Arc<AggregateUDF>>> {
+        plan_err!("No function registry provided to deserialize, so can not register User Defined Ordered Set Aggregate Function '{}'", ordered_set_udaf.inner().name())
     }
     fn register_udf(&mut self, udf: Arc<ScalarUDF>) -> Result<Option<Arc<ScalarUDF>>> {
         plan_err!("No function registry provided to deserialize, so can not deserialize User Defined Function '{}'", udf.inner().name())
