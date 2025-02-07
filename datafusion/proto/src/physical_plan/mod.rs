@@ -357,6 +357,19 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
+                let partition_keys = window_agg
+                    .partition_keys
+                    .iter()
+                    .map(|expr| {
+                        parse_physical_expr(
+                            expr,
+                            registry,
+                            input.schema().as_ref(),
+                            extension_codec,
+                        )
+                    })
+                    .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?;
+
                 if let Some(input_order_mode) = window_agg.input_order_mode.as_ref() {
                     let input_order_mode = match input_order_mode {
                         window_agg_exec_node::InputOrderMode::Linear(_) => {
@@ -376,13 +389,13 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         physical_window_expr,
                         input,
                         input_order_mode,
-                        true,
+                        !partition_keys.is_empty(),
                     )?))
                 } else {
                     Ok(Arc::new(WindowAggExec::try_new(
                         physical_window_expr,
                         input,
-                        true,
+                        !partition_keys.is_empty(),
                     )?))
                 }
             }

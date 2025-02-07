@@ -681,7 +681,7 @@ async fn run_window_test(
         )?],
         exec2,
         search_mode.clone(),
-        true,
+        false,
     )?) as _;
     let task_ctx = ctx.task_ctx();
     let collected_usual = collect(usual_window_exec, task_ctx.clone()).await?;

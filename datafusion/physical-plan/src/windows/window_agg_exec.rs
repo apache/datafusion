@@ -144,10 +144,16 @@ impl WindowAggExec {
         if !self.can_repartition {
             vec![]
         } else {
-            self.window_expr
+            let all_partition_keys = self
+                .window_expr()
                 .iter()
-                .min_by_key(|s| s.partition_by().len())
-                .map_or_else(Vec::new, |expr| expr.partition_by().to_vec())
+                .map(|expr| expr.partition_by().to_vec())
+                .collect::<Vec<_>>();
+
+            all_partition_keys
+                .into_iter()
+                .min_by_key(|s| s.len())
+                .unwrap_or_else(Vec::new)
         }
     }
 }

@@ -379,6 +379,10 @@ pub(crate) fn window_equivalence_properties(
 pub fn get_best_fitting_window(
     window_exprs: &[Arc<dyn WindowExpr>],
     input: &Arc<dyn ExecutionPlan>,
+    // These are the partition keys used during repartitioning.
+    // They are either the same with `window_expr`'s PARTITION BY columns,
+    // or it is empty if partitioning is not desirable for this windowing operator.
+    physical_partition_keys: &[Arc<dyn PhysicalExpr>],
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     // Contains at least one window expr and all of the partition by and order by sections
     // of the window_exprs are same.
@@ -422,7 +426,7 @@ pub fn get_best_fitting_window(
             window_expr,
             Arc::clone(input),
             input_order_mode,
-            true,
+            !physical_partition_keys.is_empty(),
         )?) as _))
     } else if input_order_mode != InputOrderMode::Sorted {
         // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
@@ -434,7 +438,7 @@ pub fn get_best_fitting_window(
         Ok(Some(Arc::new(WindowAggExec::try_new(
             window_expr,
             Arc::clone(input),
-            true,
+            !physical_partition_keys.is_empty(),
         )?) as _))
     }
 }
