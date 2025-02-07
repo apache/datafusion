@@ -908,3 +908,27 @@ doc_comment::doctest!(
     "../../../docs/source/library-user-guide/custom-table-providers.md",
     library_user_guide_custom_table_providers
 );
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/extending-operators.md",
+    library_user_guide_extending_operators
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/extensions.md",
+    library_user_guide_extensions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/index.md",
+    library_user_guide_index
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/profiling.md",
+    library_user_guide_profiling
+);
