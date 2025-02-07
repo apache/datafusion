@@ -524,22 +524,17 @@ This will allow you to use the custom table provider in DataFusion. For example,
 
 use datafusion::execution::context::SessionContext;
 
-impl Default for CustomDataSource {
-    fn default() -> Self {
-        CustomDataSource {
-            inner: Arc::new(Mutex::new(CustomDataSourceInner {
-                data: Default::default(),
-                bank_account_index: Default::default(),
-            })),
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let custom_table_provider = CustomDataSource::default();
+    let custom_table_provider = CustomDataSource {
+        inner: Arc::new(Mutex::new(CustomDataSourceInner {
+            data: Default::default(),
+            bank_account_index: Default::default(),
+        })),
+    };
+
     ctx.register_table("customers", Arc::new(custom_table_provider));
     let df = ctx.sql("SELECT id, bank_account FROM customers").await?;
 
