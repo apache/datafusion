@@ -875,12 +875,6 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/api-health.md",
-    library_user_guide_api_health
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
     "../../../docs/source/library-user-guide/using-the-sql-api.md",
     library_user_guide_sql_api
 );
@@ -895,6 +889,12 @@ doc_comment::doctest!(
 doc_comment::doctest!(
     "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
     library_user_guide_dataframe_api
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/api-health.md",
+    library_user_guide_api_health
 );
 
 #[cfg(doctest)]
