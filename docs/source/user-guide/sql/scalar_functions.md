@@ -4340,7 +4340,7 @@ sha512(expression)
 Computes the XXHash32 hash of a binary string.
 
 ```
-xxhash32(expression)
+xxhash32(expression [,seed])
 ```
 
 #### Arguments
@@ -4363,7 +4363,7 @@ xxhash32(expression)
 Computes the XXHash64 hash of a binary string.
 
 ```
-xxhash64(expression)
+xxhash64(expression [,seed])
 ```
 
 #### Arguments

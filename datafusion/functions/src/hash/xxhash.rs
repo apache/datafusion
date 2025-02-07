@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, AsArray, BinaryArray, LargeBinaryArray, LargeStringArray, StringArray, StringBuilder};
+use arrow::array::{
+    Array, AsArray, BinaryArray, LargeBinaryArray, LargeStringArray, StringArray,
+    StringBuilder,
+};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Binary, Int64, LargeBinary, LargeUtf8, Utf8, Utf8View};
-use datafusion_common::{plan_err,exec_err, internal_err, Result, ScalarValue};
+use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
@@ -130,17 +133,11 @@ impl ScalarUDFImpl for XxHash32Func {
                 if *seed >= 0 && *seed <= u32::MAX as i64 {
                     *seed as u32
                 } else {
-                    return exec_err!(
-                        "Seed value out of range for UInt32: {}",
-                        seed
-                    );
+                    return exec_err!("Seed value out of range for UInt32: {}", seed);
                 }
             } else {
                 let actual_type = format!("{:?}", &args[1]);
-                return exec_err!(
-                    "Expected a Int64 seed value, but got {}",
-                    actual_type
-                );
+                return exec_err!("Expected a Int64 seed value, but got {}", actual_type);
             }
         } else {
             0 // Default seed value
@@ -294,17 +291,11 @@ impl ScalarUDFImpl for XxHash64Func {
                 if *seed >= 0 {
                     *seed as u64
                 } else {
-                    return exec_err!(
-                        "Seed value out of range for UInt64: {}",
-                        seed
-                    );
+                    return exec_err!("Seed value out of range for UInt64: {}", seed);
                 }
             } else {
                 let actual_type = format!("{:?}", &args[1]);
-                return exec_err!(
-                    "Expected a Int64 seed value, but got {}",
-                    actual_type
-                );
+                return exec_err!("Expected a Int64 seed value, but got {}", actual_type);
             }
         } else {
             0 // Default seed value
@@ -344,10 +335,7 @@ impl ScalarUDFImpl for XxHash64Func {
                 }
                 _ => {
                     let actual_type = format!("{:?}", scalar);
-                    return exec_err!(
-                        "Unsupported scalar type: {}",
-                        actual_type
-                    );
+                    return exec_err!("Unsupported scalar type: {}", actual_type);
                 }
             },
         };
@@ -410,7 +398,7 @@ fn process_array<T: Hasher>(
                 )?);
             }
         }
-        
+
         Utf8 => {
             let string_array = array.as_any().downcast_ref::<StringArray>().unwrap();
             for i in 0..array.len() {
@@ -428,7 +416,8 @@ fn process_array<T: Hasher>(
         }
 
         LargeUtf8 => {
-            let large_string_array = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            let large_string_array =
+                array.as_any().downcast_ref::<LargeStringArray>().unwrap();
             for i in 0..array.len() {
                 if array.is_null(i) {
                     hash_results.append_value(String::new());
@@ -465,7 +454,11 @@ fn process_array<T: Hasher>(
                         .unwrap()
                         .value(i)
                 };
-                hash_results.append_value(hash_value(value, &mut hasher, hash_type.clone())?);
+                hash_results.append_value(hash_value(
+                    value,
+                    &mut hasher,
+                    hash_type.clone(),
+                )?);
             }
         }
 
