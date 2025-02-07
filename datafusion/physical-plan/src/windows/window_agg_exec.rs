@@ -34,6 +34,7 @@ use crate::{
     ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
+
 use arrow::array::ArrayRef;
 use arrow::compute::{concat, concat_batches};
 use arrow::datatypes::SchemaRef;
@@ -44,6 +45,7 @@ use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+
 use futures::{ready, Stream, StreamExt};
 
 /// Window execution plan
@@ -118,10 +120,10 @@ impl WindowAggExec {
     fn compute_properties(
         schema: SchemaRef,
         input: &Arc<dyn ExecutionPlan>,
-        window_expr: &[Arc<dyn WindowExpr>],
+        window_exprs: &[Arc<dyn WindowExpr>],
     ) -> PlanProperties {
         // Calculate equivalence properties:
-        let eq_properties = window_equivalence_properties(&schema, input, window_expr);
+        let eq_properties = window_equivalence_properties(&schema, input, window_exprs);
 
         // Get output partitioning:
         // Because we can have repartitioning using the partition keys this

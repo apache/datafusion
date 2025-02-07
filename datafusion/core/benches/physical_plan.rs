@@ -33,7 +33,7 @@ use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMerge
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
-    memory::MemoryExec,
+    memory::MemorySourceConfig,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -55,13 +55,13 @@ fn sort_preserving_merge_operator(
         })
         .collect::<LexOrdering>();
 
-    let exec = MemoryExec::try_new(
+    let exec = MemorySourceConfig::try_new_exec(
         &batches.into_iter().map(|rb| vec![rb]).collect::<Vec<_>>(),
         schema,
         None,
     )
     .unwrap();
-    let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+    let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
     let task_ctx = session_ctx.task_ctx();
     let rt = Runtime::new().unwrap();
     rt.block_on(collect(merge, task_ctx)).unwrap();

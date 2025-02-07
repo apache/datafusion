@@ -18,7 +18,7 @@
 extern crate criterion;
 
 use arrow::array::builder::StringBuilder;
-use arrow::array::{ArrayRef, AsArray, Int64Array, StringArray};
+use arrow::array::{ArrayRef, AsArray, Int64Array, StringArray, StringViewArray};
 use arrow::compute::cast;
 use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
@@ -141,6 +141,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("regexp_like_1000 utf8view", |b| {
+        let mut rng = rand::thread_rng();
+        let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
+        let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
+        let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
+
+        b.iter(|| {
+            black_box(
+                regexp_like(&[Arc::clone(&data), Arc::clone(&regex), Arc::clone(&flags)])
+                    .expect("regexp_like should work on valid values"),
+            )
+        })
+    });
+
     c.bench_function("regexp_match_1000", |b| {
         let mut rng = rand::thread_rng();
         let data = Arc::new(data(&mut rng)) as ArrayRef;
@@ -149,7 +163,25 @@ fn criterion_benchmark(c: &mut Criterion) {
 
         b.iter(|| {
             black_box(
-                regexp_match::<i32>(&[
+                regexp_match(&[
+                    Arc::clone(&data),
+                    Arc::clone(&regex),
+                    Arc::clone(&flags),
+                ])
+                .expect("regexp_match should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("regexp_match_1000 utf8view", |b| {
+        let mut rng = rand::thread_rng();
+        let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
+        let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
+        let flags = cast(&flags(&mut rng), &DataType::Utf8View).unwrap();
+
+        b.iter(|| {
+            black_box(
+                regexp_match(&[
                     Arc::clone(&data),
                     Arc::clone(&regex),
                     Arc::clone(&flags),
@@ -174,6 +206,29 @@ fn criterion_benchmark(c: &mut Criterion) {
                     data.as_string::<i32>(),
                     regex.as_string::<i32>(),
                     replacement.as_string::<i32>(),
+                    Some(&flags),
+                )
+                .expect("regexp_replace should work on valid values"),
+            )
+        })
+    });
+
+    c.bench_function("regexp_replace_1000 utf8view", |b| {
+        let mut rng = rand::thread_rng();
+        let data = cast(&data(&mut rng), &DataType::Utf8View).unwrap();
+        let regex = cast(&regex(&mut rng), &DataType::Utf8View).unwrap();
+        // flags are not allowed to be utf8view according to the function
+        let flags = Arc::new(flags(&mut rng)) as ArrayRef;
+        let replacement = Arc::new(StringViewArray::from_iter_values(
+            iter::repeat("XX").take(1000),
+        ));
+
+        b.iter(|| {
+            black_box(
+                regexp_replace::<i32, _, _>(
+                    data.as_string_view(),
+                    regex.as_string_view(),
+                    &replacement,
                     Some(&flags),
                 )
                 .expect("regexp_replace should work on valid values"),

@@ -56,6 +56,8 @@ DataFusion's SQL implementation is tested using [sqllogictest](https://github.co
 
 Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.
 
+DataFusion has integrated [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the [README](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite) file for instructions.
+
 ## Extended Tests
 
 In addition to the standard CI test suite that is run on all PRs prior to merge,
@@ -67,6 +69,7 @@ portions of the entire [sqlite test suite].
 
 [extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
 [sqlite test suite]: https://www.sqlite.org/sqllogictest/dir?ci=tip
+
 
 ## Rust Integration Tests
 

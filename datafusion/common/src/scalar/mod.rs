@@ -40,6 +40,8 @@ use crate::cast::{
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::buffer::ScalarBuffer;
 use arrow::compute::kernels::numeric::*;
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow::{
@@ -54,7 +56,6 @@ use arrow::{
         UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
     },
 };
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use arrow_schema::{UnionFields, UnionMode};
 
 use crate::format::DEFAULT_CAST_OPTIONS;
@@ -3958,12 +3959,11 @@ mod tests {
     };
 
     use crate::assert_batches_eq;
-    use arrow::buffer::OffsetBuffer;
+    use arrow::array::{types::Float64Type, NullBufferBuilder};
+    use arrow::buffer::{Buffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
-    use arrow_array::types::Float64Type;
-    use arrow_buffer::{Buffer, NullBufferBuilder};
     use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;

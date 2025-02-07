@@ -31,7 +31,6 @@ use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-
 /// This rule inspects [`ExecutionPlan`]'s and pushes down the fetch limit from
 /// the parent to the child if applicable.
 #[derive(Default, Debug)]
@@ -248,7 +247,15 @@ pub fn pushdown_limit_helper(
             }
         } else {
             // Add fetch or a `LimitExec`:
-            global_state.satisfied = true;
+            // If the plan's children have limit and the child's limit < parent's limit, we shouldn't change the global state to true,
+            // because the children limit will be overridden if the global state is changed.
+            if !pushdown_plan
+                .children()
+                .iter()
+                .any(|&child| extract_limit(child).is_some())
+            {
+                global_state.satisfied = true;
+            }
             pushdown_plan = if let Some(plan_with_fetch) = maybe_fetchable {
                 if global_skip > 0 {
                     add_global_limit(plan_with_fetch, global_skip, Some(global_fetch))

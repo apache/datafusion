@@ -21,7 +21,7 @@ use parquet::file::metadata::RowGroupMetaData;
 
 /// A selection of rows and row groups within a ParquetFile to decode.
 ///
-/// A `ParquetAccessPlan` is used to limit the row groups and data pages a `ParquetExec`
+/// A `ParquetAccessPlan` is used to limit the row groups and data pages a `DataSourceExec`
 /// will read and decode to improve performance.
 ///
 /// Note that page level pruning based on ArrowPredicate is applied after all of
