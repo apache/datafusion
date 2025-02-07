@@ -1242,7 +1242,7 @@ fn lookup_join_hashmap(
     offset: JoinHashMapOffset,
 ) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
     let (probe_indices, build_indices, next_offset) = build_hashmap
-        .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
+        .get_matched_indices_with_limit_offset(hashes_buffer, limit, offset);
 
     let build_indices: UInt64Array = build_indices.into();
     let probe_indices: UInt32Array = probe_indices.into();
