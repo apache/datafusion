@@ -156,8 +156,11 @@ Did you mean 'first_value'?
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type
 create table foo as values (1), ('foo');
 
-query error DataFusion error: Error during planning: Execution error: User\-defined coercion failed with "Error during planning: The substr function requires 2 or 3 arguments, but got 1\."
+query error
 select 1 group by substr('');
+----
+DataFusion error: Error during planning: Execution error: Function 'substr' user-defined coercion failed with "Error during planning: The substr function requires 2 or 3 arguments, but got 1."
+
 
 # Error in filter should be reported
 query error Divide by zero
