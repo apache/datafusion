@@ -39,7 +39,7 @@ In the following example, we'll implement an in memory catalog, starting with th
 
 The `MemorySchemaProvider` is a simple implementation of the `SchemaProvider` trait. It stores state (i.e. tables) in a `DashMap`, which then underlies the `SchemaProvider` trait.
 
-```fixed
+```rust
 use std::sync::Arc;
 use dashmap::DashMap;
 use datafusion::catalog::{TableProvider, SchemaProvider};
@@ -54,7 +54,7 @@ pub struct MemorySchemaProvider {
 
 Then we implement the `SchemaProvider` trait for `MemorySchemaProvider`.
 
-```fixed
+```rust
 # use std::sync::Arc;
 # use dashmap::DashMap;
 # use datafusion::catalog::TableProvider;
@@ -111,7 +111,7 @@ impl SchemaProvider for MemorySchemaProvider {
 
 Without getting into a `CatalogProvider` implementation, we can create a `MemorySchemaProvider` and register `TableProvider`s with it.
 
-```fixed
+```rust
 # use std::sync::Arc;
 # use dashmap::DashMap;
 # use datafusion::catalog::TableProvider;
@@ -206,7 +206,7 @@ It's often useful to fetch metadata about which tables are in a schema, from a r
 
 The trait is roughly the same except for the `table` method, and the addition of the `#[async_trait]` attribute.
 
-```fixed
+```rust
 # use async_trait::async_trait;
 # use std::sync::Arc;
 # use datafusion::catalog::{TableProvider, SchemaProvider};
@@ -233,7 +233,7 @@ impl SchemaProvider for Schema {
 
 As mentioned, the `CatalogProvider` can manage the schemas in a catalog, and the `MemoryCatalogProvider` is a simple implementation of the `CatalogProvider` trait. It stores schemas in a `DashMap`. With that the `CatalogProvider` trait can be implemented.
 
-```fixed
+```rust
 use std::any::Any;
 use std::sync::Arc;
 use dashmap::DashMap;
@@ -283,20 +283,23 @@ impl CatalogProvider for MemoryCatalogProvider {
 }
 ```
 
-Again, this is fairly straightforward, as there's an underlying data structure to store the state, via key-value pairs.
-
+Again, this is fairly straightforward, as there's an underlying data structure to store the state, via key-value pairs. With that the `CatalogProviderList` trait can be implemented.
 ## Implementing `MemoryCatalogProviderList`
 
-```tofix
+```rust
+
+use std::any::Any;
+use std::sync::Arc;
+use dashmap::DashMap;
+use datafusion::catalog::{CatalogProviderList, CatalogProvider};
+use datafusion::common::Result;
+
+#[derive(Debug)]
 pub struct MemoryCatalogProviderList {
     /// Collection of catalogs containing schemas and ultimately TableProviders
     pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
 }
-```
 
-With that the `CatalogProviderList` trait can be implemented.
-
-```tofix
 impl CatalogProviderList for MemoryCatalogProviderList {
     fn as_any(&self) -> &dyn Any {
         self
