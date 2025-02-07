@@ -256,6 +256,10 @@ impl FileSource for ArrowSource {
     fn file_type(&self) -> &str {
         "arrow"
     }
+
+    fn supports_repartition(&self, _config: &FileScanConfig) -> bool {
+        false
+    }
 }
 
 /// The struct arrow that implements `[FileOpener]` trait
