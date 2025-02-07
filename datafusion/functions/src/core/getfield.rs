@@ -181,7 +181,8 @@ impl ScalarUDFImpl for GetFieldFunc {
             return Ok(ColumnarValue::Scalar(ScalarValue::Null));
         }
 
-        let arrays = ColumnarValue::values_to_arrays(&[base.clone(), field_name.clone()])?;
+        let arrays =
+            ColumnarValue::values_to_arrays(&[base.clone(), field_name.clone()])?;
         let array = Arc::clone(&arrays[0]);
 
         let name = match field_name {
