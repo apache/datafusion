@@ -31,7 +31,7 @@ use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
-    CsvExec, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
+    CsvSource, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -53,10 +53,11 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
+use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
@@ -410,9 +411,10 @@ impl FileFormat for CsvFormat {
     async fn create_physical_plan(
         &self,
         state: &SessionState,
-        conf: FileScanConfig,
+        mut conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        conf.file_compression_type = self.options.compression.into();
         // Consult configuration options for default values
         let has_header = self
             .options
@@ -422,18 +424,17 @@ impl FileFormat for CsvFormat {
             .options
             .newlines_in_values
             .unwrap_or(state.config_options().catalog.newlines_in_values);
+        conf.new_lines_in_values = newlines_in_values;
 
-        let exec = CsvExec::builder(conf)
-            .with_has_header(has_header)
-            .with_delimeter(self.options.delimiter)
-            .with_quote(self.options.quote)
-            .with_terminator(self.options.terminator)
-            .with_escape(self.options.escape)
-            .with_comment(self.options.comment)
-            .with_newlines_in_values(newlines_in_values)
-            .with_file_compression_type(self.options.compression.into())
-            .build();
-        Ok(Arc::new(exec))
+        let source = Arc::new(
+            CsvSource::new(has_header, self.options.delimiter, self.options.quote)
+                .with_escape(self.options.escape)
+                .with_terminator(self.options.terminator)
+                .with_comment(self.options.comment),
+        );
+        conf = conf.with_source(source);
+
+        Ok(conf.new_exec())
     }
 
     async fn create_writer_physical_plan(
@@ -471,6 +472,10 @@ impl FileFormat for CsvFormat {
         let sink = Arc::new(CsvSink::new(conf, writer_options));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        Arc::new(CsvSource::default())
     }
 }
 
@@ -1202,7 +1207,7 @@ mod tests {
     }
 
     /// Explain the `sql` query under `ctx` to make sure the underlying csv scan is parallelized
-    /// e.g. "CsvExec: file_groups={2 groups:" in plan means 2 CsvExec runs concurrently
+    /// e.g. "DataSourceExec: file_groups={2 groups:" in plan means 2 DataSourceExec runs concurrently
     async fn count_query_csv_partitions(
         ctx: &SessionContext,
         sql: &str,
@@ -1211,7 +1216,7 @@ mod tests {
         let result = df.collect().await?;
         let plan = format!("{}", &pretty_format_batches(&result)?);
 
-        let re = Regex::new(r"CsvExec: file_groups=\{(\d+) group").unwrap();
+        let re = Regex::new(r"DataSourceExec: file_groups=\{(\d+) group").unwrap();
 
         if let Some(captures) = re.captures(&plan) {
             if let Some(match_) = captures.get(1) {
@@ -1220,7 +1225,7 @@ mod tests {
             }
         }
 
-        internal_err!("query contains no CsvExec")
+        internal_err!("query contains no DataSourceExec")
     }
 
     #[rstest(n_partitions, case(1), case(2), case(3), case(4))]

@@ -34,9 +34,8 @@ use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::get_writer_schema;
-use crate::datasource::physical_plan::parquet::{
-    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
-};
+use crate::datasource::physical_plan::parquet::can_expr_be_pushed_down_with_schemas;
+use crate::datasource::physical_plan::parquet::source::ParquetSource;
 use crate::datasource::physical_plan::{FileGroupDisplay, FileSink, FileSinkConfig};
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
@@ -65,6 +64,7 @@ use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
+use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -396,25 +396,34 @@ impl FileFormat for ParquetFormat {
     async fn create_physical_plan(
         &self,
         _state: &SessionState,
-        conf: FileScanConfig,
+        mut conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut builder =
-            ParquetExecBuilder::new_with_options(conf, self.options.clone());
+        let mut predicate = None;
+        let mut metadata_size_hint = None;
 
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
         if self.enable_pruning() {
-            if let Some(predicate) = filters.cloned() {
-                builder = builder.with_predicate(predicate);
+            if let Some(pred) = filters.cloned() {
+                predicate = Some(pred);
             }
         }
-        if let Some(metadata_size_hint) = self.metadata_size_hint() {
-            builder = builder.with_metadata_size_hint(metadata_size_hint);
+        if let Some(metadata) = self.metadata_size_hint() {
+            metadata_size_hint = Some(metadata);
         }
 
-        Ok(builder.build_arc())
+        let mut source = ParquetSource::new(self.options.clone());
+
+        if let Some(predicate) = predicate {
+            source = source.with_predicate(Arc::clone(&conf.file_schema), predicate);
+        }
+        if let Some(metadata_size_hint) = metadata_size_hint {
+            source = source.with_metadata_size_hint(metadata_size_hint)
+        }
+        conf = conf.with_source(Arc::new(source));
+        Ok(conf.new_exec())
     }
 
     async fn create_writer_physical_plan(
@@ -452,6 +461,10 @@ impl FileFormat for ParquetFormat {
         } else {
             FilePushdownSupport::NotSupportedForFilter
         })
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        Arc::new(ParquetSource::default())
     }
 }
 
