@@ -468,10 +468,10 @@ fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = "Dml: op=[Insert Into] table=[person]\
-                \n  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name, \
+                \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
                         CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
                         CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
-                \n    Values: (Int64(1), Utf8(\"Alan\"), Utf8(\"Turing\"))";
+                \n    Values: (CAST(Int64(1) AS UInt32), Utf8(\"Alan\"), Utf8(\"Turing\"))";
     quick_test(sql, plan);
 }
 
@@ -480,8 +480,8 @@ fn plan_insert_no_target_columns() {
     let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
     let plan = r#"
 Dml: op=[Insert Into] table=[test_decimal]
-  Projection: CAST(column1 AS Int32) AS id, CAST(column2 AS Decimal128(10, 2)) AS price
-    Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
+  Projection: column1 AS id, column2 AS price
+    Values: (CAST(Int64(1) AS Int32), CAST(Int64(2) AS Decimal128(10, 2))), (CAST(Int64(3) AS Int32), CAST(Int64(4) AS Decimal128(10, 2)))
     "#
     .trim();
     quick_test(sql, plan);
@@ -499,11 +499,11 @@ Dml: op=[Insert Into] table=[test_decimal]
 )]
 #[case::target_column_count_mismatch(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
-    "Error during planning: Column count doesn't match insert query!"
+    "Error during planning: Inconsistent data length across values list: got 2 values in row 0 but expected 3"
 )]
 #[case::source_column_count_mismatch(
     "INSERT INTO person VALUES ($1, $2)",
-    "Error during planning: Column count doesn't match insert query!"
+    "Error during planning: Inconsistent data length across values list: got 2 values in row 0 but expected 8"
 )]
 #[case::extra_placeholder(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2, $3, $4)",
