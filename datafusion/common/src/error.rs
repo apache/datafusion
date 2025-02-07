@@ -136,6 +136,12 @@ pub enum DataFusionError {
     /// human-readable messages, and locations in the source query that relate
     /// to the error in some way.
     Diagnostic(Box<Diagnostic>, Box<DataFusionError>),
+    /// A [`DataFusionError`] which shares an underlying [`DataFusionError`].
+    ///
+    /// This is useful when the same underlying [`DataFusionError`] is passed
+    /// to multiple receivers. For example, when the source of a repartition
+    /// errors and the error is propagated to multiple consumers.
+    Shared(Arc<DataFusionError>),
 }
 
 #[macro_export]
@@ -262,6 +268,17 @@ impl From<DataFusionError> for ArrowError {
     }
 }
 
+impl From<&Arc<DataFusionError>> for DataFusionError {
+    fn from(e: &Arc<DataFusionError>) -> Self {
+        if let DataFusionError::Shared(e_inner) = e.as_ref() {
+            // don't re-wrap
+            DataFusionError::Shared(Arc::clone(e_inner))
+        } else {
+            DataFusionError::Shared(Arc::clone(e))
+        }
+    }
+}
+
 #[cfg(feature = "parquet")]
 impl From<ParquetError> for DataFusionError {
     fn from(e: ParquetError) -> Self {
@@ -298,7 +315,16 @@ impl From<ParserError> for DataFusionError {
 
 impl From<GenericError> for DataFusionError {
     fn from(err: GenericError) -> Self {
-        DataFusionError::External(err)
+        // If the error is already a DataFusionError, not wrapping it.
+        if err.is::<DataFusionError>() {
+            if let Ok(e) = err.downcast::<DataFusionError>() {
+                *e
+            } else {
+                unreachable!()
+            }
+        } else {
+            DataFusionError::External(err)
+        }
     }
 }
 
@@ -334,6 +360,7 @@ impl Error for DataFusionError {
             DataFusionError::Context(_, e) => Some(e.as_ref()),
             DataFusionError::Substrait(_) => None,
             DataFusionError::Diagnostic(_, e) => Some(e.as_ref()),
+            DataFusionError::Shared(e) => Some(e.as_ref()),
         }
     }
 }
@@ -448,6 +475,7 @@ impl DataFusionError {
             DataFusionError::Context(_, _) => "",
             DataFusionError::Substrait(_) => "Substrait error: ",
             DataFusionError::Diagnostic(_, _) => "",
+            DataFusionError::Shared(_) => "",
         }
     }
 
@@ -489,6 +517,7 @@ impl DataFusionError {
             }
             DataFusionError::Substrait(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::Diagnostic(_, ref err) => Cow::Owned(err.to_string()),
+            DataFusionError::Shared(ref desc) => Cow::Owned(desc.to_string()),
         }
     }
 
@@ -713,7 +742,7 @@ pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionE
 mod test {
     use std::sync::Arc;
 
-    use crate::error::DataFusionError;
+    use crate::error::{DataFusionError, GenericError};
     use arrow::error::ArrowError;
 
     #[test]
@@ -865,6 +894,43 @@ mod test {
             res.strip_backtrace(),
             "Error during planning: Err \"extra1\" \"extra2\""
         );
+    }
+
+    #[test]
+    fn external_error() {
+        // assert not wrapping DataFusionError
+        let generic_error: GenericError =
+            Box::new(DataFusionError::Plan("test".to_string()));
+        let datafusion_error: DataFusionError = generic_error.into();
+        println!("{}", datafusion_error.strip_backtrace());
+        assert_eq!(
+            datafusion_error.strip_backtrace(),
+            "Error during planning: test"
+        );
+
+        // assert wrapping other Error
+        let generic_error: GenericError =
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let datafusion_error: DataFusionError = generic_error.into();
+        println!("{}", datafusion_error.strip_backtrace());
+        assert_eq!(
+            datafusion_error.strip_backtrace(),
+            "External error: io error"
+        );
+    }
+
+    #[test]
+    fn external_error_no_recursive() {
+        let generic_error_1: GenericError =
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, "io error"));
+        let external_error_1: DataFusionError = generic_error_1.into();
+        let generic_error_2: GenericError = Box::new(external_error_1);
+        let external_error_2: DataFusionError = generic_error_2.into();
+
+        println!("{}", external_error_2);
+        assert!(external_error_2
+            .to_string()
+            .starts_with("External error: io error"));
     }
 
     /// Model what happens when implementing SendableRecordBatchStream:
