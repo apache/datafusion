@@ -813,14 +813,14 @@ approx_median(expression)
 Returns the approximate percentile of input values using the t-digest algorithm.
 
 ```
-approx_percentile_cont(percentile, centroids) WITHIN GROUP (expression [ORDER BY expression])
+approx_percentile_cont(percentile, centroids) WITHIN GROUP (ORDER BY expression)
 ```
 
 #### Arguments
 
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
 - **centroids**: Number of centroids to use in the t-digest algorithm. _Default is 100_. A higher number results in more accurate approximation but requires more memory.
-- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -838,14 +838,14 @@ approx_percentile_cont(percentile, centroids) WITHIN GROUP (expression [ORDER BY
 Returns the weighted approximate percentile of input values using the t-digest algorithm.
 
 ```
-approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (expression [ORDER BY expression])
+approx_percentile_cont_with_weight(weight, percentile) WITHIN GROUP (ORDER BY expression)
 ```
 
 #### Arguments
 
+- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 - **weight**: Expression to use as weight. Can be a constant, column, or function, and any combination of arithmetic operators.
 - **percentile**: Percentile to compute. Must be a float value between 0 and 1 (inclusive).
-- **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
