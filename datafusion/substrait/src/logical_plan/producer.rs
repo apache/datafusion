@@ -2541,7 +2541,8 @@ mod test {
         from_substrait_named_struct, from_substrait_type_without_names,
         DefaultSubstraitConsumer,
     };
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
+    use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+    use datafusion::arrow;
     use datafusion::arrow::array::{
         GenericListArray, Int64Builder, MapBuilder, StringBuilder,
     };

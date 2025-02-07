@@ -1519,6 +1519,10 @@ pub struct ParquetScanExecNode {
     pub base_conf: ::core::option::Option<FileScanExecConf>,
     #[prost(message, optional, tag = "3")]
     pub predicate: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "4")]
+    pub parquet_options: ::core::option::Option<
+        super::datafusion_common::TableParquetOptions,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {

@@ -74,7 +74,7 @@ use tokio::task::JoinSet;
 /// [`required_input_distribution`]: ExecutionPlan::required_input_distribution
 /// [`required_input_ordering`]: ExecutionPlan::required_input_ordering
 pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
-    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     ///
     /// Implementation note: this method can just proxy to
     /// [`static_name`](ExecutionPlan::static_name) if no special action is
@@ -83,7 +83,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// range of use cases.
     fn name(&self) -> &str;
 
-    /// Short name for the ExecutionPlan, such as 'ParquetExec'.
+    /// Short name for the ExecutionPlan, such as 'DataSourceExec'.
     /// Like [`name`](ExecutionPlan::name) but can be called without an instance.
     fn static_name() -> &'static str
     where
@@ -600,10 +600,10 @@ impl Boundedness {
 ///     |_ on: [col1 ASC]
 ///     FilterExec [EmissionType::Incremental]
 ///       |_ pred: col2 > 100
-///       CsvExec [EmissionType::Incremental]
+///       DataSourceExec [EmissionType::Incremental]
 ///         |_ file: "data.csv"
 /// ```
-/// - CsvExec emits records incrementally as it reads from the file
+/// - DataSourceExec emits records incrementally as it reads from the file
 /// - FilterExec processes and emits filtered records incrementally as they arrive
 /// - SortExec must wait for all input records before it can emit the sorted result,
 ///   since it needs to see all values to determine their final order
@@ -778,7 +778,7 @@ impl PlanProperties {
     }
 
     /// Get schema of the node.
-    fn schema(&self) -> &SchemaRef {
+    pub(crate) fn schema(&self) -> &SchemaRef {
         self.eq_properties.schema()
     }
 }

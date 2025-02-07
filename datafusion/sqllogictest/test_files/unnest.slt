@@ -295,7 +295,7 @@ query error DataFusion error: Error during planning: unnest\(\) requires exactly
 select unnest();
 
 ## Unnest empty expression in from clause
-query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \)"\)
+query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 22"\)
 select * from unnest();
 
 
@@ -605,7 +605,7 @@ physical_plan
 03)----ProjectionExec: expr=[__unnest_placeholder(recursive_unnest_table.column3,depth=1)@0 as __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), column3@1 as column3]
 04)------UnnestExec
 05)--------ProjectionExec: expr=[column3@0 as __unnest_placeholder(recursive_unnest_table.column3), column3@0 as column3]
-06)----------MemoryExec: partitions=1, partition_sizes=[1]
+06)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 ## unnest->field_access->unnest->unnest
 query I?
@@ -663,7 +663,7 @@ physical_plan
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 05)--------UnnestExec
 06)----------ProjectionExec: expr=[column3@0 as __unnest_placeholder(recursive_unnest_table.column3), column3@0 as column3]
-07)------------MemoryExec: partitions=1, partition_sizes=[1]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 
@@ -901,6 +901,20 @@ logical_plan
 09)------------EmptyRelation
 physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), Column { relation: Some(Bare { table: "u" }), name: "column1" })
 
+# uncorrelated EXISTS with unnest
+query I
+SELECT 1
+WHERE EXISTS (SELECT unnest([2]))
+----
+1
+
+# EXISTS with unnest below correlation
+query I
+SELECT i
+FROM (VALUES (1), (3), (7)) AS t(i)
+WHERE EXISTS (SELECT 1 FROM unnest([2,3,4]) AS u(j) WHERE i + j = 6)
+----
+3
 
 ## Unnest in subquery
 query IIII

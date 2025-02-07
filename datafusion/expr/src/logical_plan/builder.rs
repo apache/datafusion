@@ -54,8 +54,7 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
-    FunctionalDependencies, Result, ScalarValue, TableReference, ToDFSchema,
-    UnnestOptions,
+    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -1518,27 +1517,10 @@ pub fn validate_unique_names<'a>(
 /// [`TypeCoercionRewriter::coerce_union`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/struct.TypeCoercionRewriter.html#method.coerce_union
 /// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
-    if left_plan.schema().fields().len() != right_plan.schema().fields().len() {
-        return plan_err!(
-            "UNION queries have different number of columns: \
-            left has {} columns whereas right has {} columns",
-            left_plan.schema().fields().len(),
-            right_plan.schema().fields().len()
-        );
-    }
-
-    // Temporarily use the schema from the left input and later rely on the analyzer to
-    // coerce the two schemas into a common one.
-
-    // Functional Dependencies doesn't preserve after UNION operation
-    let schema = (**left_plan.schema()).clone();
-    let schema =
-        Arc::new(schema.with_functional_dependencies(FunctionalDependencies::empty())?);
-
-    Ok(LogicalPlan::Union(Union {
-        inputs: vec![Arc::new(left_plan), Arc::new(right_plan)],
-        schema,
-    }))
+    Ok(LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+        Arc::new(left_plan),
+        Arc::new(right_plan),
+    ])?))
 }
 
 /// Create Projection
@@ -1620,7 +1602,7 @@ pub fn table_scan_with_filter_and_fetch(
     )
 }
 
-fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
+pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource { table_schema })
 }
@@ -1924,9 +1906,7 @@ pub fn unnest_with_options(
                         .extend(std::iter::repeat(index).take(transformed_columns.len()));
                     Ok(transformed_columns
                         .iter()
-                        .map(|(col, data_type)| {
-                            (col.relation.to_owned(), data_type.to_owned())
-                        })
+                        .map(|(col, field)| (col.relation.to_owned(), field.to_owned()))
                         .collect())
                 }
                 None => {
@@ -2212,6 +2192,7 @@ mod tests {
                         Column {
                             relation: Some(TableReference::Bare { table }),
                             name,
+                            spans: _,
                         },
                 },
                 _,

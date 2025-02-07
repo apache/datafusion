@@ -17,6 +17,8 @@
 
 //! [`SessionContext`] API for registering data sources and executing queries
 
+use datafusion_catalog::memory::MemorySchemaProvider;
+use datafusion_catalog::MemoryCatalogProvider;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::{Arc, Weak};
@@ -27,8 +29,6 @@ use crate::{
         CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
     },
     catalog_common::listing_schema::ListingSchemaProvider,
-    catalog_common::memory::MemorySchemaProvider,
-    catalog_common::MemoryCatalogProvider,
     dataframe::DataFrame,
     datasource::listing::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
@@ -1832,6 +1832,7 @@ mod tests {
     use crate::test_util::{plan_and_collect, populate_csv_partitions};
     use arrow_schema::{DataType, TimeUnit};
     use std::env;
+    use std::error::Error;
     use std::path::PathBuf;
 
     use datafusion_common_runtime::SpawnedTask;
@@ -2056,10 +2057,16 @@ mod tests {
             Err(DataFusionError::Plan(_))
         ));
 
-        assert!(matches!(
-            ctx.sql("select * from datafusion.public.test").await,
-            Err(DataFusionError::Plan(_))
-        ));
+        let err = ctx
+            .sql("select * from datafusion.public.test")
+            .await
+            .unwrap_err();
+        let err = err
+            .source()
+            .and_then(|err| err.downcast_ref::<DataFusionError>())
+            .unwrap();
+
+        assert!(matches!(err, &DataFusionError::Plan(_)));
 
         Ok(())
     }

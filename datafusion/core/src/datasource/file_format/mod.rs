@@ -50,6 +50,7 @@ use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_expr::Expr;
 use datafusion_physical_expr::PhysicalExpr;
 
+use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -154,6 +155,9 @@ pub trait FileFormat: Send + Sync + Debug {
     ) -> Result<FilePushdownSupport> {
         Ok(FilePushdownSupport::NoSupport)
     }
+
+    /// Return the related FileSource such as `CsvSource`, `JsonSource`, etc.
+    fn file_source(&self) -> Arc<dyn FileSource>;
 }
 
 /// An enum to distinguish between different states when determining if certain filters can be
@@ -425,6 +429,7 @@ pub fn transform_schema_to_view(schema: &Schema) -> Schema {
 }
 
 /// Coerces the file schema if the table schema uses a view type.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn coerce_file_schema_to_view_type(
     table_schema: &Schema,
     file_schema: &Schema,
@@ -489,6 +494,7 @@ pub fn transform_binary_to_string(schema: &Schema) -> Schema {
 /// If the table schema uses a string type, coerce the file schema to use a string type.
 ///
 /// See [parquet::ParquetFormat::binary_as_string] for details
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn coerce_file_schema_to_string_type(
     table_schema: &Schema,
     file_schema: &Schema,
@@ -593,11 +599,15 @@ pub(crate) mod test_util {
         let exec = format
             .create_physical_plan(
                 state,
-                FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema)
-                    .with_file_groups(file_groups)
-                    .with_statistics(statistics)
-                    .with_projection(projection)
-                    .with_limit(limit),
+                FileScanConfig::new(
+                    ObjectStoreUrl::local_filesystem(),
+                    file_schema,
+                    format.file_source(),
+                )
+                .with_file_groups(file_groups)
+                .with_statistics(statistics)
+                .with_projection(projection)
+                .with_limit(limit),
                 None,
             )
             .await?;

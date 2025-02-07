@@ -37,3 +37,14 @@ statement ok
 create table test_substr_base (
     col1 VARCHAR
 ) as values ('foo'), ('hello🌏世界'), ('💩'), ('ThisIsAVeryLongASCIIString'), (''), (NULL);
+
+
+# --------------------------------------
+# Setup test tables with date/time values to test coercion
+# --------------------------------------
+statement ok
+create table test_datetime_base as values
+  ('2024-08-09T12:13:14', '2024-08-09', '12:13:14'),
+  ('2024-08-09T12:13:15', '2024-09-09', '12:14:14'),
+  (NULL, NULL, NULL)
+;

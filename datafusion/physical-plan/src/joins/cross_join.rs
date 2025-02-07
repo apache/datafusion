@@ -411,12 +411,36 @@ fn stats_cartesian_product(
             distinct_count: s.distinct_count,
             min_value: s.min_value,
             max_value: s.max_value,
+            sum_value: s
+                .sum_value
+                .get_value()
+                // Cast the row count into the same type as any existing sum value
+                .and_then(|v| {
+                    Precision::<ScalarValue>::from(right_row_count)
+                        .cast_to(&v.data_type())
+                        .ok()
+                })
+                .map(|row_count| s.sum_value.multiply(&row_count))
+                .unwrap_or(Precision::Absent),
         })
-        .chain(right_col_stats.into_iter().map(|s| ColumnStatistics {
-            null_count: s.null_count.multiply(&left_row_count),
-            distinct_count: s.distinct_count,
-            min_value: s.min_value,
-            max_value: s.max_value,
+        .chain(right_col_stats.into_iter().map(|s| {
+            ColumnStatistics {
+                null_count: s.null_count.multiply(&left_row_count),
+                distinct_count: s.distinct_count,
+                min_value: s.min_value,
+                max_value: s.max_value,
+                sum_value: s
+                    .sum_value
+                    .get_value()
+                    // Cast the row count into the same type as any existing sum value
+                    .and_then(|v| {
+                        Precision::<ScalarValue>::from(left_row_count)
+                            .cast_to(&v.data_type())
+                            .ok()
+                    })
+                    .map(|row_count| s.sum_value.multiply(&row_count))
+                    .unwrap_or(Precision::Absent),
+            }
         }))
         .collect();
 
@@ -650,12 +674,14 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                 },
             ],
@@ -668,6 +694,7 @@ mod tests {
                 distinct_count: Precision::Exact(3),
                 max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
             }],
         };
@@ -682,18 +709,25 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(
+                        42 * right_row_count as i64,
+                    ))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3 * right_row_count),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(
+                        20 * left_row_count as i64,
+                    ))),
                     null_count: Precision::Exact(2 * left_row_count),
                 },
             ],
@@ -714,12 +748,14 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(42))),
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(3),
                 },
             ],
@@ -732,6 +768,7 @@ mod tests {
                 distinct_count: Precision::Exact(3),
                 max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
                 min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                sum_value: Precision::Exact(ScalarValue::Int64(Some(20))),
                 null_count: Precision::Exact(2),
             }],
         };
@@ -746,18 +783,23 @@ mod tests {
                     distinct_count: Precision::Exact(5),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(21))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(-4))),
+                    sum_value: Precision::Absent, // we don't know the row count on the right
                     null_count: Precision::Absent, // we don't know the row count on the right
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(1),
                     max_value: Precision::Exact(ScalarValue::from("x")),
                     min_value: Precision::Exact(ScalarValue::from("a")),
+                    sum_value: Precision::Absent,
                     null_count: Precision::Absent, // we don't know the row count on the right
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Exact(3),
                     max_value: Precision::Exact(ScalarValue::Int64(Some(12))),
                     min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                    sum_value: Precision::Exact(ScalarValue::Int64(Some(
+                        20 * left_row_count as i64,
+                    ))),
                     null_count: Precision::Exact(2 * left_row_count),
                 },
             ],

@@ -249,11 +249,11 @@
 //!             AnalyzerRules and      PhysicalPlanner          PhysicalOptimizerRules
 //!             OptimizerRules         creates ExecutionPlan    improve performance
 //!             rewrite plan
-//! ┌─────────────┐        ┌─────────────┐      ┌───────────────┐        ┌───────────────┐
-//! │Project      │        │Project(x, y)│      │ProjectExec    │        │ProjectExec    │
-//! │  TableScan  │──...──▶│  TableScan  │─────▶│  ...          │──...──▶│  ...          │
-//! │    ...      │        │    ...      │      │    ParquetExec│        │    ParquetExec│
-//! └─────────────┘        └─────────────┘      └───────────────┘        └───────────────┘
+//! ┌─────────────┐        ┌─────────────┐      ┌─────────────────┐        ┌─────────────────┐
+//! │Project      │        │Project(x, y)│      │ProjectExec      │        │ProjectExec      │
+//! │  TableScan  │──...──▶│  TableScan  │─────▶│  ...            │──...──▶│  ...            │
+//! │    ...      │        │    ...      │      │   DataSourceExec│        │   DataSourceExec│
+//! └─────────────┘        └─────────────┘      └─────────────────┘        └─────────────────┘
 //!
 //!  LogicalPlan            LogicalPlan         ExecutionPlan             ExecutionPlan
 //! ```
@@ -284,11 +284,11 @@
 //! such as schema │            ExecutionPlan
 //!                │
 //!                ▼
-//!   ┌─────────────────────────┐         ┌──────────────┐
-//!   │                         │         │              │
-//!   │impl TableProvider       │────────▶│ParquetExec   │
-//!   │                         │         │              │
-//!   └─────────────────────────┘         └──────────────┘
+//!   ┌─────────────────────────┐         ┌───────────────┐
+//!   │                         │         │               │
+//!   │impl TableProvider       │────────▶│DataSourceExec │
+//!   │                         │         │               │
+//!   └─────────────────────────┘         └───────────────┘
 //!         TableProvider
 //!         (built in or user provided)    ExecutionPlan
 //! ```
@@ -309,7 +309,7 @@
 //!
 //! [`ListingTable`]: crate::datasource::listing::ListingTable
 //! [`MemTable`]: crate::datasource::memory::MemTable
-//! [`StreamingTable`]: crate::datasource::streaming::StreamingTable
+//! [`StreamingTable`]: datafusion_catalog::streaming::StreamingTable
 //!
 //! ## Plan Representations
 //!
@@ -358,20 +358,20 @@
 //!            ExecutionPlan::execute             Calling next() on the
 //!            produces a stream                  stream produces the data
 //!
-//! ┌───────────────┐      ┌─────────────────────────┐         ┌────────────┐
-//! │ProjectExec    │      │impl                     │    ┌───▶│RecordBatch │
-//! │  ...          │─────▶│SendableRecordBatchStream│────┤    └────────────┘
-//! │    ParquetExec│      │                         │    │    ┌────────────┐
-//! └───────────────┘      └─────────────────────────┘    ├───▶│RecordBatch │
-//!               ▲                                       │    └────────────┘
-//! ExecutionPlan │                                       │         ...
-//!               │                                       │
-//!               │                                       │    ┌────────────┐
-//!             PhysicalOptimizerRules                    ├───▶│RecordBatch │
-//!             request information                       │    └────────────┘
-//!             such as partitioning                      │    ┌ ─ ─ ─ ─ ─ ─
-//!                                                       └───▶ None        │
-//!                                                            └ ─ ─ ─ ─ ─ ─
+//! ┌────────────────┐      ┌─────────────────────────┐         ┌────────────┐
+//! │ProjectExec     │      │impl                     │    ┌───▶│RecordBatch │
+//! │  ...           │─────▶│SendableRecordBatchStream│────┤    └────────────┘
+//! │  DataSourceExec│      │                         │    │    ┌────────────┐
+//! └────────────────┘      └─────────────────────────┘    ├───▶│RecordBatch │
+//!               ▲                                        │    └────────────┘
+//! ExecutionPlan │                                        │         ...
+//!               │                                        │
+//!               │                                        │    ┌────────────┐
+//!             PhysicalOptimizerRules                     ├───▶│RecordBatch │
+//!             request information                        │    └────────────┘
+//!             such as partitioning                       │    ┌ ─ ─ ─ ─ ─ ─
+//!                                                        └───▶ None        │
+//!                                                             └ ─ ─ ─ ─ ─ ─
 //! ```
 //!
 //! [`ExecutionPlan`]s process data using the [Apache Arrow] memory
@@ -442,14 +442,14 @@
 //!         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─      ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
 //!                            │                                               Step 1: Consumer
 //!         ▼                        ▼                           │               calls next()
-//! ┏━━━━━━━━━━━━━━┓     ┏━━━━━┻━━━━━━━━━━━━━┓      ┏━━━━━━━━━━━━━━━━━━━━━━━━┓
-//! ┃              ┃     ┃                   ┃      ┃                        ◀ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-//! ┃  DataSource  ┃     ┃                   ┃      ┃                        ┃
-//! ┃    (e.g.     ┃     ┃    FilterExec     ┃      ┃     ProjectionExec     ┃
-//! ┃ ParquetExec) ┃     ┃id IN (10, 20, 30) ┃      ┃date_bin('month', time) ┃
-//! ┃              ┃     ┃                   ┃      ┃                        ┣ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ▶
-//! ┃              ┃     ┃                   ┃      ┃                        ┃
-//! ┗━━━━━━━━━━━━━━┛     ┗━━━━━━━━━━━┳━━━━━━━┛      ┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+//! ┏━━━━━━━━━━━━━━━━┓     ┏━━━━━┻━━━━━━━━━━━━━┓      ┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+//! ┃                ┃     ┃                   ┃      ┃                        ◀ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+//! ┃  DataSource    ┃     ┃                   ┃      ┃                        ┃
+//! ┃    (e.g.       ┃     ┃    FilterExec     ┃      ┃     ProjectionExec     ┃
+//! ┃ ParquetSource) ┃     ┃id IN (10, 20, 30) ┃      ┃date_bin('month', time) ┃
+//! ┃                ┃     ┃                   ┃      ┃                        ┣ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ▶
+//! ┃                ┃     ┃                   ┃      ┃                        ┃
+//! ┗━━━━━━━━━━━━━━━━┛     ┗━━━━━━━━━━━┳━━━━━━━┛      ┗━━━━━━━━━━━━━━━━━━━━━━━━┛
 //!         │                  ▲                                 ▲          Step 6: ProjectionExec
 //!                            │     │                           │        computes date_trunc into a
 //!         └ ─ ─ ─ ─ ─ ─ ─ ─ ─       ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─          new RecordBatch returned
@@ -809,8 +809,9 @@ pub mod variable {
     pub use datafusion_expr::var_provider::{VarProvider, VarType};
 }
 
-#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod test;
+
 pub mod test_util;
 
 #[cfg(doctest)]

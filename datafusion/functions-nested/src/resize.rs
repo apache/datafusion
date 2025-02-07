@@ -18,11 +18,12 @@
 //! [`ScalarUDFImpl`] definitions for array_resize function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Capacities, MutableArrayData};
-use arrow_array::{
-    new_null_array, Array, ArrayRef, GenericListArray, Int64Array, OffsetSizeTrait,
+use arrow::array::{
+    new_null_array, Array, ArrayRef, Capacities, GenericListArray, Int64Array,
+    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
 };
-use arrow_buffer::{ArrowNativeType, NullBufferBuilder, OffsetBuffer};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::ArrowNativeType;
 use arrow_schema::DataType::{FixedSizeList, LargeList, List};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};

@@ -25,6 +25,7 @@ use datafusion_common::{
 use datafusion_common::{exec_datafusion_err, DataFusionError};
 use std::any::Any;
 
+use crate::utils::take_function_args;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl,
@@ -117,10 +118,9 @@ impl ScalarUDFImpl for ArrowCastFunc {
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         let nullable = args.nullables.iter().any(|&nullable| nullable);
 
-        // Length check handled in the signature
-        debug_assert_eq!(args.scalar_arguments.len(), 2);
+        let [_, type_arg] = take_function_args(self.name(), args.scalar_arguments)?;
 
-        args.scalar_arguments[1]
+        type_arg
             .and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
             .map_or_else(
                 || {

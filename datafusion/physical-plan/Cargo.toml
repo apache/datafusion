@@ -42,7 +42,6 @@ path = "src/lib.rs"
 ahash = { workspace = true }
 arrow = { workspace = true }
 arrow-array = { workspace = true }
-arrow-buffer = { workspace = true }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
@@ -68,7 +67,6 @@ tokio = { workspace = true }
 criterion = { version = "0.5", features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
-once_cell = "1.18.0"
 rand = { workspace = true }
 rstest = { workspace = true }
 rstest_reuse = "0.7.0"

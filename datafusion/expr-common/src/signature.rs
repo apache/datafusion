@@ -19,6 +19,7 @@
 //! and return types of functions in DataFusion.
 
 use std::fmt::Display;
+use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
@@ -236,9 +237,9 @@ pub enum ArrayFunctionSignature {
     /// The first argument should be non-list or list, and the second argument should be List/LargeList.
     /// The first argument's list dimension should be one dimension less than the second argument's list dimension.
     ElementAndArray,
-    /// Specialized Signature for Array functions of the form (List/LargeList, Index)
-    /// The first argument should be List/LargeList/FixedSizedList, and the second argument should be Int64.
-    ArrayAndIndex,
+    /// Specialized Signature for Array functions of the form (List/LargeList, Index+)
+    /// The first argument should be List/LargeList/FixedSizedList, and the next n arguments should be Int64.
+    ArrayAndIndexes(NonZeroUsize),
     /// Specialized Signature for Array functions of the form (List/LargeList, Element, Optional Index)
     ArrayAndElementAndOptionalIndex,
     /// Specialized Signature for ArrayEmpty and similar functions
@@ -265,8 +266,12 @@ impl Display for ArrayFunctionSignature {
             ArrayFunctionSignature::ElementAndArray => {
                 write!(f, "element, array")
             }
-            ArrayFunctionSignature::ArrayAndIndex => {
-                write!(f, "array, index")
+            ArrayFunctionSignature::ArrayAndIndexes(count) => {
+                write!(f, "array")?;
+                for _ in 0..count.get() {
+                    write!(f, ", index")?;
+                }
+                Ok(())
             }
             ArrayFunctionSignature::Array => {
                 write!(f, "array")
@@ -600,9 +605,13 @@ impl Signature {
     }
     /// Specialized Signature for ArrayElement and similar functions
     pub fn array_and_index(volatility: Volatility) -> Self {
+        Self::array_and_indexes(volatility, NonZeroUsize::new(1).expect("1 is non-zero"))
+    }
+    /// Specialized Signature for ArraySlice and similar functions
+    pub fn array_and_indexes(volatility: Volatility, count: NonZeroUsize) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::ArrayAndIndex,
+                ArrayFunctionSignature::ArrayAndIndexes(count),
             ),
             volatility,
         }
