@@ -902,3 +902,9 @@ doc_comment::doctest!(
     "../../../docs/source/library-user-guide/catalogs.md",
     library_user_guide_catalogs
 );
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/custom-table-providers.md",
+    library_user_guide_custom_table_providers
+);

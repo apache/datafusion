@@ -39,15 +39,80 @@ There are many different types of `SendableRecordBatchStream` implemented in Dat
 
 Looking at the [example in this repo][ex], the execute method:
 
-```rust
+```fixed
+use std::any::Any;
+use std::sync::{Arc, Mutex};
+use std::collections::{BTreeMap, HashMap};
+use datafusion::common::Result;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
+use datafusion::physical_plan::{
+    ExecutionPlan, SendableRecordBatchStream, DisplayAs, DisplayFormatType,
+    Statistics, PlanProperties
+};
+use datafusion::execution::context::{SessionState, TaskContext};
+use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
+use datafusion::physical_plan::memory::MemoryStream;
+use datafusion::arrow::record_batch::RecordBatch;
+
+/// A User, with an id and a bank account
+#[derive(Clone, Debug)]
+struct User {
+    id: u8,
+    bank_account: u64,
+}
+
+/// A custom datasource, used to represent a datastore with a single index
+#[derive(Clone, Debug)]
+pub struct CustomDataSource {
+    inner: Arc<Mutex<CustomDataSourceInner>>,
+}
+
+#[derive(Debug)]
+struct CustomDataSourceInner {
+    data: HashMap<u8, User>,
+    bank_account_index: BTreeMap<u64, u8>,
+}
+
+#[derive(Debug)]
 struct CustomExec {
     db: CustomDataSource,
     projected_schema: SchemaRef,
 }
 
+impl DisplayAs for CustomExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "CustomExec")
+    }
+}
+
 impl ExecutionPlan for CustomExec {
-    fn name(&self) {
+    fn name(&self) -> &str {
         "CustomExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.projected_schema.clone()
+    }
+
+
+    fn properties(&self) -> &PlanProperties {
+        unreachable!()
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        Vec::new()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(self)
     }
 
     fn execute(
@@ -97,7 +162,7 @@ With the `ExecutionPlan` implemented, we can now implement the `scan` method of 
 
 The `scan` method of the `TableProvider` returns a `Result<Arc<dyn ExecutionPlan>>`. We can use the `Arc` to return a reference-counted pointer to the `ExecutionPlan` we implemented. In the example, this is done by:
 
-```rust
+```tofix
 impl CustomDataSource {
     pub(crate) async fn create_physical_plan(
         &self,
@@ -145,7 +210,7 @@ For filters that can be pushed down, they'll be passed to the `scan` method as t
 
 In order to use the custom table provider, we need to register it with DataFusion. This is done by creating a `TableProvider` and registering it with the `SessionContext`.
 
-```rust
+```tofix
 let ctx = SessionContext::new();
 
 let custom_table_provider = CustomDataSource::new();
@@ -154,7 +219,7 @@ ctx.register_table("custom_table", Arc::new(custom_table_provider));
 
 This will allow you to use the custom table provider in DataFusion. For example, you could use it in a SQL query to get a `DataFrame`.
 
-```rust
+```tofix
 let df = ctx.sql("SELECT id, bank_account FROM custom_table")?;
 ```
 
