@@ -179,21 +179,14 @@ impl MemorySchemaProvider {
     }
 }
 
-pub fn create_table_provider(
-    seq_start: i32,
-    seq_end: i32,
-) -> Result<Arc<dyn TableProvider>> {
-    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from((seq_start..=seq_end).collect::<Vec<_>>()));
-    let partitions = vec![vec![RecordBatch::try_new(
-        schema.clone(),
-        vec![arr as ArrayRef],
-    )?]];
-    Ok(Arc::new(MemTable::try_new(schema, partitions)?))
-}
-
 let schema_provider = Arc::new(MemorySchemaProvider::new());
-let table_provider = create_table_provider(1, 1).unwrap();
+
+let table_provider = {
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+    let arr = Arc::new(Int32Array::from((1..=1).collect::<Vec<_>>()));
+    let partitions = vec![vec![RecordBatch::try_new(schema.clone(), vec![arr as ArrayRef]).unwrap()]];
+    Arc::new(MemTable::try_new(schema, partitions).unwrap())
+};
 
 schema_provider.register_table("users".to_string(), table_provider);
 
