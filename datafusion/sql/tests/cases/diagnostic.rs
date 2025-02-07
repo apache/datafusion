@@ -251,3 +251,32 @@ fn test_field_not_found_suggestion() -> Result<()> {
     assert_eq!(suggested_fields[0], "person.first_name");
     Ok(())
 }
+
+#[test]
+fn test_ambiguous_column_suggestion() -> Result<()> {
+    let query = "SELECT /*whole*/id/*whole*/ FROM test_decimal, person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+
+    assert_eq!(diag.message, "column 'id' is ambiguous");
+    assert_eq!(diag.span, Some(spans["whole"]));
+
+    assert_eq!(diag.notes.len(), 2);
+
+    let mut suggested_fields: Vec<String> = diag
+        .notes
+        .iter()
+        .filter_map(|note| {
+            if note.message.starts_with("possible column") {
+                Some(note.message.replace("possible column ", ""))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    suggested_fields.sort();
+    assert_eq!(suggested_fields, vec!["person.id", "test_decimal.id"]);
+
+    Ok(())
+}

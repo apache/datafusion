@@ -275,18 +275,11 @@ impl Column {
                         // user which columns are candidates, or which table
                         // they come from. For now, let's list the table names
                         // only.
-                        for qualified_field in qualified_fields {
-                            let (Some(table), _) = qualified_field else {
-                                continue;
-                            };
-                            diagnostic.add_note(
-                                format!(
-                                    "possible reference to '{}' in table '{}'",
-                                    &self.name, table
-                                ),
-                                None,
-                            );
-                        }
+                        add_possible_columns_to_diag(
+                            &mut diagnostic,
+                            &Column::new_unqualified(&self.name),
+                            &columns,
+                        );
                         err.with_diagnostic(diagnostic)
                     });
                 }
@@ -300,23 +293,6 @@ impl Column {
                 .flat_map(|s| s.iter())
                 .flat_map(|s| s.columns())
                 .collect(),
-        })
-        .map_err(|e| match &e {
-            DataFusionError::SchemaError(
-                SchemaError::FieldNotFound {
-                    field,
-                    valid_fields,
-                },
-                _,
-            ) => {
-                let mut diagnostic = Diagnostic::new_error(
-                    format!("column '{}' not found", &field.name()),
-                    field.spans().first(),
-                );
-                add_possible_columns_to_diag(&mut diagnostic, field, valid_fields);
-                e.with_diagnostic(diagnostic)
-            }
-            _ => e,
         })
     }
 
