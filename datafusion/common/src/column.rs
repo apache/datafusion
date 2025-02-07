@@ -19,9 +19,7 @@
 
 use crate::error::{_schema_err, add_possible_columns_to_diag};
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{
-    DFSchema, DataFusionError, Diagnostic, Result, SchemaError, Spans, TableReference,
-};
+use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow_schema::{Field, FieldRef};
 use std::collections::HashSet;
 use std::convert::Infallible;
