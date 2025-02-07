@@ -19,6 +19,7 @@
 //! and return types of functions in DataFusion.
 
 use std::fmt::Display;
+use std::hash::Hash;
 use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
@@ -339,7 +340,6 @@ impl TypeSignature {
                 vec![Self::join_types(types, ", ")]
             }
             TypeSignature::CoercibleV2(param_types) => {
-                // todo!("123")
                 vec![Self::join_types(param_types, ", ")]
             }
             TypeSignature::Exact(types) => {
@@ -417,9 +417,9 @@ impl TypeSignature {
                     let allowed_casts: Vec<DataType> = c
                         .allowed_casts
                         .iter()
-                        .flat_map(|t| get_possible_types_from_signature_classes(t))
+                        .flat_map(get_possible_types_from_signature_classes)
                         .collect();
-                    all_types.extend(allowed_casts.into_iter());
+                    all_types.extend(allowed_casts);
                     all_types.into_iter().collect::<Vec<_>>()
                 })
                 .multi_cartesian_product()
@@ -538,16 +538,7 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct FunctionSignature {
-    pub parameters: Vec<ParameterSignature>,
-    /// The volatility of the function. See [Volatility] for more information.
-    pub volatility: Volatility,
-}
-
-pub type ParameterSignature = Vec<Coercion>;
-
-#[derive(Debug, Clone, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Eq, PartialOrd)]
 pub struct Coercion {
     pub desired_type: TypeSignatureClass,
     pub allowed_casts: Vec<TypeSignatureClass>,
@@ -555,7 +546,7 @@ pub struct Coercion {
 
 impl Display for Coercion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ParameterType({}", self.desired_type)?;
+        write!(f, "Coercion({}", self.desired_type)?;
         if !self.allowed_casts.is_empty() {
             write!(
                 f,
@@ -575,6 +566,13 @@ impl PartialEq for Coercion {
     fn eq(&self, other: &Self) -> bool {
         self.desired_type == other.desired_type
             && self.allowed_casts == other.allowed_casts
+    }
+}
+
+impl Hash for Coercion {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.desired_type.hash(state);
+        self.allowed_casts.hash(state);
     }
 }
 

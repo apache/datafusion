@@ -595,7 +595,7 @@ fn get_valid_types(
             }
         }
         TypeSignature::CoercibleV2(param_types) => {
-            function_length_check(current_types.len(), param_types.len())?;
+            function_length_check(function_name, current_types.len(), param_types.len())?;
 
             let mut new_types = Vec::with_capacity(current_types.len());
             for (current_type, param) in current_types.iter().zip(param_types.iter()) {
