@@ -201,14 +201,8 @@ fn test_ambiguous_reference() -> Result<()> {
     let diag = do_query(query);
     assert_eq!(diag.message, "column 'first_name' is ambiguous");
     assert_eq!(diag.span, Some(spans["a"]));
-    assert_eq!(
-        diag.notes[0].message,
-        "possible reference to 'first_name' in table 'a'"
-    );
-    assert_eq!(
-        diag.notes[1].message,
-        "possible reference to 'first_name' in table 'b'"
-    );
+    assert_eq!(diag.notes[0].message, "possible column a.first_name");
+    assert_eq!(diag.notes[1].message, "possible column b.first_name");
     Ok(())
 }
 
