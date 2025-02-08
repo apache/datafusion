@@ -932,3 +932,9 @@ doc_comment::doctest!(
     "../../../docs/source/library-user-guide/profiling.md",
     library_user_guide_profiling
 );
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/query-optimizer.md",
+    library_user_guide_query_optimizer
+);
