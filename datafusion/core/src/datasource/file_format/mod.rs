@@ -24,12 +24,12 @@ pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
 pub mod arrow;
 pub mod avro;
 pub mod csv;
-pub mod file_compression_type;
 pub mod json;
 pub mod options;
 #[cfg(feature = "parquet")]
 pub mod parquet;
 pub mod write;
+pub use datafusion_catalog_listing::file_compression_type;
 
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};

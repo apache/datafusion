@@ -27,6 +27,9 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+compression = ["async-compression"]
+
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
@@ -37,6 +40,7 @@ async-compression = { version = "0.4.0", features = [
     "zstd",
     "tokio",
 ], optional = true }
+bytes = { workspace = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
@@ -50,12 +54,12 @@ glob = "0.3.0"
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
+tokio = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true }
 
 [lints]
 workspace = true
