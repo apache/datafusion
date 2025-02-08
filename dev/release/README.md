@@ -141,15 +141,6 @@ git checkout apache/main
 
 Manually update the datafusion version in the root `Cargo.toml` to `38.0.0`.
 
-Run `cargo update` in the root directory and also in `datafusion-cli`:
-
-```shell
-cargo update
-cd datafustion-cli
-cargo update
-cd ..
-```
-
 Run `cargo test` to re-generate some example files:
 
 ```shell
