@@ -61,12 +61,18 @@ use std::sync::LazyLock;
 use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{DataFusionError, plan_err, Result};
-use datafusion_expr::{col, ColumnarValue, Documentation, ScalarFunctionArgs, Signature, Volatility};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_expr::{col, ColumnarValue, ScalarFunctionArgs, Signature, Volatility};
 use datafusion::arrow::array::{ArrayRef, Int64Array};
 use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
+use datafusion_macros::user_doc;
+use datafusion_doc::Documentation;
 
 /// This struct for a simple UDF that adds one to an int32
+#[user_doc(
+    doc_section(label = "Math Functions"),
+    description = "Add one udf",
+    syntax_example = "add_one(1)"
+)]
 #[derive(Debug)]
 struct AddOne {
   signature: Signature,
@@ -79,12 +85,6 @@ impl AddOne {
      }
   }
 }
-
-static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
-    Documentation::builder(DOC_SECTION_MATH, "Add one to an int32", "add_one(2)")
-        .with_argument("arg1", "The int32 number to add one to")
-        .build()
-});
 
 /// Implement the ScalarUDFImpl trait for AddOne
 impl ScalarUDFImpl for AddOne {
@@ -110,7 +110,7 @@ impl ScalarUDFImpl for AddOne {
         Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
    }
    fn documentation(&self) -> Option<&Documentation> {
-        Some(&*DOCUMENTATION)
+       self.doc()
     }
 }
 ```
@@ -124,12 +124,18 @@ We now need to register the function with DataFusion so that it can be used in t
 # use arrow::datatypes::DataType;
 # use datafusion_common::cast::as_int64_array;
 # use datafusion_common::{DataFusionError, plan_err, Result};
-# use datafusion_expr::{col, ColumnarValue, Documentation, ScalarFunctionArgs, Signature, Volatility};
-# use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+# use datafusion_expr::{col, ColumnarValue, ScalarFunctionArgs, Signature, Volatility};
 # use datafusion::arrow::array::{ArrayRef, Int64Array};
 # use datafusion_expr::{ScalarUDFImpl, ScalarUDF};
+# use datafusion_macros::user_doc;
+# use datafusion_doc::Documentation;
 #
 # /// This struct for a simple UDF that adds one to an int32
+# #[user_doc(
+#     doc_section(label = "Math Functions"),
+#     description = "Add one udf",
+#     syntax_example = "add_one(1)"
+# )]
 # #[derive(Debug)]
 # struct AddOne {
 #   signature: Signature,
@@ -142,12 +148,6 @@ We now need to register the function with DataFusion so that it can be used in t
 #      }
 #   }
 # }
-#
-# static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
-#     Documentation::builder(DOC_SECTION_MATH, "Add one to an int32", "add_one(2)")
-#         .with_argument("arg1", "The int32 number to add one to")
-#         .build()
-# });
 #
 # /// Implement the ScalarUDFImpl trait for AddOne
 # impl ScalarUDFImpl for AddOne {
@@ -173,7 +173,7 @@ We now need to register the function with DataFusion so that it can be used in t
 #         Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
 #    }
 #    fn documentation(&self) -> Option<&Documentation> {
-#         Some(&*DOCUMENTATION)
+#        self.doc()
 #     }
 # }
 use datafusion::execution::context::SessionContext;
