@@ -29,6 +29,7 @@ version.workspace = true
 
 [features]
 compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
+default = ["compression"]
 
 [dependencies]
 arrow = { workspace = true }
