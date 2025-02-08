@@ -55,6 +55,8 @@ arrow-array = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
 base64 = "0.22.1"
+bigdecimal = { workspace = true }
+chrono = { workspace = true }
 half = { workspace = true }
 hashbrown = { workspace = true }
 indexmap = { workspace = true }

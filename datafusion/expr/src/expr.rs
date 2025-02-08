@@ -2812,7 +2812,7 @@ mod test {
         let expr = case(col("a"))
             .when(lit(1), lit(true))
             .when(lit(0), lit(false))
-            .otherwise(lit(ScalarValue::Null))?;
+            .otherwise(lit(LogicalScalar::Null))?;
         let expected = "CASE a WHEN Int32(1) THEN Boolean(true) WHEN Int32(0) THEN Boolean(false) ELSE NULL END";
         assert_eq!(expected, expr.canonical_name());
         assert_eq!(expected, format!("{expr}"));
@@ -2823,7 +2823,7 @@ mod test {
     #[allow(deprecated)]
     fn format_cast() -> Result<()> {
         let expr = Expr::Cast(Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Float32(Some(1.23)))),
+            expr: Box::new(Expr::Literal(LogicalScalar::Float32(1.23))),
             data_type: DataType::Utf8,
         });
         let expected_canonical = "CAST(Float32(1.23) AS Utf8)";

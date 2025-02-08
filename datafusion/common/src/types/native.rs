@@ -408,6 +408,12 @@ impl From<DataType> for NativeType {
 
 impl NativeType {
     #[inline]
+    pub fn is_null(&self) -> bool {
+        use NativeType::*;
+        matches!(self, Null)
+    }
+
+    #[inline]
     pub fn is_numeric(&self) -> bool {
         use NativeType::*;
         matches!(

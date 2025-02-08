@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::types::{LogicalTypeRef, NativeType};
+use crate::types::{
+    LogicalFieldRef, LogicalFields, LogicalTypeRef, LogicalUnionFields, NativeType,
+};
+use arrow_schema::{IntervalUnit, TimeUnit};
 use std::sync::{Arc, LazyLock};
 
 macro_rules! singleton {
@@ -47,3 +50,53 @@ singleton!(LOGICAL_FLOAT64, logical_float64, Float64);
 singleton!(LOGICAL_DATE, logical_date, Date);
 singleton!(LOGICAL_BINARY, logical_binary, Binary);
 singleton!(LOGICAL_STRING, logical_string, String);
+
+pub fn logical_timestamp(
+    time_unit: TimeUnit,
+    time_zone: Option<Arc<str>>,
+) -> LogicalTypeRef {
+    Arc::new(NativeType::Timestamp(time_unit, time_zone))
+}
+
+pub fn logical_time(time_unit: TimeUnit) -> LogicalTypeRef {
+    Arc::new(NativeType::Time(time_unit))
+}
+
+pub fn logical_duration(time_unit: TimeUnit) -> LogicalTypeRef {
+    Arc::new(NativeType::Duration(time_unit))
+}
+
+pub fn logical_interval(interval_unit: IntervalUnit) -> LogicalTypeRef {
+    Arc::new(NativeType::Interval(interval_unit))
+}
+
+pub fn logical_fixed_size_binary(len: i32) -> LogicalTypeRef {
+    Arc::new(NativeType::FixedSizeBinary(len))
+}
+
+pub fn logical_list(element_type: LogicalFieldRef) -> LogicalTypeRef {
+    Arc::new(NativeType::List(element_type))
+}
+
+pub fn logical_fixed_size_list(
+    element_type: LogicalFieldRef,
+    len: i32,
+) -> LogicalTypeRef {
+    Arc::new(NativeType::FixedSizeList(element_type, len))
+}
+
+pub fn logical_struct(fields: LogicalFields) -> LogicalTypeRef {
+    Arc::new(NativeType::Struct(fields))
+}
+
+pub fn logical_union(fields: LogicalUnionFields) -> LogicalTypeRef {
+    Arc::new(NativeType::Union(fields))
+}
+
+pub fn logical_decimal(precision: u8, scale: i8) -> LogicalTypeRef {
+    Arc::new(NativeType::Decimal(precision, scale))
+}
+
+pub fn logical_map(value_type: LogicalFieldRef) -> LogicalTypeRef {
+    Arc::new(NativeType::Map(value_type))
+}

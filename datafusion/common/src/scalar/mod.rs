@@ -18,6 +18,7 @@
 //! [`ScalarValue`]: stores single  values
 
 mod consts;
+mod logical;
 mod struct_builder;
 
 use std::borrow::Borrow;
@@ -38,7 +39,9 @@ use crate::cast::{
     as_fixed_size_binary_array, as_fixed_size_list_array,
 };
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
+use crate::format::DEFAULT_CAST_OPTIONS;
 use crate::hash_utils::create_hashes;
+use crate::types::{LogicalField, NativeType};
 use crate::utils::SingleRowListArrayBuilder;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::buffer::ScalarBuffer;
@@ -57,9 +60,15 @@ use arrow::{
     },
 };
 use arrow_schema::{UnionFields, UnionMode};
-
-use crate::format::DEFAULT_CAST_OPTIONS;
+use bigdecimal::num_bigint::BigInt;
+use bigdecimal::num_traits::FromBytes;
+use bigdecimal::BigDecimal;
 use half::f16;
+pub use logical::{
+    LogicalDecimal, LogicalExtension, LogicalFixedSizeBinary, LogicalFixedSizeList,
+    LogicalInterval, LogicalList, LogicalMap, LogicalScalar, LogicalStruct, LogicalTime,
+    LogicalUnion,
+};
 pub use struct_builder::ScalarStructBuilder;
 
 /// A dynamically typed, nullable single value.
@@ -3218,12 +3227,12 @@ impl ScalarValue {
                 ScalarValue::Map(arr) => arr.get_array_memory_size(),
                 ScalarValue::Union(vals, fields, _mode) => {
                     vals.as_ref()
-                        .map(|(_id, sv)| sv.size() - size_of_val(sv))
-                        .unwrap_or_default()
-                        // `fields` is boxed, so it is NOT already included in `self`
-                        + size_of_val(fields)
-                        + (size_of::<Field>() * fields.len())
-                        + fields.iter().map(|(_idx, field)| field.size() - size_of_val(field)).sum::<usize>()
+                    .map(|(_id, sv)| sv.size() - size_of_val(sv))
+                    .unwrap_or_default()
+                    // `fields` is boxed, so it is NOT already included in `self`
+                    + size_of_val(fields)
+                    + (size_of::<Field>() * fields.len())
+                    + fields.iter().map(|(_idx, field)| field.size() - size_of_val(field)).sum::<usize>()
                 }
                 ScalarValue::Dictionary(dt, sv) => {
                     // `dt` and `sv` are boxed, so they are NOT already included in `self`
@@ -3267,6 +3276,59 @@ impl ScalarValue {
                 .map(|sv| sv.size() - size_of_val(sv))
                 .sum::<usize>()
     }
+}
+
+/// Creates a [`LogicalList`] based on a [`ScalarValue::List`] or [`ScalarValue::LargeList`].
+///
+/// We use multiple parameters (instead of a single [`ListArray`]) to handle [`DataType::List`] and
+/// [`DataType::LargeList`] in a single function.
+fn list_to_logical_scalar(
+    value_type: DataType,
+    nullable: bool,
+    values: &dyn Array,
+) -> LogicalScalar {
+    let element_type = Arc::new(LogicalField {
+        name: String::from("values"),
+        logical_type: Arc::new(NativeType::from(value_type)),
+        nullable,
+    });
+
+    // TODO logical-values: Can we avoid returning a result?
+    let logical_values = (0..values.len())
+        .map(|i| ScalarValue::try_from_array(values, i))
+        .map(|v| v.map(LogicalScalar::from))
+        .collect::<Result<Vec<_>>>()
+        .expect("Extracting a ScalarValue from a ListArray should not fail");
+
+    let values = LogicalList::try_new(element_type, logical_values)
+        .expect("Types must have been ensured by ScalarValue");
+    LogicalScalar::List(values)
+}
+
+fn fixed_size_list_to_logical_scalar(list: Arc<FixedSizeListArray>) -> LogicalScalar {
+    let list =
+        list_to_logical_scalar(list.value_type(), list.is_nullable(), list.values());
+    let LogicalScalar::List(list) = list else {
+        unreachable!()
+    };
+    LogicalScalar::FixedSizeList(
+        LogicalFixedSizeList::try_from(list).expect("FixedSizeList cannot be too big"),
+    )
+}
+
+fn struct_to_logical_scalar(p0: Arc<StructArray>) -> LogicalScalar {
+    todo!()
+}
+
+fn map_to_logical_scalar(p0: Arc<MapArray>) -> LogicalScalar {
+    todo!()
+}
+
+fn union_to_logical_scalar(
+    p0: Option<(i8, Box<ScalarValue>)>,
+    p1: UnionFields,
+) -> LogicalScalar {
+    todo!()
 }
 
 macro_rules! impl_scalar {
@@ -3952,7 +4014,6 @@ impl ScalarType<i32> for Date32Type {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::cast::{
         as_map_array, as_string_array, as_struct_array, as_uint32_array, as_uint64_array,
