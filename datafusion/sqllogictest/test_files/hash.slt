@@ -1,0 +1,129 @@
+# Test xxhash32 with string input
+query T
+SELECT xxhash32('foo') AS hash_value;
+----
+e20f0dd9
+
+# Test xxhash32 with array input
+query T
+SELECT xxhash32(column1) AS xxhash32_result FROM ( SELECT UNNEST(ARRAY[1, 2, 3, 4, 5]) AS column1 ) AS subquery;
+----
+b6ecc8b2
+d43589af
+b6855437
+01543429
+b30d56b4
+
+# Test xxhash32 with Utf8View array input
+query T
+WITH input_data AS (SELECT arrow_cast(column1, 'Utf8View') as utf8view_value FROM (VALUES ('foobar1'),('foobar2'),('foobar3')) AS t(column1)) SELECT xxhash32(utf8view_value) as hash_value FROM input_data;
+----
+2b0d1874
+9925f907
+df748f36
+
+query T
+SELECT xxhash32(NULL) AS hash_value;
+----
+(empty)      
+
+# Test xxhash32 with string input and seed of 1
+query T
+SELECT xxhash32('foo', 1) AS hash_value;
+----
+1742761f
+
+# Test xxhash32 with array input and seed of 1
+query T
+SELECT xxhash32(column1, 1) AS xxhash32_result FROM ( SELECT UNNEST(ARRAY[1, 2, 3, 4, 5]) AS column1 ) AS subquery;
+----
+642684c5
+df0e3329
+99280b78
+e17e2fa9
+97a348b6 
+
+# Test xxhash32 with null input and seed of 1
+query T
+SELECT xxhash32(NULL, 1) AS hash_value;
+----
+(empty)       
+
+# Test xxhash32 with binary input
+query T
+SELECT xxhash32(X'1') AS hash_value;
+----
+3892f731
+
+
+# Test xxhash32 with binary input and seed of 1
+query T
+SELECT xxhash32('foo'::BYTEA, 1) AS hash_value;
+----
+1742761f
+
+# Tests for xxhash64
+
+# Test xxhash64 with string input
+query T
+SELECT xxhash64('foo') AS hash_value;
+----
+33bf00a859c4ba3f
+
+# Test xxhash64 with array input
+query T
+SELECT xxhash64(column1) AS xxhash64_result FROM ( SELECT UNNEST(ARRAY[1, 2, 3, 4, 5]) AS column1 ) AS subquery;
+----
+b7b41276360564d4
+5460f49adbe7aba2
+3c697d223fa7e885
+d8316e61d84f6ba4
+c6f2d2dd0ad64fb6
+
+# Test xxhash64 with Utf8View array input
+query T
+WITH input_data AS (SELECT arrow_cast(column1, 'Utf8View') as utf8view_value FROM (VALUES ('foobar1'),('foobar2'),('foobar3')) AS t(column1)) SELECT xxhash64(utf8view_value) as hash_value FROM input_data;
+----
+36425528f43b829c
+b24f52e2956da1a9
+5e75bd6e3aac89a9
+
+query T
+SELECT xxhash64(NULL) AS hash_value;
+----
+(empty)      
+
+# Test xxhash64 with string input and seed of 1
+query T
+SELECT xxhash64('foo', 1) AS hash_value;
+----
+c34823c5bf4f2cbd
+
+# Test xxhash64 with array input and seed of 1
+query T
+SELECT xxhash64(column1, 1) AS xxhash64_result FROM ( SELECT UNNEST(ARRAY[1, 2, 3, 4, 5]) AS column1 ) AS subquery;
+----
+192aba5fd13fb67d
+75b53fdb7dce12fa
+4b805d862c3b7497
+e9feb3476d8788cb
+8b4dc636e784c7e5
+
+# Test xxhash64 with null input and seed of 1
+query T
+SELECT xxhash64(NULL, 1) AS hash_value;
+----
+(empty)         
+
+# Test xxhash64 with binary input
+query T
+SELECT xxhash64(X'1') AS hash_value;
+----
+8a4127811b21e730
+
+
+# Test xxhash64 with binary input and seed of 1
+query T
+SELECT xxhash64('foo'::BYTEA, 1) AS hash_value;
+----
+c34823c5bf4f2cbd

@@ -133,6 +133,10 @@ make_stub_package!(crypto, "crypto_expressions");
 pub mod unicode;
 make_stub_package!(unicode, "unicode_expressions");
 
+#[cfg(feature = "hash_expressions")]
+pub mod hash;
+make_stub_package!(hash, "hash_expressions");
+
 #[cfg(any(feature = "datetime_expressions", feature = "unicode_expressions"))]
 pub mod planner;
 
@@ -150,6 +154,8 @@ pub mod expr_fn {
     pub use super::datetime::expr_fn::*;
     #[cfg(feature = "encoding_expressions")]
     pub use super::encoding::expr_fn::*;
+    #[cfg(feature = "hash_expressions")]
+    pub use super::hash::expr_fn::*;
     #[cfg(feature = "math_expressions")]
     pub use super::math::expr_fn::*;
     #[cfg(feature = "regex_expressions")]
@@ -171,6 +177,7 @@ pub fn all_default_functions() -> Vec<Arc<ScalarUDF>> {
         .chain(crypto::functions())
         .chain(unicode::functions())
         .chain(string::functions())
+        .chain(hash::functions())
         .collect::<Vec<_>>()
 }
 
