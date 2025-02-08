@@ -1181,8 +1181,10 @@ mod tests {
     };
     use crate::{execute_stream, get_plan_string, ExecutionPlan};
 
-    use arrow_array::builder::{Int64Builder, UInt64Builder};
-    use arrow_array::RecordBatch;
+    use arrow::array::{
+        builder::{Int64Builder, UInt64Builder},
+        RecordBatch,
+    };
     use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
     use datafusion_common::{
         assert_batches_eq, exec_datafusion_err, Result, ScalarValue,
@@ -1528,7 +1530,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
         let memory_exec = MemorySourceConfig::try_new_exec(

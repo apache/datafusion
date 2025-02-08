@@ -580,9 +580,9 @@ mod tests {
     use super::*;
     use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
 
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::{Float32Type, Float64Type, UInt32Type};
-    use arrow_array::{
+    use arrow::array::{
+        cast::AsArray,
+        types::{Float32Type, Float64Type, UInt32Type},
         BinaryArray, BooleanArray, Float32Array, Int32Array, Int64Array, RecordBatch,
         StringArray, UInt64Array,
     };

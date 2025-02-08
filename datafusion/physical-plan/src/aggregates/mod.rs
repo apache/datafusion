@@ -34,10 +34,9 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::ArrayRef;
+use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{UInt16Array, UInt32Array, UInt64Array, UInt8Array};
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, not_impl_err, Constraint, Constraints, Result};
 use datafusion_execution::TaskContext;
@@ -1354,12 +1353,12 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::RecordBatchStream;
 
-    use arrow::array::{Float64Array, UInt32Array};
+    use arrow::array::{
+        DictionaryArray, Float32Array, Float64Array, Int32Array, StructArray,
+        UInt32Array, UInt64Array,
+    };
     use arrow::compute::{concat_batches, SortOptions};
     use arrow::datatypes::{DataType, Int32Type};
-    use arrow_array::{
-        DictionaryArray, Float32Array, Int32Array, StructArray, UInt64Array,
-    };
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, internal_err, DataFusionError,
         ScalarValue,

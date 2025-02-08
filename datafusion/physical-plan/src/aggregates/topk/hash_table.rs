@@ -21,12 +21,11 @@ use crate::aggregates::group_values::HashValue;
 use crate::aggregates::topk::heap::Comparable;
 use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
-use arrow::datatypes::i256;
-use arrow_array::builder::PrimitiveBuilder;
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    downcast_primitive, Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray, StringArray,
+use arrow::array::{
+    builder::PrimitiveBuilder, cast::AsArray, downcast_primitive, Array, ArrayRef,
+    ArrowPrimitiveType, PrimitiveArray, StringArray,
 };
+use arrow::datatypes::i256;
 use arrow_schema::DataType;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;

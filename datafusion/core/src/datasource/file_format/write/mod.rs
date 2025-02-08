@@ -25,7 +25,7 @@ use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::error::Result;
 
-use arrow_array::RecordBatch;
+use arrow::array::RecordBatch;
 use arrow_schema::Schema;
 use bytes::Bytes;
 use object_store::buffered::BufWriter;

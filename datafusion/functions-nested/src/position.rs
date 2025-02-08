@@ -27,9 +27,9 @@ use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_array::types::UInt64Type;
-use arrow_array::{
-    Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait, UInt64Array,
+use arrow::array::{
+    types::UInt64Type, Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait,
+    UInt64Array,
 };
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,

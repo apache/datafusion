@@ -53,14 +53,13 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::*;
+use arrow::array::{types::UInt64Type, *};
 use arrow::compute::{
     self, concat_batches, filter_record_batch, is_not_null, take, SortOptions,
 };
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::ipc::reader::FileReader;
-use arrow_array::types::UInt64Type;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, HashSet, JoinSide,
     JoinType, Result,
@@ -2525,12 +2524,12 @@ fn is_join_arrays_equal(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Date32Array, Date64Array, Int32Array};
+    use arrow::array::{
+        builder::{BooleanBuilder, UInt64Builder},
+        BooleanArray, Date32Array, Date64Array, Int32Array, RecordBatch, UInt64Array,
+    };
     use arrow::compute::{concat_batches, filter_record_batch, SortOptions};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::builder::{BooleanBuilder, UInt64Builder};
-    use arrow_array::{BooleanArray, UInt64Array};
 
     use datafusion_common::JoinSide;
     use datafusion_common::JoinType::*;

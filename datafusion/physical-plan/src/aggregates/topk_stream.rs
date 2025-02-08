@@ -23,8 +23,8 @@ use crate::aggregates::{
     PhysicalGroupBy,
 };
 use crate::{RecordBatchStream, SendableRecordBatchStream};
+use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::util::pretty::print_batches;
-use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;

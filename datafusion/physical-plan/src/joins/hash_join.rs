@@ -58,14 +58,14 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array,
+    cast::downcast_array, Array, ArrayRef, BooleanArray, BooleanBufferBuilder,
+    UInt32Array, UInt64Array,
 };
 use arrow::compute::kernels::cmp::{eq, not_distinct};
 use arrow::compute::{and, concat_batches, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
@@ -1644,10 +1644,9 @@ mod tests {
         test::exec::MockExec,
     };
 
-    use arrow::array::{Date32Array, Int32Array};
+    use arrow::array::{Date32Array, Int32Array, StructArray};
     use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
-    use arrow_array::StructArray;
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
         ScalarValue,
