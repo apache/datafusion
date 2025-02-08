@@ -185,18 +185,20 @@ impl OptimizerRule for AddOneInliner {
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         // Map over the expressions and rewrite them
-        let new_expressions = plan
+        let new_expressions: Vec<Expr> = plan
             .expressions()
             .into_iter()
             .map(|expr| rewrite_add_one(expr))
-            .collect::<Result<Vec<_>>>()?
-            .map(|transformed| transformed.data);
+            .collect::<Result<Vec<_>>>()? // returns Vec<Transformed<Expr>>
+            .into_iter()
+            .map(|transformed| transformed.data)
+            .collect();
 
         let inputs = plan.inputs().into_iter().cloned().collect::<Vec<_>>();
 
-        let plan = plan.with_new_exprs(new_expressions, inputs);
+        let plan: Result<LogicalPlan> = plan.with_new_exprs(new_expressions, inputs);
 
-        plan
+        plan.map(|p| Transformed::yes(p))
     }
 }
 ```
