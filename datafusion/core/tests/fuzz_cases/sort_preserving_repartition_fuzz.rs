@@ -45,12 +45,10 @@ mod sp_repartition_fuzz_tests {
     use test_utils::add_empty_batches;
 
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
+    use datafusion_physical_plan::source::DataSourceExec;
     use datafusion_physical_plan::{
         memory::MemorySourceConfig,
         repartition::on_demand_repartition::OnDemandRepartitionExec,
-    };
-    use datafusion_physical_plan::{
-        repartition::on_demand_repartition, source::DataSourceExec,
     };
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
@@ -369,7 +367,10 @@ mod sp_repartition_fuzz_tests {
         let schema = input1[0].schema();
         let mut session_config = SessionConfig::new().with_batch_size(50);
         if use_on_demand_repartition {
-            session_config.options_mut().optimizer.prefer_round_robin_repartition = false;
+            session_config
+                .options_mut()
+                .optimizer
+                .prefer_round_robin_repartition = false;
         }
         let ctx = SessionContext::new_with_config(session_config);
         let mut sort_keys = LexOrdering::default();
