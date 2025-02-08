@@ -875,14 +875,20 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/building-logical-plans.md",
-    library_user_guide_logical_plans
+    "../../../docs/source/library-user-guide/adding-udfs.md",
+    library_user_guide_adding_udfs
 );
 
 #[cfg(doctest)]
 doc_comment::doctest!(
     "../../../docs/source/library-user-guide/api-health.md",
     library_user_guide_api_health
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/building-logical-plans.md",
+    library_user_guide_building_logical_plans
 );
 
 #[cfg(doctest)]
