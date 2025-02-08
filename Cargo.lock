@@ -2001,7 +2001,6 @@ version = "45.0.0"
 dependencies = [
  "abi_stable",
  "arrow",
- "arrow-array",
  "arrow-schema",
  "async-ffi",
  "async-trait",
@@ -2633,7 +2632,6 @@ version = "0.1.0"
 dependencies = [
  "abi_stable",
  "arrow",
- "arrow-array",
  "arrow-schema",
  "datafusion",
  "datafusion-ffi",
