@@ -60,8 +60,7 @@ We'll use a `ScalarUDF` expression as our example. This necessitates implementin
 
 So assuming you've written that function, you can use it to create an `Expr`:
 
-```rust
-
+```fixed
 # use std::sync::Arc;
 # use datafusion::arrow::array::{ArrayRef, Int64Array};
 # use datafusion::common::cast::as_int64_array;
@@ -121,12 +120,17 @@ In our example, we'll use rewriting to update our `add_one` UDF, to be rewritten
 
 To implement the inlining, we'll need to write a function that takes an `Expr` and returns a `Result<Expr>`. If the expression is _not_ to be rewritten `Transformed::no` is used to wrap the original `Expr`. If the expression _is_ to be rewritten, `Transformed::yes` is used to wrap the new `Expr`.
 
-```tofix
-fn rewrite_add_one(expr: Expr) -> Result<Expr> {
+```rust
+use datafusion::common::Result;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::logical_expr::{col, lit, Expr};
+use datafusion::logical_expr::{ScalarUDF};
+
+fn rewrite_add_one(expr: Expr) -> Result<Transformed<Expr>> {
     expr.transform(&|expr| {
         Ok(match expr {
-            Expr::ScalarUDF(scalar_fun) if scalar_fun.fun.name == "add_one" => {
-                let input_arg = scalar_fun.args[0].clone();
+            Expr::ScalarFunction(scalar_func) if scalar_func.func.inner().name() == "add_one" => {
+                let input_arg = scalar_func.args[0].clone();
                 let new_expression = input_arg + lit(1i64);
 
                 Transformed::yes(new_expression)
