@@ -64,7 +64,7 @@ jobs:
           # Adding `--locked` here to assert that the `Cargo.lock` file is up to
           # date with the manifest. When this fails, please make sure to commit
           # the changes to `Cargo.lock` after building with the updated manifest.
-        cargo check --profile ci --workspace --all-targets --features integration-tests --locked
+          cargo check --profile ci --workspace --all-targets --features integration-tests --locked
 
   # cargo check common, functions and substrait with no default features
   linux-cargo-check-no-default-features:
