@@ -28,7 +28,7 @@ use datafusion_macros::user_doc;
 
 #[user_doc(
     doc_section(label = "Union Functions"),
-    description = "Returns the value of the given field when selected, or NULL otherwise.",
+    description = "Returns the value of the given field in the union when selected, or NULL otherwise.",
     syntax_example = "union_extract(union, field_name)",
     sql_example = r#"```sql
 ❯ select union_column, union_extract(union_column, 'a'), union_extract(union_column, 'b') from table_with_union;
