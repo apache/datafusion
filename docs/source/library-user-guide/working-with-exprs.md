@@ -61,6 +61,31 @@ We'll use a `ScalarUDF` expression as our example. This necessitates implementin
 So assuming you've written that function, you can use it to create an `Expr`:
 
 ```rust
+
+use std::sync::Arc;
+
+use datafusion::arrow::array::{ArrayRef, Int64Array};
+use datafusion::common::cast::as_int64_array;
+use datafusion::common::Result;
+use datafusion::logical_expr::ColumnarValue;
+
+use datafusion::logical_expr::{Volatility, create_udf};
+use datafusion::arrow::datatypes::DataType;
+use std::sync::Arc;
+
+pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    // Error handling omitted for brevity
+    let args = ColumnarValue::values_to_arrays(args)?;
+    let i64s = as_int64_array(&args[0])?;
+
+    let new_array = i64s
+        .iter()
+        .map(|array_elem| array_elem.map(|value| value + 1))
+        .collect::<Int64Array>();
+
+    Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
+}
+
 let add_one_udf = create_udf(
     "add_one",
     vec![DataType::Int64],
@@ -98,7 +123,7 @@ In our example, we'll use rewriting to update our `add_one` UDF, to be rewritten
 
 To implement the inlining, we'll need to write a function that takes an `Expr` and returns a `Result<Expr>`. If the expression is _not_ to be rewritten `Transformed::no` is used to wrap the original `Expr`. If the expression _is_ to be rewritten, `Transformed::yes` is used to wrap the new `Expr`.
 
-```rust
+```tofix
 fn rewrite_add_one(expr: Expr) -> Result<Expr> {
     expr.transform(&|expr| {
         Ok(match expr {
@@ -123,7 +148,7 @@ We'll call our rule `AddOneInliner` and implement the `OptimizerRule` trait. The
 - `name` - returns the name of the rule
 - `try_optimize` - takes a `LogicalPlan` and returns an `Option<LogicalPlan>`. If the rule is able to optimize the plan, it returns `Some(LogicalPlan)` with the optimized plan. If the rule is not able to optimize the plan, it returns `None`.
 
-```rust
+```tofix
 struct AddOneInliner {}
 
 impl OptimizerRule for AddOneInliner {
@@ -160,7 +185,7 @@ We're almost there. Let's just test our rule works properly.
 
 Testing the rule is fairly simple, we can create a SessionState with our rule and then create a DataFrame and run a query. The logical plan will be optimized by our rule.
 
-```rust
+```tofix
 use datafusion::prelude::*;
 
 let rules = Arc::new(AddOneInliner {});
@@ -188,7 +213,7 @@ I.e. the `add_one` UDF has been inlined into the projection.
 
 The `arrow::datatypes::DataType` of the expression can be obtained by calling the `get_type` given something that implements `Expr::Schemable`, for example a `DFschema` object:
 
-```rust
+```tofix
 use arrow_schema::DataType;
 use datafusion::common::{DFField, DFSchema};
 use datafusion::logical_expr::{col, ExprSchemable};

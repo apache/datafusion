@@ -875,20 +875,8 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/using-the-sql-api.md",
-    library_user_guide_sql_api
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
     "../../../docs/source/library-user-guide/building-logical-plans.md",
     library_user_guide_logical_plans
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
-    library_user_guide_dataframe_api
 );
 
 #[cfg(doctest)]
@@ -937,4 +925,22 @@ doc_comment::doctest!(
 doc_comment::doctest!(
     "../../../docs/source/library-user-guide/query-optimizer.md",
     library_user_guide_query_optimizer
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
+    library_user_guide_dataframe_api
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/using-the-sql-api.md",
+    library_user_guide_sql_api
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/working-with-exprs.md",
+    library_user_guide_working_with_exprs
 );
