@@ -120,7 +120,7 @@ In our example, we'll use rewriting to update our `add_one` UDF, to be rewritten
 
 To implement the inlining, we'll need to write a function that takes an `Expr` and returns a `Result<Expr>`. If the expression is _not_ to be rewritten `Transformed::no` is used to wrap the original `Expr`. If the expression _is_ to be rewritten, `Transformed::yes` is used to wrap the new `Expr`.
 
-```rust
+```fixed
 use datafusion::common::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::logical_expr::{col, lit, Expr};
@@ -150,7 +150,28 @@ We'll call our rule `AddOneInliner` and implement the `OptimizerRule` trait. The
 - `name` - returns the name of the rule
 - `try_optimize` - takes a `LogicalPlan` and returns an `Option<LogicalPlan>`. If the rule is able to optimize the plan, it returns `Some(LogicalPlan)` with the optimized plan. If the rule is not able to optimize the plan, it returns `None`.
 
-```tofix
+```rust
+use std::sync::Arc;
+use datafusion::common::Result;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::logical_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion::optimizer::{OptimizerRule, OptimizerConfig, OptimizerContext, Optimizer};
+
+# fn rewrite_add_one(expr: Expr) -> Result<Transformed<Expr>> {
+#     expr.transform(&|expr| {
+#         Ok(match expr {
+#             Expr::ScalarFunction(scalar_func) if scalar_func.func.inner().name() == "add_one" => {
+#                 let input_arg = scalar_func.args[0].clone();
+#                 let new_expression = input_arg + lit(1i64);
+#
+#                 Transformed::yes(new_expression)
+#             }
+#             _ => Transformed::no(expr),
+#         })
+#     })
+# }
+
+#[derive(Default, Debug)]
 struct AddOneInliner {}
 
 impl OptimizerRule for AddOneInliner {
@@ -158,23 +179,24 @@ impl OptimizerRule for AddOneInliner {
         "add_one_inliner"
     }
 
-    fn try_optimize(
+    fn rewrite(
         &self,
-        plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
         // Map over the expressions and rewrite them
         let new_expressions = plan
             .expressions()
             .into_iter()
             .map(|expr| rewrite_add_one(expr))
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?
+            .map(|transformed| transformed.data);
 
         let inputs = plan.inputs().into_iter().cloned().collect::<Vec<_>>();
 
-        let plan = plan.with_new_exprs(&new_expressions, &inputs);
+        let plan = plan.with_new_exprs(new_expressions, inputs);
 
-        plan.map(Some)
+        plan
     }
 }
 ```
