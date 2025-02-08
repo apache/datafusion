@@ -264,7 +264,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }?;
 
-        if let LogicalPlan::Projection(_) = &plan {
+        if let LogicalPlan::Distinct(_) = &plan {
             Self::ambiguous_distinct_project_check(&plan, &order_by_rex)?;
         }
 
@@ -336,13 +336,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if missing_cols.is_empty() {
             return Ok(());
         }
-        Self::do_ambiguous_distinct_project_check(plan, &missing_cols, false)
+        Self::do_ambiguous_distinct_project_check(plan, &missing_cols)
     }
 
     fn do_ambiguous_distinct_project_check(
         plan: &LogicalPlan,
         missing_cols: &IndexSet<Column>,
-        is_distinct: bool,
     ) -> Result<()> {
         if let LogicalPlan::Projection(Projection {
             input,
@@ -361,22 +360,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // missing_cols may be already present but without the new
                 // projected alias.
                 missing_exprs.retain(|e| !expr.contains(e));
-                if is_distinct {
-                    LogicalPlanBuilder::ambiguous_distinct_check(
-                        &missing_exprs,
-                        missing_cols,
-                        expr,
-                    )?;
-                }
+                LogicalPlanBuilder::ambiguous_distinct_check(
+                    &missing_exprs,
+                    missing_cols,
+                    expr,
+                )?;
             }
         } else {
-            let is_distinct = is_distinct || matches!(plan, LogicalPlan::Distinct(_));
             for input in plan.inputs() {
-                Self::do_ambiguous_distinct_project_check(
-                    input,
-                    missing_cols,
-                    is_distinct,
-                )?;
+                Self::do_ambiguous_distinct_project_check(input, missing_cols)?;
             }
         }
         Ok(())
