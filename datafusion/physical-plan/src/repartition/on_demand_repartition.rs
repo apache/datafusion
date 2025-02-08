@@ -46,9 +46,9 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use async_channel::{Receiver, Sender};
+use async_channel::{Receiver, Sender, TrySendError};
 
-use datafusion_common::{internal_datafusion_err, Result};
+use datafusion_common::{internal_datafusion_err, internal_err, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
@@ -610,7 +610,7 @@ struct OnDemandPerPartitionStream {
     /// Partition number
     partition: usize,
 
-    /// Sender State
+    /// Avoid sending partition number multiple times, set to true after sending partition number
     is_requested: bool,
 }
 
@@ -621,18 +621,21 @@ impl Stream for OnDemandPerPartitionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        if !self.is_requested && !self.sender.is_closed() {
-            self.sender.try_send(self.partition).map_err(|e| {
-                internal_datafusion_err!(
-                    "Error sending partition number to the receiver for partition {}: {}",
-                    self.partition,
-                    e
-                )
-            })?;
-            self.is_requested = true;
+        if !self.is_requested {
+            match self.sender.try_send(self.partition) {
+                Ok(_) => self.is_requested = true,
+                // unobunded channel, should not be full
+                Err(TrySendError::Full(_)) => {
+                    return internal_err!("Partition sender {} is full", self.partition)?;
+                }
+                Err(TrySendError::Closed(_)) => {
+                    return Poll::Ready(None);
+                }
+            }
         }
 
         let result = ready!(self.receiver.recv().poll_unpin(cx));
+        // set is_requested to false, when receiving a batch
         self.is_requested = false;
 
         match result {
@@ -681,7 +684,7 @@ struct OnDemandRepartitionStream {
     /// Partition number
     partition: usize,
 
-    /// Sender state
+    /// Avoid sending partition number multiple times, set to true after sending partition number
     is_requested: bool,
 }
 
@@ -694,18 +697,24 @@ impl Stream for OnDemandRepartitionStream {
     ) -> Poll<Option<Self::Item>> {
         loop {
             // Send partition number to input partitions
-            if !self.is_requested && !self.sender.is_closed() {
-                self.sender.try_send(self.partition).map_err(|e| {
-                    internal_datafusion_err!(
-                        "Error sending partition number to the receiver for partition {}: {}",
-                        self.partition,
-                        e
-                    )
-                })?;
-                self.is_requested = true;
+            if !self.is_requested {
+                match self.sender.try_send(self.partition) {
+                    Ok(_) => self.is_requested = true,
+                    // unobunded channel, should not be full
+                    Err(TrySendError::Full(_)) => {
+                        return internal_err!(
+                            "Partition sender {} is full",
+                            self.partition
+                        )?;
+                    }
+                    Err(TrySendError::Closed(_)) => {
+                        return Poll::Ready(None);
+                    }
+                }
             }
 
             let result = ready!(self.input.recv().poll_unpin(cx));
+            // set is_requested to false, when receiving a batch
             self.is_requested = false;
 
             match result {
