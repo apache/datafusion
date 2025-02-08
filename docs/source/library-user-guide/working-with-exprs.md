@@ -60,7 +60,7 @@ We'll use a `ScalarUDF` expression as our example. This necessitates implementin
 
 So assuming you've written that function, you can use it to create an `Expr`:
 
-```fixed
+```rust
 # use std::sync::Arc;
 # use datafusion::arrow::array::{ArrayRef, Int64Array};
 # use datafusion::common::cast::as_int64_array;
@@ -120,7 +120,7 @@ In our example, we'll use rewriting to update our `add_one` UDF, to be rewritten
 
 To implement the inlining, we'll need to write a function that takes an `Expr` and returns a `Result<Expr>`. If the expression is _not_ to be rewritten `Transformed::no` is used to wrap the original `Expr`. If the expression _is_ to be rewritten, `Transformed::yes` is used to wrap the new `Expr`.
 
-```fixed
+```rust
 use datafusion::common::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::logical_expr::{col, lit, Expr};
@@ -150,7 +150,7 @@ We'll call our rule `AddOneInliner` and implement the `OptimizerRule` trait. The
 - `name` - returns the name of the rule
 - `try_optimize` - takes a `LogicalPlan` and returns an `Option<LogicalPlan>`. If the rule is able to optimize the plan, it returns `Some(LogicalPlan)` with the optimized plan. If the rule is not able to optimize the plan, it returns `None`.
 
-```fixed
+```rust
 use std::sync::Arc;
 use datafusion::common::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
@@ -325,28 +325,24 @@ I.e. the `add_one` UDF has been inlined into the projection.
 
 The `arrow::datatypes::DataType` of the expression can be obtained by calling the `get_type` given something that implements `Expr::Schemable`, for example a `DFschema` object:
 
-```tofix
-use arrow_schema::DataType;
-use datafusion::common::{DFField, DFSchema};
+```rust
+use arrow::datatypes::{DataType, Field};
+use datafusion::common::DFSchema;
 use datafusion::logical_expr::{col, ExprSchemable};
 use std::collections::HashMap;
 
+// Get the type of an expression that adds 2 columns. Adding an Int32
+// and Float32 results in Float32 type
 let expr = col("c1") + col("c2");
-let schema = DFSchema::new_with_metadata(
+let schema = DFSchema::from_unqualified_fields(
     vec![
-        DFField::new_unqualified("c1", DataType::Int32, true),
-        DFField::new_unqualified("c2", DataType::Float32, true),
-    ],
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Float32, true),
+    ]
+    .into(),
     HashMap::new(),
-)
-.unwrap();
-print!("type = {}", expr.get_type(&schema).unwrap());
-```
-
-This results in the following output:
-
-```text
-type = Float32
+).unwrap();
+assert_eq!("Float32", format!("{}", expr.get_type(&schema).unwrap()));
 ```
 
 ## Conclusion
