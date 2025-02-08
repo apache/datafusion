@@ -4347,7 +4347,7 @@ Functions to work with the union data type, also know as tagged unions, variant 
 
 ### `union_extract`
 
-Returns the value of the given field when selected, or NULL otherwise.
+Returns the value of the given field in the union when selected, or NULL otherwise.
 
 ```
 union_extract(union, field_name)

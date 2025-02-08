@@ -19,10 +19,10 @@ use arrow::array::Array;
 use arrow::datatypes::{DataType, FieldRef, UnionFields};
 use datafusion_common::cast::as_union_array;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, ExprSchema, Result, ScalarValue,
+    exec_datafusion_err, exec_err, internal_err, Result, ScalarValue,
 };
 use datafusion_doc::Documentation;
-use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs};
+use datafusion_expr::{ColumnarValue, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
@@ -85,36 +85,31 @@ impl ScalarUDFImpl for UnionExtractFun {
         internal_err!("union_extract should return type from exprs")
     }
 
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        _: &dyn ExprSchema,
-        arg_types: &[DataType],
-    ) -> Result<DataType> {
-        if args.len() != 2 {
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        if args.arg_types.len() != 2 {
             return exec_err!(
                 "union_extract expects 2 arguments, got {} instead",
-                args.len()
+                args.arg_types.len()
             );
         }
 
-        let DataType::Union(fields, _) = &arg_types[0] else {
+        let DataType::Union(fields, _) = &args.arg_types[0] else {
             return exec_err!(
                 "union_extract first argument must be a union, got {} instead",
-                arg_types[0]
+                args.arg_types[0]
             );
         };
 
-        let Expr::Literal(ScalarValue::Utf8(Some(field_name))) = &args[1] else {
+        let Some(ScalarValue::Utf8(Some(field_name))) = &args.scalar_arguments[1] else {
             return exec_err!(
                 "union_extract second argument must be a non-null string literal, got {} instead",
-                arg_types[1]
+                args.arg_types[1]
             );
         };
 
         let field = find_field(fields, field_name)?.1;
 
-        Ok(field.data_type().clone())
+        Ok(ReturnInfo::new_nullable(field.data_type().clone()))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

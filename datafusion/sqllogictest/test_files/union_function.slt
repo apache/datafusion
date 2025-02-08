@@ -28,13 +28,13 @@ select union_column, union_extract(union_column, 'int') from union_table;
 query error DataFusion error: Execution error: field bool not found on union
 select union_extract(union_column, 'bool') from union_table;
 
-query error DataFusion error: Error during planning: union_extract does not support zero arguments
+query error DataFusion error: Error during planning: 'union_extract' does not support zero arguments
 select union_extract() from union_table;
 
-query error DataFusion error: Error during planning: The function expected 2 arguments but received 1
+query error DataFusion error: Error during planning: The function 'union_extract' expected 2 arguments but received 1
 select union_extract(union_column) from union_table;
 
-query error DataFusion error: Error during planning: The function expected 2 arguments but received 1
+query error DataFusion error: Error during planning: The function 'union_extract' expected 2 arguments but received 1
 select union_extract('a') from union_table;
 
 query error DataFusion error: Execution error: union_extract first argument must be a union, got Utf8 instead
@@ -43,5 +43,5 @@ select union_extract('a', union_column) from union_table;
 query error DataFusion error: Execution error: union_extract second argument must be a non\-null string literal, got Int64 instead
 select union_extract(union_column, 1) from union_table;
 
-query error DataFusion error: Error during planning: The function expected 2 arguments but received 3
+query error DataFusion error: Error during planning: The function 'union_extract' expected 2 arguments but received 3
 select union_extract(union_column, 'a', 'b') from union_table;
