@@ -1730,7 +1730,6 @@ dependencies = [
  "arrow",
  "arrow-ipc",
  "arrow-schema",
- "async-compression",
  "async-trait",
  "bytes",
  "bzip2 0.5.0",
@@ -1759,7 +1758,6 @@ dependencies = [
  "env_logger",
  "flate2",
  "futures",
- "glob",
  "itertools 0.14.0",
  "log",
  "nix 0.29.0",
@@ -1778,7 +1776,6 @@ dependencies = [
  "tempfile",
  "test-utils",
  "tokio",
- "tokio-util",
  "url",
  "uuid",
  "xz2",
@@ -1834,6 +1831,8 @@ dependencies = [
  "arrow-schema",
  "async-compression",
  "async-trait",
+ "bytes",
+ "bzip2 0.5.0",
  "chrono",
  "datafusion-catalog",
  "datafusion-common",
@@ -1842,6 +1841,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "flate2",
  "futures",
  "glob",
  "itertools 0.14.0",
@@ -1849,7 +1849,10 @@ dependencies = [
  "object_store",
  "tempfile",
  "tokio",
+ "tokio-util",
  "url",
+ "xz2",
+ "zstd",
 ]
 
 [[package]]
@@ -1929,6 +1932,7 @@ dependencies = [
  "bytes",
  "dashmap",
  "datafusion",
+ "datafusion-catalog-listing",
  "datafusion-proto",
  "env_logger",
  "futures",
@@ -2337,6 +2341,7 @@ dependencies = [
  "clap 4.5.28",
  "datafusion",
  "datafusion-catalog",
+ "datafusion-catalog-listing",
  "datafusion-common",
  "datafusion-common-runtime",
  "env_logger",
@@ -7202,4 +7207,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
