@@ -242,16 +242,95 @@ There are a number of [utility methods][util] provided that take care of some co
 
 ### Recursively walk an expression tree
 
-Coming soon
+The [TreeNode API] provides a convenient way to recursively walk an expression or plan tree.
+
+For example, to find all subquery references in a logical plan, the following code can be used:
+
+```rust
+# use datafusion::prelude::*;
+# use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
+// Return all subquery references in an expression
+fn extract_subquery_filters(expression: &Expr) -> Result<Vec<&Expr>> {
+    let mut extracted = vec![];
+    expression.apply(|expr| {
+            if let Expr::InSubquery(_) = expr {
+                extracted.push(expr);
+            }
+            Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(extracted)
+}
+```
+
+Likewise you can use the [TreeNode API] to rewrite a `LogicalPlan` or `ExecutionPlan`
+
+```rust
+# use datafusion::prelude::*;
+# use datafusion::logical_expr::{LogicalPlan, Join};
+# use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
+// Return all joins in a logical plan
+fn find_joins(overall_plan: &LogicalPlan) -> Result<Vec<&Join>> {
+    let mut extracted = vec![];
+    overall_plan.apply(|plan| {
+            if let LogicalPlan::Join(join) = plan {
+                extracted.push(join);
+            }
+            Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(extracted)
+}
+```
 
 ### Rewriting expressions
 
-Coming soon
+The [TreeNode API] also provides a convenient way to rewrite expressions and
+plans as well. For example to rewrite all expressions like
 
-### Optimize children
+```sql
+col BETWEEN x AND y
+```
 
+into
 
-Coming soon
+```sql
+col >= x AND col <= y
+```
+
+you can use the following code:
+
+```rust
+# use datafusion::prelude::*;
+# use datafusion::logical_expr::{Between};
+# use datafusion::logical_expr::expr_fn::*;
+# use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
+// Recursively rewrite all BETWEEN expressions
+// returns Transformed::yes if any changes were made
+fn rewrite_between(expr: Expr) -> Result<Transformed<Expr>> {
+    // transform_up does a bottom up rewrite
+    expr.transform_up(|expr| {
+        // only handle BETWEEN expressions
+        let Expr::Between(Between {
+                negated,
+                expr,
+                low,
+                high,
+        }) = expr else {
+            return Ok(Transformed::no(expr))
+        };
+        let rewritten_expr = if negated {
+            // don't rewrite NOT BETWEEN
+            Expr::Between(Between::new(expr, negated, low, high))
+        } else {
+            // rewrite to (expr >= low) AND (expr <= high)
+            expr.clone().gt_eq(*low).and(expr.lt_eq(*high))
+        };
+        Ok(Transformed::yes(rewritten_expr))
+    })
+}
+```
 
 ### Writing Tests
 
