@@ -46,7 +46,7 @@ def process_markdown_file(file_path):
     print("Lines starting with '# ' removed from Rust code blocks")
 
 
-root_directory = Path("./temp")
+root_directory = Path("./temp/library-user-guide")
 
 for file_path in root_directory.rglob("*.md"):
     print(f"Processing file: {file_path}")
