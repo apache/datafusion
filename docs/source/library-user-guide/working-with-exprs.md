@@ -150,7 +150,7 @@ We'll call our rule `AddOneInliner` and implement the `OptimizerRule` trait. The
 - `name` - returns the name of the rule
 - `try_optimize` - takes a `LogicalPlan` and returns an `Option<LogicalPlan>`. If the rule is able to optimize the plan, it returns `Some(LogicalPlan)` with the optimized plan. If the rule is not able to optimize the plan, it returns `None`.
 
-```rust
+```fixed
 use std::sync::Arc;
 use datafusion::common::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
@@ -211,26 +211,112 @@ We're almost there. Let's just test our rule works properly.
 
 Testing the rule is fairly simple, we can create a SessionState with our rule and then create a DataFrame and run a query. The logical plan will be optimized by our rule.
 
-```tofix
-use datafusion::prelude::*;
+```rust
+# use std::sync::Arc;
+# use datafusion::common::Result;
+# use datafusion::common::tree_node::{Transformed, TreeNode};
+# use datafusion::logical_expr::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder};
+# use datafusion::optimizer::{OptimizerRule, OptimizerConfig, OptimizerContext, Optimizer};
+# use datafusion::arrow::array::{ArrayRef, Int64Array};
+# use datafusion::common::cast::as_int64_array;
+# use datafusion::logical_expr::ColumnarValue;
+# use datafusion::logical_expr::{Volatility, create_udf};
+# use datafusion::arrow::datatypes::DataType;
+#
+# fn rewrite_add_one(expr: Expr) -> Result<Transformed<Expr>> {
+#     expr.transform(&|expr| {
+#         Ok(match expr {
+#             Expr::ScalarFunction(scalar_func) if scalar_func.func.inner().name() == "add_one" => {
+#                 let input_arg = scalar_func.args[0].clone();
+#                 let new_expression = input_arg + lit(1i64);
+#
+#                 Transformed::yes(new_expression)
+#             }
+#             _ => Transformed::no(expr),
+#         })
+#     })
+# }
+#
+# #[derive(Default, Debug)]
+# struct AddOneInliner {}
+#
+# impl OptimizerRule for AddOneInliner {
+#     fn name(&self) -> &str {
+#         "add_one_inliner"
+#     }
+#
+#     fn rewrite(
+#         &self,
+#         plan: LogicalPlan,
+#         _config: &dyn OptimizerConfig,
+#     ) -> Result<Transformed<LogicalPlan>> {
+#         // Map over the expressions and rewrite them
+#         let new_expressions: Vec<Expr> = plan
+#             .expressions()
+#             .into_iter()
+#             .map(|expr| rewrite_add_one(expr))
+#             .collect::<Result<Vec<_>>>()? // returns Vec<Transformed<Expr>>
+#             .into_iter()
+#             .map(|transformed| transformed.data)
+#             .collect();
+#
+#         let inputs = plan.inputs().into_iter().cloned().collect::<Vec<_>>();
+#
+#         let plan: Result<LogicalPlan> = plan.with_new_exprs(new_expressions, inputs);
+#
+#         plan.map(|p| Transformed::yes(p))
+#     }
+# }
+#
+# pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+#     // Error handling omitted for brevity
+#     let args = ColumnarValue::values_to_arrays(args)?;
+#     let i64s = as_int64_array(&args[0])?;
+#
+#     let new_array = i64s
+#         .iter()
+#         .map(|array_elem| array_elem.map(|value| value + 1))
+#         .collect::<Int64Array>();
+#
+#     Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
+# }
 
-let rules = Arc::new(AddOneInliner {});
-let state = ctx.state().with_optimizer_rules(vec![rules]);
+use datafusion::execution::context::SessionContext;
 
-let ctx = SessionContext::with_state(state);
-ctx.register_udf(add_one);
+#[tokio::main]
+async fn main() -> Result<()> {
 
-let sql = "SELECT add_one(1) AS added_one";
-let plan = ctx.sql(sql).await?.logical_plan();
+    let ctx = SessionContext::new();
+    // ctx.add_optimizer_rule(Arc::new(AddOneInliner {}));
 
-println!("{:?}", plan);
+    let add_one_udf = create_udf(
+        "add_one",
+        vec![DataType::Int64],
+        DataType::Int64,
+        Volatility::Immutable,
+        Arc::new(add_one),
+    );
+    ctx.register_udf(add_one_udf);
+
+    let sql = "SELECT add_one(5) AS added_one";
+    // let plan = ctx.sql(sql).await?.into_unoptimized_plan().clone();
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?.clone();
+
+    let expected = r#"Projection: Int64(6) AS added_one
+  EmptyRelation"#;
+
+    assert_eq!(plan.to_string(), expected);
+
+    Ok(())
+}
 ```
 
-This results in the following output:
+This plan is optimized as:
 
 ```text
-Projection: Int64(1) + Int64(1) AS added_one
-  EmptyRelation
+Projection: add_one(Int64(5)) AS added_one
+    -> Projection: Int64(5) + Int64(1) AS added_one
+        -> Projection: Int64(6) AS added_one
 ```
 
 I.e. the `add_one` UDF has been inlined into the projection.
