@@ -4341,6 +4341,8 @@ sha512(expression)
 
 ## Union Functions
 
+Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator
+
 - [union_extract](#union_extract)
 
 ### `union_extract`

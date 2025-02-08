@@ -997,6 +997,7 @@ pub mod scalar_doc_sections {
             DOC_SECTION_STRUCT,
             DOC_SECTION_MAP,
             DOC_SECTION_HASHING,
+            DOC_SECTION_UNION,
             DOC_SECTION_OTHER,
         ]
     }
