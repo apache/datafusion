@@ -404,14 +404,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     Ok(Arc::new(BoundedWindowAggExec::try_new(
                         physical_window_expr,
                         input,
-                        partition_keys,
                         input_order_mode,
+                        !partition_keys.is_empty(),
                     )?))
                 } else {
                     Ok(Arc::new(WindowAggExec::try_new(
                         physical_window_expr,
                         input,
-                        partition_keys,
+                        !partition_keys.is_empty(),
                     )?))
                 }
             }
@@ -1921,7 +1921,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 .collect::<Result<Vec<protobuf::PhysicalWindowExprNode>>>()?;
 
             let partition_keys = exec
-                .partition_keys
+                .partition_keys()
                 .iter()
                 .map(|e| serialize_physical_expr(e, extension_codec))
                 .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
@@ -1951,7 +1951,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 .collect::<Result<Vec<protobuf::PhysicalWindowExprNode>>>()?;
 
             let partition_keys = exec
-                .partition_keys
+                .partition_keys()
                 .iter()
                 .map(|e| serialize_physical_expr(e, extension_codec))
                 .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;

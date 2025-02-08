@@ -460,12 +460,12 @@ fn adjust_window_sort_removal(
         if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
             let window_expr = exec.window_expr();
             let new_window =
-                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys)?;
+                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
             (window_expr, new_window)
         } else if let Some(exec) = plan.downcast_ref::<BoundedWindowAggExec>() {
             let window_expr = exec.window_expr();
             let new_window =
-                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys)?;
+                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
             (window_expr, new_window)
         } else {
             return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
@@ -493,14 +493,14 @@ fn adjust_window_sort_removal(
             Arc::new(BoundedWindowAggExec::try_new(
                 window_expr.to_vec(),
                 child_plan,
-                window_expr[0].partition_by().to_vec(),
                 InputOrderMode::Sorted,
+                !window_expr[0].partition_by().is_empty(),
             )?) as _
         } else {
             Arc::new(WindowAggExec::try_new(
                 window_expr.to_vec(),
                 child_plan,
-                window_expr[0].partition_by().to_vec(),
+                !window_expr[0].partition_by().is_empty(),
             )?) as _
         }
     };
