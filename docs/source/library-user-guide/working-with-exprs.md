@@ -62,36 +62,34 @@ So assuming you've written that function, you can use it to create an `Expr`:
 
 ```rust
 
-use std::sync::Arc;
-
-use datafusion::arrow::array::{ArrayRef, Int64Array};
-use datafusion::common::cast::as_int64_array;
-use datafusion::common::Result;
-use datafusion::logical_expr::ColumnarValue;
-
+# use std::sync::Arc;
+# use datafusion::arrow::array::{ArrayRef, Int64Array};
+# use datafusion::common::cast::as_int64_array;
+# use datafusion::common::Result;
+# use datafusion::logical_expr::ColumnarValue;
+#
+# pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+#     // Error handling omitted for brevity
+#     let args = ColumnarValue::values_to_arrays(args)?;
+#     let i64s = as_int64_array(&args[0])?;
+#
+#     let new_array = i64s
+#         .iter()
+#         .map(|array_elem| array_elem.map(|value| value + 1))
+#         .collect::<Int64Array>();
+#
+#     Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
+# }
 use datafusion::logical_expr::{Volatility, create_udf};
 use datafusion::arrow::datatypes::DataType;
-use std::sync::Arc;
-
-pub fn add_one(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    // Error handling omitted for brevity
-    let args = ColumnarValue::values_to_arrays(args)?;
-    let i64s = as_int64_array(&args[0])?;
-
-    let new_array = i64s
-        .iter()
-        .map(|array_elem| array_elem.map(|value| value + 1))
-        .collect::<Int64Array>();
-
-    Ok(ColumnarValue::from(Arc::new(new_array) as ArrayRef))
-}
+use datafusion::logical_expr::{col, lit};
 
 let add_one_udf = create_udf(
     "add_one",
     vec![DataType::Int64],
-    Arc::new(DataType::Int64),
+    DataType::Int64,
     Volatility::Immutable,
-    make_scalar_function(add_one),  // <-- the function we wrote
+    Arc::new(add_one),
 );
 
 // make the expr `add_one(5)`
