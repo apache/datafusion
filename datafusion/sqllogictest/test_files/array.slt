@@ -1485,13 +1485,24 @@ select array_min(make_array(TIMESTAMP '1992-09-01', TIMESTAMP '1984-10-01', TIME
 ----
 1984-10-01T00:00:00
 
+query R
+select array_min(make_array(5.1, -3.2, 6.3, 4.9));
+----
+-3.2
+
 query P
 select array_min(make_array(NULL, TIMESTAMP '1996-10-01', TIMESTAMP '1995-06-01'));
 ----
 1995-06-01T00:00:00
 
-query error Execution error: array_min needs one argument as non-empty array
+query I
 select array_min(make_array());
+----
+NULL
+
+# Testing with empty arguments should result in an error
+query error DataFusion error: Error during planning: 'array_min' does not support zero arguments
+select array_min();
 
 ## array_pop_back (aliases: `list_pop_back`)
 
