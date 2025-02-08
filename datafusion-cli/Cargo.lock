@@ -399,23 +399,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-compression"
-version = "0.4.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df895a515f70646414f4b45c0b79082783b80552b373a68283012928df56f522"
-dependencies = [
- "bzip2 0.4.4",
- "flate2",
- "futures-core",
- "memchr",
- "pin-project-lite",
- "tokio",
- "xz2",
- "zstd",
- "zstd-safe",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.86"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1278,9 +1261,7 @@ version = "45.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
- "async-compression",
  "bytes",
- "bzip2 0.5.0",
  "chrono",
  "datafusion-catalog",
  "datafusion-common",
@@ -1289,17 +1270,13 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
- "flate2",
  "futures",
  "glob",
  "itertools 0.14.0",
  "log",
  "object_store",
  "tokio",
- "tokio-util",
  "url",
- "xz2",
- "zstd",
 ]
 
 [[package]]
