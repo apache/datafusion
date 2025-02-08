@@ -760,10 +760,10 @@ mod tests {
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use crate::test_util::arrow_test_data;
 
+    use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
     use arrow::compute::concat_batches;
     use arrow::csv::ReaderBuilder;
     use arrow::util::pretty::pretty_format_batches;
-    use arrow_array::{BooleanArray, Float64Array, Int32Array, StringArray};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;

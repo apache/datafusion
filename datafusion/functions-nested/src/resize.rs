@@ -239,7 +239,7 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         null_builder.finish(),
     )?))
 }

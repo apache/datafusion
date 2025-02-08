@@ -18,10 +18,9 @@
 //! [`ScalarUDFImpl`] definitions for array_except function.
 
 use crate::utils::{check_datatypes, make_scalar_function};
+use arrow::array::{cast::AsArray, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
 use arrow::row::{RowConverter, SortField};
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::{exec_err, internal_err, HashSet, Result};
 use datafusion_expr::{

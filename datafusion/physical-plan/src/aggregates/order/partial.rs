@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::ArrayRef;
 use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
-use arrow_array::ArrayRef;
 use arrow_schema::Schema;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;

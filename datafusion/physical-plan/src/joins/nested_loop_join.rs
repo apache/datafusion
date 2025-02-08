@@ -1036,8 +1036,8 @@ pub(crate) mod tests {
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
 
+    use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field};
-    use arrow_array::Int32Array;
     use arrow_schema::SortOptions;
     use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;

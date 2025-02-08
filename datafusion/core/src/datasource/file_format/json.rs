@@ -42,11 +42,11 @@ use crate::physical_plan::{
     DisplayAs, DisplayFormatType, SendableRecordBatchStream, Statistics,
 };
 
+use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use arrow::json;
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
-use arrow_array::RecordBatch;
 use arrow_schema::ArrowError;
 use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};

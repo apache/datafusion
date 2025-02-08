@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::RecordBatch;
+use arrow::array::RecordBatch;
 use std::sync::Arc;
 
 use datafusion::common::{assert_batches_eq, DFSchema};

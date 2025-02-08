@@ -19,13 +19,13 @@
 
 use std::sync::Arc;
 
-use arrow::{array::ArrayRef, datatypes::DataType};
+use arrow::datatypes::DataType;
 
-use arrow::buffer::OffsetBuffer;
-use arrow_array::{
-    Array, BooleanArray, GenericListArray, ListArray, OffsetSizeTrait, Scalar,
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, GenericListArray, ListArray, OffsetSizeTrait, Scalar,
     UInt32Array,
 };
+use arrow::buffer::OffsetBuffer;
 use arrow_schema::{Field, Fields};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{

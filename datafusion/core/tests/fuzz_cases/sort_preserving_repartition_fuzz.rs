@@ -19,8 +19,8 @@
 mod sp_repartition_fuzz_tests {
     use std::sync::Arc;
 
+    use arrow::array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
     use arrow::compute::{concat_batches, lexsort, SortColumn};
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
     use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 
     use datafusion::physical_plan::{

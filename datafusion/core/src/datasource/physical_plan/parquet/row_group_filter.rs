@@ -21,8 +21,8 @@ use std::sync::Arc;
 use super::{ParquetAccessPlan, ParquetFileMetrics};
 use crate::datasource::listing::FileRange;
 
-use arrow::{array::ArrayRef, datatypes::Schema};
-use arrow_array::BooleanArray;
+use arrow::array::{ArrayRef, BooleanArray};
+use arrow::datatypes::Schema;
 use datafusion_common::{Column, Result, ScalarValue};
 use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::Int64Array;
+use arrow::array::Int64Array;
 use arrow_schema::{DataType, Field};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion_common::{Column, DFSchema, Result, ScalarValue, Spans};

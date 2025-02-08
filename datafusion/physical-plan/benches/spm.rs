@@ -17,8 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow::record_batch::RecordBatch;
-use arrow_array::{ArrayRef, Int32Array, Int64Array, StringArray};
+use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;

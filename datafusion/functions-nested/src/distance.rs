@@ -18,7 +18,7 @@
 //! [ScalarUDFImpl] definitions for array_distance function.
 
 use crate::utils::make_scalar_function;
-use arrow_array::{
+use arrow::array::{
     Array, ArrayRef, Float64Array, LargeListArray, ListArray, OffsetSizeTrait,
 };
 use arrow_schema::DataType;
