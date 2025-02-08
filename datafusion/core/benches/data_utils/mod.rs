@@ -17,15 +17,11 @@
 
 //! This module provides the in-memory table for more realistic benchmarking.
 
-use arrow::{
-    array::Float32Array,
-    array::Float64Array,
-    array::StringArray,
-    array::UInt64Array,
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
+use arrow::array::{
+    builder::{Int64Builder, StringBuilder},
+    Float32Array, Float64Array, RecordBatch, StringArray, UInt64Array,
 };
-use arrow_array::builder::{Int64Builder, StringBuilder};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;

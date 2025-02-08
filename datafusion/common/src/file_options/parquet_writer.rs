@@ -26,6 +26,8 @@ use crate::{
 };
 
 use arrow_schema::Schema;
+// TODO: handle once deprecated
+#[allow(deprecated)]
 use parquet::{
     arrow::ARROW_SCHEMA_META_KEY,
     basic::{BrotliLevel, GzipLevel, ZstdLevel},
@@ -156,9 +158,14 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
                     builder.set_column_bloom_filter_ndv(path.clone(), bloom_filter_ndv);
             }
 
+            // max_statistics_size is deprecated, currently it is not being used
+            // TODO: remove once deprecated
+            #[allow(deprecated)]
             if let Some(max_statistics_size) = options.max_statistics_size {
-                builder =
-                    builder.set_column_max_statistics_size(path, max_statistics_size);
+                builder = {
+                    #[allow(deprecated)]
+                    builder.set_column_max_statistics_size(path, max_statistics_size)
+                }
             }
         }
 
@@ -199,6 +206,7 @@ impl ParquetOptions {
     ///
     /// Note that this method does not include the key_value_metadata from [`TableParquetOptions`].
     pub fn into_writer_properties_builder(&self) -> Result<WriterPropertiesBuilder> {
+        #[allow(deprecated)]
         let ParquetOptions {
             data_pagesize_limit,
             write_batch_size,
@@ -244,14 +252,18 @@ impl ParquetOptions {
                     .and_then(|s| parse_statistics_string(s).ok())
                     .unwrap_or(DEFAULT_STATISTICS_ENABLED),
             )
-            .set_max_statistics_size(
-                max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
-            )
             .set_max_row_group_size(*max_row_group_size)
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
+
+        builder = {
+            #[allow(deprecated)]
+            builder.set_max_statistics_size(
+                max_statistics_size.unwrap_or(DEFAULT_MAX_STATISTICS_SIZE),
+            )
+        };
 
         if let Some(bloom_filter_fpp) = bloom_filter_fpp {
             builder = builder.set_bloom_filter_fpp(*bloom_filter_fpp);
@@ -445,6 +457,7 @@ mod tests {
     fn column_options_with_non_defaults(
         src_col_defaults: &ParquetOptions,
     ) -> ParquetColumnOptions {
+        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
@@ -465,6 +478,7 @@ mod tests {
             "1.0"
         };
 
+        #[allow(deprecated)] // max_statistics_size
         ParquetOptions {
             data_pagesize_limit: 42,
             write_batch_size: 42,
@@ -508,6 +522,7 @@ mod tests {
     ) -> ParquetColumnOptions {
         let bloom_filter_default_props = props.bloom_filter_properties(&col);
 
+        #[allow(deprecated)] // max_statistics_size
         ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
             encoding: props.encoding(&col).map(|s| s.to_string()),
@@ -561,6 +576,7 @@ mod tests {
             HashMap::from([(COL_NAME.into(), configured_col_props)])
         };
 
+        #[allow(deprecated)] // max_statistics_size
         TableParquetOptions {
             global: ParquetOptions {
                 // global options

@@ -17,11 +17,12 @@
 
 //! [`ScalarUDFImpl`] definitions for array_has, array_has_all and array_has_any functions.
 
-use arrow::array::{Array, ArrayRef, BooleanArray, OffsetSizeTrait};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, Datum, GenericListArray, OffsetSizeTrait, Scalar,
+};
+use arrow::buffer::BooleanBuffer;
 use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, Rows, SortField};
-use arrow_array::{Datum, GenericListArray, Scalar};
-use arrow_buffer::BooleanBuffer;
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result, ScalarValue};
@@ -204,8 +205,7 @@ fn array_has_dispatch_for_array<O: OffsetSizeTrait>(
         let is_nested = arr.data_type().is_nested();
         let needle_row = Scalar::new(needle.slice(i, 1));
         let eq_array = compare_with_eq(&arr, &needle_row, is_nested)?;
-        let is_contained = eq_array.true_count() > 0;
-        boolean_builder.append_value(is_contained)
+        boolean_builder.append_value(eq_array.true_count() > 0);
     }
 
     Ok(Arc::new(boolean_builder.finish()))
@@ -238,10 +238,7 @@ fn array_has_dispatch_for_scalar<O: OffsetSizeTrait>(
             continue;
         }
         let sliced_array = eq_array.slice(start, length);
-        // For nested list, check number of nulls
-        if sliced_array.null_count() != length {
-            final_contained[i] = Some(sliced_array.true_count() > 0);
-        }
+        final_contained[i] = Some(sliced_array.true_count() > 0);
     }
 
     Ok(Arc::new(BooleanArray::from(final_contained)))
@@ -389,7 +386,7 @@ impl ArrayHasAny {
     pub fn new() -> Self {
         Self {
             signature: Signature::any(2, Volatility::Immutable),
-            aliases: vec![String::from("list_has_any")],
+            aliases: vec![String::from("list_has_any"), String::from("arrays_overlap")],
         }
     }
 }

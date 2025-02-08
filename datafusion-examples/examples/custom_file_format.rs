@@ -19,11 +19,16 @@ use std::{any::Any, sync::Arc};
 
 use arrow::{
     array::{AsArray, RecordBatch, StringArray, UInt8Array},
-    datatypes::UInt64Type,
+    datatypes::{DataType, Field, Schema, SchemaRef, UInt64Type},
 };
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use datafusion::datasource::data_source::FileSource;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_expr::LexRequirement;
+use datafusion::physical_expr::PhysicalExpr;
+use datafusion::{
+    catalog::Session,
+    common::{GetExt, Statistics},
+};
 use datafusion::{
     datasource::{
         file_format::{
@@ -34,12 +39,9 @@ use datafusion::{
         MemTable,
     },
     error::Result,
-    execution::context::SessionState,
     physical_plan::ExecutionPlan,
     prelude::SessionContext,
 };
-use datafusion_common::{GetExt, Statistics};
-use datafusion_physical_expr::PhysicalExpr;
 use object_store::{ObjectMeta, ObjectStore};
 use tempfile::tempdir;
 
@@ -84,7 +86,7 @@ impl FileFormat for TSVFileFormat {
 
     async fn infer_schema(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -95,7 +97,7 @@ impl FileFormat for TSVFileFormat {
 
     async fn infer_stats(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
@@ -107,7 +109,7 @@ impl FileFormat for TSVFileFormat {
 
     async fn create_physical_plan(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -119,13 +121,17 @@ impl FileFormat for TSVFileFormat {
     async fn create_writer_physical_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        state: &SessionState,
+        state: &dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.csv_file_format
             .create_writer_physical_plan(input, state, conf, order_requirements)
             .await
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        self.csv_file_format.file_source()
     }
 }
 
@@ -149,7 +155,7 @@ impl TSVFileFactory {
 impl FileFormatFactory for TSVFileFactory {
     fn create(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         format_options: &std::collections::HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         let mut new_options = format_options.clone();

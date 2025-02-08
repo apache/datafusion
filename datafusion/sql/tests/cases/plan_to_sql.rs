@@ -792,7 +792,7 @@ fn test_table_references_in_plan_to_sql() {
 }
 
 #[test]
-fn test_table_scan_with_no_projection_in_plan_to_sql() {
+fn test_table_scan_with_none_projection_in_plan_to_sql() {
     fn test(table_name: &str, expected_sql: &str) {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Utf8, false),
@@ -813,6 +813,30 @@ fn test_table_scan_with_no_projection_in_plan_to_sql() {
     );
     test("schema.table", r#"SELECT * FROM "schema"."table""#);
     test("table", r#"SELECT * FROM "table""#);
+}
+
+#[test]
+fn test_table_scan_with_empty_projection_in_plan_to_sql() {
+    fn test(table_name: &str, expected_sql: &str) {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ]);
+
+        let plan = table_scan(Some(table_name), &schema, Some(vec![]))
+            .unwrap()
+            .build()
+            .unwrap();
+        let sql = plan_to_sql(&plan).unwrap();
+        assert_eq!(sql.to_string(), expected_sql)
+    }
+
+    test(
+        "catalog.schema.table",
+        r#"SELECT 1 FROM "catalog"."schema"."table""#,
+    );
+    test("schema.table", r#"SELECT 1 FROM "schema"."table""#);
+    test("table", r#"SELECT 1 FROM "table""#);
 }
 
 #[test]

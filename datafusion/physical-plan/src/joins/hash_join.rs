@@ -24,12 +24,20 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::{any::Any, vec};
 
-use super::utils::{asymmetric_join_output_partitioning, reorder_output_after_swap};
+use super::utils::{
+    asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
+    reorder_output_after_swap, swap_join_projection,
+};
 use super::{
     utils::{OnceAsync, OnceFut},
-    PartitionMode,
+    PartitionMode, SharedBitmapBuilder,
 };
 use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::projection::{
+    try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
+    ProjectionExec,
+};
+use crate::spill::get_record_batch_memory_size;
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
@@ -39,10 +47,10 @@ use crate::{
     joins::utils::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
         build_batch_from_indices, build_join_schema, check_join_is_valid,
-        estimate_join_statistics, get_final_indices_from_bit_map,
-        need_produce_result_in_final, symmetric_join_output_partitioning,
-        BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMap, JoinHashMapOffset,
-        JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
+        estimate_join_statistics, need_produce_result_in_final,
+        symmetric_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
+        JoinFilter, JoinHashMap, JoinHashMapOffset, JoinHashMapType, JoinOn, JoinOnRef,
+        StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
@@ -50,14 +58,14 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array,
+    cast::downcast_array, Array, ArrayRef, BooleanArray, BooleanBufferBuilder,
+    UInt32Array, UInt64Array,
 };
 use arrow::compute::kernels::cmp::{eq, not_distinct};
 use arrow::compute::{and, concat_batches, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
@@ -66,19 +74,16 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::equivalence::{
     join_equivalence_properties, ProjectionMapping,
 };
 use datafusion_physical_expr::PhysicalExprRef;
-
-use crate::spill::get_record_batch_memory_size;
-use ahash::RandomState;
-use datafusion_expr::Operator;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
+
+use ahash::RandomState;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
-
-type SharedBitmapBuilder = Mutex<BooleanBufferBuilder>;
 
 /// HashTable and input data for the left (build side) of a join
 struct JoinLeftData {
@@ -86,8 +91,10 @@ struct JoinLeftData {
     hash_map: JoinHashMap,
     /// The input rows for the build side
     batch: RecordBatch,
+    /// The build side on expressions values
+    values: Vec<ArrayRef>,
     /// Shared bitmap builder for visited left indices
-    visited_indices_bitmap: Mutex<BooleanBufferBuilder>,
+    visited_indices_bitmap: SharedBitmapBuilder,
     /// Counter of running probe-threads, potentially
     /// able to update `visited_indices_bitmap`
     probe_threads_counter: AtomicUsize,
@@ -103,6 +110,7 @@ impl JoinLeftData {
     fn new(
         hash_map: JoinHashMap,
         batch: RecordBatch,
+        values: Vec<ArrayRef>,
         visited_indices_bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
@@ -110,6 +118,7 @@ impl JoinLeftData {
         Self {
             hash_map,
             batch,
+            values,
             visited_indices_bitmap,
             probe_threads_counter,
             _reservation: reservation,
@@ -124,6 +133,11 @@ impl JoinLeftData {
     /// returns a reference to the build side batch
     fn batch(&self) -> &RecordBatch {
         &self.batch
+    }
+
+    /// returns a reference to the build side expressions values
+    fn values(&self) -> &[ArrayRef] {
+        &self.values
     }
 
     /// returns a reference to the visited indices bitmap
@@ -216,8 +230,8 @@ impl JoinLeftData {
 ///                                                                         │                           │
 ///            ┌───────┐                                                    │          ┌───────┐        │
 ///            │ Row 6 │        3) update_hash for batch 1 with offset 5    │          │ Row 1 │    5   │
-///   Batch 3  │       │           - hashmap.insert(Row 2, idx 5)           │ Batch 1  │       │        │
-///            │ Row 7 │           - hashmap.insert(Row 1, idx 6)           │          │ Row 2 │    6   │
+///   Batch 3  │       │           - hashmap.insert(Row 2, idx 6)           │ Batch 1  │       │        │
+///            │ Row 7 │           - hashmap.insert(Row 1, idx 5)           │          │ Row 2 │    6   │
 ///            └───────┘                                                    │          └───────┘        │
 ///                                                                         │                           │
 ///                                                                         └───────────────────────────┘
@@ -467,7 +481,7 @@ impl HashJoinExec {
     }
 
     /// Return whether the join contains a projection
-    pub fn contain_projection(&self) -> bool {
+    pub fn contains_projection(&self) -> bool {
         self.projection.is_some()
     }
 
@@ -616,38 +630,6 @@ impl HashJoinExec {
     }
 }
 
-/// This function swaps the given join's projection.
-fn swap_join_projection(
-    left_schema_len: usize,
-    right_schema_len: usize,
-    projection: Option<&Vec<usize>>,
-    join_type: &JoinType,
-) -> Option<Vec<usize>> {
-    match join_type {
-        // For Anti/Semi join types, projection should remain unmodified,
-        // since these joins output schema remains the same after swap
-        JoinType::LeftAnti
-        | JoinType::LeftSemi
-        | JoinType::RightAnti
-        | JoinType::RightSemi => projection.cloned(),
-
-        _ => projection.map(|p| {
-            p.iter()
-                .map(|i| {
-                    // If the index is less than the left schema length, it is from
-                    // the left schema, so we add the right schema length to it.
-                    // Otherwise, it is from the right schema, so we subtract the left
-                    // schema length from it.
-                    if *i < left_schema_len {
-                        *i + right_schema_len
-                    } else {
-                        *i - left_schema_len
-                    }
-                })
-                .collect()
-        }),
-    }
-}
 impl DisplayAs for HashJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
@@ -656,7 +638,7 @@ impl DisplayAs for HashJoinExec {
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
                 );
-                let display_projections = if self.contain_projection() {
+                let display_projections = if self.contains_projection() {
                     format!(
                         ", projection=[{}]",
                         self.projection
@@ -852,7 +834,6 @@ impl ExecutionPlan for HashJoinExec {
 
         Ok(Box::pin(HashJoinStream {
             schema: self.schema(),
-            on_left,
             on_right,
             filter: self.filter.clone(),
             join_type: self.join_type,
@@ -886,6 +867,47 @@ impl ExecutionPlan for HashJoinExec {
         )?;
         // Project statistics if there is a projection
         Ok(stats.project(self.projection.as_ref()))
+    }
+
+    /// Tries to push `projection` down through `hash_join`. If possible, performs the
+    /// pushdown and returns a new [`HashJoinExec`] as the top plan which has projections
+    /// as its children. Otherwise, returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // TODO: currently if there is projection in HashJoinExec, we can't push down projection to left or right input. Maybe we can pushdown the mixed projection later.
+        if self.contains_projection() {
+            return Ok(None);
+        }
+
+        if let Some(JoinData {
+            projected_left_child,
+            projected_right_child,
+            join_filter,
+            join_on,
+        }) = try_pushdown_through_join(
+            projection,
+            self.left(),
+            self.right(),
+            self.on(),
+            self.schema(),
+            self.filter(),
+        )? {
+            Ok(Some(Arc::new(HashJoinExec::try_new(
+                Arc::new(projected_left_child),
+                Arc::new(projected_right_child),
+                join_on,
+                join_filter,
+                self.join_type(),
+                // Returned early if projection is not None
+                None,
+                *self.partition_mode(),
+                self.null_equals_null,
+            )?)))
+        } else {
+            try_embed_projection(projection, self)
+        }
     }
 }
 
@@ -983,9 +1005,18 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
+    let left_values = on_left
+        .iter()
+        .map(|c| {
+            c.evaluate(&single_batch)?
+                .into_array(single_batch.num_rows())
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let data = JoinLeftData::new(
         hashmap,
         single_batch,
+        left_values,
         Mutex::new(visited_indices_bitmap),
         AtomicUsize::new(probe_threads_count),
         reservation,
@@ -1135,6 +1166,8 @@ impl HashJoinStreamState {
 struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
+    /// Probe-side on expressions values
+    values: Vec<ArrayRef>,
     /// Starting offset for JoinHashMap lookups
     offset: JoinHashMapOffset,
     /// Max joined probe-side index from current batch
@@ -1161,8 +1194,6 @@ impl ProcessProbeBatchState {
 struct HashJoinStream {
     /// Input schema
     schema: Arc<Schema>,
-    /// equijoin columns from the left (build side)
-    on_left: Vec<PhysicalExprRef>,
     /// equijoin columns from the right (probe side)
     on_right: Vec<PhysicalExprRef>,
     /// optional join filter
@@ -1248,27 +1279,13 @@ impl RecordBatchStream for HashJoinStream {
 #[allow(clippy::too_many_arguments)]
 fn lookup_join_hashmap(
     build_hashmap: &JoinHashMap,
-    build_input_buffer: &RecordBatch,
-    probe_batch: &RecordBatch,
-    build_on: &[PhysicalExprRef],
-    probe_on: &[PhysicalExprRef],
+    build_side_values: &[ArrayRef],
+    probe_side_values: &[ArrayRef],
     null_equals_null: bool,
     hashes_buffer: &[u64],
     limit: usize,
     offset: JoinHashMapOffset,
 ) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
-    let keys_values = probe_on
-        .iter()
-        .map(|c| c.evaluate(probe_batch)?.into_array(probe_batch.num_rows()))
-        .collect::<Result<Vec<_>>>()?;
-    let build_join_values = build_on
-        .iter()
-        .map(|c| {
-            c.evaluate(build_input_buffer)?
-                .into_array(build_input_buffer.num_rows())
-        })
-        .collect::<Result<Vec<_>>>()?;
-
     let (probe_indices, build_indices, next_offset) = build_hashmap
         .get_matched_indices_with_limit_offset(hashes_buffer, None, limit, offset);
 
@@ -1278,8 +1295,8 @@ fn lookup_join_hashmap(
     let (build_indices, probe_indices) = equal_rows_arr(
         &build_indices,
         &probe_indices,
-        &build_join_values,
-        &keys_values,
+        build_side_values,
+        probe_side_values,
         null_equals_null,
     )?;
 
@@ -1349,14 +1366,6 @@ pub fn equal_rows_arr(
         downcast_array(left_filtered.as_ref()),
         downcast_array(right_filtered.as_ref()),
     ))
-}
-
-fn get_final_indices_from_shared_bitmap(
-    shared_bitmap: &SharedBitmapBuilder,
-    join_type: JoinType,
-) -> (UInt64Array, UInt32Array) {
-    let bitmap = shared_bitmap.lock();
-    get_final_indices_from_bit_map(&bitmap, join_type)
 }
 
 impl HashJoinStream {
@@ -1437,6 +1446,7 @@ impl HashJoinStream {
                 self.state =
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
+                        values: keys_values,
                         offset: (0, None),
                         joined_probe_idx: None,
                     });
@@ -1461,10 +1471,8 @@ impl HashJoinStream {
         // get the matched by join keys indices
         let (left_indices, right_indices, next_offset) = lookup_join_hashmap(
             build_side.left_data.hash_map(),
-            build_side.left_data.batch(),
-            &state.batch,
-            &self.on_left,
-            &self.on_right,
+            build_side.left_data.values(),
+            &state.values,
             self.null_equals_null,
             &self.hashes_buffer,
             self.batch_size,
@@ -1621,18 +1629,24 @@ impl Stream for HashJoinStream {
     }
 }
 
+impl EmbeddedProjection for HashJoinExec {
+    fn with_projection(&self, projection: Option<Vec<usize>>) -> Result<Self> {
+        self.with_projection(projection)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::MemorySourceConfig;
     use crate::{
-        common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
-        test::build_table_i32, test::exec::MockExec,
+        common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
+        test::exec::MockExec,
     };
 
-    use arrow::array::{Date32Array, Int32Array};
+    use arrow::array::{Date32Array, Int32Array, StructArray};
+    use arrow::buffer::NullBuffer;
     use arrow::datatypes::{DataType, Field};
-    use arrow_array::StructArray;
-    use arrow_buffer::NullBuffer;
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err,
         ScalarValue,
@@ -1642,7 +1656,6 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::PhysicalExpr;
-
     use hashbrown::raw::RawTable;
     use rstest::*;
     use rstest_reuse::*;
@@ -1667,7 +1680,7 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
-        Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
+        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     fn join(
@@ -2069,9 +2082,9 @@ mod tests {
         let batch2 =
             build_table_i32(("a1", &vec![2]), ("b2", &vec![2]), ("c1", &vec![9]));
         let schema = batch1.schema();
-        let left = Arc::new(
-            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
-        );
+        let left =
+            MemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+                .unwrap();
 
         let right = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -2141,9 +2154,9 @@ mod tests {
         );
         let schema = batch1.schema();
 
-        let left = Arc::new(
-            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
-        );
+        let left =
+            MemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+                .unwrap();
         let right = build_table(
             ("a2", &vec![20, 30, 10]),
             ("b2", &vec![5, 6, 4]),
@@ -2195,9 +2208,9 @@ mod tests {
         let batch2 =
             build_table_i32(("a2", &vec![30]), ("b1", &vec![5]), ("c2", &vec![90]));
         let schema = batch1.schema();
-        let right = Arc::new(
-            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
-        );
+        let right =
+            MemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+                .unwrap();
 
         let on = vec![(
             Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
@@ -2275,9 +2288,8 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
-        Arc::new(
-            MemoryExec::try_new(&[vec![batch.clone(), batch]], schema, None).unwrap(),
-        )
+        MemorySourceConfig::try_new_exec(&[vec![batch.clone(), batch]], schema, None)
+            .unwrap()
     }
 
     #[apply(batch_sizes)]
@@ -2382,7 +2394,8 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
-        let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
+        let right =
+            MemorySourceConfig::try_new_exec(&[vec![right]], schema, None).unwrap();
         let join = join(left, right, on, &JoinType::Left, false).unwrap();
 
         let columns = columns(&join.schema());
@@ -2419,7 +2432,8 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
-        let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
+        let right =
+            MemorySourceConfig::try_new_exec(&[vec![right]], schema, None).unwrap();
         let join = join(left, right, on, &JoinType::Full, false).unwrap();
 
         let columns = columns(&join.schema());
@@ -2613,7 +2627,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2648,8 +2662,11 @@ mod tests {
             Operator::Gt,
             Arc::new(Literal::new(ScalarValue::Int32(Some(10)))),
         )) as Arc<dyn PhysicalExpr>;
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join = join_with_filter(left, right, on, filter, &JoinType::LeftSemi, false)?;
 
@@ -2737,7 +2754,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2775,8 +2792,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(11)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema.clone()),
+        );
 
         let join =
             join_with_filter(left, right, on, filter, &JoinType::RightSemi, false)?;
@@ -2859,7 +2879,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices.clone(),
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -2898,8 +2918,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join = join_with_filter(left, right, on, filter, &JoinType::LeftAnti, false)?;
 
@@ -2988,7 +3011,7 @@ mod tests {
         let filter = JoinFilter::new(
             filter_expression,
             column_indices,
-            intermediate_schema.clone(),
+            Arc::new(intermediate_schema.clone()),
         );
 
         let join = join_with_filter(
@@ -3032,8 +3055,11 @@ mod tests {
             Arc::new(Literal::new(ScalarValue::Int32(Some(8)))),
         )) as Arc<dyn PhysicalExpr>;
 
-        let filter =
-            JoinFilter::new(filter_expression, column_indices, intermediate_schema);
+        let filter = JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        );
 
         let join =
             join_with_filter(left, right, on, filter, &JoinType::RightAnti, false)?;
@@ -3304,17 +3330,20 @@ mod tests {
 
         let join_hash_map = JoinHashMap::new(hashmap_left, next);
 
+        let left_keys_values = key_column.evaluate(&left)?.into_array(left.num_rows())?;
         let right_keys_values =
             key_column.evaluate(&right)?.into_array(right.num_rows())?;
         let mut hashes_buffer = vec![0; right.num_rows()];
-        create_hashes(&[right_keys_values], &random_state, &mut hashes_buffer)?;
+        create_hashes(
+            &[Arc::clone(&right_keys_values)],
+            &random_state,
+            &mut hashes_buffer,
+        )?;
 
         let (l, r, _) = lookup_join_hashmap(
             &join_hash_map,
-            &left,
-            &right,
-            &[Arc::clone(&key_column)],
-            &[key_column],
+            &[left_keys_values],
+            &[right_keys_values],
             false,
             &hashes_buffer,
             8192,
@@ -3393,7 +3422,11 @@ mod tests {
             Arc::new(Column::new("c", 1)),
         )) as Arc<dyn PhysicalExpr>;
 
-        JoinFilter::new(filter_expression, column_indices, intermediate_schema)
+        JoinFilter::new(
+            filter_expression,
+            column_indices,
+            Arc::new(intermediate_schema),
+        )
     }
 
     #[apply(batch_sizes)]
@@ -3704,15 +3737,14 @@ mod tests {
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19107, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
-        let left = Arc::new(
-            MemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None).unwrap(),
-        );
-
+        let left =
+            MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+                .unwrap();
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19108, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
-        let right = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
-
+        let right =
+            MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
         let on = vec![(
             Arc::new(Column::new_with_schema("date", &left.schema()).unwrap()) as _,
             Arc::new(Column::new_with_schema("date", &right.schema()).unwrap()) as _,
@@ -3981,7 +4013,7 @@ mod tests {
             // Asserting that operator-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput"
             );
 
             assert_contains!(
@@ -4002,27 +4034,23 @@ mod tests {
             ("b1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
             ("c1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
         );
-        let left = Arc::new(
-            MemoryExec::try_new(
-                &[vec![left_batch.clone()], vec![left_batch.clone()]],
-                left_batch.schema(),
-                None,
-            )
-            .unwrap(),
-        );
+        let left = MemorySourceConfig::try_new_exec(
+            &[vec![left_batch.clone()], vec![left_batch.clone()]],
+            left_batch.schema(),
+            None,
+        )
+        .unwrap();
         let right_batch = build_table_i32(
             ("a2", &vec![10, 11]),
             ("b2", &vec![12, 13]),
             ("c2", &vec![14, 15]),
         );
-        let right = Arc::new(
-            MemoryExec::try_new(
-                &[vec![right_batch.clone()], vec![right_batch.clone()]],
-                right_batch.schema(),
-                None,
-            )
-            .unwrap(),
-        );
+        let right = MemorySourceConfig::try_new_exec(
+            &[vec![right_batch.clone()], vec![right_batch.clone()]],
+            right_batch.schema(),
+            None,
+        )
+        .unwrap();
         let on = vec![(
             Arc::new(Column::new_with_schema("b1", &left_batch.schema())?) as _,
             Arc::new(Column::new_with_schema("b2", &right_batch.schema())?) as _,
@@ -4066,7 +4094,7 @@ mod tests {
             // Asserting that stream-level reservation attempting to overallocate
             assert_contains!(
                 err.to_string(),
-                "External error: Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
+                "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: HashJoinInput[1]"
 
             );
 
@@ -4102,7 +4130,7 @@ mod tests {
         )
         .unwrap();
         let schema_ref = batch.schema();
-        Arc::new(MemoryExec::try_new(&[vec![batch]], schema_ref, None).unwrap())
+        MemorySourceConfig::try_new_exec(&[vec![batch]], schema_ref, None).unwrap()
     }
 
     #[tokio::test]

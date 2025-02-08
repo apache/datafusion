@@ -18,12 +18,12 @@
 //! [`ScalarUDFImpl`] definitions for array_replace, array_replace_n and array_replace_all functions.
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, Capacities, MutableArrayData, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
+    NullBufferBuilder, OffsetSizeTrait,
 };
 use arrow::datatypes::DataType;
 
-use arrow_array::GenericListArray;
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow::buffer::OffsetBuffer;
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
@@ -306,12 +306,12 @@ fn general_replace<O: OffsetSizeTrait>(
         capacity,
     );
 
-    let mut valid = BooleanBufferBuilder::new(list_array.len());
+    let mut valid = NullBufferBuilder::new(list_array.len());
 
     for (row_index, offset_window) in list_array.offsets().windows(2).enumerate() {
         if list_array.is_null(row_index) {
             offsets.push(offsets[row_index]);
-            valid.append(false);
+            valid.append_null();
             continue;
         }
 
@@ -338,7 +338,7 @@ fn general_replace<O: OffsetSizeTrait>(
                 end.to_usize().unwrap(),
             );
             offsets.push(offsets[row_index] + (end - start));
-            valid.append(true);
+            valid.append_non_null();
             continue;
         }
 
@@ -367,7 +367,7 @@ fn general_replace<O: OffsetSizeTrait>(
         }
 
         offsets.push(offsets[row_index] + (end - start));
-        valid.append(true);
+        valid.append_non_null();
     }
 
     let data = mutable.freeze();
@@ -375,8 +375,8 @@ fn general_replace<O: OffsetSizeTrait>(
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(list_array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
-        Some(NullBuffer::new(valid.finish())),
+        arrow::array::make_array(data),
+        valid.finish(),
     )?))
 }
 

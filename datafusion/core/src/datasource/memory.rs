@@ -27,7 +27,6 @@ use crate::error::Result;
 use crate::execution::context::SessionState;
 use crate::logical_expr::Expr;
 use crate::physical_plan::insert::{DataSink, DataSinkExec};
-use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::{
     common, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
@@ -42,7 +41,8 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
-use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -132,6 +132,7 @@ impl MemTable {
         state: &SessionState,
     ) -> Result<Self> {
         let schema = t.schema();
+        let constraints = t.constraints();
         let exec = t.scan(state, None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
@@ -162,7 +163,14 @@ impl MemTable {
             }
         }
 
-        let exec = MemoryExec::try_new(&data, Arc::clone(&schema), None)?;
+        let mut exec = DataSourceExec::new(Arc::new(MemorySourceConfig::try_new(
+            &data,
+            Arc::clone(&schema),
+            None,
+        )?));
+        if let Some(cons) = constraints {
+            exec = exec.with_constraints(cons.clone());
+        }
 
         if let Some(num_partitions) = output_partitions {
             let exec = RepartitionExec::try_new(
@@ -220,11 +228,11 @@ impl TableProvider for MemTable {
             partitions.push(inner_vec.clone())
         }
 
-        let mut exec =
-            MemoryExec::try_new(&partitions, self.schema(), projection.cloned())?;
+        let mut source =
+            MemorySourceConfig::try_new(&partitions, self.schema(), projection.cloned())?;
 
         let show_sizes = state.config_options().explain.show_sizes;
-        exec = exec.with_show_sizes(show_sizes);
+        source = source.with_show_sizes(show_sizes);
 
         // add sort information if present
         let sort_order = self.sort_order.lock();
@@ -241,10 +249,10 @@ impl TableProvider for MemTable {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            exec = exec.try_with_sort_information(file_sort_order)?;
+            source = source.try_with_sort_information(file_sort_order)?;
         }
 
-        Ok(Arc::new(exec))
+        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
     }
 
     /// Returns an ExecutionPlan that inserts the execution results of a given [`ExecutionPlan`] into this [`MemTable`].
@@ -293,13 +301,8 @@ impl TableProvider for MemTable {
         if insert_op != InsertOp::Append {
             return not_impl_err!("{insert_op} not implemented for MemoryTable yet");
         }
-        let sink = Arc::new(MemSink::try_new(self.batches.clone())?);
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            Arc::clone(&self.schema),
-            None,
-        )))
+        let sink = MemSink::try_new(self.batches.clone(), Arc::clone(&self.schema))?;
+        Ok(Arc::new(DataSinkExec::new(input, Arc::new(sink), None)))
     }
 
     fn get_column_default(&self, column: &str) -> Option<&Expr> {
@@ -311,6 +314,7 @@ impl TableProvider for MemTable {
 struct MemSink {
     /// Target locations for writing data
     batches: Vec<PartitionData>,
+    schema: SchemaRef,
 }
 
 impl Debug for MemSink {
@@ -336,11 +340,11 @@ impl MemSink {
     /// Creates a new [`MemSink`].
     ///
     /// The caller is responsible for ensuring that there is at least one partition to insert into.
-    fn try_new(batches: Vec<PartitionData>) -> Result<Self> {
+    fn try_new(batches: Vec<PartitionData>, schema: SchemaRef) -> Result<Self> {
         if batches.is_empty() {
             return plan_err!("Cannot insert into MemTable with zero partitions");
         }
-        Ok(Self { batches })
+        Ok(Self { batches, schema })
     }
 }
 
@@ -350,8 +354,8 @@ impl DataSink for MemSink {
         self
     }
 
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
     }
 
     async fn write_all(

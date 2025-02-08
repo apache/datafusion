@@ -124,7 +124,7 @@ logical_plan
 02)--TableScan: values projection=[a, b, c]
 physical_plan
 01)ProjectionExec: expr=[struct(a@0, b@1, c@2) as struct(values.a,values.b,values.c)]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # error on 0 arguments
 query error
@@ -151,19 +151,19 @@ query error DataFusion error: Execution error: named_struct requires an even num
 select named_struct('a', 1, 'b');
 
 # error on even argument not a string literal #1
-query error DataFusion error: Execution error: named_struct even arguments must be string literals, got Int64\(1\) instead at position 0
+query error DataFusion error: Execution error: named_struct requires 0\-th \(0\-indexed\) field name as non\-empty constant string
 select named_struct(1, 'a');
 
 # error on even argument not a string literal #2
-query error DataFusion error: Execution error: named_struct even arguments must be string literals, got Int64\(0\) instead at position 2
+query error DataFusion error: Execution error: named_struct requires 2\-th \(0\-indexed\) field name as non\-empty constant string
 select named_struct('corret', 1, 0, 'wrong');
 
 # error on even argument not a string literal #3
-query error DataFusion error: Execution error: named_struct even arguments must be string literals, got values\.a instead at position 0
+query error DataFusion error: Execution error: named_struct requires 0\-th \(0\-indexed\) field name as non\-empty constant string
 select named_struct(values.a, 'a') from values;
 
 # error on even argument not a string literal #4
-query error DataFusion error: Execution error: named_struct even arguments must be string literals, got values\.c instead at position 0
+query error DataFusion error: Execution error: named_struct requires 0\-th \(0\-indexed\) field name as non\-empty constant string
 select named_struct(values.c, 'c') from values;
 
 # named_struct with mixed scalar and array values #1
@@ -459,14 +459,14 @@ create table t as values({r: 'a', c: 1}), ({r: 'b', c: 2.3});
 query ?
 select * from t;
 ----
-{c0: a, c1: 1.0}
-{c0: b, c1: 2.3}
+{r: a, c: 1.0}
+{r: b, c: 2.3}
 
 query T
 select arrow_typeof(column1) from t;
 ----
-Struct([Field { name: "c0", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c1", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
-Struct([Field { name: "c0", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c1", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
+Struct([Field { name: "r", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "c", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }])
 
 statement ok
 drop table t;

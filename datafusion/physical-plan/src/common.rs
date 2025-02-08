@@ -26,10 +26,10 @@ use super::SendableRecordBatchStream;
 use crate::stream::RecordBatchReceiverStream;
 use crate::{ColumnStatistics, Statistics};
 
+use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
@@ -333,12 +333,14 @@ mod tests {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(0),
                 },
                 ColumnStatistics {
                     distinct_count: Precision::Absent,
                     max_value: Precision::Absent,
                     min_value: Precision::Absent,
+                    sum_value: Precision::Absent,
                     null_count: Precision::Exact(0),
                 },
             ],
@@ -371,6 +373,7 @@ mod tests {
                 distinct_count: Precision::Absent,
                 max_value: Precision::Absent,
                 min_value: Precision::Absent,
+                sum_value: Precision::Absent,
                 null_count: Precision::Exact(3),
             }],
         };

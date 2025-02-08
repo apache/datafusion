@@ -137,7 +137,7 @@ impl ListingTableConfig {
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
-    pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_options(self, state: &dyn Session) -> Result<Self> {
         let store = if let Some(url) = self.table_paths.first() {
             state.runtime_env().object_store(url)?
         } else {
@@ -164,7 +164,7 @@ impl ListingTableConfig {
             format_options
                 .insert("format.compression".to_string(), compression_type.clone());
         }
-
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let file_format = state
             .get_file_format_factory(&file_extension)
             .ok_or(config_datafusion_err!(
@@ -191,7 +191,7 @@ impl ListingTableConfig {
     }
 
     /// Infer the [`SchemaRef`] based on `table_path` suffix.  Requires `self.options` to be set prior to using.
-    pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_schema(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let schema = if let Some(url) = self.table_paths.first() {
@@ -211,12 +211,12 @@ impl ListingTableConfig {
     }
 
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
-    pub async fn infer(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer(self, state: &dyn Session) -> Result<Self> {
         self.infer_options(state).await?.infer_schema(state).await
     }
 
     /// Infer the partition columns from the path. Requires `self.options` to be set prior to using.
-    pub async fn infer_partitions_from_path(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_partitions_from_path(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let Some(url) = self.table_paths.first() else {
@@ -484,7 +484,7 @@ impl ListingOptions {
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema<'a>(
         &'a self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
         let store = state.runtime_env().object_store(table_path)?;
@@ -509,7 +509,7 @@ impl ListingOptions {
     /// Allows specifying partial partitions.
     pub async fn validate_partitions(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &ListingTableUrl,
     ) -> Result<()> {
         if self.table_partition_cols.is_empty() {
@@ -563,7 +563,7 @@ impl ListingOptions {
     /// and therefore may fail to detect invalid partitioning.
     pub(crate) async fn infer_partitions(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &ListingTableUrl,
     ) -> Result<Vec<String>> {
         let store = state.runtime_env().object_store(table_path)?;
@@ -933,13 +933,18 @@ impl TableProvider for ListingTable {
             .format
             .create_physical_plan(
                 session_state,
-                FileScanConfig::new(object_store_url, Arc::clone(&self.file_schema))
-                    .with_file_groups(partitioned_file_lists)
-                    .with_statistics(statistics)
-                    .with_projection(projection.cloned())
-                    .with_limit(limit)
-                    .with_output_ordering(output_ordering)
-                    .with_table_partition_cols(table_partition_cols),
+                FileScanConfig::new(
+                    object_store_url,
+                    Arc::clone(&self.file_schema),
+                    self.options.format.file_source(),
+                )
+                .with_file_groups(partitioned_file_lists)
+                .with_constraints(self.constraints.clone())
+                .with_statistics(statistics)
+                .with_projection(projection.cloned())
+                .with_limit(limit)
+                .with_output_ordering(output_ordering)
+                .with_table_partition_cols(table_partition_cols),
                 filters.as_ref(),
             )
             .await
@@ -1050,21 +1055,22 @@ impl TableProvider for ListingTable {
             table_partition_cols: self.options.table_partition_cols.clone(),
             insert_op,
             keep_partition_by_columns,
+            file_extension: self.options().format.get_ext(),
         };
 
         let order_requirements = if !self.options().file_sort_order.is_empty() {
             // Multiple sort orders in outer vec are equivalent, so we pass only the first one
-            let ordering = self
-                .try_create_output_ordering()?
-                .first()
-                .ok_or(DataFusionError::Internal(
-                    "Expected ListingTable to have a sort order, but none found!".into(),
-                ))?
-                .clone();
+            let orderings = self.try_create_output_ordering()?;
+            let Some(ordering) = orderings.first() else {
+                return internal_err!(
+                    "Expected ListingTable to have a sort order, but none found!"
+                );
+            };
             // Converts Vec<Vec<SortExpr>> into type required by execution plan to specify its required input ordering
             Some(LexRequirement::new(
                 ordering
                     .into_iter()
+                    .cloned()
                     .map(PhysicalSortRequirement::from)
                     .collect::<Vec<_>>(),
             ))
@@ -1089,7 +1095,7 @@ impl ListingTable {
     /// be distributed to different threads / executors.
     async fn list_files_for_scan<'a>(
         &'a self,
-        ctx: &'a SessionState,
+        ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
@@ -1150,7 +1156,7 @@ impl ListingTable {
     /// If they are not, it infers the statistics from the file and stores them in the cache.
     async fn do_collect_statistics(
         &self,
-        ctx: &SessionState,
+        ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> Result<Arc<Statistics>> {
@@ -1312,15 +1318,15 @@ mod tests {
             // ok with one column
             (
                 vec![vec![col("string_col").sort(true, false)]],
-                Ok(vec![LexOrdering {
-                        inner: vec![PhysicalSortExpr {
+                Ok(vec![LexOrdering::new(
+                        vec![PhysicalSortExpr {
                             expr: physical_col("string_col", &schema).unwrap(),
                             options: SortOptions {
                                 descending: false,
                                 nulls_first: false,
                             },
                         }],
-                    }
+                )
                 ])
             ),
             // ok with two columns, different options
@@ -1329,8 +1335,8 @@ mod tests {
                     col("string_col").sort(true, false),
                     col("int_col").sort(false, true),
                 ]],
-                Ok(vec![LexOrdering {
-                        inner: vec![
+                Ok(vec![LexOrdering::new(
+                        vec![
                             PhysicalSortExpr::new_default(physical_col("string_col", &schema).unwrap())
                                         .asc()
                                         .nulls_last(),
@@ -1338,7 +1344,7 @@ mod tests {
                                         .desc()
                                         .nulls_first()
                         ],
-                    }
+                )
                 ])
             ),
         ];
@@ -1992,7 +1998,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(arrow_array::Int32Array::from(vec![
+            vec![Arc::new(arrow::array::Int32Array::from(vec![
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
             ]))],
         )?;

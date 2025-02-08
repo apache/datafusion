@@ -18,16 +18,16 @@
 //! [`ScalarUDFImpl`] definitions for range and gen_series functions.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, Int64Array, ListArray, ListBuilder};
-use arrow::datatypes::{DataType, Field};
-use arrow_array::builder::{Date32Builder, TimestampNanosecondBuilder};
-use arrow_array::temporal_conversions::as_datetime_with_timezone;
-use arrow_array::timezone::Tz;
-use arrow_array::types::{
-    Date32Type, IntervalMonthDayNanoType, TimestampNanosecondType as TSNT,
+use arrow::array::{
+    builder::{Date32Builder, TimestampNanosecondBuilder},
+    temporal_conversions::as_datetime_with_timezone,
+    timezone::Tz,
+    types::{Date32Type, IntervalMonthDayNanoType, TimestampNanosecondType as TSNT},
+    Array, ArrayRef, Int64Array, ListArray, ListBuilder, NullArray, NullBufferBuilder,
+    TimestampNanosecondArray,
 };
-use arrow_array::{NullArray, TimestampNanosecondArray};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, Field};
 use arrow_schema::DataType::*;
 use arrow_schema::IntervalUnit::MonthDayNano;
 use arrow_schema::TimeUnit::Nanosecond;
@@ -345,7 +345,7 @@ pub(super) fn gen_range_inner(
 
     let mut values = vec![];
     let mut offsets = vec![0];
-    let mut valid = BooleanBufferBuilder::new(stop_array.len());
+    let mut valid = NullBufferBuilder::new(stop_array.len());
     for (idx, stop) in stop_array.iter().enumerate() {
         match retrieve_range_args(start_array, stop, step_array, idx) {
             Some((_, _, 0)) => {
@@ -369,12 +369,12 @@ pub(super) fn gen_range_inner(
                         .step_by(step_abs),
                 );
                 offsets.push(values.len() as i32);
-                valid.append(true);
+                valid.append_non_null();
             }
             // If any of the arguments is NULL, append a NULL value to the result.
             None => {
                 offsets.push(values.len() as i32);
-                valid.append(false);
+                valid.append_null();
             }
         };
     }
@@ -382,7 +382,7 @@ pub(super) fn gen_range_inner(
         Arc::new(Field::new_list_field(Int64, true)),
         OffsetBuffer::new(offsets.into()),
         Arc::new(Int64Array::from(values)),
-        Some(NullBuffer::new(valid.finish())),
+        valid.finish(),
     )?);
     Ok(arr)
 }

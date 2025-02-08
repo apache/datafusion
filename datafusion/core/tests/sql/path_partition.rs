@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::physical_plan::ParquetExec;
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::{
     assert_batches_sorted_eq,
     datasource::{
@@ -41,12 +41,13 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
+use datafusion_expr::{col, lit, Expr, Operator};
+use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
+use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
-use datafusion_expr::{col, lit, Expr, Operator};
-use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
 use futures::stream::{self, BoxStream};
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
@@ -84,8 +85,15 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
         Expr::gt(col("id"), lit(1)),
     ];
     let exec = table.scan(&ctx.state(), None, &filters, None).await?;
-    let parquet_exec = exec.as_any().downcast_ref::<ParquetExec>().unwrap();
-    let pred = parquet_exec.predicate().unwrap();
+    let data_source = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let source = data_source.source();
+    let file_source = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+    let parquet_config = file_source
+        .file_source()
+        .as_any()
+        .downcast_ref::<ParquetSource>()
+        .unwrap();
+    let pred = parquet_config.predicate().unwrap();
     // Only the last filter should be pushdown to TableScan
     let expected = Arc::new(BinaryExpr::new(
         Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
@@ -218,10 +226,11 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     assert_eq!(min_limit, resulting_limit);
 
     let s = ScalarValue::try_from_array(results[0].column(1), 0)?;
-    let month = match extract_as_utf(&s) {
-        Some(month) => month,
-        s => panic!("Expected month as Dict(_, Utf8) found {s:?}"),
-    };
+    assert!(
+        matches!(s.data_type(), DataType::Dictionary(_, v) if v.as_ref() == &DataType::Utf8),
+        "Expected month as Dict(_, Utf8) found {s:?}"
+    );
+    let month = s.try_as_str().flatten().unwrap();
 
     let sql_on_partition_boundary = format!(
         "SELECT month from t where month = '{}' LIMIT {}",
@@ -239,15 +248,6 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let partition_row_count = max_limit - 1;
     assert_eq!(partition_row_count, resulting_limit);
     Ok(())
-}
-
-fn extract_as_utf(v: &ScalarValue) -> Option<String> {
-    if let ScalarValue::Dictionary(_, v) = v {
-        if let ScalarValue::Utf8(v) = v.as_ref() {
-            return v.clone();
-        }
-    }
-    None
 }
 
 #[tokio::test]

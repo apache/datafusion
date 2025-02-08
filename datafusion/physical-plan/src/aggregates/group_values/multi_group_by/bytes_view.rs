@@ -17,11 +17,9 @@
 
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
-use arrow::array::{make_view, AsArray, ByteView};
-use arrow::buffer::ScalarBuffer;
+use arrow::array::{make_view, Array, ArrayRef, AsArray, ByteView, GenericByteViewArray};
+use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::ByteViewType;
-use arrow_array::{Array, ArrayRef, GenericByteViewArray};
-use arrow_buffer::Buffer;
 use itertools::izip;
 use std::marker::PhantomData;
 use std::mem::{replace, size_of};
@@ -545,10 +543,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::aggregates::group_values::multi_group_by::bytes_view::ByteViewGroupValueBuilder;
-    use arrow::array::AsArray;
+    use arrow::array::{ArrayRef, AsArray, NullBufferBuilder, StringViewArray};
     use arrow::datatypes::StringViewType;
-    use arrow_array::{ArrayRef, StringViewArray};
-    use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
 
     use super::GroupColumn;
 
@@ -751,22 +747,21 @@ mod tests {
         .into_parts();
 
         // explicitly build a boolean buffer where one of the null values also happens to match
-        let mut boolean_buffer_builder = BooleanBufferBuilder::new(9);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(false); // this sets Some("bar") to null above
-        boolean_buffer_builder.append(false);
-        boolean_buffer_builder.append(false);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(true);
-        let nulls = NullBuffer::new(boolean_buffer_builder.finish());
+        let mut nulls = NullBufferBuilder::new(9);
+        nulls.append_non_null();
+        nulls.append_null(); // this sets Some("bar") to null above
+        nulls.append_null();
+        nulls.append_null();
+        nulls.append_non_null();
+        nulls.append_non_null();
+        nulls.append_non_null();
+        nulls.append_non_null();
+        nulls.append_non_null();
+        nulls.append_non_null();
+        nulls.append_non_null();
+        nulls.append_non_null();
         let input_array =
-            Arc::new(StringViewArray::new(views, buffer, Some(nulls))) as ArrayRef;
+            Arc::new(StringViewArray::new(views, buffer, nulls.finish())) as ArrayRef;
 
         // Check
         let mut equal_to_results = vec![true; input_array.len()];

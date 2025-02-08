@@ -94,6 +94,7 @@ fn parse_decimals() {
                 enable_ident_normalization: false,
                 support_varchar_with_length: false,
                 enable_options_value_normalization: false,
+                collect_spans: false,
             },
         );
     }
@@ -149,6 +150,7 @@ fn parse_ident_normalization() {
                 enable_ident_normalization,
                 support_varchar_with_length: false,
                 enable_options_value_normalization: false,
+                collect_spans: false,
             },
         );
         if plan.is_ok() {
@@ -466,10 +468,10 @@ fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = "Dml: op=[Insert Into] table=[person]\
-                \n  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name, \
+                \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
                         CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
                         CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
-                \n    Values: (Int64(1), Utf8(\"Alan\"), Utf8(\"Turing\"))";
+                \n    Values: (CAST(Int64(1) AS UInt32), Utf8(\"Alan\"), Utf8(\"Turing\"))";
     quick_test(sql, plan);
 }
 
@@ -478,8 +480,8 @@ fn plan_insert_no_target_columns() {
     let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
     let plan = r#"
 Dml: op=[Insert Into] table=[test_decimal]
-  Projection: CAST(column1 AS Int32) AS id, CAST(column2 AS Decimal128(10, 2)) AS price
-    Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
+  Projection: column1 AS id, column2 AS price
+    Values: (CAST(Int64(1) AS Int32), CAST(Int64(2) AS Decimal128(10, 2))), (CAST(Int64(3) AS Int32), CAST(Int64(4) AS Decimal128(10, 2)))
     "#
     .trim();
     quick_test(sql, plan);
@@ -492,15 +494,16 @@ Dml: op=[Insert Into] table=[test_decimal]
 )]
 #[case::non_existing_column(
     "INSERT INTO test_decimal (nonexistent, price) VALUES (1, 2), (4, 5)",
-    "Schema error: No field named nonexistent. Valid fields are id, price."
+    "Schema error: No field named nonexistent. \
+    Valid fields are id, price."
 )]
 #[case::target_column_count_mismatch(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
-    "Error during planning: Column count doesn't match insert query!"
+    "Error during planning: Inconsistent data length across values list: got 2 values in row 0 but expected 3"
 )]
 #[case::source_column_count_mismatch(
     "INSERT INTO person VALUES ($1, $2)",
-    "Error during planning: Column count doesn't match insert query!"
+    "Error during planning: Inconsistent data length across values list: got 2 values in row 0 but expected 8"
 )]
 #[case::extra_placeholder(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2, $3, $4)",
@@ -1358,9 +1361,11 @@ fn select_simple_aggregate_with_groupby_column_unselected() {
 fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
     let sql = "SELECT sum(age) FROM person GROUP BY doesnotexist";
     let err = logical_plan(sql).expect_err("query should have failed");
-    assert_eq!("Schema error: No field named doesnotexist. Valid fields are \"sum(person.age)\", \
+    let expected = "Schema error: No field named doesnotexist. \
+        Valid fields are \"sum(person.age)\", \
         person.id, person.first_name, person.last_name, person.age, person.state, \
-        person.salary, person.birth_date, person.\"😀\".", err.strip_backtrace());
+        person.salary, person.birth_date, person.\"😀\".";
+    assert_eq!(err.strip_backtrace(), expected);
 }
 
 #[test]
@@ -2506,6 +2511,21 @@ fn select_groupby_orderby() {
   FROM person GROUP BY person.birth_date ORDER BY birth_date;
 "#;
     quick_test(sql, expected);
+
+    // Use columnized `avg(age)` in the order by
+    let sql = r#"SELECT
+  avg(age) + avg(age),
+  date_trunc('month', person.birth_date) AS "birth_date"
+  FROM person GROUP BY person.birth_date ORDER BY avg(age) + avg(age);
+"#;
+
+    let expected =
+        "Sort: avg(person.age) + avg(person.age) ASC NULLS LAST\
+        \n  Projection: avg(person.age) + avg(person.age), date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date\
+        \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]\
+        \n      TableScan: person";
+
+    quick_test(sql, expected);
 }
 
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
@@ -3627,19 +3647,17 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
     // param is not number following the $ sign
     // panic due to error returned from the parser
     let sql = "PREPARE AS SELECT id, age  FROM person WHERE age = $foo";
-    assert_eq!(
-        logical_plan(sql).unwrap_err().strip_backtrace(),
-        "SQL error: ParserError(\"Expected: AS, found: SELECT\")"
-    )
+    assert!(logical_plan(sql)
+        .unwrap_err()
+        .strip_backtrace()
+        .contains("Expected: AS, found: SELECT"))
 }
 
 #[test]
 fn test_prepare_statement_to_plan_panic_no_relation_and_constant_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id + $1";
-    assert_eq!(
-        logical_plan(sql).unwrap_err().strip_backtrace(),
-        "Schema error: No field named id."
-    )
+    let expected = "Schema error: No field named id.";
+    assert_eq!(logical_plan(sql).unwrap_err().strip_backtrace(), expected);
 }
 
 #[test]
@@ -3670,7 +3688,7 @@ fn test_non_prepare_statement_should_infer_types() {
 
 #[test]
 #[should_panic(
-    expected = "value: SQL(ParserError(\"Expected: [NOT] NULL or TRUE|FALSE or [NOT] DISTINCT FROM after IS, found: $1\""
+    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [form] NORMALIZED FROM after IS, found: $1"
 )]
 fn test_prepare_statement_to_plan_panic_is_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";
@@ -4334,18 +4352,14 @@ fn test_multi_grouping_sets() {
 fn test_field_not_found_window_function() {
     let order_by_sql = "SELECT count() OVER (order by a);";
     let order_by_err = logical_plan(order_by_sql).expect_err("query should have failed");
-    assert_eq!(
-        "Schema error: No field named a.",
-        order_by_err.strip_backtrace()
-    );
+    let expected = "Schema error: No field named a.";
+    assert_eq!(order_by_err.strip_backtrace(), expected);
 
     let partition_by_sql = "SELECT count() OVER (PARTITION BY a);";
     let partition_by_err =
         logical_plan(partition_by_sql).expect_err("query should have failed");
-    assert_eq!(
-        "Schema error: No field named a.",
-        partition_by_err.strip_backtrace()
-    );
+    let expected = "Schema error: No field named a.";
+    assert_eq!(partition_by_err.strip_backtrace(), expected);
 
     let qualified_sql =
         "SELECT order_id, MAX(qty) OVER (PARTITION BY orders.order_id) from orders";
@@ -4408,7 +4422,18 @@ fn plan_create_index() {
     }
 }
 
-fn assert_field_not_found(err: DataFusionError, name: &str) {
+fn assert_field_not_found(mut err: DataFusionError, name: &str) {
+    let err = loop {
+        match err {
+            DataFusionError::Diagnostic(_, wrapped_err) => {
+                err = *wrapped_err;
+            }
+            DataFusionError::Collection(errs) => {
+                err = errs.into_iter().next().unwrap();
+            }
+            err => break err,
+        }
+    };
     match err {
         DataFusionError::SchemaError { .. } => {
             let msg = format!("{err}");
@@ -4515,7 +4540,7 @@ fn error_message_test(sql: &str, err_msg_starts_with: &str) {
 fn test_error_message_invalid_scalar_function_signature() {
     error_message_test(
         "select sqrt()",
-        "Error during planning: sqrt does not support zero arguments",
+        "Error during planning: 'sqrt' does not support zero arguments",
     );
     error_message_test(
         "select sqrt(1, 2)",
@@ -4527,13 +4552,13 @@ fn test_error_message_invalid_scalar_function_signature() {
 fn test_error_message_invalid_aggregate_function_signature() {
     error_message_test(
         "select sum()",
-        "Error during planning: sum does not support zero arguments",
+        "Error during planning: 'sum' does not support zero arguments",
     );
     // We keep two different prefixes because they clarify each other.
     // It might be incorrect, and we should consider keeping only one.
     error_message_test(
         "select max(9, 3)",
-        "Error during planning: Execution error: User-defined coercion failed",
+        "Error during planning: Execution error: Function 'max' user-defined coercion failed",
     );
 }
 
@@ -4541,7 +4566,7 @@ fn test_error_message_invalid_aggregate_function_signature() {
 fn test_error_message_invalid_window_function_signature() {
     error_message_test(
         "select rank(1) over()",
-        "Error during planning: The function expected zero argument but received 1",
+        "Error during planning: The function 'rank' expected zero argument but received 1",
     );
 }
 
@@ -4549,6 +4574,80 @@ fn test_error_message_invalid_window_function_signature() {
 fn test_error_message_invalid_window_aggregate_function_signature() {
     error_message_test(
         "select sum() over()",
-        "Error during planning: sum does not support zero arguments",
+        "Error during planning: 'sum' does not support zero arguments",
+    );
+}
+
+// Test issue: https://github.com/apache/datafusion/issues/14058
+// Select with wildcard over a USING/NATURAL JOIN should deduplicate condition columns.
+#[test]
+fn test_using_join_wildcard_schema() {
+    let sql = "SELECT * FROM orders o1 JOIN orders o2 USING (order_id)";
+    let plan = logical_plan(sql).unwrap();
+    let count = plan
+        .schema()
+        .iter()
+        .filter(|(_, f)| f.name() == "order_id")
+        .count();
+    // Only one order_id column
+    assert_eq!(count, 1);
+
+    let sql = "SELECT * FROM orders o1 NATURAL JOIN orders o2";
+    let plan = logical_plan(sql).unwrap();
+    // Only columns from one join side should be present
+    let expected_fields = vec![
+        "o1.order_id".to_string(),
+        "o1.customer_id".to_string(),
+        "o1.o_item_id".to_string(),
+        "o1.qty".to_string(),
+        "o1.price".to_string(),
+        "o1.delivered".to_string(),
+    ];
+    assert_eq!(plan.schema().field_names(), expected_fields);
+
+    // Reproducible example of issue #14058
+    let sql = "WITH t1 AS (SELECT 1 AS id, 'a' AS value1),
+        t2 AS (SELECT 1 AS id, 'x' AS value2)
+        SELECT * FROM t1 NATURAL JOIN t2";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        plan.schema().field_names(),
+        [
+            "t1.id".to_string(),
+            "t1.value1".to_string(),
+            "t2.value2".to_string()
+        ]
+    );
+
+    // Multiple joins
+    let sql = "WITH t1 AS (SELECT 1 AS a, 1 AS b),
+        t2 AS (SELECT 1 AS a, 2 AS c),
+        t3 AS (SELECT 1 AS c, 2 AS d)
+        SELECT * FROM t1 NATURAL JOIN t2 RIGHT JOIN t3 USING (c)";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        plan.schema().field_names(),
+        [
+            "t1.a".to_string(),
+            "t1.b".to_string(),
+            "t2.c".to_string(),
+            "t3.d".to_string()
+        ]
+    );
+
+    // Subquery
+    let sql = "WITH t1 AS (SELECT 1 AS a, 1 AS b),
+        t2 AS (SELECT 1 AS a, 2 AS c),
+        t3 AS (SELECT 1 AS c, 2 AS d)
+        SELECT * FROM (SELECT * FROM t1 LEFT JOIN t2 USING(a)) NATURAL JOIN t3";
+    let plan = logical_plan(sql).unwrap();
+    assert_eq!(
+        plan.schema().field_names(),
+        [
+            "t1.a".to_string(),
+            "t1.b".to_string(),
+            "t2.c".to_string(),
+            "t3.d".to_string()
+        ]
     );
 }

@@ -17,18 +17,17 @@
 
 use std::sync::Arc;
 
-use arrow::record_batch::RecordBatch;
-use arrow_array::{ArrayRef, Int32Array, Int64Array, StringArray};
+use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::memory::MemoryExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{collect, ExecutionPlan};
 
 use criterion::async_executor::FuturesExecutor;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_physical_plan::memory::MemorySourceConfig;
 
 fn generate_spm_for_round_robin_tie_breaker(
     has_same_value: bool,
@@ -82,8 +81,8 @@ fn generate_spm_for_round_robin_tie_breaker(
         },
     ]);
 
-    let exec = MemoryExec::try_new(&partitiones, schema, None).unwrap();
-    SortPreservingMergeExec::new(sort, Arc::new(exec))
+    let exec = MemorySourceConfig::try_new_exec(&partitiones, schema, None).unwrap();
+    SortPreservingMergeExec::new(sort, exec)
         .with_round_robin_repartition(enable_round_robin_repartition)
 }
 

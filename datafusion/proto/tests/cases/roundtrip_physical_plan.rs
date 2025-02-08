@@ -41,13 +41,14 @@ use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvSink;
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-    FileSinkConfig, ParquetExec,
+    FileSinkConfig, ParquetSource,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
@@ -94,7 +95,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
+    internal_err, not_impl_err, Constraints, DataFusionError, Result, UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -270,6 +271,7 @@ fn roundtrip_nested_loop_join() -> Result<()> {
             Arc::new(EmptyExec::new(schema_right.clone())),
             None,
             join_type,
+            Some(vec![0]),
         )?))?;
     }
     Ok(())
@@ -303,8 +305,8 @@ fn roundtrip_udwf() -> Result<()> {
     roundtrip_test(Arc::new(BoundedWindowAggExec::try_new(
         vec![udwf_expr],
         input,
-        vec![col("a", &schema)?],
         InputOrderMode::Sorted,
+        true,
     )?))
 }
 
@@ -331,15 +333,13 @@ fn roundtrip_window() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         nth_value_window,
         &[col("b", &schema)?],
-        &LexOrdering {
-            inner: vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-        },
+        &LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }]),
         Arc::new(window_frame),
     ));
 
@@ -382,7 +382,7 @@ fn roundtrip_window() -> Result<()> {
     roundtrip_test(Arc::new(WindowAggExec::try_new(
         vec![plain_aggr_window_expr, sliding_aggr_window_expr, udwf_expr],
         input,
-        vec![col("b", &schema)?],
+        false,
     )?))
 }
 
@@ -701,17 +701,30 @@ fn roundtrip_coalesce_with_fetch() -> Result<()> {
 
 #[test]
 fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+    let predicate = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new("col", 1)),
+        Operator::Eq,
+        lit("1"),
+    ));
+
+    let mut options = TableParquetOptions::new();
+    options.global.pushdown_filters = true;
+
+    let source = Arc::new(
+        ParquetSource::new(options).with_predicate(Arc::clone(&file_schema), predicate),
+    );
+
     let scan_config = FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_schema: Arc::new(Schema::new(vec![Field::new(
-            "col",
-            DataType::Utf8,
-            false,
-        )])),
+        file_schema,
         file_groups: vec![vec![PartitionedFile::new(
             "/path/to/file.parquet".to_string(),
             1024,
         )]],
+        constraints: Constraints::empty(),
         statistics: Statistics {
             num_rows: Precision::Inexact(100),
             total_byte_size: Precision::Inexact(1024),
@@ -723,18 +736,12 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         limit: None,
         table_partition_cols: vec![],
         output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
+        source,
     };
 
-    let predicate = Arc::new(BinaryExpr::new(
-        Arc::new(Column::new("col", 1)),
-        Operator::Eq,
-        lit("1"),
-    ));
-    roundtrip_test(
-        ParquetExec::builder(scan_config)
-            .with_predicate(predicate)
-            .build_arc(),
-    )
+    roundtrip_test(scan_config.new_exec())
 }
 
 #[tokio::test]
@@ -745,9 +752,11 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         vec![wrap_partition_value_in_dict(ScalarValue::Int64(Some(0)))];
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
+    let source = Arc::new(ParquetSource::default());
     let scan_config = FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_groups: vec![vec![file_group]],
+        constraints: Constraints::empty(),
         statistics: Statistics::new_unknown(&schema),
         file_schema: schema,
         projection: Some(vec![0, 1]),
@@ -758,24 +767,36 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
             false,
         )],
         output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
+        source,
     };
 
-    roundtrip_test(ParquetExec::builder(scan_config).build_arc())
+    roundtrip_test(scan_config.new_exec())
 }
 
 #[test]
 fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
+
+    let custom_predicate_expr = Arc::new(CustomPredicateExpr {
+        inner: Arc::new(Column::new("col", 1)),
+    });
+
+    let source = Arc::new(
+        ParquetSource::default()
+            .with_predicate(Arc::clone(&file_schema), custom_predicate_expr),
+    );
+
     let scan_config = FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_schema: Arc::new(Schema::new(vec![Field::new(
-            "col",
-            DataType::Utf8,
-            false,
-        )])),
+        file_schema,
         file_groups: vec![vec![PartitionedFile::new(
             "/path/to/file.parquet".to_string(),
             1024,
         )]],
+        constraints: Constraints::empty(),
         statistics: Statistics {
             num_rows: Precision::Inexact(100),
             total_byte_size: Precision::Inexact(1024),
@@ -787,6 +808,9 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         limit: None,
         table_partition_cols: vec![],
         output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
+        source,
     };
 
     #[derive(Debug, Clone, Eq)]
@@ -894,12 +918,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         }
     }
 
-    let custom_predicate_expr = Arc::new(CustomPredicateExpr {
-        inner: Arc::new(Column::new("col", 1)),
-    });
-    let exec_plan = ParquetExec::builder(scan_config)
-        .with_predicate(custom_predicate_expr)
-        .build_arc();
+    let exec_plan = scan_config.new_exec();
 
     let ctx = SessionContext::new();
     roundtrip_test_and_return(exec_plan, &ctx, &CustomPhysicalExtensionCodec {})?;
@@ -1089,7 +1108,7 @@ fn roundtrip_scalar_udf_extension_codec() -> Result<()> {
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
-        vec![col("author", &schema)?],
+        true,
     )?);
 
     let aggregate = Arc::new(AggregateExec::try_new(
@@ -1130,15 +1149,13 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     let udwf_expr = Arc::new(StandardWindowExpr::new(
         udwf,
         &[col("b", &schema)?],
-        &LexOrdering {
-            inner: vec![PhysicalSortExpr {
-                expr: col("a", &schema)?,
-                options: SortOptions {
-                    descending: false,
-                    nulls_first: false,
-                },
-            }],
-        },
+        &LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("a", &schema)?,
+            options: SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+        }]),
         Arc::new(window_frame),
     ));
 
@@ -1146,8 +1163,8 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
     let window = Arc::new(BoundedWindowAggExec::try_new(
         vec![udwf_expr],
         input,
-        vec![col("b", &schema)?],
         InputOrderMode::Sorted,
+        true,
     )?);
 
     let ctx = SessionContext::new();
@@ -1199,7 +1216,7 @@ fn roundtrip_aggregate_udf_extension_codec() -> Result<()> {
             Arc::new(WindowFrame::new(None)),
         ))],
         filter,
-        vec![col("author", &schema)?],
+        true,
     )?);
 
     let aggr_expr = AggregateExprBuilder::new(udaf, aggr_args.clone())
@@ -1275,6 +1292,7 @@ fn roundtrip_json_sink() -> Result<()> {
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
+        file_extension: "json".into(),
     };
     let data_sink = Arc::new(JsonSink::new(
         file_sink_config,
@@ -1291,7 +1309,6 @@ fn roundtrip_json_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema,
         Some(sort_order),
     )))
 }
@@ -1311,6 +1328,7 @@ fn roundtrip_csv_sink() -> Result<()> {
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
+        file_extension: "csv".into(),
     };
     let data_sink = Arc::new(CsvSink::new(
         file_sink_config,
@@ -1327,12 +1345,7 @@ fn roundtrip_csv_sink() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let roundtrip_plan = roundtrip_test_and_return(
-        Arc::new(DataSinkExec::new(
-            input,
-            data_sink,
-            schema,
-            Some(sort_order),
-        )),
+        Arc::new(DataSinkExec::new(input, data_sink, Some(sort_order))),
         &ctx,
         &codec,
     )
@@ -1370,6 +1383,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
         table_partition_cols: vec![("plan_type".to_string(), DataType::Utf8)],
         insert_op: InsertOp::Overwrite,
         keep_partition_by_columns: true,
+        file_extension: "parquet".into(),
     };
     let data_sink = Arc::new(ParquetSink::new(
         file_sink_config,
@@ -1386,7 +1400,6 @@ fn roundtrip_parquet_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        schema,
         Some(sort_order),
     )))
 }

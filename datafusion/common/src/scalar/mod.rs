@@ -40,21 +40,24 @@ use crate::cast::{
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
-use arrow::compute::kernels::numeric::*;
-use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
-use arrow::{
-    array::*,
-    compute::kernels::cast::{cast_with_options, CastOptions},
-    datatypes::{
-        i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-        Date32Type, Date64Type, Field, Float32Type, Int16Type, Int32Type, Int64Type,
-        Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-        IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
-        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-        UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
-    },
+use arrow::array::{
+    types::{IntervalDayTime, IntervalMonthDayNano},
+    *,
 };
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
+use arrow::buffer::ScalarBuffer;
+use arrow::compute::kernels::{
+    cast::{cast_with_options, CastOptions},
+    numeric::*,
+};
+use arrow::datatypes::{
+    i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
+    Date32Type, Date64Type, Field, Float32Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type, DECIMAL128_MAX_PRECISION,
+};
+use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow_schema::{UnionFields, UnionMode};
 
 use crate::format::DEFAULT_CAST_OPTIONS;
@@ -164,7 +167,7 @@ pub use struct_builder::ScalarStructBuilder;
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{DataType, Field, Fields};
-/// # use arrow_array::{ArrayRef, Int32Array, StructArray, StringArray};
+/// # use arrow::array::{ArrayRef, Int32Array, StructArray, StringArray};
 /// # use datafusion_common::ScalarValue;
 /// // Build a struct like: {a: 1, b: "foo"}
 /// // Field description
@@ -1673,7 +1676,7 @@ impl ScalarValue {
     ///
     /// assert_eq!(&result, &expected);
     /// ```
-    /// [`Datum`]: arrow_array::Datum
+    /// [`Datum`]: arrow::array::Datum
     pub fn to_scalar(&self) -> Result<Scalar<ArrayRef>> {
         Ok(Scalar::new(self.to_array_of_size(1)?))
     }
@@ -2595,7 +2598,7 @@ impl ScalarValue {
     /// use datafusion_common::ScalarValue;
     /// use arrow::array::ListArray;
     /// use arrow::datatypes::{DataType, Int32Type};
-    /// use datafusion_common::utils::array_into_list_array_nullable;
+    /// use datafusion_common::utils::SingleRowListArrayBuilder;
     /// use std::sync::Arc;
     ///
     /// let list_arr = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
@@ -2604,7 +2607,7 @@ impl ScalarValue {
     /// ]);
     ///
     /// // Wrap into another layer of list, we got nested array as [ [[1,2,3], [4,5]] ]
-    /// let list_arr = array_into_list_array_nullable(Arc::new(list_arr));
+    /// let list_arr = SingleRowListArrayBuilder::new(Arc::new(list_arr)).build_list_array();
     ///
     /// // Convert the array into Scalar Values for each row, we got 1D arrays in this example
     /// let scalar_vec = ScalarValue::convert_array_to_scalar_vec(&list_arr).unwrap();
@@ -2847,6 +2850,50 @@ impl ScalarValue {
     /// Try to parse `value` into a ScalarValue of type `target_type`
     pub fn try_from_string(value: String, target_type: &DataType) -> Result<Self> {
         ScalarValue::from(value).cast_to(target_type)
+    }
+
+    /// Returns the Some(`&str`) representation of `ScalarValue` of logical string type
+    ///
+    /// Returns `None` if this `ScalarValue` is not a logical string type or the
+    /// `ScalarValue` represents the `NULL` value.
+    ///
+    /// Note you can use [`Option::flatten`] to check for non null logical
+    /// strings.
+    ///
+    /// For example, [`ScalarValue::Utf8`], [`ScalarValue::LargeUtf8`], and
+    /// [`ScalarValue::Dictionary`] with a logical string value and store
+    /// strings and can be accessed as `&str` using this method.
+    ///
+    /// # Example: logical strings
+    /// ```
+    /// # use datafusion_common::ScalarValue;
+    /// /// non strings return None
+    /// let scalar = ScalarValue::from(42);
+    /// assert_eq!(scalar.try_as_str(), None);
+    /// // Non null logical string returns Some(Some(&str))
+    /// let scalar = ScalarValue::from("hello");
+    /// assert_eq!(scalar.try_as_str(), Some(Some("hello")));
+    /// // Null logical string returns Some(None)
+    /// let scalar = ScalarValue::Utf8(None);
+    /// assert_eq!(scalar.try_as_str(), Some(None));
+    /// ```
+    ///
+    /// # Example: use [`Option::flatten`] to check for non-null logical strings
+    /// ```
+    /// # use datafusion_common::ScalarValue;
+    /// // Non null logical string returns Some(Some(&str))
+    /// let scalar = ScalarValue::from("hello");
+    /// assert_eq!(scalar.try_as_str().flatten(), Some("hello"));
+    /// ```
+    pub fn try_as_str(&self) -> Option<Option<&str>> {
+        let v = match self {
+            ScalarValue::Utf8(v) => v,
+            ScalarValue::LargeUtf8(v) => v,
+            ScalarValue::Utf8View(v) => v,
+            ScalarValue::Dictionary(_, v) => return v.try_as_str(),
+            _ => return None,
+        };
+        Some(v.as_ref().map(|v| v.as_str()))
     }
 
     /// Try to cast this value to a ScalarValue of type `data_type`
@@ -3914,12 +3961,11 @@ mod tests {
     };
 
     use crate::assert_batches_eq;
-    use arrow::buffer::OffsetBuffer;
+    use arrow::array::{types::Float64Type, NullBufferBuilder};
+    use arrow::buffer::{Buffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
-    use arrow_array::types::Float64Type;
-    use arrow_buffer::{Buffer, NullBuffer};
     use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;
@@ -6868,12 +6914,11 @@ mod tests {
         let array_b = Arc::new(Int32Array::from_iter_values([2]));
         let arrays: Vec<ArrayRef> = vec![array_a, array_b];
 
-        let mut not_nulls = BooleanBufferBuilder::new(1);
-        not_nulls.append(true);
-        let not_nulls = not_nulls.finish();
-        let not_nulls = Some(NullBuffer::new(not_nulls));
+        let mut not_nulls = NullBufferBuilder::new(1);
 
-        let ar = StructArray::new(fields, arrays, not_nulls);
+        not_nulls.append_non_null();
+
+        let ar = StructArray::new(fields, arrays, not_nulls.finish());
         let s = ScalarValue::Struct(Arc::new(ar));
 
         assert_eq!(s.to_string(), "{a:1,b:2}");

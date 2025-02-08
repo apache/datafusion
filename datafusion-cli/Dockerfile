@@ -15,21 +15,17 @@
 # specific language governing permissions and limitations
 # under the License.
 
-FROM rust:1.80-bookworm AS builder
+FROM rust:bookworm AS builder
 
 COPY . /usr/src/datafusion
-COPY ./datafusion /usr/src/datafusion/datafusion
-COPY ./datafusion-cli /usr/src/datafusion/datafusion-cli
 
-WORKDIR /usr/src/datafusion/datafusion-cli
+WORKDIR /usr/src/datafusion
 
-RUN rustup component add rustfmt
-
-RUN cargo build --release
+RUN cargo build -p datafusion-cli --release
 
 FROM debian:bookworm-slim
 
-COPY --from=builder /usr/src/datafusion/datafusion-cli/target/release/datafusion-cli /usr/local/bin
+COPY --from=builder /usr/src/datafusion/target/release/datafusion-cli /usr/local/bin
 
 RUN mkdir /data
 

@@ -24,6 +24,7 @@ use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
 use datafusion_common::cast::as_binary_array;
 
+use crate::utils::take_function_args;
 use arrow::compute::StringArrayType;
 use datafusion_common::plan_err;
 use datafusion_common::{
@@ -41,14 +42,8 @@ macro_rules! define_digest_function {
     ($NAME: ident, $METHOD: ident, $DOC: expr) => {
         #[doc = $DOC]
         pub fn $NAME(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-            if args.len() != 1 {
-                return exec_err!(
-                    "{:?} args were supplied but {} takes exactly one argument",
-                    args.len(),
-                    DigestAlgorithm::$METHOD.to_string()
-                );
-            }
-            digest_process(&args[0], DigestAlgorithm::$METHOD)
+            let [data] = take_function_args(&DigestAlgorithm::$METHOD.to_string(), args)?;
+            digest_process(data, DigestAlgorithm::$METHOD)
         }
     };
 }
@@ -114,24 +109,17 @@ pub enum DigestAlgorithm {
 /// Second argument is the algorithm to use.
 /// Standard algorithms are md5, sha1, sha224, sha256, sha384 and sha512.
 pub fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return exec_err!(
-            "{:?} args were supplied but digest takes exactly two arguments",
-            args.len()
-        );
-    }
-    let digest_algorithm = match &args[1] {
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8View(Some(method))
-            | ScalarValue::Utf8(Some(method))
-            | ScalarValue::LargeUtf8(Some(method)) => method.parse::<DigestAlgorithm>(),
-            other => exec_err!("Unsupported data type {other:?} for function digest"),
+    let [data, digest_algorithm] = take_function_args("digest", args)?;
+    let digest_algorithm = match digest_algorithm {
+        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+            Some(Some(method)) => method.parse::<DigestAlgorithm>(),
+            _ => exec_err!("Unsupported data type {scalar:?} for function digest"),
         },
         ColumnarValue::Array(_) => {
             internal_err!("Digest using dynamically decided method is not yet supported")
         }
     }?;
-    digest_process(&args[0], digest_algorithm)
+    digest_process(data, digest_algorithm)
 }
 
 impl FromStr for DigestAlgorithm {
@@ -177,15 +165,8 @@ impl fmt::Display for DigestAlgorithm {
 
 /// computes md5 hash digest of the given input
 pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 1 {
-        return exec_err!(
-            "{:?} args were supplied but {} takes exactly one argument",
-            args.len(),
-            DigestAlgorithm::Md5
-        );
-    }
-
-    let value = digest_process(&args[0], DigestAlgorithm::Md5)?;
+    let [data] = take_function_args("md5", args)?;
+    let value = digest_process(data, DigestAlgorithm::Md5)?;
 
     // md5 requires special handling because of its unique utf8 return type
     Ok(match value {

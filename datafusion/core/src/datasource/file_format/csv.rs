@@ -22,15 +22,16 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::sync::Arc;
 
-use super::write::orchestration::stateless_multipart_put;
+use super::write::orchestration::spawn_writer_tasks_and_join;
 use super::{
     Decoder, DecoderDeserializer, FileFormat, FileFormatFactory,
     DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
+use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::datasource::file_format::write::BatchSerializer;
 use crate::datasource::physical_plan::{
-    CsvExec, FileGroupDisplay, FileScanConfig, FileSinkConfig,
+    CsvSource, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
 };
 use crate::error::Result;
 use crate::execution::context::SessionState;
@@ -43,19 +44,21 @@ use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow_schema::ArrowError;
+use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
     exec_err, not_impl_err, DataFusionError, GetExt, DEFAULT_CSV_EXTENSION,
 };
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
+use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::stream::BoxStream;
 use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use object_store::{delimited::newline_delimited_stream, ObjectMeta, ObjectStore};
@@ -93,9 +96,10 @@ impl Debug for CsvFormatFactory {
 impl FileFormatFactory for CsvFormatFactory {
     fn create(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         format_options: &HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let csv_options = match &self.options {
             None => {
                 let mut table_options = state.default_table_options();
@@ -363,7 +367,7 @@ impl FileFormat for CsvFormat {
 
     async fn infer_schema(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -398,7 +402,7 @@ impl FileFormat for CsvFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -408,10 +412,11 @@ impl FileFormat for CsvFormat {
 
     async fn create_physical_plan(
         &self,
-        state: &SessionState,
-        conf: FileScanConfig,
+        state: &dyn Session,
+        mut conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        conf.file_compression_type = self.options.compression.into();
         // Consult configuration options for default values
         let has_header = self
             .options
@@ -421,24 +426,23 @@ impl FileFormat for CsvFormat {
             .options
             .newlines_in_values
             .unwrap_or(state.config_options().catalog.newlines_in_values);
+        conf.new_lines_in_values = newlines_in_values;
 
-        let exec = CsvExec::builder(conf)
-            .with_has_header(has_header)
-            .with_delimeter(self.options.delimiter)
-            .with_quote(self.options.quote)
-            .with_terminator(self.options.terminator)
-            .with_escape(self.options.escape)
-            .with_comment(self.options.comment)
-            .with_newlines_in_values(newlines_in_values)
-            .with_file_compression_type(self.options.compression.into())
-            .build();
-        Ok(Arc::new(exec))
+        let source = Arc::new(
+            CsvSource::new(has_header, self.options.delimiter, self.options.quote)
+                .with_escape(self.options.escape)
+                .with_terminator(self.options.terminator)
+                .with_comment(self.options.comment),
+        );
+        conf = conf.with_source(source);
+
+        Ok(conf.new_exec())
     }
 
     async fn create_writer_physical_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        state: &SessionState,
+        state: &dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -467,15 +471,13 @@ impl FileFormat for CsvFormat {
 
         let writer_options = CsvWriterOptions::try_from(&options)?;
 
-        let sink_schema = Arc::clone(conf.output_schema());
         let sink = Arc::new(CsvSink::new(conf, writer_options));
 
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            sink_schema,
-            order_requirements,
-        )) as _)
+        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        Arc::new(CsvSource::default())
     }
 }
 
@@ -485,7 +487,7 @@ impl CsvFormat {
     /// number of lines that were read
     async fn infer_schema_from_stream(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         mut records_to_read: usize,
         stream: impl Stream<Item = Result<Bytes>>,
     ) -> Result<(Schema, usize)> {
@@ -685,42 +687,41 @@ impl CsvSink {
         }
     }
 
-    /// Retrieve the inner [`FileSinkConfig`].
-    pub fn config(&self) -> &FileSinkConfig {
-        &self.config
-    }
-
-    async fn multipartput_all(
-        &self,
-        data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        let builder = &self.writer_options.writer_options;
-
-        let builder_clone = builder.clone();
-        let options_clone = self.writer_options.clone();
-        let get_serializer = move || {
-            Arc::new(
-                CsvSerializer::new()
-                    .with_builder(builder_clone.clone())
-                    .with_header(options_clone.writer_options.header()),
-            ) as _
-        };
-
-        stateless_multipart_put(
-            data,
-            context,
-            "csv".into(),
-            Box::new(get_serializer),
-            &self.config,
-            self.writer_options.compression.into(),
-        )
-        .await
-    }
-
     /// Retrieve the writer options
     pub fn writer_options(&self) -> &CsvWriterOptions {
         &self.writer_options
+    }
+}
+
+#[async_trait]
+impl FileSink for CsvSink {
+    fn config(&self) -> &FileSinkConfig {
+        &self.config
+    }
+
+    async fn spawn_writer_tasks_and_join(
+        &self,
+        context: &Arc<TaskContext>,
+        demux_task: SpawnedTask<Result<()>>,
+        file_stream_rx: DemuxedStreamReceiver,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Result<u64> {
+        let builder = self.writer_options.writer_options.clone();
+        let header = builder.header();
+        let serializer = Arc::new(
+            CsvSerializer::new()
+                .with_builder(builder)
+                .with_header(header),
+        ) as _;
+        spawn_writer_tasks_and_join(
+            context,
+            serializer,
+            self.writer_options.compression.into(),
+            object_store,
+            demux_task,
+            file_stream_rx,
+        )
+        .await
     }
 }
 
@@ -730,8 +731,8 @@ impl DataSink for CsvSink {
         self
     }
 
-    fn metrics(&self) -> Option<MetricsSet> {
-        None
+    fn schema(&self) -> &SchemaRef {
+        self.config.output_schema()
     }
 
     async fn write_all(
@@ -739,8 +740,7 @@ impl DataSink for CsvSink {
         data: SendableRecordBatchStream,
         context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let total_count = self.multipartput_all(data, context).await?;
-        Ok(total_count)
+        FileSink::write_all(self, data, context).await
     }
 }
 
@@ -760,10 +760,10 @@ mod tests {
     use crate::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use crate::test_util::arrow_test_data;
 
+    use arrow::array::{BooleanArray, Float64Array, Int32Array, StringArray};
     use arrow::compute::concat_batches;
     use arrow::csv::ReaderBuilder;
     use arrow::util::pretty::pretty_format_batches;
-    use arrow_array::{BooleanArray, Float64Array, Int32Array, StringArray};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::internal_err;
     use datafusion_common::stats::Precision;
@@ -1149,7 +1149,7 @@ mod tests {
     }
 
     async fn get_exec(
-        state: &SessionState,
+        state: &dyn Session,
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
@@ -1209,7 +1209,7 @@ mod tests {
     }
 
     /// Explain the `sql` query under `ctx` to make sure the underlying csv scan is parallelized
-    /// e.g. "CsvExec: file_groups={2 groups:" in plan means 2 CsvExec runs concurrently
+    /// e.g. "DataSourceExec: file_groups={2 groups:" in plan means 2 DataSourceExec runs concurrently
     async fn count_query_csv_partitions(
         ctx: &SessionContext,
         sql: &str,
@@ -1218,7 +1218,7 @@ mod tests {
         let result = df.collect().await?;
         let plan = format!("{}", &pretty_format_batches(&result)?);
 
-        let re = Regex::new(r"CsvExec: file_groups=\{(\d+) group").unwrap();
+        let re = Regex::new(r"DataSourceExec: file_groups=\{(\d+) group").unwrap();
 
         if let Some(captures) = re.captures(&plan) {
             if let Some(match_) = captures.get(1) {
@@ -1227,7 +1227,7 @@ mod tests {
             }
         }
 
-        internal_err!("query contains no CsvExec")
+        internal_err!("query contains no DataSourceExec")
     }
 
     #[rstest(n_partitions, case(1), case(2), case(3), case(4))]

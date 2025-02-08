@@ -17,41 +17,43 @@
 
 //! This module contains tests for limiting memory at runtime in DataFusion
 
-use arrow::datatypes::{Int32Type, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use arrow_array::{ArrayRef, DictionaryArray};
-use arrow_schema::SortOptions;
-use async_trait::async_trait;
-use datafusion::assert_batches_eq;
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_plan::memory::MemoryExec;
-use datafusion::physical_plan::streaming::PartitionStream;
-use datafusion_execution::memory_pool::{
-    GreedyMemoryPool, MemoryPool, TrackConsumersPool,
-};
-use datafusion_expr::{Expr, TableType};
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_plan::spill::get_record_batch_memory_size;
-use futures::StreamExt;
 use std::any::Any;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
-use tokio::fs::File;
 
-use datafusion::datasource::streaming::StreamingTable;
+#[cfg(feature = "extended_tests")]
+mod memory_limit_validation;
+use arrow::array::{ArrayRef, DictionaryArray, RecordBatch};
+use arrow::datatypes::{Int32Type, SchemaRef};
+use arrow_schema::SortOptions;
+use datafusion::assert_batches_eq;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
-use datafusion_common::{assert_contains, Result};
-
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
+use datafusion_common::{assert_contains, Result};
+use datafusion_execution::memory_pool::{
+    GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+};
 use datafusion_execution::TaskContext;
+use datafusion_expr::{Expr, TableType};
+use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_optimizer::join_selection::JoinSelection;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use test_utils::AccessLogGenerator;
+
+use async_trait::async_trait;
+use futures::StreamExt;
+use tokio::fs::File;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -239,15 +241,15 @@ async fn sort_preserving_merge() {
             // SortPreservingMergeExec (not a Sort which would compete
             // with the SortPreservingMergeExec for memory)
             &[
-                "+---------------+------------------------------------------------------------------------------------------------------------+",
-                "| plan_type     | plan                                                                                                       |",
-                "+---------------+------------------------------------------------------------------------------------------------------------+",
-                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b ASC NULLS LAST, fetch=10                                                     |",
-                "|               |   TableScan: t projection=[a, b]                                                                           |",
-                "| physical_plan | SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], fetch=10                                |",
-                "|               |   MemoryExec: partitions=2, partition_sizes=[5, 5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
-                "|               |                                                                                                            |",
-                "+---------------+------------------------------------------------------------------------------------------------------------+",
+                "+---------------+--------------------------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                                     |",
+                "+---------------+--------------------------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b ASC NULLS LAST, fetch=10                                                                   |",
+                "|               |   TableScan: t projection=[a, b]                                                                                         |",
+                "| physical_plan | SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], fetch=10                                              |",
+                "|               |   DataSourceExec: partitions=2, partition_sizes=[5, 5], fetch=10, output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
+                "|               |                                                                                                                          |",
+                "+---------------+--------------------------------------------------------------------------------------------------------------------------+"
             ]
         )
         .run()
@@ -286,15 +288,15 @@ async fn sort_spill_reservation() {
             // also merge, so we can ensure the sort could finish
             // given enough merging memory
             &[
-                "+---------------+---------------------------------------------------------------------------------------------------------+",
-                "| plan_type     | plan                                                                                                    |",
-                "+---------------+---------------------------------------------------------------------------------------------------------+",
-                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                          |",
-                "|               |   TableScan: t projection=[a, b]                                                                        |",
-                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], preserve_partitioning=[false]                            |",
-                "|               |   MemoryExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
-                "|               |                                                                                                         |",
-                "+---------------+---------------------------------------------------------------------------------------------------------+",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                        |",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                              |",
+                "|               |   TableScan: t projection=[a, b]                                                                            |",
+                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], preserve_partitioning=[false]                                |",
+                "|               |   DataSourceExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
+                "|               |                                                                                                             |",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
             ]
         );
 
@@ -842,10 +844,13 @@ impl TableProvider for SortedTableProvider {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mem_exec =
-            MemoryExec::try_new(&self.batches, self.schema(), projection.cloned())?
-                .try_with_sort_information(self.sort_information.clone())?;
+        let mem_conf = MemorySourceConfig::try_new(
+            &self.batches,
+            self.schema(),
+            projection.cloned(),
+        )?
+        .try_with_sort_information(self.sort_information.clone())?;
 
-        Ok(Arc::new(mem_exec))
+        Ok(Arc::new(DataSourceExec::new(Arc::new(mem_conf))))
     }
 }
