@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_err, Diagnostic, Result, Span};
+use datafusion_common::{
+    not_impl_err, plan_err, DataFusionError, Diagnostic, Result, Span,
+};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier, Spanned};
 
@@ -39,8 +41,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 let left_span = Span::try_from_sqlparser_span(left.span());
                 let right_span = Span::try_from_sqlparser_span(right.span());
-                let left_plan = self.set_expr_to_plan(*left, planner_context)?;
-                let right_plan = self.set_expr_to_plan(*right, planner_context)?;
+                let left_plan = self.set_expr_to_plan(*left, planner_context);
+                let right_plan = self.set_expr_to_plan(*right, planner_context);
+                let (left_plan, right_plan) = match (left_plan, right_plan) {
+                    (Ok(left_plan), Ok(right_plan)) => (left_plan, right_plan),
+                    (Err(left_err), Err(right_err)) => {
+                        return Err(DataFusionError::Collection(vec![
+                            left_err, right_err,
+                        ]));
+                    }
+                    (Err(err), _) | (_, Err(err)) => {
+                        return Err(err);
+                    }
+                };
                 self.validate_set_expr_num_of_columns(
                     op,
                     left_span,
@@ -49,6 +62,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &right_plan,
                     set_expr_span,
                 )?;
+
                 self.set_operation_to_plan(op, left_plan, right_plan, set_quantifier)
             }
             SetExpr::Query(q) => self.query_to_plan(*q, planner_context),

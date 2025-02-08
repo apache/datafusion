@@ -22,11 +22,11 @@ use std::sync::Arc;
 use std::vec;
 
 use crate::utils::make_scalar_function;
-use arrow::array::{ArrayData, Capacities, MutableArrayData};
-use arrow::buffer::OffsetBuffer;
-use arrow_array::{
-    new_null_array, Array, ArrayRef, GenericListArray, NullArray, OffsetSizeTrait,
+use arrow::array::{
+    new_null_array, Array, ArrayData, ArrayRef, Capacities, GenericListArray,
+    MutableArrayData, NullArray, OffsetSizeTrait,
 };
+use arrow::buffer::OffsetBuffer;
 use arrow_schema::DataType::{List, Null};
 use arrow_schema::{DataType, Field};
 use datafusion_common::utils::SingleRowListArrayBuilder;
@@ -275,7 +275,7 @@ fn array_array<O: OffsetSizeTrait>(
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         None,
     )?))
 }

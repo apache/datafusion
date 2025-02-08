@@ -19,11 +19,11 @@
 
 use crate::utils;
 use crate::utils::make_scalar_function;
-use arrow::buffer::OffsetBuffer;
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    new_empty_array, Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait,
+use arrow::array::{
+    cast::AsArray, new_empty_array, Array, ArrayRef, BooleanArray, GenericListArray,
+    OffsetSizeTrait,
 };
+use arrow::buffer::OffsetBuffer;
 use arrow_schema::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
@@ -330,7 +330,7 @@ fn array_remove_internal(
 ///
 /// The type of each **element** in `list_array` must be the same as the type of
 /// `element_array`. This function also handles nested arrays
-/// ([`arrow_array::ListArray`] of [`arrow_array::ListArray`]s)
+/// ([`arrow::array::ListArray`] of [`arrow::array::ListArray`]s)
 ///
 /// For example, when called to remove a list array (where each element is a
 /// list of int32s, the second argument are int32 arrays, and the

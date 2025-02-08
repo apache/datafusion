@@ -20,29 +20,39 @@
 mod arrow_file;
 mod avro;
 mod csv;
-mod file_groups;
 mod file_scan_config;
 mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
 mod statistics;
-
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
 #[cfg(feature = "parquet")]
-pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
-
+pub use self::parquet::source::ParquetSource;
+#[cfg(feature = "parquet")]
+#[allow(deprecated)]
+pub use self::parquet::{
+    ParquetExec, ParquetExecBuilder, ParquetFileMetrics, ParquetFileReaderFactory,
+};
+#[allow(deprecated)]
 pub use arrow_file::ArrowExec;
+pub use arrow_file::ArrowSource;
+#[allow(deprecated)]
 pub use avro::AvroExec;
-pub use csv::{CsvConfig, CsvExec, CsvExecBuilder, CsvOpener};
+pub use avro::AvroSource;
+#[allow(deprecated)]
+pub use csv::{CsvExec, CsvExecBuilder};
+pub use csv::{CsvOpener, CsvSource};
+pub use datafusion_catalog_listing::file_groups::FileGroupPartitioner;
 use datafusion_expr::dml::InsertOp;
-pub use file_groups::FileGroupPartitioner;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
-pub use json::{JsonOpener, NdJsonExec};
+#[allow(deprecated)]
+pub use json::NdJsonExec;
+pub use json::{JsonOpener, JsonSource};
 
 use std::{
     fmt::{Debug, Formatter, Result as FmtResult},
@@ -367,7 +377,7 @@ impl From<ObjectMeta> for FileMeta {
 ///┃    Partition 1          Partition 2          Partition 3          Partition 4       ┃
 /// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
 ///
-///                                      ParquetExec
+///                                      DataSourceExec
 ///```
 ///
 /// However, when more than 1 file is assigned to each partition, each
@@ -393,7 +403,7 @@ impl From<ObjectMeta> for FileMeta {
 ///┃    Partition 1          Partition 2
 /// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
 ///
-///              ParquetExec
+///              DataSourceExec
 ///```
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
@@ -570,9 +580,9 @@ mod tests {
     use super::*;
     use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
 
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::{Float32Type, Float64Type, UInt32Type};
-    use arrow_array::{
+    use arrow::array::{
+        cast::AsArray,
+        types::{Float32Type, Float64Type, UInt32Type},
         BinaryArray, BooleanArray, Float32Array, Int32Array, Int64Array, RecordBatch,
         StringArray, UInt64Array,
     };

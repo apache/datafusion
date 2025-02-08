@@ -21,8 +21,8 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
+use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
 use arrow::compute::{can_cast_types, cast};
-use arrow_array::{new_null_array, RecordBatch, RecordBatchOptions};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::plan_err;
 use std::fmt::Debug;
@@ -31,7 +31,7 @@ use std::sync::Arc;
 /// Factory for creating [`SchemaAdapter`]
 ///
 /// This interface provides a way to implement custom schema adaptation logic
-/// for ParquetExec (for example, to fill missing columns with default value
+/// for DataSourceExec (for example, to fill missing columns with default value
 /// other than null).
 ///
 /// Most users should use [`DefaultSchemaAdapterFactory`]. See that struct for
@@ -229,7 +229,7 @@ impl SchemaAdapterFactory for DefaultSchemaAdapterFactory {
 #[derive(Clone, Debug)]
 pub(crate) struct DefaultSchemaAdapter {
     /// The schema for the table, projected to include only the fields being output (projected) by the
-    /// associated ParquetExec
+    /// associated ParquetSource
     projected_table_schema: SchemaRef,
     /// The entire table schema for the table we're using this to adapt.
     ///
@@ -315,7 +315,7 @@ impl SchemaAdapter for DefaultSchemaAdapter {
 /// can be used for Parquet predicate pushdown, meaning that it may contain
 /// fields which are not in the projected schema (as the fields that parquet
 /// pushdown filters operate can be completely distinct from the fields that are
-/// projected (output) out of the ParquetExec). `map_partial_batch` thus uses
+/// projected (output) out of the ParquetSource). `map_partial_batch` thus uses
 /// `table_schema` to create the resulting RecordBatch (as it could be operating
 /// on any fields in the schema).
 ///
@@ -434,22 +434,22 @@ mod tests {
     use std::sync::Arc;
 
     use crate::assert_batches_sorted_eq;
+    use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use arrow_array::{Int32Array, StringArray};
     use arrow_schema::{DataType, SchemaRef};
     use object_store::path::Path;
     use object_store::ObjectMeta;
 
-    use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::{FileScanConfig, ParquetExec};
-    use crate::physical_plan::collect;
-    use crate::prelude::SessionContext;
-
     use crate::datasource::listing::PartitionedFile;
+    use crate::datasource::object_store::ObjectStoreUrl;
+    use crate::datasource::physical_plan::{FileScanConfig, ParquetSource};
     use crate::datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
+    use crate::physical_plan::collect;
+    use crate::prelude::SessionContext;
+
     use datafusion_common::record_batch;
     #[cfg(feature = "parquet")]
     use parquet::arrow::ArrowWriter;
@@ -500,18 +500,19 @@ mod tests {
         let f2 = Field::new("extra_column", DataType::Utf8, true);
 
         let schema = Arc::new(Schema::new(vec![f1.clone(), f2.clone()]));
+        let source = Arc::new(
+            ParquetSource::default()
+                .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {})),
+        );
+        let base_conf =
+            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
+                .with_file(partitioned_file);
 
-        // prepare the scan
-        let parquet_exec = ParquetExec::builder(
-            FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
-                .with_file(partitioned_file),
-        )
-        .build()
-        .with_schema_adapter_factory(Arc::new(TestSchemaAdapterFactory {}));
+        let parquet_exec = base_conf.new_exec();
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
+        let read = collect(parquet_exec, task_ctx).await.unwrap();
 
         let expected = [
             "+----+--------------+",

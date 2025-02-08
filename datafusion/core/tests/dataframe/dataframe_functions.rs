@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{types::Int32Type, ListArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
     array::{Int32Array, StringArray},
     record_batch::RecordBatch,
 };
-use arrow_array::types::Int32Type;
-use arrow_array::ListArray;
 use arrow_schema::SchemaRef;
 use std::sync::Arc;
 

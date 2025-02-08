@@ -468,10 +468,10 @@ fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
     let plan = "Dml: op=[Insert Into] table=[person]\
-                \n  Projection: CAST(column1 AS UInt32) AS id, column2 AS first_name, column3 AS last_name, \
+                \n  Projection: column1 AS id, column2 AS first_name, column3 AS last_name, \
                         CAST(NULL AS Int32) AS age, CAST(NULL AS Utf8) AS state, CAST(NULL AS Float64) AS salary, \
                         CAST(NULL AS Timestamp(Nanosecond, None)) AS birth_date, CAST(NULL AS Int32) AS 😀\
-                \n    Values: (Int64(1), Utf8(\"Alan\"), Utf8(\"Turing\"))";
+                \n    Values: (CAST(Int64(1) AS UInt32), Utf8(\"Alan\"), Utf8(\"Turing\"))";
     quick_test(sql, plan);
 }
 
@@ -480,8 +480,8 @@ fn plan_insert_no_target_columns() {
     let sql = "INSERT INTO test_decimal VALUES (1, 2), (3, 4)";
     let plan = r#"
 Dml: op=[Insert Into] table=[test_decimal]
-  Projection: CAST(column1 AS Int32) AS id, CAST(column2 AS Decimal128(10, 2)) AS price
-    Values: (Int64(1), Int64(2)), (Int64(3), Int64(4))
+  Projection: column1 AS id, column2 AS price
+    Values: (CAST(Int64(1) AS Int32), CAST(Int64(2) AS Decimal128(10, 2))), (CAST(Int64(3) AS Int32), CAST(Int64(4) AS Decimal128(10, 2)))
     "#
     .trim();
     quick_test(sql, plan);
@@ -499,11 +499,11 @@ Dml: op=[Insert Into] table=[test_decimal]
 )]
 #[case::target_column_count_mismatch(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2)",
-    "Error during planning: Column count doesn't match insert query!"
+    "Error during planning: Inconsistent data length across values list: got 2 values in row 0 but expected 3"
 )]
 #[case::source_column_count_mismatch(
     "INSERT INTO person VALUES ($1, $2)",
-    "Error during planning: Column count doesn't match insert query!"
+    "Error during planning: Inconsistent data length across values list: got 2 values in row 0 but expected 8"
 )]
 #[case::extra_placeholder(
     "INSERT INTO person (id, first_name, last_name) VALUES ($1, $2, $3, $4)",
@@ -2511,6 +2511,21 @@ fn select_groupby_orderby() {
   FROM person GROUP BY person.birth_date ORDER BY birth_date;
 "#;
     quick_test(sql, expected);
+
+    // Use columnized `avg(age)` in the order by
+    let sql = r#"SELECT
+  avg(age) + avg(age),
+  date_trunc('month', person.birth_date) AS "birth_date"
+  FROM person GROUP BY person.birth_date ORDER BY avg(age) + avg(age);
+"#;
+
+    let expected =
+        "Sort: avg(person.age) + avg(person.age) ASC NULLS LAST\
+        \n  Projection: avg(person.age) + avg(person.age), date_trunc(Utf8(\"month\"), person.birth_date) AS birth_date\
+        \n    Aggregate: groupBy=[[person.birth_date]], aggr=[[avg(person.age)]]\
+        \n      TableScan: person";
+
+    quick_test(sql, expected);
 }
 
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
@@ -4407,10 +4422,17 @@ fn plan_create_index() {
     }
 }
 
-fn assert_field_not_found(err: DataFusionError, name: &str) {
-    let err = match err {
-        DataFusionError::Diagnostic(_, err) => *err,
-        err => err,
+fn assert_field_not_found(mut err: DataFusionError, name: &str) {
+    let err = loop {
+        match err {
+            DataFusionError::Diagnostic(_, wrapped_err) => {
+                err = *wrapped_err;
+            }
+            DataFusionError::Collection(errs) => {
+                err = errs.into_iter().next().unwrap();
+            }
+            err => break err,
+        }
     };
     match err {
         DataFusionError::SchemaError { .. } => {
@@ -4518,7 +4540,7 @@ fn error_message_test(sql: &str, err_msg_starts_with: &str) {
 fn test_error_message_invalid_scalar_function_signature() {
     error_message_test(
         "select sqrt()",
-        "Error during planning: sqrt does not support zero arguments",
+        "Error during planning: 'sqrt' does not support zero arguments",
     );
     error_message_test(
         "select sqrt(1, 2)",
@@ -4530,13 +4552,13 @@ fn test_error_message_invalid_scalar_function_signature() {
 fn test_error_message_invalid_aggregate_function_signature() {
     error_message_test(
         "select sum()",
-        "Error during planning: sum does not support zero arguments",
+        "Error during planning: 'sum' does not support zero arguments",
     );
     // We keep two different prefixes because they clarify each other.
     // It might be incorrect, and we should consider keeping only one.
     error_message_test(
         "select max(9, 3)",
-        "Error during planning: Execution error: User-defined coercion failed",
+        "Error during planning: Execution error: Function 'max' user-defined coercion failed",
     );
 }
 
@@ -4544,7 +4566,7 @@ fn test_error_message_invalid_aggregate_function_signature() {
 fn test_error_message_invalid_window_function_signature() {
     error_message_test(
         "select rank(1) over()",
-        "Error during planning: The function expected zero argument but received 1",
+        "Error during planning: The function 'rank' expected zero argument but received 1",
     );
 }
 
@@ -4552,7 +4574,7 @@ fn test_error_message_invalid_window_function_signature() {
 fn test_error_message_invalid_window_aggregate_function_signature() {
     error_message_test(
         "select sum() over()",
-        "Error during planning: sum does not support zero arguments",
+        "Error during planning: 'sum' does not support zero arguments",
     );
 }
 

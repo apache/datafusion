@@ -27,9 +27,10 @@ use crate::datasource::physical_plan::FileSinkConfig;
 use crate::error::Result;
 use crate::physical_plan::SendableRecordBatchStream;
 
-use arrow_array::builder::UInt64Builder;
-use arrow_array::cast::AsArray;
-use arrow_array::{downcast_dictionary_array, RecordBatch, StringArray, StructArray};
+use arrow::array::{
+    builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, RecordBatch,
+    StringArray, StructArray,
+};
 use arrow_schema::{DataType, Schema};
 use datafusion_common::cast::{
     as_boolean_array, as_date32_array, as_date64_array, as_int32_array, as_int64_array,

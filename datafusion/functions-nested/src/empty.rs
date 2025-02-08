@@ -18,7 +18,7 @@
 //! [`ScalarUDFImpl`] definitions for array_empty function.
 
 use crate::utils::make_scalar_function;
-use arrow_array::{ArrayRef, BooleanArray, OffsetSizeTrait};
+use arrow::array::{ArrayRef, BooleanArray, OffsetSizeTrait};
 use arrow_schema::DataType;
 use arrow_schema::DataType::{Boolean, FixedSizeList, LargeList, List};
 use datafusion_common::cast::as_generic_list_array;

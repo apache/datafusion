@@ -29,15 +29,14 @@ use crate::{
 };
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, FixedSizeListArray, LargeListArray, ListArray,
-    PrimitiveArray,
+    new_null_array, Array, ArrayRef, AsArray, FixedSizeListArray, Int64Array,
+    LargeListArray, ListArray, PrimitiveArray, Scalar, StructArray,
 };
 use arrow::compute::kernels::length::length;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{cast, is_not_null, kernels, sum};
 use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{new_null_array, Int64Array, Scalar, StructArray};
 use arrow_ord::cmp::lt;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, HashMap, HashSet, Result, UnnestOptions,

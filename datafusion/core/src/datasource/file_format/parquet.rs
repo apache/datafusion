@@ -34,13 +34,12 @@ use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::get_writer_schema;
-use crate::datasource::physical_plan::parquet::{
-    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
-};
+use crate::datasource::physical_plan::parquet::can_expr_be_pushed_down_with_schemas;
+use crate::datasource::physical_plan::parquet::source::ParquetSource;
 use crate::datasource::physical_plan::{FileGroupDisplay, FileSink, FileSinkConfig};
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
-use crate::execution::context::SessionState;
+use crate::execution::SessionState;
 use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
@@ -48,6 +47,7 @@ use crate::physical_plan::{
 };
 
 use arrow::compute::sum;
+use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
@@ -65,6 +65,7 @@ use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
+use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -121,9 +122,10 @@ impl ParquetFormatFactory {
 impl FileFormatFactory for ParquetFormatFactory {
     fn create(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         format_options: &std::collections::HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let parquet_options = match &self.options {
             None => {
                 let mut table_options = state.default_table_options();
@@ -325,7 +327,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_schema(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -378,7 +380,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
@@ -395,32 +397,41 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
-        conf: FileScanConfig,
+        _state: &dyn Session,
+        mut conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut builder =
-            ParquetExecBuilder::new_with_options(conf, self.options.clone());
+        let mut predicate = None;
+        let mut metadata_size_hint = None;
 
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
         if self.enable_pruning() {
-            if let Some(predicate) = filters.cloned() {
-                builder = builder.with_predicate(predicate);
+            if let Some(pred) = filters.cloned() {
+                predicate = Some(pred);
             }
         }
-        if let Some(metadata_size_hint) = self.metadata_size_hint() {
-            builder = builder.with_metadata_size_hint(metadata_size_hint);
+        if let Some(metadata) = self.metadata_size_hint() {
+            metadata_size_hint = Some(metadata);
         }
 
-        Ok(builder.build_arc())
+        let mut source = ParquetSource::new(self.options.clone());
+
+        if let Some(predicate) = predicate {
+            source = source.with_predicate(Arc::clone(&conf.file_schema), predicate);
+        }
+        if let Some(metadata_size_hint) = metadata_size_hint {
+            source = source.with_metadata_size_hint(metadata_size_hint)
+        }
+        conf = conf.with_source(Arc::new(source));
+        Ok(conf.new_exec())
     }
 
     async fn create_writer_physical_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &SessionState,
+        _state: &dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -452,6 +463,10 @@ impl FileFormat for ParquetFormat {
         } else {
             FilePushdownSupport::NotSupportedForFilter
         })
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        Arc::new(ParquetSource::default())
     }
 }
 
@@ -1282,6 +1297,7 @@ pub(crate) mod test_util {
 mod tests {
     use super::super::test_util::scan_format;
     use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
+    use crate::execution::SessionState;
     use crate::physical_plan::collect;
     use crate::test_util::bounded_stream;
     use std::fmt::{Display, Formatter};
@@ -1293,9 +1309,10 @@ mod tests {
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
-    use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow_array::types::Int32Type;
-    use arrow_array::{DictionaryArray, Int32Array, Int64Array};
+    use arrow::array::{
+        types::Int32Type, Array, ArrayRef, DictionaryArray, Int32Array, Int64Array,
+        StringArray,
+    };
     use arrow_schema::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_common::cast::{
@@ -2216,13 +2233,13 @@ mod tests {
     }
 
     async fn get_exec(
-        state: &SessionState,
+        state: &dyn Session,
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
-
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let format = state
             .get_file_format_factory("parquet")
             .map(|factory| factory.create(state, &Default::default()).unwrap())
