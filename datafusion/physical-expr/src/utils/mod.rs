@@ -258,7 +258,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::expressions::{binary, cast, col, in_list, lit, Literal};
 
-    use arrow_array::{ArrayRef, Float32Array, Float64Array};
+    use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::{exec_err, DataFusionError, ScalarValue};
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};

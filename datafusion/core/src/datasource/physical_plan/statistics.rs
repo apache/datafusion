@@ -28,11 +28,11 @@ use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
 
+use arrow::array::RecordBatch;
 use arrow::{
     compute::SortColumn,
     row::{Row, Rows},
 };
-use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion_common::{plan_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};

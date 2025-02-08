@@ -22,12 +22,10 @@ use crate::fuzz_cases::aggregation_fuzzer::{
     AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
 };
 
-use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
+use arrow::array::{types::Int64Type, Array, ArrayRef, AsArray, Int64Array, RecordBatch};
 use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::DataType;
-use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_array::types::Int64Type;
 use arrow_schema::{
     IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,

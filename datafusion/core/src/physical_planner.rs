@@ -59,10 +59,9 @@ use crate::physical_plan::{
     Partitioning, PhysicalExpr, WindowExpr,
 };
 
+use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow_array::builder::StringBuilder;
-use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{

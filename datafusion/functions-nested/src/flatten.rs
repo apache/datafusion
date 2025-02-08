@@ -18,8 +18,8 @@
 //! [`ScalarUDFImpl`] definitions for flatten function.
 
 use crate::utils::make_scalar_function;
+use arrow::array::{ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
-use arrow_array::{ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_schema::DataType;
 use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
 use datafusion_common::cast::{

@@ -26,7 +26,7 @@ use super::{create_writer, BatchSerializer};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::error::Result;
 
-use arrow_array::RecordBatch;
+use arrow::array::RecordBatch;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;

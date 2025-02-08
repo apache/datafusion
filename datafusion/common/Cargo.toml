@@ -51,7 +51,6 @@ apache-avro = { version = "0.17", default-features = false, features = [
     "zstandard",
 ], optional = true }
 arrow = { workspace = true }
-arrow-array = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
 base64 = "0.22.1"
