@@ -33,7 +33,7 @@ they execute more quickly while still computing the same result.
 The following code demonstrates the basic flow of creating the optimizer with a default set of optimization rules
 and applying it to a logical plan to produce an optimized logical plan.
 
-```fixed
+```rust
 
 use std::sync::Arc;
 use datafusion::logical_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
@@ -80,7 +80,7 @@ the optimizer can simply return it as is.
 
 All rules must implement the `OptimizerRule` trait.
 
-```fixed
+```rust
 # use datafusion::common::tree_node::Transformed;
 # use datafusion::common::Result;
 # use datafusion::logical_expr::LogicalPlan;
@@ -109,7 +109,7 @@ impl OptimizerRule for MyOptimizerRule {
 
 The optimizer can be created with a custom set of rules.
 
-```fixed
+```rust
 # use std::sync::Arc;
 # use datafusion::logical_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
 # use datafusion::optimizer::{OptimizerRule, OptimizerConfig, OptimizerContext, Optimizer};
@@ -213,7 +213,7 @@ and [#3555](https://github.com/apache/datafusion/issues/3555) occur where the ex
 
 There are currently two ways to create a name for an expression in the logical plan.
 
-```fixed
+```rust
 # use datafusion::common::Result;
 # struct Expr;
 
