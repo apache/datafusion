@@ -28,7 +28,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-compression = ["async-compression","xz2", "bzip2", "flate2", "zstd", "tokio-util"]
+compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
 
 [dependencies]
@@ -41,12 +41,12 @@ async-compression = { version = "0.4.0", features = [
     "zstd",
     "tokio",
 ], optional = true }
-tokio = { workspace = true }
+bzip2 = { version = "0.5.0", optional = true }
 flate2 = { version = "1.0.24", optional = true }
+tokio = { workspace = true }
 tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
-bzip2 = { version = "0.5.0", optional = true }
 
 bytes = { workspace = true }
 chrono = { workspace = true }
