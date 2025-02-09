@@ -17,7 +17,7 @@
 
 //! Join related functionality used both on logical and physical plans
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::iter::once;
@@ -259,32 +259,25 @@ pub trait JoinHashMapType {
         let next_chain = self.get_list();
 
         // (input_index, next_offset) of remaining items to handle
-        let mut todo = VecDeque::with_capacity(initial_capacity);
+        let mut todo = Vec::with_capacity(initial_capacity);
 
         // initialize todo
-        for (input_index, hash_value) in hash_values.iter().enumerate() {
+        for (input_index, hash_value) in hash_values.iter().enumerate().rev() {
             if let Some((_, match_row_index)) =
                 hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
             {
-                input_indices.push(input_index as u32);
-                let match_row_index = match_row_index - 1;
-                match_indices.push(match_row_index);
-                let next = next_chain[match_row_index as usize];
-
-                if next != 0 {
-                    todo.push_back((input_index, next - 1));
-                }
+                todo.push((input_index, match_row_index - 1));
             }
         }
 
         // iterate the next items
-        while let Some((input_index, match_row_idx)) = todo.pop_front() {
+        while let Some((input_index, match_row_idx)) = todo.pop() {
             input_indices.push(input_index as u32);
             match_indices.push(match_row_idx);
             let next = next_chain[match_row_idx as usize];
 
             if next != 0 {
-                todo.push_back((input_index, next - 1));
+                todo.push((input_index, next - 1));
             }
         }
 
