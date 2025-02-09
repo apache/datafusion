@@ -244,16 +244,16 @@ impl PhysicalExpr for ScalarFunctionExpr {
         ))
     }
 
-    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        self.fun.evaluate_bounds(children)
+    fn evaluate_ranges(&self, children: &[&Interval]) -> Result<Interval> {
+        self.fun.evaluate_ranges(children)
     }
 
-    fn propagate_constraints(
+    fn propagate_ranges(
         &self,
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        self.fun.propagate_constraints(interval, children)
+        self.fun.propagate_ranges(interval, children)
     }
 
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
@@ -263,7 +263,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .iter()
             .map(|props| &props.range)
             .collect::<Vec<_>>();
-        let range = self.fun().evaluate_bounds(&children_range)?;
+        let range = self.fun().evaluate_ranges(&children_range)?;
 
         Ok(ExprProperties {
             sort_properties,

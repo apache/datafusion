@@ -108,14 +108,14 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     /// If the expression is `a + b`, and the input intervals are `a: [1, 2]`
     /// and `b: [3, 4]`, then the output interval would be `[4, 6]`.
-    fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
+    fn evaluate_ranges(&self, _children: &[&Interval]) -> Result<Interval> {
         not_impl_err!("Not implemented for {self}")
     }
 
     /// Updates bounds for child expressions, given a known interval for this
     /// expression.
     ///
-    /// This is used to propagate constraints down through an expression tree.
+    /// This is used to propagate ranges down through an expression tree.
     ///
     /// # Arguments
     ///
@@ -126,7 +126,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     /// A `Vec` of new intervals for the children, in order.
     ///
-    /// If constraint propagation reveals an infeasibility for any child, returns
+    /// If range propagation reveals an infeasibility for any child, returns
     /// [`None`]. If none of the children intervals change as a result of propagation,
     /// may return an empty vector instead of cloning `children`. This is the default
     /// (and conservative) return value.
@@ -137,7 +137,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// inputs `a` and `b` are respectively given as `[0, 2]` and `[-∞, 4]`, then
     /// propagation would return `[0, 2]` and `[2, 4]` as `b` must be at least
     /// `2` to make the output at least `4`.
-    fn propagate_constraints(
+    fn propagate_ranges(
         &self,
         _interval: &Interval,
         _children: &[&Interval],
@@ -152,7 +152,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     }
 
     /// Updates children statistics using the given parent statistic for this expression.
-    /// This is used to propagate constraints down through an expression tree.
+    /// This is used to propagate statistics down through an expression tree.
     ///
     /// If statistics propagation reveals an infeasibility for any child, returns
     /// [`None`]. If none of the children statistics change as a result of propagation,

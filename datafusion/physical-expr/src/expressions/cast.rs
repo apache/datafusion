@@ -159,12 +159,12 @@ impl PhysicalExpr for CastExpr {
         )))
     }
 
-    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+    fn evaluate_ranges(&self, children: &[&Interval]) -> Result<Interval> {
         // Cast current node's interval to the right type:
         children[0].cast_to(&self.cast_type, &self.cast_options)
     }
 
-    fn propagate_constraints(
+    fn propagate_ranges(
         &self,
         interval: &Interval,
         children: &[&Interval],

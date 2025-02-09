@@ -151,7 +151,7 @@ macro_rules! downcast_arg {
 /// $OUTPUT_ORDERING: the output ordering calculation method of the function
 /// $GET_DOC: the function to get the documentation of the UDF
 macro_rules! make_math_unary_udf {
-    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_BOUNDS:expr, $GET_DOC:expr) => {
+    ($UDF:ident, $NAME:ident, $UNARY_FUNC:ident, $OUTPUT_ORDERING:expr, $EVALUATE_RANGES:expr, $GET_DOC:expr) => {
         make_udf_function!($NAME::$UDF, $NAME);
 
         mod $NAME {
@@ -214,8 +214,8 @@ macro_rules! make_math_unary_udf {
                     $OUTPUT_ORDERING(input)
                 }
 
-                fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
-                    $EVALUATE_BOUNDS(inputs)
+                fn evaluate_ranges(&self, inputs: &[&Interval]) -> Result<Interval> {
+                    $EVALUATE_RANGES(inputs)
                 }
 
                 fn invoke_batch(

@@ -382,7 +382,7 @@ impl PhysicalExpr for BinaryExpr {
         ))
     }
 
-    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+    fn evaluate_ranges(&self, children: &[&Interval]) -> Result<Interval> {
         // Get children intervals:
         let left_interval = children[0];
         let right_interval = children[1];
@@ -390,7 +390,7 @@ impl PhysicalExpr for BinaryExpr {
         apply_operator(&self.op, left_interval, right_interval)
     }
 
-    fn propagate_constraints(
+    fn propagate_ranges(
         &self,
         interval: &Interval,
         children: &[&Interval],
@@ -525,8 +525,7 @@ impl PhysicalExpr for BinaryExpr {
             right_stat.range()?,
             parent_stat.range()?,
         );
-        let Some(propagated_children) = self.propagate_constraints(&pi, &[&li, &ri])?
-        else {
+        let Some(propagated_children) = self.propagate_ranges(&pi, &[&li, &ri])? else {
             return Ok(None);
         };
         Some(

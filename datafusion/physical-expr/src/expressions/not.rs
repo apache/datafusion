@@ -116,7 +116,7 @@ impl PhysicalExpr for NotExpr {
         Ok(Arc::new(NotExpr::new(Arc::clone(&children[0]))))
     }
 
-    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+    fn evaluate_ranges(&self, children: &[&Interval]) -> Result<Interval> {
         children[0].not()
     }
 
@@ -182,35 +182,35 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_bounds() -> Result<()> {
+    fn test_evaluate_ranges() -> Result<()> {
         // Note that `None` for boolean intervals is converted to `Some(false)`
         // / `Some(true)` by `Interval::make`, so it is not explicitly tested
         // here
 
         // if the bounds are all booleans (false, true) so is the negation
-        assert_evaluate_bounds(
+        assert_evaluate_ranges(
             Interval::make(Some(false), Some(true))?,
             Interval::make(Some(false), Some(true))?,
         )?;
         // (true, false) is not tested because it is not a valid interval (lower
         // bound is greater than upper bound)
-        assert_evaluate_bounds(
+        assert_evaluate_ranges(
             Interval::make(Some(true), Some(true))?,
             Interval::make(Some(false), Some(false))?,
         )?;
-        assert_evaluate_bounds(
+        assert_evaluate_ranges(
             Interval::make(Some(false), Some(false))?,
             Interval::make(Some(true), Some(true))?,
         )?;
         Ok(())
     }
 
-    fn assert_evaluate_bounds(
+    fn assert_evaluate_ranges(
         interval: Interval,
         expected_interval: Interval,
     ) -> Result<()> {
         let not_expr = not(col("a", &schema())?)?;
-        assert_eq!(not_expr.evaluate_bounds(&[&interval])?, expected_interval);
+        assert_eq!(not_expr.evaluate_ranges(&[&interval])?, expected_interval);
         Ok(())
     }
 

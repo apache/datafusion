@@ -119,7 +119,7 @@ impl PhysicalExpr for NegativeExpr {
     /// Given the child interval of a NegativeExpr, it calculates the NegativeExpr's interval.
     /// It replaces the upper and lower bounds after multiplying them with -1.
     /// Ex: `(a, b]` => `[-b, -a)`
-    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+    fn evaluate_ranges(&self, children: &[&Interval]) -> Result<Interval> {
         Interval::try_new(
             children[0].upper().arithmetic_negate()?,
             children[0].lower().arithmetic_negate()?,
@@ -128,7 +128,7 @@ impl PhysicalExpr for NegativeExpr {
 
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
     /// given the input interval is known to be `children`.
-    fn propagate_constraints(
+    fn propagate_ranges(
         &self,
         interval: &Interval,
         children: &[&Interval],
@@ -148,7 +148,7 @@ impl PhysicalExpr for NegativeExpr {
         debug_assert_eq!(stats.len(), 1);
         match stats[0] {
             Uniform { interval } => {
-                StatisticsV2::new_uniform(self.evaluate_bounds(&[interval])?)
+                StatisticsV2::new_uniform(self.evaluate_ranges(&[interval])?)
             }
             Unknown {
                 mean,
@@ -159,7 +159,7 @@ impl PhysicalExpr for NegativeExpr {
                 mean.arithmetic_negate()?,
                 median.arithmetic_negate()?,
                 variance.clone(),
-                self.evaluate_bounds(&[range])?,
+                self.evaluate_ranges(&[range])?,
             ),
             Bernoulli { .. } => {
                 internal_err!("NegativeExpr cannot operate on Boolean datatype")
@@ -206,7 +206,7 @@ impl PhysicalExpr for NegativeExpr {
                     ..
                 } => {
                     let propagated =
-                        self.propagate_constraints(parent_interval, &[child_interval])?;
+                        self.propagate_ranges(parent_interval, &[child_interval])?;
 
                     if let Some(propagated) = propagated {
                         Ok(Some(vec![StatisticsV2::new_unknown_from_interval(
@@ -304,12 +304,12 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_bounds() -> Result<()> {
+    fn test_evaluate_ranges() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let child_interval = Interval::make(Some(-2), Some(1))?;
         let negative_expr_interval = Interval::make(Some(-1), Some(2))?;
         assert_eq!(
-            negative_expr.evaluate_bounds(&[&child_interval])?,
+            negative_expr.evaluate_ranges(&[&child_interval])?,
             negative_expr_interval
         );
         Ok(())
@@ -380,16 +380,14 @@ mod tests {
     }
 
     #[test]
-    fn test_propagate_constraints() -> Result<()> {
+    fn test_propagate_ranges() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let original_child_interval = Interval::make(Some(-2), Some(3))?;
         let negative_expr_interval = Interval::make(Some(0), Some(4))?;
         let after_propagation = Some(vec![Interval::make(Some(-2), Some(0))?]);
         assert_eq!(
-            negative_expr.propagate_constraints(
-                &negative_expr_interval,
-                &[&original_child_interval]
-            )?,
+            negative_expr
+                .propagate_ranges(&negative_expr_interval, &[&original_child_interval])?,
             after_propagation
         );
         Ok(())

@@ -466,7 +466,7 @@ impl ExprIntervalGraph {
         given_range: Interval,
     ) -> Result<PropagationResult> {
         self.assign_intervals(leaf_bounds);
-        let bounds = self.evaluate_bounds()?;
+        let bounds = self.evaluate_ranges()?;
         // There are three possible cases to consider:
         // (1) given_range ⊇ bounds => Nothing to propagate
         // (2) ∅ ⊂ (given_range ∩ bounds) ⊂ bounds => Can propagate
@@ -476,7 +476,7 @@ impl ExprIntervalGraph {
             Ok(PropagationResult::CannotPropagate)
         } else if bounds.contains(&given_range)? != Interval::CERTAINLY_FALSE {
             // Second case:
-            let result = self.propagate_constraints(given_range);
+            let result = self.propagate_ranges(given_range);
             self.update_intervals(leaf_bounds);
             result
         } else {
@@ -548,11 +548,11 @@ impl ExprIntervalGraph {
     /// // Evaluate bounds for the composite expression:
     /// graph.assign_intervals(&intervals);
     /// assert_eq!(
-    ///     graph.evaluate_bounds().unwrap(),
+    ///     graph.evaluate_ranges().unwrap(),
     ///     &Interval::make(Some(20), Some(30)).unwrap(),
     /// )
     /// ```
-    pub fn evaluate_bounds(&mut self) -> Result<&Interval> {
+    pub fn evaluate_ranges(&mut self) -> Result<&Interval> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
@@ -565,7 +565,7 @@ impl ExprIntervalGraph {
                 // Reverse to align with `PhysicalExpr`'s children:
                 children_intervals.reverse();
                 self.graph[node].interval =
-                    self.graph[node].expr.evaluate_bounds(&children_intervals)?;
+                    self.graph[node].expr.evaluate_ranges(&children_intervals)?;
             }
         }
         Ok(&self.graph[self.root].interval)
@@ -573,10 +573,7 @@ impl ExprIntervalGraph {
 
     /// Updates/shrinks bounds for leaf expressions using interval arithmetic
     /// via a top-down traversal.
-    fn propagate_constraints(
-        &mut self,
-        given_range: Interval,
-    ) -> Result<PropagationResult> {
+    fn propagate_ranges(&mut self, given_range: Interval) -> Result<PropagationResult> {
         // Adjust the root node with the given range:
         if let Some(interval) = self.graph[self.root].interval.intersect(given_range)? {
             self.graph[self.root].interval = interval;
@@ -603,7 +600,7 @@ impl ExprIntervalGraph {
             let node_interval = self.graph[node].interval();
             let propagated_intervals = self.graph[node]
                 .expr
-                .propagate_constraints(node_interval, &children_intervals)?;
+                .propagate_ranges(node_interval, &children_intervals)?;
             if let Some(propagated_intervals) = propagated_intervals {
                 for (child, interval) in children.into_iter().zip(propagated_intervals) {
                     self.graph[child].interval = interval;
@@ -1377,7 +1374,7 @@ mod tests {
     }
 
     #[test]
-    fn test_propagate_constraints_singleton_interval_at_right() -> Result<()> {
+    fn test_propagate_ranges_singleton_interval_at_right() -> Result<()> {
         let expression = BinaryExpr::new(
             Arc::new(Column::new("ts_column", 0)),
             Operator::Plus,
@@ -1410,9 +1407,7 @@ mod tests {
             })),
         )?;
         let children = vec![&left_child, &right_child];
-        let result = expression
-            .propagate_constraints(&parent, &children)?
-            .unwrap();
+        let result = expression.propagate_ranges(&parent, &children)?.unwrap();
 
         assert_eq!(
             vec![
@@ -1450,7 +1445,7 @@ mod tests {
     }
 
     #[test]
-    fn test_propagate_constraints_column_interval_at_left() -> Result<()> {
+    fn test_propagate_ranges_column_interval_at_left() -> Result<()> {
         let expression = BinaryExpr::new(
             Arc::new(Column::new("interval_column", 1)),
             Operator::Plus,
@@ -1481,9 +1476,7 @@ mod tests {
             })),
         )?;
         let children = vec![&left_child, &right_child];
-        let result = expression
-            .propagate_constraints(&parent, &children)?
-            .unwrap();
+        let result = expression.propagate_ranges(&parent, &children)?.unwrap();
 
         assert_eq!(
             vec![
@@ -1612,7 +1605,7 @@ mod tests {
         ];
         for children in children_set {
             assert_eq!(
-                expr.propagate_constraints(&parent, &children)?.unwrap(),
+                expr.propagate_ranges(&parent, &children)?.unwrap(),
                 vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE],
             );
         }
@@ -1623,20 +1616,20 @@ mod tests {
             vec![&Interval::UNCERTAIN, &Interval::CERTAINLY_TRUE],
         ];
         for children in children_set {
-            assert_eq!(expr.propagate_constraints(&parent, &children)?, None,);
+            assert_eq!(expr.propagate_ranges(&parent, &children)?, None,);
         }
 
         let parent = Interval::CERTAINLY_TRUE;
         let children = vec![&Interval::CERTAINLY_FALSE, &Interval::UNCERTAIN];
         assert_eq!(
-            expr.propagate_constraints(&parent, &children)?.unwrap(),
+            expr.propagate_ranges(&parent, &children)?.unwrap(),
             vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_TRUE]
         );
 
         let parent = Interval::CERTAINLY_TRUE;
         let children = vec![&Interval::UNCERTAIN, &Interval::UNCERTAIN];
         assert_eq!(
-            expr.propagate_constraints(&parent, &children)?.unwrap(),
+            expr.propagate_ranges(&parent, &children)?.unwrap(),
             // Empty means unchanged intervals.
             vec![]
         );
@@ -1672,10 +1665,7 @@ mod tests {
             ),
         ];
         for (children, result) in children_and_results_set {
-            assert_eq!(
-                expr.propagate_constraints(&parent, &children)?.unwrap(),
-                result
-            );
+            assert_eq!(expr.propagate_ranges(&parent, &children)?.unwrap(), result);
         }
 
         Ok(())
