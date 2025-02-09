@@ -902,6 +902,12 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/installation.md",
+    user_guide_cli_installation
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/library-user-guide/adding-udfs.md",
     library_user_guide_adding_udfs
 );
