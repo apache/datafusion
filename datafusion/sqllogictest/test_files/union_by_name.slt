@@ -36,9 +36,29 @@ SELECT t1.x FROM t1 UNION BY NAME SELECT x FROM t1 ORDER BY t1.x;
 3
 
 query I
+SELECT t1.x FROM t1 UNION ALL BY NAME SELECT x FROM t1 ORDER BY t1.x;
+----
+1
+1
+3
+3
+3
+3
+
+query I
 SELECT x FROM t1 UNION BY NAME SELECT x FROM t1 ORDER BY t1.x;
 ----
 1
+3
+
+query I
+SELECT x FROM t1 UNION ALL BY NAME SELECT x FROM t1 ORDER BY t1.x;
+----
+1
+1
+3
+3
+3
 3
 
 query II
@@ -48,12 +68,32 @@ NULL 1
 NULL 3
 5 NULL
 
+# TODO: This should pass, but the sanity checker isn't allowing it.
+# Commenting out the ordering check in the sanity checker produces the correct result.
+query error
+(SELECT x FROM t1 UNION ALL SELECT x FROM t1) UNION ALL BY NAME SELECT 5 ORDER BY x;
+----
+DataFusion error: SanityCheckPlan
+caused by
+Error during planning: Plan: ["SortPreservingMergeExec: [x@1 ASC NULLS LAST]", "  UnionExec", "    SortExec: expr=[x@1 ASC NULLS LAST], preserve_partitioning=[true]", "      ProjectionExec: expr=[NULL as Int64(5), x@0 as x]", "        UnionExec", "          MemoryExec: partitions=1, partition_sizes=[1]", "          MemoryExec: partitions=1, partition_sizes=[1]", "    ProjectionExec: expr=[5 as Int64(5), NULL as x]", "      PlaceholderRowExec"] does not satisfy order requirements: [x@1 ASC NULLS LAST]. Child-0 order: []
+
+
 query II
 (SELECT x FROM t1 UNION ALL SELECT y FROM t1) UNION BY NAME SELECT 5 ORDER BY x;
 ----
 NULL 1
 NULL 3
 5 NULL
+
+# TODO: This should pass, but the sanity checker isn't allowing it.
+# Commenting out the ordering check in the sanity checker produces the correct result.
+query error
+(SELECT x FROM t1 UNION ALL SELECT y FROM t1) UNION ALL BY NAME SELECT 5 ORDER BY x;
+----
+DataFusion error: SanityCheckPlan
+caused by
+Error during planning: Plan: ["SortPreservingMergeExec: [x@1 ASC NULLS LAST]", "  UnionExec", "    SortExec: expr=[x@1 ASC NULLS LAST], preserve_partitioning=[true]", "      ProjectionExec: expr=[NULL as Int64(5), x@0 as x]", "        UnionExec", "          MemoryExec: partitions=1, partition_sizes=[1]", "          ProjectionExec: expr=[y@0 as x]", "            MemoryExec: partitions=1, partition_sizes=[1]", "    ProjectionExec: expr=[5 as Int64(5), NULL as x]", "      PlaceholderRowExec"] does not satisfy order requirements: [x@1 ASC NULLS LAST]. Child-0 order: []
+
 
 
 # Ambiguous name
