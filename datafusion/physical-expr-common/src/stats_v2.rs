@@ -226,11 +226,11 @@ impl StatisticsV2 {
     pub fn mean(&self) -> Result<ScalarValue> {
         match &self {
             Uniform { interval } => {
-                let agg = interval
+                let dt = interval.lower().data_type();
+                interval
                     .lower()
                     .add_checked(interval.upper())?
-                    .cast_to(&DataType::Float64)?;
-                agg.div(ScalarValue::Float64(Some(2.)))
+                    .div(ScalarValue::from(2).cast_to(&dt)?)
             }
             Exponential {
                 rate,

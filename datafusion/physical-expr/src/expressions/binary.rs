@@ -43,7 +43,7 @@ use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-    self, Bernoulli, Gaussian, Uniform, Unknown,
+    self, Bernoulli, Gaussian,
 };
 use datafusion_physical_expr_common::stats_v2::{get_one, get_zero};
 use kernels::{
@@ -520,30 +520,40 @@ impl PhysicalExpr for BinaryExpr {
         children_stat: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
         let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
-        match parent_stat {
-            Uniform { interval }
-            | Unknown {
-                range: interval, ..
-            } => match (left_stat, right_stat) {
-                (Uniform { interval: left }, Uniform { interval: right })
-                | (Uniform { interval: left }, Unknown { range: right, .. })
-                | (Unknown { range: left, .. }, Uniform { interval: right })
-                | (Unknown { range: left, .. }, Unknown { range: right, .. }) => {
-                    let propagated =
-                        self.propagate_constraints(interval, &[left, right])?;
-                    if let Some(propagated) = propagated {
-                        Ok(Some(vec![
-                            StatisticsV2::new_unknown_from_interval(&propagated[0])?,
-                            StatisticsV2::new_unknown_from_interval(&propagated[1])?,
-                        ]))
+        let (li, ri, pi) = (
+            left_stat.range()?,
+            right_stat.range()?,
+            parent_stat.range()?,
+        );
+        let Some(propagated_children) = self.propagate_constraints(&pi, &[&li, &ri])?
+        else {
+            return Ok(None);
+        };
+        Some(
+            propagated_children
+                .into_iter()
+                .map(|child_interval| {
+                    if child_interval.data_type().eq(&DataType::Boolean) {
+                        if child_interval.eq(&Interval::CERTAINLY_TRUE) {
+                            StatisticsV2::new_bernoulli(get_one().clone())
+                        } else if child_interval.eq(&Interval::CERTAINLY_FALSE) {
+                            StatisticsV2::new_bernoulli(get_zero().clone())
+                        } else {
+                            StatisticsV2::new_bernoulli(ScalarValue::Boolean(None))
+                        }
                     } else {
-                        Ok(None)
+                        let unknown = ScalarValue::Null;
+                        StatisticsV2::new_unknown(
+                            unknown.clone(),
+                            unknown.clone(),
+                            unknown.clone(),
+                            child_interval,
+                        )
                     }
-                }
-                (_, _) => Ok(None),
-            },
-            _ => Ok(None),
-        }
+                })
+                .collect::<Result<Vec<_>>>(),
+        )
+        .transpose()
     }
 
     /// For each operator, [`BinaryExpr`] has distinct rules.
@@ -865,7 +875,7 @@ mod tests {
     use crate::expressions::{col, lit, try_cast, Column, Literal};
 
     use datafusion_common::plan_datafusion_err;
-    use datafusion_physical_expr_common::stats_v2::StatisticsV2::Uniform;
+    use datafusion_physical_expr_common::stats_v2::StatisticsV2::{Uniform, Unknown};
 
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
