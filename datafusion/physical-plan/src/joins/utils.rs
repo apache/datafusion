@@ -146,8 +146,8 @@ impl JoinHashMap {
     }
 }
 
-// Type of offsets for obtaining indices from JoinHashMap.
-pub(crate) type JoinHashMapOffset = (usize, Option<u64>);
+// Type of remaining items (input / output offset) to process.
+pub(crate) type NextItems = Vec<(usize, u64)>;
 
 // Trait defining methods that must be implemented by a hash map type to be used for joins.
 pub trait JoinHashMapType {
@@ -238,50 +238,55 @@ pub trait JoinHashMapType {
         (input_indices, match_indices)
     }
 
-    /// Matches hashes with taking limit and offset into account.
-    /// Returns pairs of matched indices along with the starting point for next
-    /// matching iteration (`None` if limit has not been reached).
-    ///
-    /// This method only compares hashes, so additional further check for actual values
-    /// equality may be required.
-    fn get_matched_indices_with_limit_offset(
-        &self,
-        hash_values: &[u64],
-        // TODO: HANDLE emitting in batches
-        limit: usize,
-        offset: JoinHashMapOffset,
-    ) -> (Vec<u32>, Vec<u64>, Option<JoinHashMapOffset>) {
-        let initial_capacity = hash_values.len(); // Initial capacity hint based on input size
-        let mut input_indices = Vec::with_capacity(initial_capacity);
-        let mut match_indices = Vec::with_capacity(initial_capacity);
-
+    /// Initializes first (input_index, next_offset) items list based on hash table
+    fn get_initial_matches(&self, hash_values: &[u64]) -> Vec<(usize, u64)> {
         let hash_map: &RawTable<(u64, u64)> = self.get_map();
-        let next_chain = self.get_list();
 
-        // (input_index, next_offset) of remaining items to handle
-        let mut todo = Vec::with_capacity(initial_capacity);
+        let mut next_items = Vec::with_capacity(hash_values.len());
 
         // initialize todo
         for (input_index, hash_value) in hash_values.iter().enumerate().rev() {
             if let Some((_, match_row_index)) =
                 hash_map.get(*hash_value, |(hash, _)| *hash_value == *hash)
             {
-                todo.push((input_index, match_row_index - 1));
+                next_items.push((input_index, match_row_index - 1));
             }
         }
 
+        return next_items;
+    }
+
+    /// Matches hashes with taking batch size into account
+    /// Returns pairs of matched indices along with the starting point for next
+    /// matching iteration (`None` if limit has not been reached).
+    ///
+    /// This method only compares hashes, so additional further check for actual values
+    /// equality may be required.
+    fn get_matched_indices_with_limit(
+        &self,
+        next_items: &mut Vec<(usize, u64)>,
+        batch_size: usize,
+    ) -> (Vec<u32>, Vec<u64>) {
+        let mut input_indices = Vec::with_capacity(batch_size);
+        let mut match_indices = Vec::with_capacity(batch_size);
+
+        let next_chain = self.get_list();
+
         // iterate the next items
-        while let Some((input_index, match_row_idx)) = todo.pop() {
+        while let Some((input_index, match_row_idx)) = next_items.pop() {
             input_indices.push(input_index as u32);
             match_indices.push(match_row_idx);
             let next = next_chain[match_row_idx as usize];
 
             if next != 0 {
-                todo.push((input_index, next - 1));
+                next_items.push((input_index, next - 1));
+            }
+            if input_indices.len() >= batch_size {
+                break;
             }
         }
 
-        (input_indices, match_indices, None)
+        (input_indices, match_indices)
     }
 }
 

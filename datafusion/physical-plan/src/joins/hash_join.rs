@@ -26,7 +26,7 @@ use std::{any::Any, vec};
 
 use super::utils::{
     asymmetric_join_output_partitioning, get_final_indices_from_shared_bitmap,
-    reorder_output_after_swap, swap_join_projection,
+    reorder_output_after_swap, swap_join_projection, NextItems,
 };
 use super::{
     utils::{OnceAsync, OnceFut},
@@ -44,7 +44,7 @@ use crate::{
         build_batch_from_indices, build_join_schema, check_join_is_valid,
         estimate_join_statistics, need_produce_result_in_final,
         symmetric_join_output_partitioning, BuildProbeJoinMetrics, ColumnIndex,
-        JoinFilter, JoinHashMap, JoinHashMapOffset, JoinHashMapType, JoinOn, JoinOnRef,
+        JoinFilter, JoinHashMap, JoinHashMapType, JoinOn, JoinOnRef,
         StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
@@ -64,8 +64,7 @@ use arrow_array::cast::downcast_array;
 use arrow_schema::ArrowError;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
-    internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
-    JoinSide, JoinType, Result,
+    internal_err, plan_err, project_schema, DataFusionError, JoinSide, JoinType, Result,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::TaskContext;
@@ -1123,15 +1122,14 @@ struct ProcessProbeBatchState {
     batch: RecordBatch,
     /// Probe-side on expressions values
     values: Vec<ArrayRef>,
-    /// Starting offset for JoinHashMap lookups
-    offset: JoinHashMapOffset,
+    /// Remaining items (input / output offset) to process
+    next_items: Option<NextItems>,
     /// Max joined probe-side index from current batch
     joined_probe_idx: Option<usize>,
 }
 
 impl ProcessProbeBatchState {
-    fn advance(&mut self, offset: JoinHashMapOffset, joined_probe_idx: Option<usize>) {
-        self.offset = offset;
+    fn advance(&mut self, joined_probe_idx: Option<usize>) {
         if joined_probe_idx.is_some() {
             self.joined_probe_idx = joined_probe_idx;
         }
@@ -1238,11 +1236,15 @@ fn lookup_join_hashmap(
     probe_side_values: &[ArrayRef],
     null_equals_null: bool,
     hashes_buffer: &[u64],
-    limit: usize,
-    offset: JoinHashMapOffset,
-) -> Result<(UInt64Array, UInt32Array, Option<JoinHashMapOffset>)> {
-    let (probe_indices, build_indices, next_offset) =
-        build_hashmap.get_matched_indices_with_limit_offset(hashes_buffer, limit, offset);
+    batch_size: usize,
+    next_items: &mut Option<NextItems>,
+) -> Result<(UInt64Array, UInt32Array)> {
+    if next_items.is_none() {
+        *next_items = Some(build_hashmap.get_initial_matches(hashes_buffer));
+    }
+    let next_items = next_items.as_mut().unwrap();
+    let (probe_indices, build_indices) =
+        build_hashmap.get_matched_indices_with_limit(next_items, batch_size);
 
     let build_indices: UInt64Array = build_indices.into();
     let probe_indices: UInt32Array = probe_indices.into();
@@ -1255,7 +1257,7 @@ fn lookup_join_hashmap(
         null_equals_null,
     )?;
 
-    Ok((build_indices, probe_indices, next_offset))
+    Ok((build_indices, probe_indices))
 }
 
 // version of eq_dyn supporting equality on null arrays
@@ -1402,7 +1404,7 @@ impl HashJoinStream {
                     HashJoinStreamState::ProcessProbeBatch(ProcessProbeBatchState {
                         batch,
                         values: keys_values,
-                        offset: (0, None),
+                        next_items: None,
                         joined_probe_idx: None,
                     });
             }
@@ -1424,14 +1426,14 @@ impl HashJoinStream {
         let timer = self.join_metrics.join_time.timer();
 
         // get the matched by join keys indices
-        let (left_indices, right_indices, next_offset) = lookup_join_hashmap(
+        let (left_indices, right_indices) = lookup_join_hashmap(
             build_side.left_data.hash_map(),
             build_side.left_data.values(),
             &state.values,
             self.null_equals_null,
             &self.hashes_buffer,
             self.batch_size,
-            state.offset,
+            &mut state.next_items,
         )?;
 
         // apply join filter if exists
@@ -1481,7 +1483,8 @@ impl HashJoinStream {
         // Calculate range and perform alignment.
         // In case probe batch has been processed -- align all remaining rows.
         let index_alignment_range_start = state.joined_probe_idx.map_or(0, |v| v + 1);
-        let index_alignment_range_end = if next_offset.is_none() {
+        let is_done = state.next_items.as_ref().map(|x| x.is_empty()).unwrap();
+        let index_alignment_range_end = if is_done {
             state.batch.num_rows()
         } else {
             last_joined_right_idx.map_or(0, |v| v + 1)
@@ -1509,14 +1512,10 @@ impl HashJoinStream {
         self.join_metrics.output_rows.add(result.num_rows());
         timer.done();
 
-        if next_offset.is_none() {
+        if is_done {
             self.state = HashJoinStreamState::FetchProbeBatch;
         } else {
-            state.advance(
-                next_offset
-                    .ok_or_else(|| internal_datafusion_err!("unexpected None offset"))?,
-                last_joined_right_idx,
-            )
+            state.advance(last_joined_right_idx)
         };
 
         Ok(StatefulStreamResult::Ready(Some(result)))
@@ -3289,14 +3288,14 @@ mod tests {
             &mut hashes_buffer,
         )?;
 
-        let (l, r, _) = lookup_join_hashmap(
+        let (l, r) = lookup_join_hashmap(
             &join_hash_map,
             &[left_keys_values],
             &[right_keys_values],
             false,
             &hashes_buffer,
             8192,
-            (0, None),
+            &mut None,
         )?;
 
         let left_ids: UInt64Array = vec![0, 1].into();
