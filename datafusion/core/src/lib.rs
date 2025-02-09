@@ -842,17 +842,11 @@ doc_comment::doctest!("../../../README.md", readme_example_test);
 //
 // For example, if `user_guide_expressions(line 123)` fails,
 // go to `docs/source/user-guide/expressions.md` to find the relevant problem.
-
+//
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/user-guide/example-usage.md",
-    user_guide_example_usage
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
-    "../../../docs/source/user-guide/crate-configuration.md",
-    user_guide_crate_configuration
+    "../../../docs/source/user-guide/concepts-readings-events.md",
+    user_guide_concepts_readings_events
 );
 
 #[cfg(doctest)]
@@ -863,14 +857,41 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/crate-configuration.md",
+    user_guide_crate_configuration
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/dataframe.md",
     user_guide_dataframe
 );
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/example-usage.md",
+    user_guide_example_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/explain-usage.md",
+    user_guide_explain_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/expressions.md",
     user_guide_expressions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!("../../../docs/source/user-guide/faq.md", user_guide_faq);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/introduction.md",
+    user_guide_introduction
 );
 
 #[cfg(doctest)]
