@@ -33,16 +33,14 @@ use crate::{
 pub use super::join_filter::JoinFilter;
 
 use arrow::array::{
-    downcast_array, new_null_array, Array, BooleanBufferBuilder, UInt32Array,
-    UInt32Builder, UInt64Array,
+    builder::UInt64Builder, downcast_array, new_null_array, Array, ArrowPrimitiveType,
+    BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch, RecordBatchOptions,
+    UInt32Array, UInt32Builder, UInt64Array,
 };
 use arrow::compute;
 use arrow::datatypes::{
     ArrowNativeType, Field, Schema, SchemaBuilder, UInt32Type, UInt64Type,
 };
-use arrow::record_batch::{RecordBatch, RecordBatchOptions};
-use arrow_array::builder::UInt64Builder;
-use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray};
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -1077,7 +1075,7 @@ impl<T: 'static> OnceFut<T> {
             OnceFutState::Ready(r) => Poll::Ready(
                 r.as_ref()
                     .map(|r| r.as_ref())
-                    .map_err(|e| DataFusionError::External(Box::new(Arc::clone(e)))),
+                    .map_err(DataFusionError::from),
             ),
         }
     }
@@ -1091,10 +1089,9 @@ impl<T: 'static> OnceFut<T> {
 
         match &self.state {
             OnceFutState::Pending(_) => unreachable!(),
-            OnceFutState::Ready(r) => Poll::Ready(
-                r.clone()
-                    .map_err(|e| DataFusionError::External(Box::new(e))),
-            ),
+            OnceFutState::Ready(r) => {
+                Poll::Ready(r.clone().map_err(DataFusionError::Shared))
+            }
         }
     }
 }
@@ -1821,13 +1818,12 @@ pub(super) fn swap_join_projection(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::pin::Pin;
 
-    use super::*;
-
+    use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
-    use arrow_array::Int32Array;
     use arrow_schema::SortOptions;
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};

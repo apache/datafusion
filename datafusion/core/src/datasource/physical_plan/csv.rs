@@ -618,6 +618,9 @@ impl FileSource for CsvSource {
     fn fmt_extra(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, ", has_header={}", self.has_header)
     }
+    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
+        !(config.file_compression_type.is_compressed() || config.new_lines_in_values)
+    }
 }
 
 impl FileOpener for CsvOpener {

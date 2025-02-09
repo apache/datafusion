@@ -60,7 +60,11 @@ jobs:
         with:
           rust-version: stable
       - name: Prepare cargo build
-        run: cargo check --profile ci --all-targets --features integration-tests
+        run: |
+          # Adding `--locked` here to assert that the `Cargo.lock` file is up to
+          # date with the manifest. When this fails, please make sure to commit
+          # the changes to `Cargo.lock` after building with the updated manifest.
+          cargo check --profile ci --workspace --all-targets --features integration-tests --locked
 
   # cargo check common, functions and substrait with no default features
   linux-cargo-check-no-default-features:
@@ -94,12 +98,6 @@ jobs:
 
       - name: Check workspace with additional features
         run: cargo check --profile ci --workspace --benches --features avro,json,integration-tests
-
-      - name: Check Cargo.lock for datafusion-cli
-        run: |
-          # If this test fails, try running `cargo update` in the `datafusion-cli` directory
-          # and check in the updated Cargo.lock file.
-          cargo check --profile ci --manifest-path datafusion-cli/Cargo.toml --locked
 
   # cargo check datafusion to ensure that the datafusion crate can be built with only a
   # subset of the function packages enabled.
@@ -189,28 +187,6 @@ jobs:
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
-  linux-test-datafusion-cli:
-    name: cargo test datafusion-cli (amd64)
-    needs: linux-build-lib
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
-      - name: Run tests (excluding doctests)
-        run: |
-          cd datafusion-cli
-          cargo test --profile ci --lib --tests --bins --all-features
-      - name: Verify Working Directory Clean
-        run: git diff --exit-code
-
   linux-test-example:
     name: cargo examples (amd64)
     needs: linux-build-lib
@@ -252,10 +228,7 @@ jobs:
         with:
           rust-version: stable
       - name: Run doctests
-        run: |
-          cargo test --profile ci --doc --features avro,json
-          cd datafusion-cli
-          cargo test --profile ci --doc --all-features
+        run: cargo test --profile ci --doc --features avro,json
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -364,45 +337,40 @@ jobs:
           POSTGRES_HOST: postgres
           POSTGRES_PORT: ${{ job.services.postgres.ports[5432] }}
 
-#  Temporarily commenting out the Windows flow, the reason is enormously slow running build
-#  Waiting for new Windows 2025 github runner
-#  Details: https://github.com/apache/datafusion/issues/13726
-#
-#  windows:
-#    name: cargo test (win64)
-#    runs-on: windows-latest
-#    steps:
-#      - uses: actions/checkout@v4
-#        with:
-#          submodules: true
-#      - name: Setup Rust toolchain
-#        uses: ./.github/actions/setup-windows-builder
-#      - name: Run tests (excluding doctests)
-#        shell: bash
-#        run: |
-#          export PATH=$PATH:$HOME/d/protoc/bin
-#          cargo test --lib --tests --bins --features avro,json,backtrace
-#          cd datafusion-cli
-#          cargo test --lib --tests --bins --all-features
+  #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
+  #  Waiting for new Windows 2025 github runner
+  #  Details: https://github.com/apache/datafusion/issues/13726
+  #
+  #  windows:
+  #    name: cargo test (win64)
+  #    runs-on: windows-latest
+  #    steps:
+  #      - uses: actions/checkout@v4
+  #        with:
+  #          submodules: true
+  #      - name: Setup Rust toolchain
+  #        uses: ./.github/actions/setup-windows-builder
+  #      - name: Run tests (excluding doctests)
+  #        shell: bash
+  #        run: |
+  #          export PATH=$PATH:$HOME/d/protoc/bin
+  #          cargo test --lib --tests --bins --features avro,json,backtrace
 
-# Commenting out intel mac build as so few users would ever use it
-# Details: https://github.com/apache/datafusion/issues/13846
-#  macos:
-#    name: cargo test (macos)
-#    runs-on: macos-latest
-#    steps:
-#      - uses: actions/checkout@v4
-#        with:
-#          submodules: true
-#          fetch-depth: 1
-#      - name: Setup Rust toolchain
-#        uses: ./.github/actions/setup-macos-builder
-#      - name: Run tests (excluding doctests)
-#        shell: bash
-#        run: |
-#          cargo test run --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace
-#          cd datafusion-cli
-#          cargo test run --profile ci --lib --tests --bins --all-features
+  # Commenting out intel mac build as so few users would ever use it
+  # Details: https://github.com/apache/datafusion/issues/13846
+  #  macos:
+  #    name: cargo test (macos)
+  #    runs-on: macos-latest
+  #    steps:
+  #      - uses: actions/checkout@v4
+  #        with:
+  #          submodules: true
+  #          fetch-depth: 1
+  #      - name: Setup Rust toolchain
+  #        uses: ./.github/actions/setup-macos-builder
+  #      - name: Run tests (excluding doctests)
+  #        shell: bash
+  #        run: cargo test run --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace
 
   macos-aarch64:
     name: cargo test (macos-aarch64)
@@ -416,10 +384,7 @@ jobs:
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run tests (excluding doctests)
         shell: bash
-        run: |
-          cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
-          cd datafusion-cli
-          cargo test --profile ci --lib --tests --bins --all-features
+        run: cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
@@ -615,19 +580,19 @@ jobs:
           # (Min Supported Rust Version) than the one specified in the
           # `rust-version` key of `Cargo.toml`.
           #
-          # To reproduce: 
-          # 1. Install the version of Rust that is failing. Example: 
+          # To reproduce:
+          # 1. Install the version of Rust that is failing. Example:
           #    rustup install 1.80.1
           # 2. Run the command that failed with that version. Example:
           #    cargo +1.80.1 check -p datafusion
-          # 
+          #
           # To resolve, either:
-          # 1. Change your code to use older Rust features, 
+          # 1. Change your code to use older Rust features,
           # 2. Revert dependency update
           # 3. Update the MSRV version in `Cargo.toml`
           #
           # Please see the DataFusion Rust Version Compatibility Policy before
-          # updating Cargo.toml. You may have to update the code instead. 
+          # updating Cargo.toml. You may have to update the code instead.
           # https://github.com/apache/datafusion/blob/main/README.md#rust-version-compatibility-policy
           cargo msrv --output-format json --log-target stdout verify
       - name: Check datafusion-substrait
@@ -635,7 +600,4 @@ jobs:
         run: cargo msrv --output-format json --log-target stdout verify
       - name: Check datafusion-proto
         working-directory: datafusion/proto
-        run: cargo msrv --output-format json --log-target stdout verify
-      - name: Check datafusion-cli
-        working-directory: datafusion-cli
         run: cargo msrv --output-format json --log-target stdout verify

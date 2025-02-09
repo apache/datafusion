@@ -17,10 +17,9 @@
 
 use crate::aggregates::group_values::GroupValues;
 use ahash::RandomState;
+use arrow::array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
 use arrow::compute::cast;
-use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, Rows, SortField};
-use arrow_array::{Array, ArrayRef, ListArray, StructArray};
 use arrow_schema::{DataType, SchemaRef};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::Result;

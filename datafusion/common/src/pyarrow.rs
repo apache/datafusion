@@ -17,9 +17,8 @@
 
 //! Conversions between PyArrow and DataFusion types
 
-use arrow::array::ArrayData;
+use arrow::array::{Array, ArrayData};
 use arrow::pyarrow::{FromPyArrow, ToPyArrow};
-use arrow_array::Array;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::PyErr;
 use pyo3::types::{PyAnyMethods, PyList};

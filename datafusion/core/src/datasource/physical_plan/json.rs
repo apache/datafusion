@@ -313,6 +313,10 @@ impl FileSource for JsonSource {
     fn file_type(&self) -> &str {
         "json"
     }
+
+    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
+        !(config.file_compression_type.is_compressed() || config.new_lines_in_values)
+    }
 }
 
 impl FileOpener for JsonOpener {

@@ -259,8 +259,9 @@ fn get_valid_types_with_scalar_udf(
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
             Ok(coerced_types) => Ok(vec![coerced_types]),
             Err(e) => exec_err!(
-                "Function '{}' user-defined coercion failed with {e:?}",
-                func.name()
+                "Function '{}' user-defined coercion failed with {:?}",
+                func.name(),
+                e.strip_backtrace()
             ),
         },
         TypeSignature::OneOf(signatures) => {
@@ -302,8 +303,9 @@ fn get_valid_types_with_aggregate_udf(
             Ok(coerced_types) => vec![coerced_types],
             Err(e) => {
                 return exec_err!(
-                    "Function '{}' user-defined coercion failed with {e:?}",
-                    func.name()
+                    "Function '{}' user-defined coercion failed with {:?}",
+                    func.name(),
+                    e.strip_backtrace()
                 )
             }
         },
@@ -330,8 +332,9 @@ fn get_valid_types_with_window_udf(
             Ok(coerced_types) => vec![coerced_types],
             Err(e) => {
                 return exec_err!(
-                    "Function '{}' user-defined coercion failed with {e:?}",
-                    func.name()
+                    "Function '{}' user-defined coercion failed with {:?}",
+                    func.name(),
+                    e.strip_backtrace()
                 )
             }
         },

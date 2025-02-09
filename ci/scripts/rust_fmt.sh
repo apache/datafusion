@@ -19,5 +19,3 @@
 
 set -ex
 cargo fmt --all -- --check
-cd datafusion-cli
-cargo fmt --all -- --check
