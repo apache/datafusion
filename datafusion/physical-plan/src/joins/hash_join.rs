@@ -1988,12 +1988,7 @@ mod tests {
 
         let expected_batch_count = if cfg!(not(feature = "force_hash_collisions")) {
             // Expected number of hash table matches = 3
-            // in case batch_size is 1 - additional empty batch for remaining 3-2 row
-            let mut expected_batch_count = div_ceil(3, batch_size);
-            if batch_size == 1 {
-                expected_batch_count += 1;
-            }
-            expected_batch_count
+            div_ceil(3, batch_size)
         } else {
             // With hash collisions enabled, all records will match each other
             // and filtered later.
