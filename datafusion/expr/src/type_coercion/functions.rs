@@ -22,8 +22,8 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, plan_err, types::NativeType,
-    utils::list_ndims, Result,
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    types::NativeType, utils::list_ndims, Result,
 };
 use datafusion_common::{types::LogicalType, utils::coerced_fixed_size_list_to_list};
 use datafusion_expr_common::{
@@ -629,21 +629,47 @@ fn get_valid_types(
                     }
                 }
 
+                fn default_casted_type(
+                    signature_class: &TypeSignatureClass,
+                    logical_type: &NativeType,
+                    origin_type: &DataType,
+                ) -> Result<DataType> {
+                    match signature_class {
+                        TypeSignatureClass::Native(logical_type) => {
+                            logical_type.native().default_cast_for(origin_type)
+                        }
+                        // If the given type is already a timestamp, we don't change the unit and timezone
+                        TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
+                            Ok(origin_type.to_owned())
+                        }
+                        TypeSignatureClass::Time if logical_type.is_time() => {
+                            Ok(origin_type.to_owned())
+                        }
+                        TypeSignatureClass::Interval if logical_type.is_interval() => {
+                            Ok(origin_type.to_owned())
+                        }
+                        TypeSignatureClass::Duration if logical_type.is_duration() => {
+                            Ok(origin_type.to_owned())
+                        }
+                        _ => not_impl_err!("Other cases are not implemented yet"),
+                    }
+                }
+
                 if is_matched_type(&param.desired_type, &current_logical_type) {
-                    let casted_type = param
-                    .desired_type
-                    .default_casted_type(&current_logical_type, current_type)?;
+                    let casted_type = default_casted_type(
+                        &param.desired_type,
+                        &current_logical_type,
+                        current_type,
+                    )?;
+
                     new_types.push(casted_type);
                 } else if param
                 .allowed_source_types()
                 .iter()
                 .any(|t| is_matched_type(t, &current_logical_type)) {
-
-                    if param.default_casted_type().is_none() {
-                        return exec_err!("This shouldn't be None");
-                    }
-                    let default_type = param.default_casted_type().unwrap();
-                    let casted_type = default_type.default_cast_for(current_type)?;
+                    // If the condition is met which means `implicit coercion`` is provided so we can safely unwrap
+                    let default_casted_type = param.default_casted_type().unwrap();
+                    let casted_type = default_casted_type.default_cast_for(current_type)?;
                     new_types.push(casted_type);
                 } else {
                     return internal_err!(

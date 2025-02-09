@@ -24,8 +24,7 @@ use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::types::{LogicalTypeRef, NativeType};
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -226,36 +225,6 @@ impl Display for TypeSignatureClass {
     }
 }
 
-impl TypeSignatureClass {
-    /// Returns the default cast type for the given `TypeSignatureClass`.  
-    /// Be cautious to avoid adding specialized logic here, as this function is public and intended for general use.
-    pub fn default_casted_type(
-        &self,
-        logical_type: &NativeType,
-        origin_type: &DataType,
-    ) -> Result<DataType> {
-        match self {
-            TypeSignatureClass::Native(logical_type) => {
-                logical_type.native().default_cast_for(origin_type)
-            }
-            // If the given type is already a timestamp, we don't change the unit and timezone
-            TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
-                Ok(origin_type.to_owned())
-            }
-            TypeSignatureClass::Time if logical_type.is_time() => {
-                Ok(origin_type.to_owned())
-            }
-            TypeSignatureClass::Interval if logical_type.is_interval() => {
-                Ok(origin_type.to_owned())
-            }
-            TypeSignatureClass::Duration if logical_type.is_duration() => {
-                Ok(origin_type.to_owned())
-            }
-            _ => not_impl_err!("Other cases are not implemented yet"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum ArrayFunctionSignature {
     /// Specialized Signature for ArrayAppend and similar functions
@@ -396,7 +365,12 @@ impl TypeSignature {
         }
     }
 
-    /// get all possible types for the given `TypeSignature`
+    /// This function is used specifically internally for `information_schema`
+    /// We suggest not to rely on this function
+    ///
+    /// Get all possible types for `information_schema` from the given `TypeSignature`
+    //
+    // TODO: Make this function private
     pub fn get_possible_types(&self) -> Vec<Vec<DataType>> {
         match self {
             TypeSignature::Exact(types) => vec![types.clone()],
@@ -524,16 +498,20 @@ impl Coercion {
         }
     }
 
+    /// Create a new coercion with implicit coercion rules.
+    ///
+    /// `allowed_source_types` defines the possible types that can be coerced to `desired_type`.
+    /// `default_casted_type` is the default type to be used for coercion if we cast from other types via `allowed_source_types`.
     pub fn new_with_implicit_coercion(
         desired_type: TypeSignatureClass,
         allowed_source_types: Vec<TypeSignatureClass>,
-        default_type: NativeType,
+        default_casted_type: NativeType,
     ) -> Self {
         Self {
             desired_type,
             implicit_coercion: Some(ImplicitCoercion {
                 allowed_source_types,
-                default_casted_type: default_type,
+                default_casted_type,
             }),
         }
     }
@@ -579,11 +557,11 @@ impl Hash for Coercion {
 
 #[derive(Debug, Clone, Eq, PartialOrd)]
 pub struct ImplicitCoercion {
-    pub allowed_source_types: Vec<TypeSignatureClass>,
+    allowed_source_types: Vec<TypeSignatureClass>,
     /// For types like Timestamp, there are multiple possible timeunit and timezone from a given TypeSignatureClass
     /// We need to specify the default type to be used for coercion if we cast from other types via `allowed_source_types`
     /// Other types like Int64, you don't need to specify this field since there is only one possible type.
-    pub default_casted_type: NativeType,
+    default_casted_type: NativeType,
 }
 
 impl Display for ImplicitCoercion {

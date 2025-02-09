@@ -198,6 +198,11 @@ impl LogicalType for NativeType {
         TypeSignature::Native(self)
     }
 
+    /// Returns the default casted type for the given arrow type
+    ///
+    /// For types like String or Date, multiple arrow types mapped to the same logical type
+    /// If the given arrow type is one of them, we return the same type
+    /// Otherwise, we define the default casted type for the given arrow type
     fn default_cast_for(&self, origin: &DataType) -> Result<DataType> {
         use DataType::*;
 
@@ -226,6 +231,7 @@ impl LogicalType for NativeType {
             (Self::Decimal(p, s), _) if p <= &38 => Decimal128(*p, *s),
             (Self::Decimal(p, s), _) => Decimal256(*p, *s),
             (Self::Timestamp(tu, tz), _) => Timestamp(*tu, tz.clone()),
+            // If given type is Date, return the same type
             (Self::Date, origin) if matches!(origin, Date32 | Date64) => {
                 origin.to_owned()
             }
