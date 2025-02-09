@@ -79,7 +79,7 @@ SELECT * FROM test_table ORDER BY int_col;
 5 eee 500 1970-01-06
 6 fff 600 1970-01-07
 
-# Check output plan, expect no "output_ordering" clause in the physical_plan -> DataSourceExec:
+# Check output plan, expect no "output_ordering" clause in the physical_plan -> ParquetExec:
 query TT
 EXPLAIN SELECT int_col, string_col
 FROM test_table
@@ -109,7 +109,7 @@ STORED AS PARQUET
 WITH ORDER (string_col ASC NULLS LAST, int_col ASC NULLS LAST)
 LOCATION 'test_files/scratch/parquet/test_table';
 
-# Check output plan, expect an "output_ordering" clause in the physical_plan -> DataSourceExec:
+# Check output plan, expect an "output_ordering" clause in the physical_plan -> ParquetExec:
 query TT
 EXPLAIN SELECT int_col, string_col
 FROM test_table
@@ -130,7 +130,7 @@ STORED AS PARQUET;
 ----
 3
 
-# Check output plan again, expect no "output_ordering" clause in the physical_plan -> DataSourceExec,
+# Check output plan again, expect no "output_ordering" clause in the physical_plan -> ParquetExec,
 # due to there being more files than partitions:
 query TT
 EXPLAIN SELECT int_col, string_col
@@ -625,7 +625,7 @@ physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: column1@0 LIKE f%
 03)----RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
-04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/foo.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 LIKE f%, pruning_predicate=column1_null_count@2 != column1_row_count@3 AND column1_min@0 <= g AND f <= column1_max@1, required_guarantees=[]
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet/foo.parquet]]}, projection=[column1], file_type=parquet, predicate=column1@0 LIKE f%, pruning_predicate=column1_null_count@2 != row_count@3 AND column1_min@0 <= g AND f <= column1_max@1, required_guarantees=[]
 
 statement ok
 drop table foo
