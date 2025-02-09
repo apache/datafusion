@@ -3578,7 +3578,7 @@ impl TryFrom<&DataType> for ScalarValue {
 
     /// Create a Null instance of ScalarValue for this datatype
     fn try_from(data_type: &DataType) -> Result<Self> {
-        Ok(Self::try_new_null(data_type)?)
+        Self::try_new_null(data_type)
     }
 }
 
