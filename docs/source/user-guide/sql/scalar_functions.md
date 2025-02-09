@@ -2695,7 +2695,7 @@ _Alias of [array_has](#array_has)._
 
 Returns an array of the array's dimensions.
 
-```
+```text
 array_dims(array)
 ```
 
@@ -2722,7 +2722,7 @@ array_dims(array)
 
 Returns the Euclidean distance between two input arrays of equal length.
 
-```
+```text
 array_distance(array1, array2)
 ```
 
@@ -2750,7 +2750,7 @@ array_distance(array1, array2)
 
 Returns distinct values from the array after removing duplicates.
 
-```
+```text
 array_distinct(array)
 ```
 
@@ -2777,7 +2777,7 @@ array_distinct(array)
 
 Extracts the element with the index n from the array.
 
-```
+```text
 array_element(array, index)
 ```
 
@@ -2811,7 +2811,7 @@ _Alias of [empty](#empty)._
 
 Returns an array of the elements that appear in the first array but not in the second.
 
-```
+```text
 array_except(array1, array2)
 ```
 
@@ -2849,7 +2849,7 @@ _Alias of [array_element](#array_element)._
 
 Returns true if the array contains the element.
 
-```
+```text
 array_has(array, element)
 ```
 
@@ -2879,7 +2879,7 @@ array_has(array, element)
 
 Returns true if all elements of sub-array exist in array.
 
-```
+```text
 array_has_all(array, sub-array)
 ```
 
@@ -2907,7 +2907,7 @@ array_has_all(array, sub-array)
 
 Returns true if any elements exist in both arrays.
 
-```
+```text
 array_has_any(array, sub-array)
 ```
 
@@ -2940,7 +2940,7 @@ _Alias of [array_position](#array_position)._
 
 Returns an array of elements in the intersection of array1 and array2.
 
-```
+```text
 array_intersect(array1, array2)
 ```
 
@@ -2978,7 +2978,7 @@ _Alias of [array_to_string](#array_to_string)._
 
 Returns the length of the array dimension.
 
-```
+```text
 array_length(array, dimension)
 ```
 
@@ -3006,7 +3006,7 @@ array_length(array, dimension)
 
 Returns the number of dimensions of the array.
 
-```
+```text
 array_ndims(array, element)
 ```
 
@@ -3034,7 +3034,7 @@ array_ndims(array, element)
 
 Returns the array without the last element.
 
-```
+```text
 array_pop_back(array)
 ```
 
@@ -3061,7 +3061,7 @@ array_pop_back(array)
 
 Returns the array without the first element.
 
-```
+```text
 array_pop_front(array)
 ```
 
@@ -3088,7 +3088,7 @@ array_pop_front(array)
 
 Returns the position of the first occurrence of the specified element in the array.
 
-```
+```text
 array_position(array, element)
 array_position(array, element, index)
 ```
@@ -3126,7 +3126,7 @@ array_position(array, element, index)
 
 Searches for an element in the array, returns all occurrences.
 
-```
+```text
 array_positions(array, element)
 ```
 
@@ -3154,7 +3154,7 @@ array_positions(array, element)
 
 Prepends an element to the beginning of an array.
 
-```
+```text
 array_prepend(element, array)
 ```
 
@@ -3192,7 +3192,7 @@ _Alias of [array_prepend](#array_prepend)._
 
 Removes the first element from the array equal to the given value.
 
-```
+```text
 array_remove(array, element)
 ```
 
@@ -3220,7 +3220,7 @@ array_remove(array, element)
 
 Removes all elements from the array equal to the given value.
 
-```
+```text
 array_remove_all(array, element)
 ```
 
@@ -3248,7 +3248,7 @@ array_remove_all(array, element)
 
 Removes the first `max` elements from the array equal to the given value.
 
-```
+```text
 array_remove_n(array, element, max))
 ```
 
@@ -3277,7 +3277,7 @@ array_remove_n(array, element, max))
 
 Returns an array containing element `count` times.
 
-```
+```text
 array_repeat(element, count)
 ```
 
@@ -3311,7 +3311,7 @@ array_repeat(element, count)
 
 Replaces the first occurrence of the specified element with another specified element.
 
-```
+```text
 array_replace(array, from, to)
 ```
 
@@ -3340,7 +3340,7 @@ array_replace(array, from, to)
 
 Replaces all occurrences of the specified element with another specified element.
 
-```
+```text
 array_replace_all(array, from, to)
 ```
 
@@ -3369,7 +3369,7 @@ array_replace_all(array, from, to)
 
 Replaces the first `max` occurrences of the specified element with another specified element.
 
-```
+```text
 array_replace_n(array, from, to, max)
 ```
 
@@ -3399,7 +3399,7 @@ array_replace_n(array, from, to, max)
 
 Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.
 
-```
+```text
 array_resize(array, size, value)
 ```
 
@@ -3428,7 +3428,7 @@ array_resize(array, size, value)
 
 Returns the array with the order of the elements reversed.
 
-```
+```text
 array_reverse(array)
 ```
 
@@ -3455,7 +3455,7 @@ array_reverse(array)
 
 Returns a slice of the array based on 1-indexed start and end positions.
 
-```
+```text
 array_slice(array, begin, end)
 ```
 
@@ -3485,7 +3485,7 @@ array_slice(array, begin, end)
 
 Sort array.
 
-```
+```text
 array_sort(array, desc, nulls_first)
 ```
 
@@ -3514,7 +3514,7 @@ array_sort(array, desc, nulls_first)
 
 Converts each element to its text representation.
 
-```
+```text
 array_to_string(array, delimiter[, null_string])
 ```
 
@@ -3545,7 +3545,7 @@ array_to_string(array, delimiter[, null_string])
 
 Returns an array of elements that are present in both arrays (all elements from both arrays) with out duplicates.
 
-```
+```text
 array_union(array1, array2)
 ```
 
@@ -3583,7 +3583,7 @@ _Alias of [array_has_any](#array_has_any)._
 
 Returns the total number of elements in the array.
 
-```
+```text
 cardinality(array)
 ```
 
@@ -3606,7 +3606,7 @@ cardinality(array)
 
 Returns 1 for an empty array or 0 for a non-empty array.
 
-```
+```text
 empty(array)
 ```
 
@@ -3639,7 +3639,7 @@ Converts an array of arrays to a flat array.
 
 The flattened array contains all the elements from all source arrays.
 
-```
+```text
 flatten(array)
 ```
 
@@ -3662,7 +3662,7 @@ flatten(array)
 
 Similar to the range function, but it includes the upper bound.
 
-```
+```text
 generate_series(start, stop, step)
 ```
 
@@ -3847,7 +3847,7 @@ _Alias of [array_union](#array_union)._
 
 Returns an array using the specified input expressions.
 
-```
+```text
 make_array(expression1[, ..., expression_n])
 ```
 
@@ -3878,7 +3878,7 @@ _Alias of [make_array](#make_array)._
 
 Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.
 
-```
+```text
 range(start, stop, step)
 ```
 
@@ -3910,7 +3910,7 @@ range(start, stop, step)
 
 Splits a string into an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.
 
-```
+```text
 string_to_array(str, delimiter[, null_str])
 ```
 
@@ -3955,7 +3955,7 @@ _Alias of [string_to_array](#string_to_array)._
 
 Returns an Arrow struct using the specified name and input expressions pairs.
 
-```
+```text
 named_struct(expression1_name, expression1_input[, ..., expression_n_name, expression_n_input])
 ```
 
@@ -3996,7 +3996,7 @@ Returns an Arrow struct using the specified input expressions optionally named.
 Fields in the returned struct use the optional name or the `cN` naming convention.
 For example: `c0`, `c1`, `c2`, etc.
 
-```
+```text
 struct(expression1[, ..., expression_n])
 ```
 
@@ -4059,7 +4059,7 @@ Returns an Arrow map with the specified key-value pairs.
 
 The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.
 
-```
+```text
 map(key, value)
 map(key: value)
 make_map(['key1', 'key2'], ['value1', 'value2'])
@@ -4106,7 +4106,7 @@ SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
 
 Returns a list containing the value for the given key or an empty list if the key is not present in the map.
 
-```
+```text
 map_extract(map, key)
 ```
 
@@ -4139,7 +4139,7 @@ SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
 
 Returns a list of all keys in the map.
 
-```
+```text
 map_keys(map)
 ```
 
@@ -4163,7 +4163,7 @@ SELECT map_keys(map([100, 5], [42, 43]));
 
 Returns a list of all values in the map.
 
-```
+```text
 map_values(map)
 ```
 
@@ -4196,7 +4196,7 @@ SELECT map_values(map([100, 5], [42, 43]));
 
 Computes the binary hash of an expression using the specified algorithm.
 
-```
+```text
 digest(expression, algorithm)
 ```
 
@@ -4228,7 +4228,7 @@ digest(expression, algorithm)
 
 Computes an MD5 128-bit checksum for a string expression.
 
-```
+```text
 md5(expression)
 ```
 
@@ -4251,7 +4251,7 @@ md5(expression)
 
 Computes the SHA-224 hash of a binary string.
 
-```
+```text
 sha224(expression)
 ```
 
@@ -4274,7 +4274,7 @@ sha224(expression)
 
 Computes the SHA-256 hash of a binary string.
 
-```
+```text
 sha256(expression)
 ```
 
@@ -4297,7 +4297,7 @@ sha256(expression)
 
 Computes the SHA-384 hash of a binary string.
 
-```
+```text
 sha384(expression)
 ```
 
@@ -4320,7 +4320,7 @@ sha384(expression)
 
 Computes the SHA-512 hash of a binary string.
 
-```
+```text
 sha512(expression)
 ```
 
@@ -4350,7 +4350,7 @@ sha512(expression)
 
 Casts a value to a specific Arrow data type.
 
-```
+```text
 arrow_cast(expression, datatype)
 ```
 
@@ -4378,7 +4378,7 @@ arrow_cast(expression, datatype)
 
 Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression.
 
-```
+```text
 arrow_typeof(expression)
 ```
 
@@ -4404,7 +4404,7 @@ Note: most users invoke `get_field` indirectly via field access
 syntax such as `my_struct_col['field_name']` which results in a call to
 `get_field(my_struct_col, 'field_name')`.
 
-```
+```text
 get_field(expression1, expression2)
 ```
 
@@ -4444,7 +4444,7 @@ get_field(expression1, expression2)
 
 Returns the version of DataFusion.
 
-```
+```text
 version()
 ```
 
