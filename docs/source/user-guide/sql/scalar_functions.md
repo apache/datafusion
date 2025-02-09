@@ -73,7 +73,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 
 Returns the absolute value of a number.
 
-```
+```text
 abs(numeric_expression)
 ```
 
@@ -85,7 +85,7 @@ abs(numeric_expression)
 
 Returns the arc cosine or inverse cosine of a number.
 
-```
+```text
 acos(numeric_expression)
 ```
 
@@ -109,7 +109,7 @@ acosh(numeric_expression)
 
 Returns the arc sine or inverse sine of a number.
 
-```
+```text
 asin(numeric_expression)
 ```
 
@@ -121,7 +121,7 @@ asin(numeric_expression)
 
 Returns the area hyperbolic sine or inverse hyperbolic sine of a number.
 
-```
+```text
 asinh(numeric_expression)
 ```
 
@@ -133,7 +133,7 @@ asinh(numeric_expression)
 
 Returns the arc tangent or inverse tangent of a number.
 
-```
+```text
 atan(numeric_expression)
 ```
 
@@ -145,7 +145,7 @@ atan(numeric_expression)
 
 Returns the arc tangent or inverse tangent of `expression_y / expression_x`.
 
-```
+```text
 atan2(expression_y, expression_x)
 ```
 
@@ -160,7 +160,7 @@ atan2(expression_y, expression_x)
 
 Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.
 
-```
+```text
 atanh(numeric_expression)
 ```
 
@@ -172,7 +172,7 @@ atanh(numeric_expression)
 
 Returns the cube root of a number.
 
-```
+```text
 cbrt(numeric_expression)
 ```
 
@@ -184,7 +184,7 @@ cbrt(numeric_expression)
 
 Returns the nearest integer greater than or equal to a number.
 
-```
+```text
 ceil(numeric_expression)
 ```
 
@@ -196,7 +196,7 @@ ceil(numeric_expression)
 
 Returns the cosine of a number.
 
-```
+```text
 cos(numeric_expression)
 ```
 
@@ -208,7 +208,7 @@ cos(numeric_expression)
 
 Returns the hyperbolic cosine of a number.
 
-```
+```text
 cosh(numeric_expression)
 ```
 
@@ -220,7 +220,7 @@ cosh(numeric_expression)
 
 Returns the cotangent of a number.
 
-```
+```text
 cot(numeric_expression)
 ```
 
@@ -232,7 +232,7 @@ cot(numeric_expression)
 
 Converts radians to degrees.
 
-```
+```text
 degrees(numeric_expression)
 ```
 
@@ -244,7 +244,7 @@ degrees(numeric_expression)
 
 Returns the base-e exponential of a number.
 
-```
+```text
 exp(numeric_expression)
 ```
 
@@ -256,7 +256,7 @@ exp(numeric_expression)
 
 Factorial. Returns 1 if value is less than 2.
 
-```
+```text
 factorial(numeric_expression)
 ```
 
@@ -268,7 +268,7 @@ factorial(numeric_expression)
 
 Returns the nearest integer less than or equal to a number.
 
-```
+```text
 floor(numeric_expression)
 ```
 
@@ -280,7 +280,7 @@ floor(numeric_expression)
 
 Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.
 
-```
+```text
 gcd(expression_x, expression_y)
 ```
 
@@ -293,7 +293,7 @@ gcd(expression_x, expression_y)
 
 Returns true if a given number is +NaN or -NaN otherwise returns false.
 
-```
+```text
 isnan(numeric_expression)
 ```
 
@@ -305,7 +305,7 @@ isnan(numeric_expression)
 
 Returns true if a given number is +0.0 or -0.0 otherwise returns false.
 
-```
+```text
 iszero(numeric_expression)
 ```
 
@@ -317,7 +317,7 @@ iszero(numeric_expression)
 
 Returns the least common multiple of `expression_x` and `expression_y`. Returns 0 if either input is zero.
 
-```
+```text
 lcm(expression_x, expression_y)
 ```
 
@@ -330,7 +330,7 @@ lcm(expression_x, expression_y)
 
 Returns the natural logarithm of a number.
 
-```
+```text
 ln(numeric_expression)
 ```
 
@@ -342,7 +342,7 @@ ln(numeric_expression)
 
 Returns the base-x logarithm of a number. Can either provide a specified base, or if omitted then takes the base-10 of a number.
 
-```
+```text
 log(base, numeric_expression)
 log(numeric_expression)
 ```
@@ -356,7 +356,7 @@ log(numeric_expression)
 
 Returns the base-10 logarithm of a number.
 
-```
+```text
 log10(numeric_expression)
 ```
 
@@ -368,7 +368,7 @@ log10(numeric_expression)
 
 Returns the base-2 logarithm of a number.
 
-```
+```text
 log2(numeric_expression)
 ```
 
@@ -381,7 +381,7 @@ log2(numeric_expression)
 Returns the first argument if it's not _NaN_.
 Returns the second argument otherwise.
 
-```
+```text
 nanvl(expression_x, expression_y)
 ```
 
@@ -394,7 +394,7 @@ nanvl(expression_x, expression_y)
 
 Returns an approximate value of π.
 
-```
+```text
 pi()
 ```
 
@@ -406,7 +406,7 @@ _Alias of [power](#power)._
 
 Returns a base expression raised to the power of an exponent.
 
-```
+```text
 power(base, exponent)
 ```
 
@@ -423,7 +423,7 @@ power(base, exponent)
 
 Converts degrees to radians.
 
-```
+```text
 radians(numeric_expression)
 ```
 
@@ -436,7 +436,7 @@ radians(numeric_expression)
 Returns a random float value in the range [0, 1).
 The random seed is unique to each row.
 
-```
+```text
 random()
 ```
 
@@ -444,7 +444,7 @@ random()
 
 Rounds a number to the nearest integer.
 
-```
+```text
 round(numeric_expression[, decimal_places])
 ```
 
@@ -459,7 +459,7 @@ Returns the sign of a number.
 Negative numbers return `-1`.
 Zero and positive numbers return `1`.
 
-```
+```text
 signum(numeric_expression)
 ```
 
@@ -471,7 +471,7 @@ signum(numeric_expression)
 
 Returns the sine of a number.
 
-```
+```text
 sin(numeric_expression)
 ```
 
@@ -483,7 +483,7 @@ sin(numeric_expression)
 
 Returns the hyperbolic sine of a number.
 
-```
+```text
 sinh(numeric_expression)
 ```
 
@@ -495,7 +495,7 @@ sinh(numeric_expression)
 
 Returns the square root of a number.
 
-```
+```text
 sqrt(numeric_expression)
 ```
 
@@ -507,7 +507,7 @@ sqrt(numeric_expression)
 
 Returns the tangent of a number.
 
-```
+```text
 tan(numeric_expression)
 ```
 
@@ -519,7 +519,7 @@ tan(numeric_expression)
 
 Returns the hyperbolic tangent of a number.
 
-```
+```text
 tanh(numeric_expression)
 ```
 
@@ -531,7 +531,7 @@ tanh(numeric_expression)
 
 Truncates a number to a whole number or truncated to the specified decimal places.
 
-```
+```text
 trunc(numeric_expression[, decimal_places])
 ```
 
@@ -558,7 +558,7 @@ trunc(numeric_expression[, decimal_places])
 
 Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.
 
-```
+```text
 coalesce(expression1[, ..., expression_n])
 ```
 
@@ -581,7 +581,7 @@ coalesce(expression1[, ..., expression_n])
 
 Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.
 
-```
+```text
 greatest(expression1[, ..., expression_n])
 ```
 
@@ -608,7 +608,7 @@ _Alias of [nvl](#nvl)._
 
 Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_.
 
-```
+```text
 least(expression1[, ..., expression_n])
 ```
 
@@ -632,7 +632,7 @@ least(expression1[, ..., expression_n])
 Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
 This can be used to perform the inverse operation of [`coalesce`](#coalesce).
 
-```
+```text
 nullif(expression1, expression2)
 ```
 
@@ -662,7 +662,7 @@ nullif(expression1, expression2)
 
 Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_.
 
-```
+```text
 nvl(expression1, expression2)
 ```
 
@@ -696,7 +696,7 @@ nvl(expression1, expression2)
 
 Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.
 
-```
+```text
 nvl2(expression1, expression2, expression3)
 ```
 
@@ -769,7 +769,7 @@ nvl2(expression1, expression2, expression3)
 
 Returns the Unicode character code of the first character in a string.
 
-```
+```text
 ascii(str)
 ```
 
@@ -802,7 +802,7 @@ ascii(str)
 
 Returns the bit length of a string.
 
-```
+```text
 bit_length(str)
 ```
 
@@ -830,7 +830,7 @@ bit_length(str)
 
 Trims the specified trim string from the start and end of a string. If no trim string is provided, all whitespace is removed from the start and end of the input string.
 
-```
+```text
 btrim(str[, trim_str])
 ```
 
@@ -852,11 +852,11 @@ btrim(str[, trim_str])
 
 #### Alternative Syntax
 
-```sql
+```text
 trim(BOTH trim_str FROM str)
 ```
 
-```sql
+```text
 trim(trim_str FROM str)
 ```
 
@@ -877,7 +877,7 @@ _Alias of [character_length](#character_length)._
 
 Returns the number of characters in a string.
 
-```
+```text
 character_length(str)
 ```
 
@@ -910,7 +910,7 @@ character_length(str)
 
 Returns the character with the specified ASCII or Unicode code value.
 
-```
+```text
 chr(expression)
 ```
 
@@ -937,7 +937,7 @@ chr(expression)
 
 Concatenates multiple strings together.
 
-```
+```text
 concat(str[, ..., str_n])
 ```
 
@@ -965,7 +965,7 @@ concat(str[, ..., str_n])
 
 Concatenates multiple strings together with a specified separator.
 
-```
+```text
 concat_ws(separator, str[, ..., str_n])
 ```
 
@@ -994,7 +994,7 @@ concat_ws(separator, str[, ..., str_n])
 
 Return true if search_str is found within string (case-sensitive).
 
-```
+```text
 contains(str, search_str)
 ```
 
@@ -1018,7 +1018,7 @@ contains(str, search_str)
 
 Tests if a string ends with a substring.
 
-```
+```text
 ends_with(str, substr)
 ```
 
@@ -1048,7 +1048,7 @@ ends_with(str, substr)
 
 Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.
 
-```
+```text
 find_in_set(str, strlist)
 ```
 
@@ -1072,7 +1072,7 @@ find_in_set(str, strlist)
 
 Capitalizes the first character in each word in the input string. Words are delimited by non-alphanumeric characters.
 
-```
+```text
 initcap(str)
 ```
 
@@ -1104,7 +1104,7 @@ _Alias of [strpos](#strpos)._
 
 Returns a specified number of characters from the left side of a string.
 
-```
+```text
 left(str, n)
 ```
 
@@ -1136,7 +1136,7 @@ _Alias of [character_length](#character_length)._
 
 Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.
 
-```
+```text
 levenshtein(str1, str2)
 ```
 
@@ -1160,7 +1160,7 @@ levenshtein(str1, str2)
 
 Converts a string to lower-case.
 
-```
+```text
 lower(str)
 ```
 
@@ -1188,7 +1188,7 @@ lower(str)
 
 Pads the left side of a string with another string to a specified string length.
 
-```
+```text
 lpad(str, n[, padding_str])
 ```
 
@@ -1217,7 +1217,7 @@ lpad(str, n[, padding_str])
 
 Trims the specified trim string from the beginning of a string. If no trim string is provided, all whitespace is removed from the start of the input string.
 
-```
+```text
 ltrim(str[, trim_str])
 ```
 
@@ -1245,7 +1245,7 @@ ltrim(str[, trim_str])
 
 #### Alternative Syntax
 
-```sql
+```text
 trim(LEADING trim_str FROM str)
 ```
 
@@ -1258,7 +1258,7 @@ trim(LEADING trim_str FROM str)
 
 Returns the length of a string in bytes.
 
-```
+```text
 octet_length(str)
 ```
 
@@ -1290,7 +1290,7 @@ _Alias of [strpos](#strpos)._
 
 Returns a string with an input string repeated a specified number.
 
-```
+```text
 repeat(str, n)
 ```
 
@@ -1314,7 +1314,7 @@ repeat(str, n)
 
 Replaces all occurrences of a specified substring in a string with a new substring.
 
-```
+```text
 replace(str, substr, replacement)
 ```
 
@@ -1339,7 +1339,7 @@ replace(str, substr, replacement)
 
 Reverses the character order of a string.
 
-```
+```text
 reverse(str)
 ```
 
@@ -1362,7 +1362,7 @@ reverse(str)
 
 Returns a specified number of characters from the right side of a string.
 
-```
+```text
 right(str, n)
 ```
 
@@ -1390,7 +1390,7 @@ right(str, n)
 
 Pads the right side of a string with another string to a specified string length.
 
-```
+```text
 rpad(str, n[, padding_str])
 ```
 
@@ -1419,7 +1419,7 @@ rpad(str, n[, padding_str])
 
 Trims the specified trim string from the end of a string. If no trim string is provided, all whitespace is removed from the end of the input string.
 
-```
+```text
 rtrim(str[, trim_str])
 ```
 
@@ -1447,7 +1447,7 @@ rtrim(str[, trim_str])
 
 #### Alternative Syntax
 
-```sql
+```text
 trim(TRAILING trim_str FROM str)
 ```
 
@@ -1460,7 +1460,7 @@ trim(TRAILING trim_str FROM str)
 
 Splits a string based on a specified delimiter and returns the substring in the specified position.
 
-```
+```text
 split_part(str, delimiter, pos)
 ```
 
@@ -1485,7 +1485,7 @@ split_part(str, delimiter, pos)
 
 Tests if a string starts with a substring.
 
-```
+```text
 starts_with(str, substr)
 ```
 
@@ -1509,7 +1509,7 @@ starts_with(str, substr)
 
 Returns the starting position of a specified substring in a string. Positions begin at 1. If the substring does not exist in the string, the function returns 0.
 
-```
+```text
 strpos(str, substr)
 ```
 
@@ -1544,7 +1544,7 @@ position(substr in origstr)
 
 Extracts a substring of a specified number of characters from a specific starting position in a string.
 
-```
+```text
 substr(str, start_pos[, length])
 ```
 
@@ -1581,7 +1581,7 @@ Returns the substring from str before count occurrences of the delimiter delim.
 If count is positive, everything to the left of the final delimiter (counting from the left) is returned.
 If count is negative, everything to the right of the final delimiter (counting from the right) is returned.
 
-```
+```text
 substr_index(str, delim, count)
 ```
 
@@ -1624,7 +1624,7 @@ _Alias of [substr_index](#substr_index)._
 
 Converts an integer to a hexadecimal string.
 
-```
+```text
 to_hex(int)
 ```
 
@@ -1647,7 +1647,7 @@ to_hex(int)
 
 Translates characters in a string to specified translation characters.
 
-```
+```text
 translate(str, chars, translation)
 ```
 
@@ -1676,7 +1676,7 @@ _Alias of [btrim](#btrim)._
 
 Converts a string to upper-case.
 
-```
+```text
 upper(str)
 ```
 
@@ -1704,7 +1704,7 @@ upper(str)
 
 Returns [`UUID v4`](<https://en.wikipedia.org/wiki/Universally_unique_identifier#Version_4_(random)>) string value which is unique per row.
 
-```
+```text
 uuid()
 ```
 
@@ -1728,7 +1728,7 @@ uuid()
 
 Decode binary data from textual representation in string.
 
-```
+```text
 decode(expression, format)
 ```
 
@@ -1745,7 +1745,7 @@ decode(expression, format)
 
 Encode binary data into a textual representation.
 
-```
+```text
 encode(expression, format)
 ```
 
@@ -1774,7 +1774,7 @@ The following regular expression functions are supported:
 
 Returns the number of matches that a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has in a string.
 
-```
+```text
 regexp_count(str, regexp[, start, flags])
 ```
 
@@ -1805,7 +1805,7 @@ regexp_count(str, regexp[, start, flags])
 
 Returns true if a [regular expression](https://docs.rs/regex/latest/regex/#syntax) has at least one match in a string, false otherwise.
 
-```
+```text
 regexp_like(str, regexp[, flags])
 ```
 
@@ -1843,7 +1843,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Returns the first [regular expression](https://docs.rs/regex/latest/regex/#syntax) matches in a string.
 
-```
+```text
 regexp_match(str, regexp[, flags])
 ```
 
@@ -1882,7 +1882,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Replaces substrings in a string that match a [regular expression](https://docs.rs/regex/latest/regex/#syntax).
 
-```
+```text
 regexp_replace(str, regexp, replacement[, flags])
 ```
 
@@ -1950,7 +1950,7 @@ Returns the current UTC date.
 
 The `current_date()` return value is determined at query time and will return the same date, no matter when in the query plan the function executes.
 
-```
+```text
 current_date()
 ```
 
@@ -1964,7 +1964,7 @@ Returns the current UTC time.
 
 The `current_time()` return value is determined at query time and will return the same time, no matter when in the query plan the function executes.
 
-```
+```text
 current_time()
 ```
 
@@ -1978,7 +1978,7 @@ Calculates time intervals and returns the start of the interval nearest to the s
 
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
 
-```
+```text
 date_bin(interval, expression, origin-timestamp)
 ```
 
@@ -2034,7 +2034,7 @@ _Alias of [to_char](#to_char)._
 
 Returns the specified part of the date as an integer.
 
-```
+```text
 date_part(part, expression)
 ```
 
@@ -2073,7 +2073,7 @@ extract(field FROM source)
 
 Truncates a timestamp value to a specified precision.
 
-```
+```text
 date_trunc(precision, expression)
 ```
 
@@ -2108,7 +2108,7 @@ _Alias of [date_trunc](#date_trunc)._
 
 Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.
 
-```
+```text
 from_unixtime(expression[, timezone])
 ```
 
@@ -2132,7 +2132,7 @@ from_unixtime(expression[, timezone])
 
 Make a date from year/month/day component parts.
 
-```
+```text
 make_date(year, month, day)
 ```
 
@@ -2167,7 +2167,7 @@ Returns the current UTC timestamp.
 
 The `now()` return value is determined at query time and will return the same timestamp, no matter when in the query plan the function executes.
 
-```
+```text
 now()
 ```
 
@@ -2179,7 +2179,7 @@ now()
 
 Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.
 
-```
+```text
 to_char(expression, format)
 ```
 
@@ -2216,7 +2216,7 @@ Returns the corresponding date.
 
 Note: `to_date` returns Date32, which represents its values as the number of days since unix epoch(`1970-01-01`) stored as signed 32 bit value. The largest supported date value is `9999-12-31`.
 
-```
+```text
 to_date('2017-05-31', '%Y-%m-%d')
 ```
 
@@ -2250,7 +2250,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.
 
-```
+```text
 to_local_time(expression)
 ```
 
@@ -2313,7 +2313,7 @@ Converts a value to a timestamp (`YYYY-MM-DDT00:00:00Z`). Supports strings, inte
 
 Note: `to_timestamp` returns `Timestamp(Nanosecond)`. The supported range for integer input is between `-9223372037` and `9223372036`. Supported range for string input is between `1677-09-21T00:12:44.0` and `2262-04-11T23:47:16.0`. Please use `to_timestamp_seconds` for the input outside of supported bounds.
 
-```
+```text
 to_timestamp(expression[, ..., format_n])
 ```
 
@@ -2345,7 +2345,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as microseconds since the unix epoch (`1970-01-01T00:00:00Z`) Returns the corresponding timestamp.
 
-```
+```text
 to_timestamp_micros(expression[, ..., format_n])
 ```
 
@@ -2377,7 +2377,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided. Integers and unsigned integers are interpreted as milliseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
 
-```
+```text
 to_timestamp_millis(expression[, ..., format_n])
 ```
 
@@ -2409,7 +2409,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000000000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
 
-```
+```text
 to_timestamp_nanos(expression[, ..., format_n])
 ```
 
@@ -2441,7 +2441,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to a timestamp (`YYYY-MM-DDT00:00:00.000Z`). Supports strings, integer, and unsigned integer types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html)s are provided. Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`). Returns the corresponding timestamp.
 
-```
+```text
 to_timestamp_seconds(expression[, ..., format_n])
 ```
 
@@ -2473,7 +2473,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 
 Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.
 
-```
+```text
 to_unixtime(expression[, ..., format_n])
 ```
 
@@ -2600,7 +2600,7 @@ _Alias of [current_date](#current_date)._
 
 Returns the first non-null element in the array.
 
-```
+```text
 array_any_value(array)
 ```
 
@@ -2627,7 +2627,7 @@ array_any_value(array)
 
 Appends an element to the end of an array.
 
-```
+```text
 array_append(array, element)
 ```
 
@@ -2661,7 +2661,7 @@ _Alias of [array_concat](#array_concat)._
 
 Concatenates arrays.
 
-```
+```text
 array_concat(array[, ..., array_n])
 ```
 
