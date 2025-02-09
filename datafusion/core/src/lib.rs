@@ -920,6 +920,90 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/aggregate_functions.md",
+    user_guide_sql_aggregate_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/data_types.md",
+    user_guide_sql_data_types
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/ddl.md",
+    user_guide_sql_ddl
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/dml.md",
+    user_guide_sql_dml
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/explain.md",
+    user_guide_sql_exmplain
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/information_schema.md",
+    user_guide_sql_information_schema
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/operators.md",
+    user_guide_sql_operators
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/scalar_functions.md",
+    user_guide_sql_scalar_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/select.md",
+    user_guide_sql_select
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/special_functions.md",
+    user_guide_sql_special_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/sql_status.md",
+    user_guide_sql_status
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/subqueries.md",
+    user_guide_sql_subqueries
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/window_functions.md",
+    user_guide_sql_window_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/write_options.md",
+    user_guide_sql_write_options
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/library-user-guide/adding-udfs.md",
     library_user_guide_adding_udfs
 );
