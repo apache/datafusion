@@ -7453,11 +7453,11 @@ mod tests {
             true,
         ));
         let scalars = vec![
-            ScalarValue::try_new_null(&DataType::List(field_ref.clone())).unwrap(),
-            ScalarValue::try_new_null(&DataType::LargeList(field_ref.clone())).unwrap(),
-            ScalarValue::try_new_null(&DataType::FixedSizeList(field_ref.clone(), 42))
+            ScalarValue::try_new_null(&DataType::List(Arc::clone(&field_ref))).unwrap(),
+            ScalarValue::try_new_null(&DataType::LargeList(Arc::clone(&field_ref))).unwrap(),
+            ScalarValue::try_new_null(&DataType::FixedSizeList(Arc::clone(&field_ref), 42))
                 .unwrap(),
-            ScalarValue::try_new_null(&DataType::Struct(vec![field_ref.clone()].into()))
+            ScalarValue::try_new_null(&DataType::Struct(vec![Arc::clone(&field_ref)].into()))
                 .unwrap(),
             ScalarValue::try_new_null(&DataType::Map(map_field_ref, false)).unwrap(),
             ScalarValue::try_new_null(&DataType::Union(
