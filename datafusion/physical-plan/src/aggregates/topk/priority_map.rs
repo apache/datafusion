@@ -19,7 +19,7 @@
 
 use crate::aggregates::topk::hash_table::{new_hash_table, ArrowHashTable};
 use crate::aggregates::topk::heap::{new_heap, ArrowHeap};
-use arrow_array::ArrayRef;
+use arrow::array::ArrayRef;
 use arrow_schema::DataType;
 use datafusion_common::Result;
 
@@ -108,8 +108,8 @@ impl PriorityMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::{Int64Array, RecordBatch, StringArray};
     use arrow::util::pretty::pretty_format_batches;
-    use arrow_array::{Int64Array, RecordBatch, StringArray};
     use arrow_schema::Field;
     use arrow_schema::Schema;
     use arrow_schema::SchemaRef;

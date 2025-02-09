@@ -78,8 +78,6 @@ pub struct BoundedWindowAggExec {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
     schema: SchemaRef,
-    /// Partition Keys
-    pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Describes how the input is ordered relative to the partition keys
@@ -93,6 +91,8 @@ pub struct BoundedWindowAggExec {
     ordered_partition_by_indices: Vec<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// If `can_rerepartition` is false, partition_keys is always empty.
+    can_repartition: bool,
 }
 
 impl BoundedWindowAggExec {
@@ -100,8 +100,8 @@ impl BoundedWindowAggExec {
     pub fn try_new(
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
-        partition_keys: Vec<Arc<dyn PhysicalExpr>>,
         input_order_mode: InputOrderMode,
+        can_repartition: bool,
     ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
@@ -128,11 +128,11 @@ impl BoundedWindowAggExec {
             input,
             window_expr,
             schema,
-            partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode,
             ordered_partition_by_indices,
             cache,
+            can_repartition,
         })
     }
 
@@ -209,6 +209,23 @@ impl BoundedWindowAggExec {
             input.boundedness(),
         )
     }
+
+    pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        if !self.can_repartition {
+            vec![]
+        } else {
+            let all_partition_keys = self
+                .window_expr()
+                .iter()
+                .map(|expr| expr.partition_by().to_vec())
+                .collect::<Vec<_>>();
+
+            all_partition_keys
+                .into_iter()
+                .min_by_key(|s| s.len())
+                .unwrap_or_else(Vec::new)
+        }
+    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -269,11 +286,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_keys.is_empty() {
+        if self.partition_keys().is_empty() {
             debug!("No partition defined for BoundedWindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys.clone())]
+            vec![Distribution::HashPartitioned(self.partition_keys().clone())]
         }
     }
 
@@ -288,8 +305,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Ok(Arc::new(BoundedWindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),
-            self.partition_keys.clone(),
             self.input_order_mode.clone(),
+            self.can_repartition,
         )?))
     }
 
@@ -1171,7 +1188,9 @@ mod tests {
     use std::task::{Context, Poll};
     use std::time::Duration;
 
+    use crate::common::collect;
     use crate::expressions::PhysicalSortExpr;
+    use crate::memory::MemorySourceConfig;
     use crate::projection::ProjectionExec;
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::windows::{
@@ -1179,8 +1198,10 @@ mod tests {
     };
     use crate::{execute_stream, get_plan_string, ExecutionPlan};
 
-    use arrow_array::builder::{Int64Builder, UInt64Builder};
-    use arrow_array::RecordBatch;
+    use arrow::array::{
+        builder::{Int64Builder, UInt64Builder},
+        RecordBatch,
+    };
     use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
     use datafusion_common::{
         assert_batches_eq, exec_datafusion_err, Result, ScalarValue,
@@ -1196,11 +1217,9 @@ mod tests {
     use datafusion_functions_window::nth_value::last_value_udwf;
     use datafusion_functions_window::nth_value::nth_value_udwf;
     use datafusion_physical_expr::expressions::{col, Column, Literal};
+    use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
-    use crate::common::collect;
-    use crate::memory::MemoryExec;
-    use datafusion_physical_expr::window::StandardWindowExpr;
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
     use itertools::Itertools;
@@ -1327,8 +1346,8 @@ mod tests {
                 false,
             )?],
             input,
-            partitionby_exprs,
             input_order_mode,
+            true,
         )?))
     }
 
@@ -1528,15 +1547,14 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
-        let memory_exec = MemoryExec::try_new(
+        let memory_exec = MemorySourceConfig::try_new_exec(
             &[vec![batch.clone(), batch.clone(), batch.clone()]],
             Arc::clone(&schema),
             None,
-        )
-        .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
+        )?;
         let col_a = col("a", &schema)?;
         let nth_value_func1 = create_udwf_window_expr(
             &nth_value_udwf(),
@@ -1609,8 +1627,8 @@ mod tests {
         let physical_plan = BoundedWindowAggExec::try_new(
             window_exprs,
             memory_exec,
-            vec![],
             InputOrderMode::Sorted,
+            true,
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
 
@@ -1618,7 +1636,7 @@ mod tests {
 
         let expected = vec![
             "BoundedWindowAggExec: wdw=[last: Ok(Field { name: \"last\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }, nth_value(-1): Ok(Field { name: \"nth_value(-1)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }, nth_value(-2): Ok(Field { name: \"nth_value(-2)\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: CurrentRow, is_causal: true }], mode=[Sorted]",
-            "  MemoryExec: partitions=1, partition_sizes=[3]",
+            "  DataSourceExec: partitions=1, partition_sizes=[3]",
         ];
         // Get string representation of the plan
         let actual = get_plan_string(&physical_plan);

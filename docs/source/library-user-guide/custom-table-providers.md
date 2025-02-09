@@ -154,7 +154,7 @@ This `execute` method:
 2. Constructs the individual output arrays (columns)
 3. Returns a `MemoryStream` of a single `RecordBatch` with the arrays
 
-I.e. returns the "physical" data. For other examples, refer to the [`CsvExec`][csv] and [`ParquetExec`][parquet] for more complex implementations.
+I.e. returns the "physical" data. For other examples, refer to the [`CsvSource`][csv] and [`ParquetSource`][parquet] for more complex implementations.
 
 With the `ExecutionPlan` implemented, we can now implement the `scan` method of the `TableProvider`.
 

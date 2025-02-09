@@ -20,12 +20,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::as_string_array;
-use arrow::compute::kernels::numeric::add;
-use arrow_array::builder::BooleanBuilder;
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+use arrow::array::{
+    builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
+    Int32Array, RecordBatch, StringArray,
 };
+use arrow::compute::kernels::numeric::add;
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;

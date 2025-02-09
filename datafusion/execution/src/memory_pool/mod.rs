@@ -54,7 +54,7 @@ pub use pool::*;
 /// As explained above, DataFusion's design ONLY limits operators that require
 /// "large" amounts of memory (proportional to number of input rows), such as
 /// `GroupByHashExec`. It does NOT track and limit memory used internally by
-/// other operators such as `ParquetExec` or the `RecordBatch`es that flow
+/// other operators such as `DataSourceExec` or the `RecordBatch`es that flow
 /// between operators.
 ///
 /// In order to avoid allocating memory until the OS or the container system

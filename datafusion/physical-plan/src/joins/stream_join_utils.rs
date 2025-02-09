@@ -26,9 +26,11 @@ use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{metrics, ExecutionPlan};
 
+use arrow::array::{
+    ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch,
+};
 use arrow::compute::concat_batches;
-use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
+use arrow::datatypes::ArrowNativeType;
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{

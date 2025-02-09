@@ -85,7 +85,6 @@ extended_tests = []
 [dependencies]
 apache-avro = { version = "0.17", optional = true }
 arrow = { workspace = true }
-arrow-array = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
 async-compression = { version = "0.4.0", features = [
@@ -100,6 +99,7 @@ bytes = { workspace = true }
 bzip2 = { version = "0.5.0", optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
+datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -138,7 +138,6 @@ xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
-arrow-buffer = { workspace = true }
 async-trait = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
 ctor = { workspace = true }

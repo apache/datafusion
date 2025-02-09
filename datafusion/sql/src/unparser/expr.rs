@@ -26,14 +26,16 @@ use std::vec;
 
 use super::dialect::IntervalStyle;
 use super::Unparser;
+use arrow::array::{
+    types::{
+        ArrowTemporalType, Time32MillisecondType, Time32SecondType,
+        Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    },
+    ArrayRef, Date32Array, Date64Array, PrimitiveArray,
+};
 use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
 use arrow::util::display::array_value_to_string;
-use arrow_array::types::{
-    ArrowTemporalType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
-};
-use arrow_array::{ArrayRef, Date32Array, Date64Array, PrimitiveArray};
 use arrow_schema::DataType;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
@@ -544,9 +546,9 @@ impl Unparser<'_> {
         }
         let array = self.expr_to_sql(&args[0])?;
         let index = self.expr_to_sql(&args[1])?;
-        Ok(ast::Expr::Subscript {
-            expr: Box::new(array),
-            subscript: Box::new(Subscript::Index { index }),
+        Ok(ast::Expr::CompoundFieldAccess {
+            root: Box::new(array),
+            access_chain: vec![ast::AccessExpr::Subscript(Subscript::Index { index })],
         })
     }
 
@@ -1646,9 +1648,8 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{any::Any, sync::Arc, vec};
 
-    use arrow::datatypes::{Field, Schema};
-    use arrow::datatypes::{Int32Type, TimeUnit};
-    use arrow_array::{LargeListArray, ListArray};
+    use arrow::array::{LargeListArray, ListArray};
+    use arrow::datatypes::{Field, Int32Type, Schema, TimeUnit};
     use arrow_schema::DataType::Int8;
     use ast::ObjectName;
     use datafusion_common::{Spans, TableReference};
@@ -1667,6 +1668,7 @@ mod tests {
     use datafusion_functions_nested::map::map;
     use datafusion_functions_window::rank::rank_udwf;
     use datafusion_functions_window::row_number::row_number_udwf;
+    use sqlparser::ast::ExactNumberInfo;
 
     use crate::unparser::dialect::{
         CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
@@ -2184,7 +2186,7 @@ mod tests {
     #[test]
     fn custom_dialect_float64_ast_dtype() -> Result<()> {
         for (float64_ast_dtype, identifier) in [
-            (ast::DataType::Double, "DOUBLE"),
+            (ast::DataType::Double(ExactNumberInfo::None), "DOUBLE"),
             (ast::DataType::DoublePrecision, "DOUBLE PRECISION"),
         ] {
             let dialect = CustomDialectBuilder::new()

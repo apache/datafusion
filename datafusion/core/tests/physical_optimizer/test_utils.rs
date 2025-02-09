@@ -25,7 +25,7 @@ use arrow::array::Int32Array;
 use arrow::record_batch::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
@@ -51,10 +51,11 @@ use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::memory::MemoryExec;
+use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
@@ -66,24 +67,28 @@ use datafusion_physical_plan::{
 use datafusion_physical_plan::{InputOrderMode, Partitioning};
 
 /// Create a non sorted parquet exec
-pub fn parquet_exec(schema: &SchemaRef) -> Arc<ParquetExec> {
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema.clone())
-            .with_file(PartitionedFile::new("x".to_string(), 100)),
+pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
+    FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        schema.clone(),
+        Arc::new(ParquetSource::default()),
     )
-    .build_arc()
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .new_exec()
 }
 
 /// Create a single parquet file that is sorted
 pub(crate) fn parquet_exec_with_sort(
     output_ordering: Vec<LexOrdering>,
-) -> Arc<ParquetExec> {
-    ParquetExec::builder(
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), schema())
-            .with_file(PartitionedFile::new("x".to_string(), 100))
-            .with_output_ordering(output_ordering),
+) -> Arc<DataSourceExec> {
+    FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        schema(),
+        Arc::new(ParquetSource::default()),
     )
-    .build_arc()
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .with_output_ordering(output_ordering)
+    .new_exec()
 }
 
 pub fn schema() -> SchemaRef {
@@ -174,7 +179,7 @@ pub fn coalesce_partitions_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn Execut
 }
 
 pub fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-    Arc::new(MemoryExec::try_new(&[vec![]], Arc::clone(schema), None).unwrap())
+    MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
 }
 
 pub fn hash_join_exec(
@@ -232,8 +237,8 @@ pub fn bounded_window_exec_with_partition(
         BoundedWindowAggExec::try_new(
             vec![window_expr],
             Arc::clone(&input),
-            vec![],
             InputOrderMode::Sorted,
+            false,
         )
         .unwrap(),
     )
@@ -261,8 +266,8 @@ pub fn bounded_window_exec_non_set_monotonic(
             )
             .unwrap()],
             Arc::clone(&input),
-            vec![],
             InputOrderMode::Sorted,
+            false,
         )
         .unwrap(),
     )
@@ -521,7 +526,7 @@ pub fn stream_exec_ordered_with_projection(
     )
 }
 
-pub fn mock_data() -> Result<Arc<MemoryExec>> {
+pub fn mock_data() -> Result<Arc<DataSourceExec>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Int32, true),
@@ -549,11 +554,7 @@ pub fn mock_data() -> Result<Arc<MemoryExec>> {
         ],
     )?;
 
-    Ok(Arc::new(MemoryExec::try_new(
-        &[vec![batch]],
-        Arc::clone(&schema),
-        None,
-    )?))
+    MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
 }
 
 pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> PhysicalGroupBy {

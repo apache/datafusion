@@ -17,7 +17,7 @@
 
 //! DataFusion Join implementations
 
-use arrow_buffer::BooleanBufferBuilder;
+use arrow::array::BooleanBufferBuilder;
 pub use cross_join::CrossJoinExec;
 pub use hash_join::HashJoinExec;
 pub use nested_loop_join::NestedLoopJoinExec;

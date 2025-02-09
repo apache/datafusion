@@ -18,7 +18,7 @@
 //! [`ScalarUDFImpl`] definitions for array_length function.
 
 use crate::utils::make_scalar_function;
-use arrow_array::{
+use arrow::array::{
     Array, ArrayRef, Int64Array, LargeListArray, ListArray, OffsetSizeTrait, UInt64Array,
 };
 use arrow_schema::DataType;

@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{
     BinaryType, BinaryViewType, BooleanType, ByteArrayType, ByteViewType, Date32Type,
     Date64Type, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type,
@@ -26,7 +27,6 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, Utf8Type,
 };
-use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
@@ -728,7 +728,7 @@ impl RecordBatchGenerator {
 
 #[cfg(test)]
 mod test {
-    use arrow_array::UInt32Array;
+    use arrow::array::UInt32Array;
 
     use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
 

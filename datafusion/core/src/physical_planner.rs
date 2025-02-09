@@ -47,7 +47,6 @@ use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::recursive_query::RecursiveQueryExec;
 use crate::physical_plan::repartition::RepartitionExec;
@@ -60,10 +59,9 @@ use crate::physical_plan::{
     Partitioning, PhysicalExpr, WindowExpr,
 };
 
+use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow_array::builder::StringBuilder;
-use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
@@ -83,13 +81,14 @@ use datafusion_expr::{
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
+use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
-use datafusion_sql::utils::window_expr_common_partition_keys;
 
+use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
@@ -467,9 +466,8 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let value_exec =
-                    MemoryExec::try_new_as_values(SchemaRef::new(exec_schema), exprs)?;
-                Arc::new(value_exec)
+                MemorySourceConfig::try_new_as_values(SchemaRef::new(exec_schema), exprs)?
+                    as _
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
@@ -558,33 +556,12 @@ impl DefaultPhysicalPlanner {
                     return exec_err!("Table '{table_name}' does not exist");
                 }
             }
-            LogicalPlan::Window(Window {
-                input, window_expr, ..
-            }) => {
+            LogicalPlan::Window(Window { window_expr, .. }) => {
                 if window_expr.is_empty() {
                     return internal_err!("Impossibly got empty window expression");
                 }
 
                 let input_exec = children.one()?;
-
-                // at this moment we are guaranteed by the logical planner
-                // to have all the window_expr to have equal sort key
-                let partition_keys = window_expr_common_partition_keys(window_expr)?;
-
-                let can_repartition = !partition_keys.is_empty()
-                    && session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_window_functions();
-
-                let physical_partition_keys = if can_repartition {
-                    partition_keys
-                        .iter()
-                        .map(|e| {
-                            self.create_physical_expr(e, input.schema(), session_state)
-                        })
-                        .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?
-                } else {
-                    vec![]
-                };
 
                 let get_sort_keys = |expr: &Expr| match expr {
                     Expr::WindowFunction(WindowFunction {
@@ -627,6 +604,9 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
+                let can_repartition = session_state.config().target_partitions() > 1
+                    && session_state.config().repartition_window_functions();
+
                 let uses_bounded_memory =
                     window_expr.iter().all(|e| e.uses_bounded_memory());
                 // If all window expressions can run with bounded memory,
@@ -635,14 +615,14 @@ impl DefaultPhysicalPlanner {
                     Arc::new(BoundedWindowAggExec::try_new(
                         window_expr,
                         input_exec,
-                        physical_partition_keys,
                         InputOrderMode::Sorted,
+                        can_repartition,
                     )?)
                 } else {
                     Arc::new(WindowAggExec::try_new(
                         window_expr,
                         input_exec,
-                        physical_partition_keys,
+                        can_repartition,
                     )?)
                 }
             }
@@ -660,7 +640,10 @@ impl DefaultPhysicalPlanner {
                 let physical_input_schema_from_logical = logical_input_schema.inner();
 
                 if !options.execution.skip_physical_aggregate_schema_check
-                    && &physical_input_schema != physical_input_schema_from_logical
+                    && !schema_satisfied_by(
+                        physical_input_schema_from_logical,
+                        &physical_input_schema,
+                    )
                 {
                     let mut differences = Vec::new();
                     if physical_input_schema.fields().len()
@@ -689,7 +672,7 @@ impl DefaultPhysicalPlanner {
                         if physical_field.data_type() != logical_field.data_type() {
                             differences.push(format!("field data type at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.data_type(), logical_field.data_type()));
                         }
-                        if physical_field.is_nullable() != logical_field.is_nullable() {
+                        if physical_field.is_nullable() && !logical_field.is_nullable() {
                             differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
                         }
                     }
@@ -1946,8 +1929,8 @@ impl DefaultPhysicalPlanner {
         let schema = record_batch.schema();
         let partitions = vec![vec![record_batch]];
         let projection = None;
-        let mem_exec = MemoryExec::try_new(&partitions, schema, projection)?;
-        Ok(Arc::new(mem_exec))
+        let mem_exec = MemorySourceConfig::try_new_exec(&partitions, schema, projection)?;
+        Ok(mem_exec)
     }
 
     fn create_project_physical_exec(

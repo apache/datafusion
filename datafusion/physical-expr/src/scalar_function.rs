@@ -37,16 +37,14 @@ use std::sync::Arc;
 use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
+use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
 use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
-    expr_vec_fmt, ColumnarValue, Expr, NullHandling, ReturnTypeArgs, ScalarFunctionArgs,
-    ScalarUDF,
+    expr_vec_fmt, ColumnarValue, Expr, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
 };
 
 /// Physical expression of a scalar function
@@ -186,15 +184,6 @@ impl PhysicalExpr for ScalarFunctionExpr {
             .iter()
             .map(|e| e.evaluate(batch))
             .collect::<Result<Vec<_>>>()?;
-
-        if self.fun.null_handling() == NullHandling::Propagate
-            && args.iter().any(
-                |arg| matches!(arg, ColumnarValue::Scalar(scalar) if scalar.is_null()),
-            )
-        {
-            let null_value = ScalarValue::try_from(&self.return_type)?;
-            return Ok(ColumnarValue::Scalar(null_value));
-        }
 
         let input_empty = args.is_empty();
         let input_all_scalar = args
