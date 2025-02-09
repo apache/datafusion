@@ -107,7 +107,10 @@ impl State {
         match self {
             State::Taken => 0,
             State::Start => 0,
-            State::InProgress { sort_key, .. } => sort_key.iter().map(|scalar_value| scalar_value.size()).sum() ,
+            State::InProgress { sort_key, .. } => sort_key
+                .iter()
+                .map(|scalar_value| scalar_value.size())
+                .sum(),
             State::Complete => 0,
         }
     }
@@ -266,9 +269,7 @@ impl GroupOrderingPartial {
 
     /// Return the size of memory allocated by this structure
     pub(crate) fn size(&self) -> usize {
-        size_of::<Self>()
-            + self.order_indices.allocated_size()
-            + self.state.size()
+        size_of::<Self>() + self.order_indices.allocated_size() + self.state.size()
     }
 }
 
