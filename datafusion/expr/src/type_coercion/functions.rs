@@ -22,8 +22,8 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
-    types::NativeType, utils::list_ndims, Result,
+    exec_err, internal_datafusion_err, internal_err, plan_err, types::NativeType,
+    utils::list_ndims, Result,
 };
 use datafusion_common::{types::LogicalType, utils::coerced_fixed_size_list_to_list};
 use datafusion_expr_common::{
@@ -650,7 +650,10 @@ fn get_valid_types(
                         TypeSignatureClass::Duration if logical_type.is_duration() => {
                             Ok(origin_type.to_owned())
                         }
-                        _ => not_impl_err!("Other cases are not implemented yet"),
+                        TypeSignatureClass::Integer if logical_type.is_integer() => {
+                            Ok(origin_type.to_owned())
+                        }
+                        _ => internal_err!("May miss the matching logic in `is_matched_type`"),
                     }
                 }
 
