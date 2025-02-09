@@ -226,6 +226,9 @@ impl LogicalType for NativeType {
             (Self::Decimal(p, s), _) if p <= &38 => Decimal128(*p, *s),
             (Self::Decimal(p, s), _) => Decimal256(*p, *s),
             (Self::Timestamp(tu, tz), _) => Timestamp(*tu, tz.clone()),
+            (Self::Date, origin) if matches!(origin, Date32 | Date64) => {
+                origin.to_owned()
+            }
             (Self::Date, _) => Date32,
             (Self::Time(tu), _) => match tu {
                 TimeUnit::Second | TimeUnit::Millisecond => Time32(*tu),

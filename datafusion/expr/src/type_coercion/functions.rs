@@ -21,11 +21,11 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err, types::NativeType,
     utils::list_ndims, Result,
 };
+use datafusion_common::{types::LogicalType, utils::coerced_fixed_size_list_to_list};
 use datafusion_expr_common::{
     signature::{
         ArrayFunctionSignature, TypeSignatureClass, FIXED_SIZE_LIST_WILDCARD,
@@ -616,7 +616,7 @@ fn get_valid_types(
                         TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
                             true
                         }
-                        TypeSignatureClass::Date if logical_type.is_date() => true,
+                        // TypeSignatureClass::Date if logical_type.is_date() => true,
                         TypeSignatureClass::Time if logical_type.is_time() => true,
                         TypeSignatureClass::Interval if logical_type.is_interval() => {
                             true
@@ -629,14 +629,21 @@ fn get_valid_types(
                     }
                 }
 
-                if is_matched_type(&param.desired_type, &current_logical_type) || param
-                        .allowed_source_types
-                        .iter()
-                        .any(|t| is_matched_type(t, &current_logical_type))
-                {
+                if is_matched_type(&param.desired_type, &current_logical_type) {
                     let casted_type = param
-                        .desired_type
-                        .default_casted_type(&current_logical_type, current_type)?;
+                    .desired_type
+                    .default_casted_type(&current_logical_type, current_type)?;
+                    new_types.push(casted_type);
+                } else if param
+                .allowed_source_types()
+                .iter()
+                .any(|t| is_matched_type(t, &current_logical_type)) {
+
+                    if param.default_casted_type().is_none() {
+                        return exec_err!("This shouldn't be None");
+                    }
+                    let default_type = param.default_casted_type().unwrap();
+                    let casted_type = default_type.default_cast_for(current_type)?;
                     new_types.push(casted_type);
                 } else {
                     return internal_err!(

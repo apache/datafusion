@@ -27,6 +27,7 @@ use arrow::datatypes::DataType::{
 };
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
+use datafusion_common::types::{logical_date, NativeType};
 
 use crate::utils::take_function_args;
 use datafusion_common::not_impl_err;
@@ -96,57 +97,29 @@ impl DatePartFunc {
             signature: Signature::one_of(
                 vec![
                     TypeSignature::Coercible(vec![
-                        Coercion {
-                            desired_type: TypeSignatureClass::Native(logical_string()),
-                            allowed_source_types: vec![],
-                        },
-                        Coercion {
-                            desired_type: TypeSignatureClass::Timestamp,
+                        Coercion::new(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_with_implicit_coercion(
+                            TypeSignatureClass::Timestamp,
                             // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
-                            allowed_source_types: vec![TypeSignatureClass::Native(
-                                logical_string(),
-                            )],
-                        },
+                            vec![TypeSignatureClass::Native(logical_string())],
+                            NativeType::Timestamp(Nanosecond, None),
+                        ),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion {
-                            desired_type: TypeSignatureClass::Native(logical_string()),
-                            allowed_source_types: vec![],
-                        },
-                        Coercion {
-                            desired_type: TypeSignatureClass::Date,
-                            allowed_source_types: vec![],
-                        },
+                        Coercion::new(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new(TypeSignatureClass::Native(logical_date())),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion {
-                            desired_type: TypeSignatureClass::Native(logical_string()),
-                            allowed_source_types: vec![],
-                        },
-                        Coercion {
-                            desired_type: TypeSignatureClass::Time,
-                            allowed_source_types: vec![],
-                        },
+                        Coercion::new(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new(TypeSignatureClass::Time),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion {
-                            desired_type: TypeSignatureClass::Native(logical_string()),
-                            allowed_source_types: vec![],
-                        },
-                        Coercion {
-                            desired_type: TypeSignatureClass::Interval,
-                            allowed_source_types: vec![],
-                        },
+                        Coercion::new(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new(TypeSignatureClass::Interval),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion {
-                            desired_type: TypeSignatureClass::Native(logical_string()),
-                            allowed_source_types: vec![],
-                        },
-                        Coercion {
-                            desired_type: TypeSignatureClass::Duration,
-                            allowed_source_types: vec![],
-                        },
+                        Coercion::new(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new(TypeSignatureClass::Duration),
                     ]),
                 ],
                 Volatility::Immutable,

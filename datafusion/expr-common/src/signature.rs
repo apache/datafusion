@@ -24,9 +24,7 @@ use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::types::{
-    logical_timestamp, LogicalType, LogicalTypeRef, NativeType,
-};
+use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use datafusion_common::{not_impl_err, Result};
 use indexmap::IndexSet;
 use itertools::Itertools;
@@ -213,7 +211,6 @@ impl TypeSignature {
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Hash)]
 pub enum TypeSignatureClass {
     Timestamp,
-    Date,
     Time,
     Interval,
     Duration,
@@ -243,15 +240,6 @@ impl TypeSignatureClass {
             }
             // If the given type is already a timestamp, we don't change the unit and timezone
             TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
-                Ok(origin_type.to_owned())
-            }
-            // This is an existing use case for casting string to timestamp, since we don't have specific unit and timezone from string,
-            // so we use the default timestamp type with nanosecond precision and no timezone
-            // TODO: Consider allowing the user to specify the default timestamp type instead of having it predefined in DataFusion when we have more use cases
-            TypeSignatureClass::Timestamp if logical_type == &NativeType::String => {
-                logical_timestamp().default_cast_for(origin_type)
-            }
-            TypeSignatureClass::Date if logical_type.is_date() => {
                 Ok(origin_type.to_owned())
             }
             TypeSignatureClass::Time if logical_type.is_time() => {
@@ -428,12 +416,16 @@ impl TypeSignature {
                         get_possible_types_from_signature_classes(&c.desired_type)
                             .into_iter()
                             .collect();
-                    let allowed_casts: Vec<DataType> = c
-                        .allowed_source_types
-                        .iter()
-                        .flat_map(get_possible_types_from_signature_classes)
-                        .collect();
-                    all_types.extend(allowed_casts);
+
+                    if let Some(implicit_coercion) = &c.implicit_coercion {
+                        let allowed_casts: Vec<DataType> = implicit_coercion
+                            .allowed_source_types
+                            .iter()
+                            .flat_map(get_possible_types_from_signature_classes)
+                            .collect();
+                        all_types.extend(allowed_casts);
+                    }
+
                     all_types.into_iter().collect::<Vec<_>>()
                 })
                 .multi_cartesian_product()
@@ -473,9 +465,6 @@ fn get_possible_types_from_signature_classes(
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
                 DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
             ]
-        }
-        TypeSignatureClass::Date => {
-            vec![DataType::Date64]
         }
         TypeSignatureClass::Time => {
             vec![DataType::Time64(TimeUnit::Nanosecond)]
@@ -524,21 +513,50 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 #[derive(Debug, Clone, Eq, PartialOrd)]
 pub struct Coercion {
     pub desired_type: TypeSignatureClass,
-    pub allowed_source_types: Vec<TypeSignatureClass>,
+    implicit_coercion: Option<ImplicitCoercion>,
+}
+
+impl Coercion {
+    pub fn new(desired_type: TypeSignatureClass) -> Self {
+        Self {
+            desired_type,
+            implicit_coercion: None,
+        }
+    }
+
+    pub fn new_with_implicit_coercion(
+        desired_type: TypeSignatureClass,
+        allowed_source_types: Vec<TypeSignatureClass>,
+        default_type: NativeType,
+    ) -> Self {
+        Self {
+            desired_type,
+            implicit_coercion: Some(ImplicitCoercion {
+                allowed_source_types,
+                default_casted_type: default_type,
+            }),
+        }
+    }
+
+    pub fn allowed_source_types(&self) -> &[TypeSignatureClass] {
+        self.implicit_coercion
+            .as_ref()
+            .map(|c| c.allowed_source_types.as_slice())
+            .unwrap_or_default()
+    }
+
+    pub fn default_casted_type(&self) -> Option<&NativeType> {
+        self.implicit_coercion
+            .as_ref()
+            .map(|c| &c.default_casted_type)
+    }
 }
 
 impl Display for Coercion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Coercion({}", self.desired_type)?;
-        if !self.allowed_source_types.is_empty() {
-            write!(
-                f,
-                ", allowed_casts=[{}]",
-                self.allowed_source_types
-                    .iter()
-                    .map(|cast| cast.to_string())
-                    .join(", ")
-            )
+        if let Some(implicit_coercion) = &self.implicit_coercion {
+            write!(f, ", implicit_coercion={implicit_coercion}",)
         } else {
             write!(f, ")")
         }
@@ -548,14 +566,47 @@ impl Display for Coercion {
 impl PartialEq for Coercion {
     fn eq(&self, other: &Self) -> bool {
         self.desired_type == other.desired_type
-            && self.allowed_source_types == other.allowed_source_types
+            && self.implicit_coercion == other.implicit_coercion
     }
 }
 
 impl Hash for Coercion {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.desired_type.hash(state);
+        self.implicit_coercion.hash(state);
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialOrd)]
+pub struct ImplicitCoercion {
+    pub allowed_source_types: Vec<TypeSignatureClass>,
+    /// For types like Timestamp, there are multiple possible timeunit and timezone from a given TypeSignatureClass
+    /// We need to specify the default type to be used for coercion if we cast from other types via `allowed_source_types`
+    /// Other types like Int64, you don't need to specify this field since there is only one possible type.
+    pub default_casted_type: NativeType,
+}
+
+impl Display for ImplicitCoercion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ImplicitCoercion({:?}, default_type={:?})",
+            self.allowed_source_types, self.default_casted_type
+        )
+    }
+}
+
+impl PartialEq for ImplicitCoercion {
+    fn eq(&self, other: &Self) -> bool {
+        self.allowed_source_types == other.allowed_source_types
+            && self.default_casted_type == other.default_casted_type
+    }
+}
+
+impl Hash for ImplicitCoercion {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.allowed_source_types.hash(state);
+        self.default_casted_type.hash(state);
     }
 }
 
@@ -836,14 +887,8 @@ mod tests {
         );
 
         let type_signature = TypeSignature::Coercible(vec![
-            Coercion {
-                desired_type: TypeSignatureClass::Native(logical_string()),
-                allowed_source_types: vec![],
-            },
-            Coercion {
-                desired_type: TypeSignatureClass::Native(logical_int64()),
-                allowed_source_types: vec![],
-            },
+            Coercion::new(TypeSignatureClass::Native(logical_string())),
+            Coercion::new(TypeSignatureClass::Native(logical_int64())),
         ]);
         let possible_types = type_signature.get_possible_types();
         assert_eq!(

@@ -26,7 +26,7 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::types::{logical_int64, logical_string};
+use datafusion_common::types::{logical_int64, logical_string, NativeType};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
@@ -67,15 +67,13 @@ impl RepeatFunc {
         Self {
             signature: Signature::coercible(
                 vec![
-                    Coercion {
-                        desired_type: TypeSignatureClass::Native(logical_string()),
-                        allowed_source_types: vec![],
-                    },
+                    Coercion::new(TypeSignatureClass::Native(logical_string())),
                     // Accept all integer types but cast them to i64
-                    Coercion {
-                        desired_type: TypeSignatureClass::Native(logical_int64()),
-                        allowed_source_types: vec![TypeSignatureClass::Integer],
-                    },
+                    Coercion::new_with_implicit_coercion(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![TypeSignatureClass::Integer],
+                        NativeType::Int64,
+                    ),
                 ],
                 Volatility::Immutable,
             ),

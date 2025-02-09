@@ -19,7 +19,7 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, AsArray, Int32Array};
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::types::{logical_binary, logical_string};
+use datafusion_common::types::{logical_binary, logical_string, NativeType};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignatureClass};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
@@ -64,10 +64,11 @@ impl AsciiFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion {
-                    desired_type: TypeSignatureClass::Native(logical_string()),
-                    allowed_source_types: vec![TypeSignatureClass::Native(logical_binary())],
-                }],
+                vec![Coercion::new_with_implicit_coercion(
+                    TypeSignatureClass::Native(logical_string()),
+                    vec![TypeSignatureClass::Native(logical_binary())],
+                    NativeType::String,
+                )],
                 Volatility::Immutable,
             ),
         }
