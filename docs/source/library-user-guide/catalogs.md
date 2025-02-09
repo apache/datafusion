@@ -277,6 +277,7 @@ impl CatalogProvider for MemoryCatalogProvider {
 ```
 
 Again, this is fairly straightforward, as there's an underlying data structure to store the state, via key-value pairs. With that the `CatalogProviderList` trait can be implemented.
+
 ## Implementing `MemoryCatalogProviderList`
 
 ```rust

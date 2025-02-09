@@ -65,7 +65,6 @@ fn observer(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
 }
 ```
 
-
 ## Writing Optimization Rules
 
 Please refer to the
