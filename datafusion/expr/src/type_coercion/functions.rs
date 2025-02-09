@@ -630,7 +630,7 @@ fn get_valid_types(
                 }
 
                 if is_matched_type(&param.desired_type, &current_logical_type) || param
-                        .allowed_casts
+                        .allowed_source_types
                         .iter()
                         .any(|t| is_matched_type(t, &current_logical_type))
                 {

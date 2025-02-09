@@ -429,7 +429,7 @@ impl TypeSignature {
                             .into_iter()
                             .collect();
                     let allowed_casts: Vec<DataType> = c
-                        .allowed_casts
+                        .allowed_source_types
                         .iter()
                         .flat_map(get_possible_types_from_signature_classes)
                         .collect();
@@ -524,17 +524,17 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 #[derive(Debug, Clone, Eq, PartialOrd)]
 pub struct Coercion {
     pub desired_type: TypeSignatureClass,
-    pub allowed_casts: Vec<TypeSignatureClass>,
+    pub allowed_source_types: Vec<TypeSignatureClass>,
 }
 
 impl Display for Coercion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Coercion({}", self.desired_type)?;
-        if !self.allowed_casts.is_empty() {
+        if !self.allowed_source_types.is_empty() {
             write!(
                 f,
                 ", allowed_casts=[{}]",
-                self.allowed_casts
+                self.allowed_source_types
                     .iter()
                     .map(|cast| cast.to_string())
                     .join(", ")
@@ -548,14 +548,14 @@ impl Display for Coercion {
 impl PartialEq for Coercion {
     fn eq(&self, other: &Self) -> bool {
         self.desired_type == other.desired_type
-            && self.allowed_casts == other.allowed_casts
+            && self.allowed_source_types == other.allowed_source_types
     }
 }
 
 impl Hash for Coercion {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.desired_type.hash(state);
-        self.allowed_casts.hash(state);
+        self.allowed_source_types.hash(state);
     }
 }
 
@@ -838,11 +838,11 @@ mod tests {
         let type_signature = TypeSignature::Coercible(vec![
             Coercion {
                 desired_type: TypeSignatureClass::Native(logical_string()),
-                allowed_casts: vec![],
+                allowed_source_types: vec![],
             },
             Coercion {
                 desired_type: TypeSignatureClass::Native(logical_int64()),
-                allowed_casts: vec![],
+                allowed_source_types: vec![],
             },
         ]);
         let possible_types = type_signature.get_possible_types();

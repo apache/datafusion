@@ -69,12 +69,12 @@ impl RepeatFunc {
                 vec![
                     Coercion {
                         desired_type: TypeSignatureClass::Native(logical_string()),
-                        allowed_casts: vec![],
+                        allowed_source_types: vec![],
                     },
                     // Accept all integer types but cast them to i64
                     Coercion {
                         desired_type: TypeSignatureClass::Native(logical_int64()),
-                        allowed_casts: vec![TypeSignatureClass::Integer],
+                        allowed_source_types: vec![TypeSignatureClass::Integer],
                     },
                 ],
                 Volatility::Immutable,

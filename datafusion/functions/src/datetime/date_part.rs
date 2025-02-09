@@ -98,12 +98,12 @@ impl DatePartFunc {
                     TypeSignature::Coercible(vec![
                         Coercion {
                             desired_type: TypeSignatureClass::Native(logical_string()),
-                            allowed_casts: vec![],
+                            allowed_source_types: vec![],
                         },
                         Coercion {
                             desired_type: TypeSignatureClass::Timestamp,
                             // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
-                            allowed_casts: vec![TypeSignatureClass::Native(
+                            allowed_source_types: vec![TypeSignatureClass::Native(
                                 logical_string(),
                             )],
                         },
@@ -111,41 +111,41 @@ impl DatePartFunc {
                     TypeSignature::Coercible(vec![
                         Coercion {
                             desired_type: TypeSignatureClass::Native(logical_string()),
-                            allowed_casts: vec![],
+                            allowed_source_types: vec![],
                         },
                         Coercion {
                             desired_type: TypeSignatureClass::Date,
-                            allowed_casts: vec![],
+                            allowed_source_types: vec![],
                         },
                     ]),
                     TypeSignature::Coercible(vec![
                         Coercion {
                             desired_type: TypeSignatureClass::Native(logical_string()),
-                            allowed_casts: vec![],
+                            allowed_source_types: vec![],
                         },
                         Coercion {
                             desired_type: TypeSignatureClass::Time,
-                            allowed_casts: vec![],
+                            allowed_source_types: vec![],
                         },
                     ]),
                     TypeSignature::Coercible(vec![
                         Coercion {
                             desired_type: TypeSignatureClass::Native(logical_string()),
-                            allowed_casts: vec![],
+                            allowed_source_types: vec![],
                         },
                         Coercion {
                             desired_type: TypeSignatureClass::Interval,
-                            allowed_casts: vec![],
+                            allowed_source_types: vec![],
                         },
                     ]),
                     TypeSignature::Coercible(vec![
                         Coercion {
                             desired_type: TypeSignatureClass::Native(logical_string()),
-                            allowed_casts: vec![],
+                            allowed_source_types: vec![],
                         },
                         Coercion {
                             desired_type: TypeSignatureClass::Duration,
-                            allowed_casts: vec![],
+                            allowed_source_types: vec![],
                         },
                     ]),
                 ],

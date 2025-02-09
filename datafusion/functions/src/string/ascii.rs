@@ -66,7 +66,7 @@ impl AsciiFunc {
             signature: Signature::coercible(
                 vec![Coercion {
                     desired_type: TypeSignatureClass::Native(logical_string()),
-                    allowed_casts: vec![TypeSignatureClass::Native(logical_binary())],
+                    allowed_source_types: vec![TypeSignatureClass::Native(logical_binary())],
                 }],
                 Volatility::Immutable,
             ),
