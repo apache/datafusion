@@ -542,13 +542,7 @@ impl PhysicalExpr for BinaryExpr {
                             StatisticsV2::new_bernoulli(ScalarValue::Boolean(None))
                         }
                     } else {
-                        let unknown = ScalarValue::Null;
-                        StatisticsV2::new_unknown(
-                            unknown.clone(),
-                            unknown.clone(),
-                            unknown.clone(),
-                            child_interval,
-                        )
+                        StatisticsV2::new_unknown_from_interval(&child_interval)
                     }
                 })
                 .collect::<Result<Vec<_>>>(),
