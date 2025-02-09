@@ -24,8 +24,8 @@ use crate::sorts::{
     stream::{FieldCursorStream, RowCursorStream},
 };
 use crate::SendableRecordBatchStream;
+use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
-use arrow_array::*;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;

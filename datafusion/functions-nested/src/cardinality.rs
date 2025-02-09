@@ -18,7 +18,7 @@
 //! [`ScalarUDFImpl`] definitions for cardinality function.
 
 use crate::utils::make_scalar_function;
-use arrow_array::{
+use arrow::array::{
     Array, ArrayRef, GenericListArray, MapArray, OffsetSizeTrait, UInt64Array,
 };
 use arrow_schema::DataType;

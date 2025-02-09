@@ -16,8 +16,7 @@
 # under the License.
 
 [workspace]
-# datafusion-cli is excluded because of its Cargo.lock. See datafusion-cli/README.md.
-exclude = ["datafusion-cli", "dev/depcheck"]
+exclude = ["dev/depcheck"]
 members = [
     "datafusion/common",
     "datafusion/common-runtime",
@@ -48,6 +47,7 @@ members = [
     "datafusion/sqllogictest",
     "datafusion/substrait",
     "datafusion/wasmtest",
+    "datafusion-cli",
     "datafusion-examples",
     "datafusion-examples/examples/ffi/ffi_example_table_provider",
     "datafusion-examples/examples/ffi/ffi_module_interface",
@@ -80,8 +80,6 @@ ahash = { version = "0.8", default-features = false, features = [
 ] }
 arrow = { version = "54.1.0", features = [
     "prettyprint",
-] }
-arrow-array = { version = "54.1.0", default-features = false, features = [
     "chrono-tz",
 ] }
 arrow-buffer = { version = "54.1.0", default-features = false }

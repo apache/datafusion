@@ -33,9 +33,8 @@ use crate::projection::{
 };
 use crate::source::{DataSource, DataSourceExec};
 
+use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use arrow_array::RecordBatchOptions;
 use arrow_schema::Schema;
 use datafusion_common::{
     internal_err, plan_err, project_schema, Constraints, Result, ScalarValue,
@@ -726,7 +725,7 @@ pub struct MemoryStream {
     projection: Option<Vec<usize>>,
     /// Index into the data
     index: usize,
-    /// The remaining number of rows to return
+    /// The remaining number of rows to return. If None, all rows are returned
     fetch: Option<usize>,
 }
 
@@ -778,11 +777,9 @@ impl Stream for MemoryStream {
             None => batch.clone(),
         };
 
-        if self.fetch.is_none() {
+        let Some(&fetch) = self.fetch.as_ref() else {
             return Poll::Ready(Some(Ok(batch)));
-        }
-
-        let fetch = self.fetch.unwrap();
+        };
         if fetch == 0 {
             return Poll::Ready(None);
         }

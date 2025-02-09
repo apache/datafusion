@@ -24,14 +24,13 @@ pub mod string_utils;
 
 use crate::error::{_internal_datafusion_err, _internal_err};
 use crate::{DataFusionError, Result, ScalarValue};
-use arrow::array::ArrayRef;
+use arrow::array::{
+    cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
+    OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef};
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
-};
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
@@ -329,8 +328,8 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_array::{Array, ListArray};
-/// # use arrow_array::types::Int64Type;
+/// # use arrow::array::{Array, ListArray};
+/// # use arrow::array::types::Int64Type;
 /// # use datafusion_common::utils::SingleRowListArrayBuilder;
 /// // Array is [1, 2, 3]
 /// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![

@@ -42,9 +42,8 @@ use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use crate::stream::RecordBatchStreamAdapter;
 
+use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use arrow_array::Array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
 use datafusion_execution::TaskContext;
@@ -283,7 +282,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
+    /// # use arrow::array::RecordBatch;
     /// # use arrow_schema::SchemaRef;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -313,7 +312,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
+    /// # use arrow::array::RecordBatch;
     /// # use arrow_schema::SchemaRef;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -348,7 +347,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow_array::RecordBatch;
+    /// # use arrow::array::RecordBatch;
     /// # use arrow_schema::SchemaRef;
     /// # use futures::TryStreamExt;
     /// # use datafusion_common::Result;
@@ -1055,7 +1054,7 @@ pub enum CardinalityEffect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{DictionaryArray, Int32Array, NullArray, RunArray};
+    use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
     use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use std::any::Any;
     use std::sync::Arc;

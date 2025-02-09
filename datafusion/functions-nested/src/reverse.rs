@@ -18,9 +18,10 @@
 //! [`ScalarUDFImpl`] definitions for array_reverse function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Capacities, MutableArrayData};
+use arrow::array::{
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
-use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_schema::DataType::{LargeList, List, Null};
 use arrow_schema::{DataType, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
@@ -173,7 +174,7 @@ fn general_array_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         Some(nulls.into()),
     )?))
 }

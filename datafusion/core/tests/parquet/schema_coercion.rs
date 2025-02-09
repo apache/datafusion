@@ -17,10 +17,11 @@
 
 use std::sync::Arc;
 
+use arrow::array::{
+    types::Int32Type, ArrayRef, DictionaryArray, Float32Array, Int64Array, RecordBatch,
+    StringArray,
+};
 use arrow::datatypes::{Field, Schema};
-use arrow::record_batch::RecordBatch;
-use arrow_array::types::Int32Type;
-use arrow_array::{ArrayRef, DictionaryArray, Float32Array, Int64Array, StringArray};
 use arrow_schema::DataType;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
