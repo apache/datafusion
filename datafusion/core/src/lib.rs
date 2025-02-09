@@ -908,6 +908,18 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/overview.md",
+    user_guide_cli_overview
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/usage.md",
+    user_guide_cli_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/library-user-guide/adding-udfs.md",
     library_user_guide_adding_udfs
 );
