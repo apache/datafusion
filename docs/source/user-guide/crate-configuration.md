@@ -68,7 +68,7 @@ codegen-units = 1
 
 Then, in `main.rs.` update the memory allocator with the below after your imports:
 
-```rust ,ignore
+```rust
 use datafusion::prelude::*;
 
 #[global_allocator]
