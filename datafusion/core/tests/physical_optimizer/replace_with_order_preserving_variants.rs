@@ -1166,6 +1166,15 @@ fn sort_preserving_merge_exec(
     Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
 }
 
+pub fn sort_preserving_merge_exec_with_fetch(
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    input: Arc<dyn ExecutionPlan>,
+    fetch: usize,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+    Arc::new(SortPreservingMergeExec::new(sort_exprs, input).with_fetch(Some(fetch)))
+}
+
 fn repartition_exec_round_robin(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(8)).unwrap())
 }

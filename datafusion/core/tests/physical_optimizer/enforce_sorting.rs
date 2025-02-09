@@ -54,6 +54,7 @@ use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::sorts::sort::SortExec;
 
 use rstest::rstest;
+use crate::physical_optimizer::replace_with_order_preserving_variants::sort_preserving_merge_exec_with_fetch;
 
 /// Create a csv exec for tests
 fn csv_exec_ordered(
@@ -218,6 +219,30 @@ async fn test_remove_unnecessary_sort5() -> Result<()> {
         "  DataSourceExec: partitions=1, partition_sizes=[0]",
         "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet"];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_remove_unnecessary_spm2() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = memory_exec(&schema);
+    let input = sort_preserving_merge_exec_with_fetch(
+        vec![sort_expr("non_nullable_col", &schema)],
+        source,
+        100,
+    );
+
+    let expected_input = [
+        "SortPreservingMergeExec: [non_nullable_col@1 ASC], fetch=100",
+        "  MemoryExec: partitions=1, partition_sizes=[0]",
+    ];
+    let expected_optimized =[
+        "SortPreservingMergeExec: [non_nullable_col@1 ASC], fetch=100",
+        "  SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
+        "    MemoryExec: partitions=1, partition_sizes=[0]",
+    ];
+    assert_optimized!(expected_input, expected_optimized, input, true);
 
     Ok(())
 }
