@@ -61,7 +61,10 @@ fn run(column_count: u32, ctx: Arc<SessionContext>) {
                 .with_column(new_field_name, btrim(vec![col(new_field_name)]))
                 .unwrap();
         }
-    }));
+
+        Some(true)
+    }))
+    .unwrap();
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
