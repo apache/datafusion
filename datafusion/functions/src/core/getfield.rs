@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::take_function_args;
 use arrow::array::{
     make_array, Array, Capacities, MutableArrayData, Scalar, StringArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, Result, ScalarValue,
+    exec_err, internal_err, plan_datafusion_err, utils::take_function_args, Result,
+    ScalarValue,
 };
 use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};

@@ -24,8 +24,8 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Int32Type, Int64Type};
 
-use crate::utils::{make_scalar_function, take_function_args, utf8_to_str_type};
-use datafusion_common::{exec_err, Result};
+use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,

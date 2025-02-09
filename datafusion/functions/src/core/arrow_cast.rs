@@ -22,10 +22,11 @@ use arrow::error::ArrowError;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
 };
-use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_common::{
+    exec_datafusion_err, utils::take_function_args, DataFusionError,
+};
 use std::any::Any;
 
-use crate::utils::take_function_args;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl,

@@ -19,8 +19,8 @@ use arrow::compute::kernels::length::bit_length;
 use arrow::datatypes::DataType;
 use std::any::Any;
 
-use crate::utils::{take_function_args, utf8_to_int_type};
-use datafusion_common::{Result, ScalarValue};
+use crate::utils::utf8_to_int_type;
+use datafusion_common::{utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;

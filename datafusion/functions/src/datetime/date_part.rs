@@ -28,8 +28,6 @@ use arrow::datatypes::DataType::{
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
-use crate::utils::take_function_args;
-use datafusion_common::not_impl_err;
 use datafusion_common::{
     cast::{
         as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
@@ -37,8 +35,9 @@ use datafusion_common::{
         as_timestamp_microsecond_array, as_timestamp_millisecond_array,
         as_timestamp_nanosecond_array, as_timestamp_second_array,
     },
-    exec_err, internal_err,
+    exec_err, internal_err, not_impl_err,
     types::logical_string,
+    utils::take_function_args,
     Result, ScalarValue,
 };
 use datafusion_expr::{

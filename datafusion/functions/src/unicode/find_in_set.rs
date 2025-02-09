@@ -24,8 +24,10 @@ use arrow::array::{
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 
-use crate::utils::{take_function_args, utf8_to_int_type};
-use datafusion_common::{exec_err, internal_err, Result, ScalarValue};
+use crate::utils::utf8_to_int_type;
+use datafusion_common::{
+    exec_err, internal_err, utils::take_function_args, Result, ScalarValue,
+};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,

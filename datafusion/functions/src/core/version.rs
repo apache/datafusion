@@ -17,9 +17,8 @@
 
 //! [`VersionFunc`]: Implementation of the `version` function.
 
-use crate::utils::take_function_args;
 use arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };

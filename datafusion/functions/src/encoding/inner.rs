@@ -17,7 +17,6 @@
 
 //! Encoding expressions
 
-use crate::utils::take_function_args;
 use arrow::{
     array::{
         Array, ArrayRef, BinaryArray, GenericByteArray, OffsetSizeTrait, StringArray,
@@ -29,6 +28,7 @@ use base64::{engine::general_purpose, Engine as _};
 use datafusion_common::{
     cast::{as_generic_binary_array, as_generic_string_array},
     not_impl_err, plan_err,
+    utils::take_function_args,
 };
 use datafusion_common::{exec_err, ScalarValue};
 use datafusion_common::{DataFusionError, Result};

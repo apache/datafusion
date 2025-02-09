@@ -21,10 +21,10 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
-use crate::utils::{make_scalar_function, take_function_args, utf8_to_int_type};
+use crate::utils::{make_scalar_function, utf8_to_int_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::datafusion_strsim;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;

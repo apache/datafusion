@@ -29,9 +29,10 @@ use arrow::datatypes::{
 };
 use chrono::{DateTime, MappedLocalTime, Offset, TimeDelta, TimeZone, Utc};
 
-use crate::utils::take_function_args;
 use datafusion_common::cast::as_primitive_array;
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, plan_err, utils::take_function_args, DataFusionError, Result, ScalarValue,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
