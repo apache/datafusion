@@ -253,7 +253,7 @@ pub trait JoinHashMapType {
             }
         }
 
-        return next_items;
+        next_items
     }
 
     /// Matches hashes with taking batch size into account
