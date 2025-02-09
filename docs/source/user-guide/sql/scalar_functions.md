@@ -97,7 +97,7 @@ acos(numeric_expression)
 
 Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.
 
-```
+```text
 acosh(numeric_expression)
 ```
 
