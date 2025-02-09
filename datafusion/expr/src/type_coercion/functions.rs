@@ -616,7 +616,6 @@ fn get_valid_types(
                         TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
                             true
                         }
-                        // TypeSignatureClass::Date if logical_type.is_date() => true,
                         TypeSignatureClass::Time if logical_type.is_time() => true,
                         TypeSignatureClass::Interval if logical_type.is_interval() => {
                             true

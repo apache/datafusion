@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::TimeUnit;
-
 use crate::types::{LogicalTypeRef, NativeType};
 use std::sync::{Arc, LazyLock};
 
@@ -49,11 +47,3 @@ singleton!(LOGICAL_FLOAT64, logical_float64, Float64);
 singleton!(LOGICAL_DATE, logical_date, Date);
 singleton!(LOGICAL_BINARY, logical_binary, Binary);
 singleton!(LOGICAL_STRING, logical_string, String);
-
-// TODO: Extend macro
-// TODO: Should we use LOGICAL_TIMESTAMP_NANO to distinguish unit and timzeone?
-static LOGICAL_TIMESTAMP: LazyLock<LogicalTypeRef> =
-    LazyLock::new(|| Arc::new(NativeType::Timestamp(TimeUnit::Nanosecond, None)));
-pub fn logical_timestamp() -> LogicalTypeRef {
-    Arc::clone(&LOGICAL_TIMESTAMP)
-}
