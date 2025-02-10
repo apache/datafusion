@@ -17,7 +17,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion_common_runtime::SpawnedTask;
+use datafusion::common::runtime::SpawnedTask;
 use futures::{SinkExt, StreamExt};
 use log::{debug, info};
 use sqllogictest::DBOutput;
