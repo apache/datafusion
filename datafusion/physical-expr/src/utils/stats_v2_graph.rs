@@ -47,14 +47,6 @@ pub struct ExprStatisticGraphNode {
 }
 
 impl ExprStatisticGraphNode {
-    /// Creates a DAEG node from DataFusion's [`ExprTreeNode`] object and `StatisticV2` statistic.
-    pub fn make_node_with_stats(
-        node: &ExprTreeNode<NodeIndex>,
-        stats: StatisticsV2,
-    ) -> Self {
-        Self::new(Arc::clone(&node.expr), stats)
-    }
-
     /// Creates a DAEG node from DataFusion's [`ExprTreeNode`] object. Literals are creating
     /// [`Uniform`] distribution kind of statistic with definite, singleton intervals.
     /// Otherwise, create [`Unknown`] statistic with an unbounded interval, by default.
@@ -72,14 +64,6 @@ impl ExprStatisticGraphNode {
                     Self::new_unknown(expr, &dt)
                 }
             })
-        }
-    }
-
-    /// Creates a new graph node with prepared statistics
-    fn new(expr: Arc<dyn PhysicalExpr>, stats: StatisticsV2) -> Self {
-        ExprStatisticGraphNode {
-            expr,
-            statistics: stats,
         }
     }
 
@@ -184,8 +168,9 @@ impl ExprStatisticGraph {
                 self.graph[self.root].statistics =
                     StatisticsV2::new_bernoulli(get_zero().clone())?;
             }
-            // if interval == Interval::UNCERTAIN => do nothing to the root
+            // If interval == Interval::UNCERTAIN => do nothing to the root
             else if interval != Interval::UNCERTAIN {
+                // This case is for numeric quantities
                 self.graph[self.root].statistics =
                     StatisticsV2::new_from_interval(&interval)?;
             }
@@ -208,10 +193,10 @@ impl ExprStatisticGraph {
                 .iter()
                 .map(|child| self.graph[*child].statistic())
                 .collect::<Vec<_>>();
+            let node_statistics = self.graph[node].statistic();
             let propagated_statistics = self.graph[node]
                 .expression()
-                .propagate_statistics(self.graph[node].statistic(), &children_stats)?;
-
+                .propagate_statistics(node_statistics, &children_stats)?;
             if let Some(propagated_stats) = propagated_statistics {
                 for (child_idx, stat) in children.into_iter().zip(propagated_stats) {
                     self.graph[child_idx].statistics = stat;
@@ -227,7 +212,7 @@ impl ExprStatisticGraph {
 
 /// Creates a new [`Unknown`] distribution, and tries to compute
 /// mean/median/variance if it is calculable.
-pub fn new_custom_from_binary_expr(
+pub fn new_unknown_from_binary_expr(
     op: &Operator,
     left: &StatisticsV2,
     right: &StatisticsV2,

@@ -23,7 +23,7 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::utils::stats_v2_graph::{
-    new_bernoulli_from_binary_expr, new_custom_from_binary_expr,
+    new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
 };
 use crate::PhysicalExpr;
 
@@ -511,7 +511,7 @@ impl PhysicalExpr for BinaryExpr {
             return new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat);
         }
 
-        new_custom_from_binary_expr(&self.op, left_stat, right_stat)
+        new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
     }
 
     fn propagate_statistics(
@@ -4600,7 +4600,7 @@ mod tests {
                 // TODO: to think, if maybe we want to handcraft the expected value...
                 assert_eq!(
                     expr.evaluate_statistics(&child)?,
-                    new_custom_from_binary_expr(&op, child[0], child[1])?
+                    new_unknown_from_binary_expr(&op, child[0], child[1])?
                 );
             }
         }
