@@ -519,10 +519,9 @@ impl PhysicalExpr for BinaryExpr {
         parent_stat: &StatisticsV2,
         children_stat: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
-        let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
         let (li, ri, pi) = (
-            left_stat.range()?,
-            right_stat.range()?,
+            children_stat[0].range()?,
+            children_stat[1].range()?,
             parent_stat.range()?,
         );
         let Some(propagated_children) = self.propagate_constraints(&pi, &[&li, &ri])?
@@ -545,7 +544,7 @@ impl PhysicalExpr for BinaryExpr {
                         StatisticsV2::new_from_interval(&child_interval)
                     }
                 })
-                .collect::<Result<Vec<_>>>(),
+                .collect::<Result<_>>(),
         )
         .transpose()
     }

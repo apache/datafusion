@@ -327,12 +327,15 @@ impl ExponentialDistribution {
         offset: ScalarValue,
         positive_tail: bool,
     ) -> Result<Self> {
-        if offset.is_null() {
-            internal_err!("Offset of an Exponential distribution cannot be null")
+        let dt = rate.data_type();
+        if offset.data_type() != dt {
+            internal_err!("Rate and offset must have the same data type")
+        } else if offset.is_null() {
+            internal_err!("Offset of an `ExponentialDistribution` cannot be null")
         } else if rate.is_null() {
-            internal_err!("Rate of an Exponential Distribution cannot be null")
-        } else if rate.le(&ScalarValue::new_zero(&rate.data_type())?) {
-            internal_err!("Rate of an Exponential Distribution must be positive")
+            internal_err!("Rate of an `ExponentialDistribution` cannot be null")
+        } else if rate.le(&ScalarValue::new_zero(&dt)?) {
+            internal_err!("Rate of an `ExponentialDistribution` must be positive")
         } else {
             Ok(Self {
                 rate,
@@ -373,7 +376,7 @@ impl ExponentialDistribution {
 
     pub fn variance(&self) -> Result<ScalarValue> {
         let one = ScalarValue::new_one(&self.rate.data_type())?;
-        let rate_squared = self.rate.mul(&self.rate)?;
+        let rate_squared = self.rate.mul_checked(&self.rate)?;
         one.div(rate_squared)
     }
 
@@ -390,10 +393,13 @@ impl ExponentialDistribution {
 
 impl GaussianDistribution {
     fn try_new(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
-        if variance.is_null() {
-            internal_err!("Variance of a Gaussian Distribution cannot be null")
-        } else if variance.lt(&ScalarValue::new_zero(&variance.data_type())?) {
-            internal_err!("Variance of a Gaussian Distribution must be positive")
+        let dt = variance.data_type();
+        if mean.data_type() != dt {
+            internal_err!("Mean and variance must have the same data type")
+        } else if variance.is_null() {
+            internal_err!("Variance of a `GaussianDistribution` cannot be null")
+        } else if variance.lt(&ScalarValue::new_zero(&dt)?) {
+            internal_err!("Variance of a `GaussianDistribution` must be positive")
         } else {
             Ok(Self { mean, variance })
         }
@@ -428,7 +434,7 @@ impl BernoulliDistribution {
                 Ok(Self { p })
             } else {
                 internal_err!(
-                    "Success probability of a Bernoulli Distribution must be in [0, 1]"
+                    "Success probability of a `BernoulliDistribution` must be in [0, 1]"
                 )
             }
         }
@@ -444,7 +450,8 @@ impl BernoulliDistribution {
 
     pub fn median(&self) -> Result<ScalarValue> {
         let dt = self.p.data_type();
-        if self.p.gt(&ScalarValue::Float64(Some(0.5))) {
+        let one = ScalarValue::new_one(&dt)?;
+        if one.sub_checked(&self.p)?.lt(&self.p) {
             ScalarValue::new_one(&dt)
         } else {
             ScalarValue::new_zero(&dt)
@@ -452,14 +459,18 @@ impl BernoulliDistribution {
     }
 
     pub fn variance(&self) -> Result<ScalarValue> {
-        let one = ScalarValue::new_one(&DataType::Float64)?;
+        let dt = self.p.data_type();
+        let one = ScalarValue::new_one(&dt)?;
         one.sub_checked(&self.p)?.mul_checked(&self.p)
     }
 
     pub fn range(&self) -> Interval {
-        if self.p.eq(get_zero()) {
+        let dt = self.p.data_type();
+        // Unwraps are safe as the constructor guarantees that the data type
+        // supports zero and one values.
+        if ScalarValue::new_zero(&dt).unwrap().eq(&self.p) {
             Interval::CERTAINLY_FALSE
-        } else if self.p.eq(get_one()) {
+        } else if ScalarValue::new_one(&dt).unwrap().eq(&self.p) {
             Interval::CERTAINLY_TRUE
         } else {
             Interval::UNCERTAIN
@@ -474,7 +485,8 @@ impl UnknownDistribution {
         variance: ScalarValue,
         range: Interval,
     ) -> Result<Self> {
-        let is_valid_mean_median = |m: &ScalarValue| -> Result<bool> {
+        let validate_location = |m: &ScalarValue| -> Result<bool> {
+            // Checks whether the given location estimate is within the range.
             if m.is_null() {
                 Ok(true)
             } else {
@@ -486,11 +498,12 @@ impl UnknownDistribution {
             internal_err!(
                 "Construction of a boolean `Unknown` statistic is prohibited, create a `Bernoulli` statistic instead."
             )
-        } else if (!is_valid_mean_median(&mean)? || !is_valid_mean_median(&median)?)
+        } else if !validate_location(&mean)?
+            || !validate_location(&median)?
             || (!variance.is_null()
                 && variance.lt(&ScalarValue::new_zero(&variance.data_type())?))
         {
-            internal_err!("Tried to construct an invalid Unknown statistic")
+            internal_err!("Tried to construct an invalid `UnknownDistribution` instance")
         } else {
             Ok(Self {
                 mean,
@@ -620,10 +633,6 @@ mod tests {
                 true,
             ),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::Int64(Some(0))),
-                false,
-            ),
-            (
                 StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.25))),
                 true,
             ),
@@ -637,6 +646,22 @@ mod tests {
             ),
             (
                 StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(-11.))),
+                false,
+            ),
+            (
+                StatisticsV2::new_bernoulli(ScalarValue::Int64(Some(0))),
+                true,
+            ),
+            (
+                StatisticsV2::new_bernoulli(ScalarValue::Int64(Some(1))),
+                true,
+            ),
+            (
+                StatisticsV2::new_bernoulli(ScalarValue::Int64(Some(11))),
+                false,
+            ),
+            (
+                StatisticsV2::new_bernoulli(ScalarValue::Int64(Some(-11))),
                 false,
             ),
         ];
