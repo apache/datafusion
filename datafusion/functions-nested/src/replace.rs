@@ -27,8 +27,8 @@ use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionArguments, ArrayFunctionSignature, ColumnarValue,
+    Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -96,11 +96,12 @@ impl ArrayReplace {
             signature: Signature {
                 type_signature: TypeSignature::ArraySignature(
                     ArrayFunctionSignature::Array {
-                        arguments: vec![
+                        arguments: ArrayFunctionArguments::new(vec![
                             ArrayFunctionArgument::Array,
                             ArrayFunctionArgument::Element,
                             ArrayFunctionArgument::Element,
-                        ],
+                        ])
+                        .expect("contains array"),
                         mutability: ArrayFunctionMutability::Mutable,
                     },
                 ),
@@ -177,12 +178,13 @@ impl ArrayReplaceN {
             signature: Signature {
                 type_signature: TypeSignature::ArraySignature(
                     ArrayFunctionSignature::Array {
-                        arguments: vec![
+                        arguments: ArrayFunctionArguments::new(vec![
                             ArrayFunctionArgument::Array,
                             ArrayFunctionArgument::Element,
                             ArrayFunctionArgument::Element,
                             ArrayFunctionArgument::Index,
-                        ],
+                        ])
+                        .expect("contains array"),
                         mutability: ArrayFunctionMutability::Mutable,
                     },
                 ),
@@ -258,11 +260,12 @@ impl ArrayReplaceAll {
             signature: Signature {
                 type_signature: TypeSignature::ArraySignature(
                     ArrayFunctionSignature::Array {
-                        arguments: vec![
+                        arguments: ArrayFunctionArguments::new(vec![
                             ArrayFunctionArgument::Array,
                             ArrayFunctionArgument::Element,
                             ArrayFunctionArgument::Element,
-                        ],
+                        ])
+                        .expect("contains array"),
                         mutability: ArrayFunctionMutability::Mutable,
                     },
                 ),

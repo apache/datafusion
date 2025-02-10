@@ -36,9 +36,7 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
     DataFusionError, Result,
 };
-use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
-};
+use datafusion_expr::{ArrayFunctionArgument, ArrayFunctionArguments, ArrayFunctionSignature, Expr, TypeSignature};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -335,20 +333,22 @@ impl ArraySlice {
             signature: Signature::one_of(
                 vec![
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
-                        arguments: vec![
+                        arguments: ArrayFunctionArguments::new(vec![
                             ArrayFunctionArgument::Array,
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
-                        ],
+                        ])
+                        .expect("contains array"),
                         mutability: ArrayFunctionMutability::Immutable,
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
-                        arguments: vec![
+                        arguments: ArrayFunctionArguments::new(vec![
                             ArrayFunctionArgument::Array,
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
                             ArrayFunctionArgument::Index,
-                        ],
+                        ])
+                        .expect("contains array"),
                         mutability: ArrayFunctionMutability::Immutable,
                     }),
                 ],

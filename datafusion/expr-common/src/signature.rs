@@ -230,7 +230,7 @@ pub enum ArrayFunctionSignature {
     /// A function takes at least one List/LargeList/FixedSizeList argument.
     Array {
         /// A full list of the arguments accepted by this function.
-        arguments: Vec<ArrayFunctionArgument>,
+        arguments: ArrayFunctionArguments,
         /// Whether any of the input arrays are modified.
         mutability: ArrayFunctionMutability,
     },
@@ -246,13 +246,7 @@ impl Display for ArrayFunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ArrayFunctionSignature::Array { arguments, .. } => {
-                for (idx, argument) in arguments.iter().enumerate() {
-                    write!(f, "{argument}")?;
-                    if idx != arguments.len() - 1 {
-                        write!(f, ", ")?;
-                    }
-                }
-                Ok(())
+                write!(f, "{arguments}")
             }
             ArrayFunctionSignature::RecursiveArray => {
                 write!(f, "recursive_array")
@@ -261,6 +255,42 @@ impl Display for ArrayFunctionSignature {
                 write!(f, "map_array")
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub struct ArrayFunctionArguments {
+    /// A full list of the arguments accepted by this function.
+    arguments: Vec<ArrayFunctionArgument>,
+}
+
+impl ArrayFunctionArguments {
+    /// Returns an error if there are no [`ArrayFunctionArgument::Array`] arguments.
+    pub fn new(arguments: Vec<ArrayFunctionArgument>) -> Result<Self, ()> {
+        if !arguments
+            .iter()
+            .any(|arg| *arg == ArrayFunctionArgument::Array)
+        {
+            Err(())
+        } else {
+            Ok(Self { arguments })
+        }
+    }
+
+    pub fn inner(&self) -> &[ArrayFunctionArgument] {
+        self.arguments.as_slice()
+    }
+}
+
+impl Display for ArrayFunctionArguments {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (idx, argument) in self.arguments.iter().enumerate() {
+            write!(f, "{argument}")?;
+            if idx != self.arguments.len() - 1 {
+                write!(f, ", ")?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -590,10 +620,11 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
-                    arguments: vec![
+                    arguments: ArrayFunctionArguments::new(vec![
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
-                    ],
+                    ])
+                    .expect("contains array"),
                     mutability,
                 },
             ),
@@ -608,18 +639,20 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::OneOf(vec![
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
-                    arguments: vec![
+                    arguments: ArrayFunctionArguments::new(vec![
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
-                    ],
+                    ])
+                    .expect("contains array"),
                     mutability: mutability.clone(),
                 }),
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
-                    arguments: vec![
+                    arguments: ArrayFunctionArguments::new(vec![
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
                         ArrayFunctionArgument::Index,
-                    ],
+                    ])
+                    .expect("contains array"),
                     mutability,
                 }),
             ]),
@@ -634,10 +667,11 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
-                    arguments: vec![
+                    arguments: ArrayFunctionArguments::new(vec![
                         ArrayFunctionArgument::Element,
                         ArrayFunctionArgument::Array,
-                    ],
+                    ])
+                    .expect("contains array"),
                     mutability,
                 },
             ),
@@ -652,10 +686,11 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
-                    arguments: vec![
+                    arguments: ArrayFunctionArguments::new(vec![
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Index,
-                    ],
+                    ])
+                    .expect("contains array"),
                     mutability,
                 },
             ),
@@ -667,7 +702,10 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
-                    arguments: vec![ArrayFunctionArgument::Array],
+                    arguments: ArrayFunctionArguments::new(vec![
+                        ArrayFunctionArgument::Array,
+                    ])
+                    .expect("contains array"),
                     mutability,
                 },
             ),

@@ -706,7 +706,7 @@ fn get_valid_types(
         TypeSignature::ArraySignature(ref function_signature) => {
             match function_signature {
                 ArrayFunctionSignature::Array { arguments, mutability } => {
-                    array_valid_types(function_name, current_types, arguments, mutability)?
+                    array_valid_types(function_name, current_types, arguments.inner(), mutability)?
                 }
                 ArrayFunctionSignature::RecursiveArray => {
                     if current_types.len() != 1 {
