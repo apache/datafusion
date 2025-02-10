@@ -55,12 +55,12 @@ pub enum StatisticsV2 {
 }
 
 impl StatisticsV2 {
-    /// Constructs a new [`StatisticsV2`] with [`Uniform`] distribution from the given [`Interval`].
+    /// Constructs a new [`StatisticsV2`] instance with [`Uniform`] distribution from the given [`Interval`].
     pub fn new_uniform(interval: Interval) -> Result<Self> {
         UniformDistribution::new(interval).map(Uniform)
     }
 
-    /// Constructs a new [`StatisticsV2`] with [`Exponential`] distribution from the given
+    /// Constructs a new [`StatisticsV2`] instance with [`Exponential`] distribution from the given
     /// rate/offset pair, and checks the newly created statistic for validity.
     pub fn new_exponential(
         rate: ScalarValue,
@@ -70,19 +70,19 @@ impl StatisticsV2 {
         ExponentialDistribution::new(rate, offset, positive_tail).map(Exponential)
     }
 
-    /// Constructs a new [`StatisticsV2`] with [`Gaussian`] distribution from the given
+    /// Constructs a new [`StatisticsV2`] instance with [`Gaussian`] distribution from the given
     /// mean/variance pair, and checks the newly created statistic for validity.
     pub fn new_gaussian(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
         GaussianDistribution::new(mean, variance).map(Gaussian)
     }
 
-    /// Constructs a new [`StatisticsV2`] with [`Bernoulli`] distribution from the given probability,
+    /// Constructs a new [`StatisticsV2`] instance with [`Bernoulli`] distribution from the given probability,
     /// and checks the newly created statistic for validity.
     pub fn new_bernoulli(p: ScalarValue) -> Result<Self> {
         BernoulliDistribution::new(p).map(Bernoulli)
     }
 
-    /// Constructs a new [`StatisticsV2`] with [`Unknown`] distribution from the given mean,
+    /// Constructs a new [`StatisticsV2`] instance with [`Unknown`] distribution from the given mean,
     /// median, variance, and range values. Then, checks the newly created statistic for validity.
     pub fn new_unknown(
         mean: ScalarValue,
