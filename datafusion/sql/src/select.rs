@@ -36,7 +36,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
-    GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning, Projection,
+    GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
 };
 
 use indexmap::{IndexMap, IndexSet};
@@ -207,6 +207,33 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 None => (base_plan.clone(), select_exprs.clone(), having_expr_opt)
             }
         };
+        let missing_cols =
+            Self::calc_missing_columns(&select_exprs_post_aggr, &order_by_rex)?;
+
+        // do ambiguous_distinct_check if select in distinct case
+        if select.distinct.is_some() {
+            let input = projected_plan.inputs()[0];
+
+            let mut missing_exprs = missing_cols
+                .iter()
+                .map(|c| normalize_col(Expr::Column(c.clone()), input))
+                .collect::<Result<Vec<_>>>()?;
+
+            // Do not let duplicate columns to be added, some of the
+            // missing_cols may be already present but without the new
+            // projected alias.
+            missing_exprs.retain(|e| !select_exprs.contains(e));
+
+            LogicalPlanBuilder::ambiguous_distinct_check(
+                &missing_exprs,
+                &missing_cols,
+                &select_exprs,
+            )?;
+        }
+        let add_missing_cols = !missing_cols.is_empty();
+        missing_cols
+            .into_iter()
+            .for_each(|column| select_exprs_post_aggr.push(Expr::Column(column)));
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
@@ -259,14 +286,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 // Build the final plan
                 LogicalPlanBuilder::from(base_plan)
-                    .distinct_on(on_expr, select_exprs, None)?
+                    .distinct_on(on_expr, select_exprs.clone(), None)?
                     .build()
             }
         }?;
-
-        if let LogicalPlan::Distinct(_) = &plan {
-            Self::ambiguous_distinct_project_check(&plan, &order_by_rex)?;
-        }
 
         // DISTRIBUTE BY
         let plan = if !select.distribute_by.is_empty() {
@@ -288,90 +311,42 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        self.order_by(plan, order_by_rex)
+        let plan = self.order_by(plan, order_by_rex)?;
+        // if add missing columns, we MUST remove unused columns in project
+        if add_missing_cols {
+            LogicalPlanBuilder::from(plan)
+                .project(select_exprs)?
+                .build()
+        } else {
+            Ok(plan)
+        }
     }
 
-    /// Adding a new column is not correct if there is a `Distinct`
-    /// node, which produces only distinct values of its
-    /// inputs. Adding a new column to its input will result in
-    /// potentially different results than with the original column.
-    ///
-    /// For example, if the input is like:
-    ///
-    /// Distinct(A, B)
-    ///
-    /// If the input looks like
-    ///
-    /// a | b | c
-    /// --+---+---
-    /// 1 | 2 | 3
-    /// 1 | 2 | 4
-    ///
-    /// Distinct (A, B) --> (1,2)
-    ///
-    /// But Distinct (A, B, C) --> (1, 2, 3), (1, 2, 4)
-    ///  (which will appear as a (1, 2), (1, 2) if a and b are projected
-    ///
-    /// See <https://github.com/apache/datafusion/issues/5065> for more details
-    fn ambiguous_distinct_project_check(
-        plan: &LogicalPlan,
+    fn calc_missing_columns(
+        exprs: &[Expr],
         order_by: &[datafusion_expr::expr::Sort],
-    ) -> Result<()> {
-        let schema = plan.schema();
-        // Collect sort columns that are missing in the input plan's schema
+    ) -> Result<IndexSet<Column>> {
+        let mut expr_columns: IndexSet<&Column> = IndexSet::new();
+        exprs.iter().for_each(|expr| {
+            expr_columns.extend(expr.column_refs());
+        });
+
         let mut missing_cols: IndexSet<Column> = IndexSet::new();
         order_by.iter().try_for_each::<_, Result<()>>(|sort| {
             let columns = sort.expr.column_refs();
 
             missing_cols.extend(
                 columns
+                    .clone()
                     .into_iter()
-                    .filter(|c| !schema.has_column(c))
+                    .filter(|c| !expr_columns.contains(c))
                     .cloned(),
             );
 
             Ok(())
         })?;
 
-        if missing_cols.is_empty() {
-            return Ok(());
-        }
-        Self::do_ambiguous_distinct_project_check(plan, &missing_cols)
-    }
-
-    fn do_ambiguous_distinct_project_check(
-        plan: &LogicalPlan,
-        missing_cols: &IndexSet<Column>,
-    ) -> Result<()> {
-        if let LogicalPlan::Projection(Projection {
-            input,
-            expr,
-            schema: _,
-            ..
-        }) = plan
-        {
-            if missing_cols.iter().all(|c| input.schema().has_column(c)) {
-                let mut missing_exprs = missing_cols
-                    .iter()
-                    .map(|c| normalize_col(Expr::Column(c.clone()), input))
-                    .collect::<Result<Vec<_>>>()?;
-
-                // Do not let duplicate columns to be added, some of the
-                // missing_cols may be already present but without the new
-                // projected alias.
-                missing_exprs.retain(|e| !expr.contains(e));
-                LogicalPlanBuilder::ambiguous_distinct_check(
-                    &missing_exprs,
-                    missing_cols,
-                    expr,
-                )?;
-            }
-        } else {
-            for input in plan.inputs() {
-                Self::do_ambiguous_distinct_project_check(input, missing_cols)?;
-            }
-        }
-        Ok(())
+        Ok(missing_cols)
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
