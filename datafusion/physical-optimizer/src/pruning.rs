@@ -1590,6 +1590,7 @@ fn build_statistics_expr(
                 )),
             ))
         }
+        Operator::NotLikeMatch => build_not_like_match(expr_builder)?,
         Operator::LikeMatch => build_like_match(expr_builder).ok_or_else(|| {
             plan_datafusion_err!(
                 "LIKE expression with wildcard at the beginning is not supported"
@@ -1638,6 +1639,19 @@ fn build_statistics_expr(
     Ok(statistics_expr)
 }
 
+/// returns the string literal of the scalar value if it is a string
+fn unpack_string(s: &ScalarValue) -> Option<&str> {
+    s.try_as_str().flatten()
+}
+
+fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
+    if let Some(lit) = expr.as_any().downcast_ref::<phys_expr::Literal>() {
+        let s = unpack_string(lit.value())?;
+        return Some(s);
+    }
+    None
+}
+
 /// Convert `column LIKE literal` where P is a constant prefix of the literal
 /// to a range check on the column: `P <= column && column < P'`, where P' is the
 /// lowest string after all P* strings.
@@ -1649,19 +1663,6 @@ fn build_like_match(
     // column LIKE '%foo' => min <= '' && '' <= max => true
     // column LIKE '%foo%' => min <= '' && '' <= max => true
     // column LIKE 'foo' => min <= 'foo' && 'foo' <= max
-
-    /// returns the string literal of the scalar value if it is a string
-    fn unpack_string(s: &ScalarValue) -> Option<&str> {
-        s.try_as_str().flatten()
-    }
-
-    fn extract_string_literal(expr: &Arc<dyn PhysicalExpr>) -> Option<&str> {
-        if let Some(lit) = expr.as_any().downcast_ref::<phys_expr::Literal>() {
-            let s = unpack_string(lit.value())?;
-            return Some(s);
-        }
-        None
-    }
 
     // TODO Handle ILIKE perhaps by making the min lowercase and max uppercase
     //  this may involve building the physical expressions that call lower() and upper()
@@ -1708,6 +1709,66 @@ fn build_like_match(
         lower_bound_expr,
     ));
     Some(combined)
+}
+
+// For predicate `col NOT LIKE 'foo%'`, we rewrite it as `(col_min NOT LIKE 'foo%' OR col_max NOT LIKE 'foo%')`. If both col_min and col_max have the prefix foo, we skip the entire row group (as we can be certain that all data in this row group has the prefix foo).
+fn build_not_like_match(
+    expr_builder: &mut PruningExpressionBuilder<'_>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    // col NOT LIKE 'prefix%' ->  !(col_min LIKE 'prefix%' && col_max LIKE 'prefix%') -> (col_min NOT LIKE 'prefix%' || col_max NOT LIKE 'prefix%')
+
+    let min_column_expr = expr_builder.min_column_expr()?;
+    let max_column_expr = expr_builder.max_column_expr()?;
+
+    let scalar_expr = expr_builder.scalar_expr();
+
+    let pattern = extract_string_literal(scalar_expr).ok_or_else(|| {
+        plan_datafusion_err!("cannot extract literal from NOT LIKE expression")
+    })?;
+
+    let chars: Vec<char> = pattern.chars().collect();
+    for i in 0..chars.len() - 1 {
+        // Check if current char is a wildcard and is not escaped with backslash
+        if (chars[i] == '%' || chars[i] == '_') && (i == 0 || chars[i - 1] != '\\') {
+            // Example: For pattern "foo%bar", the row group might include values like
+            // ["foobar", "food", "foodbar"], making it unsafe to prune.
+            // Even if the min/max values in the group (e.g., "foobar" and "foodbar")
+            // match the pattern, intermediate values like "food" may not
+            // match the full pattern "foo%bar", making pruning unsafe.
+            // (truncate foo%bar to foo% have same problem)
+            return Err(plan_datafusion_err!(
+                "NOT LIKE expressions with unescaped wildcards ('%' or '_') at the beginning or middle of the pattern are not supported"
+            ));
+        }
+    }
+
+    if chars.last() == Some(&'_') && (chars.len() > 1 && chars[chars.len() - 2] != '\\') {
+        // Example: For pattern "foo_", row groups might contain ["fooa", "fooaa", "foob"],
+        // which means not every row is guaranteed to match the pattern.
+        return Err(plan_datafusion_err!(
+            "NOT LIKE expressions with unescaped '_' at the end of the pattern are not supported"
+        ));
+    }
+
+    let min_col_not_like_epxr = Arc::new(phys_expr::LikeExpr::new(
+        true,
+        false,
+        Arc::clone(&min_column_expr),
+        Arc::clone(scalar_expr),
+    ));
+
+    let max_col_not_like_expr = Arc::new(phys_expr::LikeExpr::new(
+        true,
+        false,
+        Arc::clone(&max_column_expr),
+        Arc::clone(scalar_expr),
+    ));
+
+    Ok(Arc::new(phys_expr::BinaryExpr::new(
+        min_col_not_like_epxr,
+        Operator::Or,
+        max_col_not_like_expr,
+    )))
 }
 
 /// Increment a UTF8 string by one, returning `None` if it can't be incremented.
@@ -4058,6 +4119,132 @@ mod tests {
             // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no rows can pass (not keep)
             false,
         ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_utf8_not_like_one() {
+        let (schema, statistics) = utf8_setup();
+
+        let expr = col("s1").not_like(lit("A\u{10ffff}_"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> some rows could pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no row match. (min, max) maybe truncate 
+            // orignal (min, max) maybe ("A\u{10ffff}\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}\u{10ffff}\u{10ffff}")
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+    }
+
+    #[test]
+    fn prune_utf8_not_like_many() {
+        let (schema, statistics) = utf8_setup();
+
+        let expr = col("s1").not_like(lit("A\u{10ffff}%"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> some rows could pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> no row match
+            false,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").not_like(lit("A\u{10ffff}%\u{10ffff}"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> some rows could pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").not_like(lit("M"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> no row match
+            false,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").not_like(lit("A\\%%"));
+        let statistics = TestStatistics::new().with(
+            "s1",
+            ContainerStats::new_utf8(
+                vec![Some("A%a"), Some("A")],
+                vec![Some("A%c"), Some("A")],
+            ),
+        );
+        let expected_ret = &[false, true];
         prune_with_expr(expr, &schema, &statistics, expected_ret);
     }
 

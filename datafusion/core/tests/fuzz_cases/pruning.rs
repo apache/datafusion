@@ -111,8 +111,22 @@ async fn test_utf8_not_like_prefix() {
 }
 
 #[tokio::test]
+async fn test_utf8_not_like_ecsape() {
+    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{}%", value))))
+        .run()
+        .await;
+}
+
+#[tokio::test]
 async fn test_utf8_not_like_suffix() {
     Utf8Test::new(|value| col("a").not_like(lit(format!("{}%", value))))
+        .run()
+        .await;
+}
+
+#[tokio::test]
+async fn test_utf8_not_like_suffix_one() {
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{}_", value))))
         .run()
         .await;
 }
