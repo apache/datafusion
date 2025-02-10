@@ -97,8 +97,8 @@ type PartitionChannels = (Vec<Sender<usize>>, Vec<Receiver<usize>>);
 ///                       └─────────────────┘ Distribute data to the output partitions
 ///
 /// ```
-type OnDemandDistributionSender = tokio::sync::mpsc::Sender<MaybeBatch>;
-type OnDemandDistributionReceiver = tokio::sync::mpsc::Receiver<MaybeBatch>;
+type OnDemandDistributionSender = tokio::sync::mpsc::UnboundedSender<MaybeBatch>;
+type OnDemandDistributionReceiver = tokio::sync::mpsc::UnboundedReceiver<MaybeBatch>;
 
 type OnDemandInputPartitionsToCurrentPartitionSender = Vec<OnDemandDistributionSender>;
 type OnDemandInputPartitionsToCurrentPartitionReceiver =
@@ -631,10 +631,8 @@ impl OnDemandRepartitionExec {
         metrics: OnDemandRepartitionMetrics,
         context: Arc<TaskContext>,
     ) -> Result<()> {
-        let num_output_partition = partitioning.partition_count();
         // initialize buffer channel so that we can pre-fetch from input
-        let (buffer_tx, mut buffer_rx) =
-            tokio::sync::mpsc::channel(num_output_partition * 2);
+        let (buffer_tx, mut buffer_rx) = tokio::sync::mpsc::channel(2);
         // execute the child operator in a separate task
         // that pushes batches into buffer channel with limited capacity
         let processing_task = SpawnedTask::spawn(Self::process_input(
@@ -683,7 +681,7 @@ impl OnDemandRepartitionExec {
             if let Some((tx, reservation)) = output_channels.get_mut(&partition) {
                 reservation.lock().try_grow(size)?;
 
-                if tx.send(Some(Ok(batch))).await.is_err() {
+                if tx.send(Some(Ok(batch))).is_err() {
                     // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                     reservation.lock().shrink(size);
                     output_channels.remove(&partition);
@@ -737,7 +735,7 @@ impl OnDemandRepartitionExec {
                         "Join Error".to_string(),
                         Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
                     ));
-                    tx.send(Some(err)).await.ok();
+                    tx.send(Some(err)).ok();
                 }
             }
             // Error from running input task
@@ -748,14 +746,14 @@ impl OnDemandRepartitionExec {
                 for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
                     let err = Err(DataFusionError::from(&e));
-                    tx.send(Some(err)).await.ok();
+                    tx.send(Some(err)).ok();
                 }
             }
             // Input task completed successfully
             Ok(Ok(())) => {
                 // notify each output partition that this input partition has no more data
                 for (_, tx) in txs {
-                    tx.send(None).await.ok();
+                    tx.send(None).ok();
                 }
             }
         }

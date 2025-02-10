@@ -82,11 +82,12 @@ pub fn channels<T>(
 pub fn tokio_channels<T>(
     n: usize,
 ) -> (
-    Vec<tokio::sync::mpsc::Sender<T>>,
-    Vec<tokio::sync::mpsc::Receiver<T>>,
+    Vec<tokio::sync::mpsc::UnboundedSender<T>>,
+    Vec<tokio::sync::mpsc::UnboundedReceiver<T>>,
 ) {
-    // only used for OnDemandRepartitionExec, so no need for unbounded capacity
-    let (senders, receivers) = (0..n).map(|_| tokio::sync::mpsc::channel(2)).unzip();
+    let (senders, receivers) = (0..n)
+        .map(|_| tokio::sync::mpsc::unbounded_channel())
+        .unzip();
     (senders, receivers)
 }
 
@@ -103,8 +104,9 @@ pub fn partition_aware_channels<T>(
     (0..n_in).map(|_| channels(n_out)).unzip()
 }
 
-type OnDemandPartitionAwareSenders<T> = Vec<Vec<tokio::sync::mpsc::Sender<T>>>;
-type OnDemandPartitionAwareReceivers<T> = Vec<Vec<tokio::sync::mpsc::Receiver<T>>>;
+type OnDemandPartitionAwareSenders<T> = Vec<Vec<tokio::sync::mpsc::UnboundedSender<T>>>;
+type OnDemandPartitionAwareReceivers<T> =
+    Vec<Vec<tokio::sync::mpsc::UnboundedReceiver<T>>>;
 
 pub fn on_demand_partition_aware_channels<T>(
     n_in: usize,
