@@ -603,12 +603,12 @@ pub enum ArrayFunctionMutability {
 /// Example
 /// ```
 /// use arrow::datatypes::{DataType, Field};
-/// use datafusion_common::utils::coerced_type_with_base_type_only;
+/// use datafusion_common::utils::{coerced_type_with_base_type_only, ArrayFunctionMutability};
 /// use std::sync::Arc;
 ///
 /// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// let base_type = DataType::Float64;
-/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type, true);
+/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type, &ArrayFunctionMutability::Mutable);
 /// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))));
 pub fn coerced_type_with_base_type_only(
     data_type: &DataType,
