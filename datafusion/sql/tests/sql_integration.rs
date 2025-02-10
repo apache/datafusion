@@ -557,6 +557,19 @@ Dml: op=[Delete] table=[person]
 }
 
 #[test]
+fn plan_delete_quoted_identifier_case_sensitive() {
+    let sql =
+        "DELETE FROM \"SomeCatalog\".\"SomeSchema\".\"UPPERCASE_test\" WHERE \"Id\" = 1";
+    let plan = r#"
+Dml: op=[Delete] table=[SomeCatalog.SomeSchema.UPPERCASE_test]
+  Filter: Id = Int64(1)
+    TableScan: SomeCatalog.SomeSchema.UPPERCASE_test
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
 fn select_column_does_not_exist() {
     let sql = "SELECT doesnotexist FROM person";
     let err = logical_plan(sql).expect_err("query should have failed");
