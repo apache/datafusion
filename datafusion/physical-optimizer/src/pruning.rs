@@ -1711,7 +1711,7 @@ fn build_like_match(
     Some(combined)
 }
 
-// For predicate `col NOT LIKE 'const_prefix%'`, we rewrite it as `(col_min NOT LIKE 'const_prefix%' OR col_max NOT LIKE 'const_prefix%')`. 
+// For predicate `col NOT LIKE 'const_prefix%'`, we rewrite it as `(col_min NOT LIKE 'const_prefix%' OR col_max NOT LIKE 'const_prefix%')`.
 //
 // The intuition is that if both `col_min` and `col_max` begin with `const_prefix` that means
 // **all** data in this row group begins with `const_prefix` as well (and therefore the predicate
@@ -4199,6 +4199,32 @@ mod tests {
         prune_with_expr(expr, &schema, &statistics, expected_ret);
 
         let expr = col("s1").not_like(lit("A\u{10ffff}%\u{10ffff}"));
+        #[rustfmt::skip]
+        let expected_ret = &[
+            // s1 ["A", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["A", "L"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["N", "Z"] ==> some rows could pass (must keep)
+            true,
+            // s1 ["M", "M"] ==> some rows could pass (must keep)
+            true,
+            // s1 [NULL, NULL]  ==> unknown (must keep)
+            true,
+            // s1 ["A", NULL]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", "A"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["", ""]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
+            true,
+        ];
+        prune_with_expr(expr, &schema, &statistics, expected_ret);
+
+        let expr = col("s1").not_like(lit("A\u{10ffff}%\u{10ffff}_"));
         #[rustfmt::skip]
         let expected_ret = &[
             // s1 ["A", "Z"] ==> some rows could pass (must keep)
