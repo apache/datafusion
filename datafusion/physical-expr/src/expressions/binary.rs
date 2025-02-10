@@ -838,6 +838,8 @@ fn evaluate_statistics_logical(
     }
 }
 
+/// Adds/subtracts two Gaussian distributions. For details, see:
+///
 /// <https://en.wikipedia.org/wiki/Sum_of_normally_distributed_random_variables>
 fn add_sub_on_gaussians(
     op: &Operator,

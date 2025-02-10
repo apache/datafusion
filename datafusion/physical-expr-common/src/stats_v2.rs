@@ -43,8 +43,8 @@ pub fn get_ln_two() -> &'static ScalarValue {
     LN_TWO_LOCK.get_or_init(|| ScalarValue::Float64(Some(2_f64.ln())))
 }
 
-/// New, enhanced `Statistics` definition, represents five core statistical distributions.
-/// New variants will be added over time.
+/// New, enhanced `Statistics` definition, represents five core statistical
+/// distributions. New variants will be added over time.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StatisticsV2 {
     Uniform(UniformDistribution),
@@ -55,35 +55,40 @@ pub enum StatisticsV2 {
 }
 
 impl StatisticsV2 {
-    /// Constructs a new [`StatisticsV2`] instance with [`Uniform`] distribution from the given [`Interval`].
+    /// Constructs a new [`StatisticsV2`] instance with [`Uniform`]
+    /// distribution from the given [`Interval`].
     pub fn new_uniform(interval: Interval) -> Result<Self> {
-        UniformDistribution::new(interval).map(Uniform)
+        UniformDistribution::try_new(interval).map(Uniform)
     }
 
-    /// Constructs a new [`StatisticsV2`] instance with [`Exponential`] distribution from the given
-    /// rate/offset pair, and checks the newly created statistic for validity.
+    /// Constructs a new [`StatisticsV2`] instance with [`Exponential`]
+    /// distribution from the given rate/offset pair, and checks the newly
+    /// created statistic for validity.
     pub fn new_exponential(
         rate: ScalarValue,
         offset: ScalarValue,
         positive_tail: bool,
     ) -> Result<Self> {
-        ExponentialDistribution::new(rate, offset, positive_tail).map(Exponential)
+        ExponentialDistribution::try_new(rate, offset, positive_tail).map(Exponential)
     }
 
-    /// Constructs a new [`StatisticsV2`] instance with [`Gaussian`] distribution from the given
-    /// mean/variance pair, and checks the newly created statistic for validity.
+    /// Constructs a new [`StatisticsV2`] instance with [`Gaussian`]
+    /// distribution from the given mean/variance pair, and checks the newly
+    /// created statistic for validity.
     pub fn new_gaussian(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
         GaussianDistribution::new(mean, variance).map(Gaussian)
     }
 
-    /// Constructs a new [`StatisticsV2`] instance with [`Bernoulli`] distribution from the given probability,
-    /// and checks the newly created statistic for validity.
+    /// Constructs a new [`StatisticsV2`] instance with [`Bernoulli`]
+    /// distribution from the given probability, and checks the newly created
+    /// statistic for validity.
     pub fn new_bernoulli(p: ScalarValue) -> Result<Self> {
         BernoulliDistribution::new(p).map(Bernoulli)
     }
 
-    /// Constructs a new [`StatisticsV2`] instance with [`Unknown`] distribution from the given mean,
-    /// median, variance, and range values. Then, checks the newly created statistic for validity.
+    /// Constructs a new [`StatisticsV2`] instance with [`Unknown`]
+    /// distribution from the given mean, median, variance, and range values.
+    /// Then, checks the newly created statistic for validity.
     pub fn new_unknown(
         mean: ScalarValue,
         median: ScalarValue,
@@ -101,14 +106,14 @@ impl StatisticsV2 {
     }
 
     /// Extracts the mean value of the given statistic, depending on its distribution:
-    /// - A [`Uniform`] distribution's interval determines its mean value, which is the
-    ///   arithmetic average of the interval endpoints.
-    /// - An [`Exponential`] distribution's mean is calculable by formula `offset + 1/λ`,
-    ///   where λ is the (non-negative) rate.
+    /// - A [`Uniform`] distribution's interval determines its mean value, which
+    ///   is the arithmetic average of the interval endpoints.
+    /// - An [`Exponential`] distribution's mean is calculable by the formula
+    ///   `offset + 1 / λ`, where `λ` is the (non-negative) rate.
     /// - A [`Gaussian`] distribution contains the mean explicitly.
     /// - A [`Bernoulli`] distribution's mean is equal to its success probability `p`.
-    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information may
-    ///   be absent.
+    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information
+    ///   may be absent.
     pub fn mean(&self) -> Result<ScalarValue> {
         match &self {
             Uniform(uni) => uni.mean(),
@@ -120,14 +125,16 @@ impl StatisticsV2 {
     }
 
     /// Extracts the median value of the given statistic, depending on its distribution:
-    /// - A [`Uniform`] distribution's interval determines its median value, which is the
-    ///   arithmetic average of the interval endpoints.
-    /// - An [`Exponential`] distribution's median is calculable by the formula `offset + ln2/λ`,
-    ///   where λ is the (non-negative) rate.
-    /// - A [`Gaussian`] distribution's median is equal to its mean, which is specified explicitly.
-    /// - A [`Bernoulli`] distribution's median is `1` if `p > 0.5` and `0` otherwise.
-    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information may
-    ///   be absent.
+    /// - A [`Uniform`] distribution's interval determines its median value, which
+    ///   is the arithmetic average of the interval endpoints.
+    /// - An [`Exponential`] distribution's median is calculable by the formula
+    ///   `offset + ln(2) / λ`, where `λ` is the (non-negative) rate.
+    /// - A [`Gaussian`] distribution's median is equal to its mean, which is
+    ///   specified explicitly.
+    /// - A [`Bernoulli`] distribution's median is `1` if `p > 0.5` and `0`
+    ///   otherwise, where `p` is the success probability.
+    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information
+    ///   may be absent.
     pub fn median(&self) -> Result<ScalarValue> {
         match &self {
             Uniform(uni) => uni.median(),
@@ -139,15 +146,15 @@ impl StatisticsV2 {
     }
 
     /// Extracts the variance value of the given statistic, depending on its distribution:
-    /// - A [`Uniform`] distribution's interval determines its variance value, which is calculable
-    ///   by the formula `(upper - lower) ^ 2 / 12`.
-    /// - An [`Exponential`] distribution's variance is calculable by the formula `1/(λ ^ 2)`,
-    ///   where λ is the (non-negative) rate.
+    /// - A [`Uniform`] distribution's interval determines its variance value, which
+    ///   is calculable by the formula `(upper - lower) ^ 2 / 12`.
+    /// - An [`Exponential`] distribution's variance is calculable by the formula
+    ///   `1 / (λ ^ 2)`, where `λ` is the (non-negative) rate.
     /// - A [`Gaussian`] distribution's variance is specified explicitly.
-    /// - A [`Bernoulli`] distribution's median is given by the formula `p * (1 - p)` where `p`
-    ///   is the success probability.
-    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information may
-    ///   be absent.
+    /// - A [`Bernoulli`] distribution's median is given by the formula `p * (1 - p)`
+    ///   where `p` is the success probability.
+    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information
+    ///   may be absent.
     pub fn variance(&self) -> Result<ScalarValue> {
         match &self {
             Uniform(uni) => uni.variance(),
@@ -162,9 +169,11 @@ impl StatisticsV2 {
     /// - A [`Uniform`] distribution's range is simply its interval.
     /// - An [`Exponential`] distribution's range is `[offset, +∞)`.
     /// - A [`Gaussian`] distribution's range is unbounded.
-    /// - A [`Bernoulli`] distribution's range is [`Interval::UNCERTAIN`], if `p` is neither `0` nor `1`.
-    ///   Otherwise, it is [`Interval::CERTAINLY_FALSE`] and [`Interval::CERTAINLY_TRUE`], respectively.
-    /// - An [`Unknown`] distribution is unbounded by default, but more information may be present.
+    /// - A [`Bernoulli`] distribution's range is [`Interval::UNCERTAIN`], if
+    ///   `p` is neither `0` nor `1`. Otherwise, it is [`Interval::CERTAINLY_FALSE`]
+    ///   and [`Interval::CERTAINLY_TRUE`], respectively.
+    /// - An [`Unknown`] distribution is unbounded by default, but more information
+    ///   may be present.
     pub fn range(&self) -> Result<Interval> {
         match &self {
             Uniform(uni) => Ok(uni.range().clone()),
@@ -195,18 +204,22 @@ impl StatisticsV2 {
             }
         });
 
-        let Some(dt) = arg_types.next().map_or(Some(DataType::Null), |first| {
-            arg_types
-                .try_fold(first, |target, arg| binary_numeric_coercion(&target, &arg))
-        }) else {
+        let Some(dt) = arg_types.next().map_or_else(
+            || Some(DataType::Null),
+            |first| {
+                arg_types
+                    .try_fold(first, |target, arg| binary_numeric_coercion(&target, &arg))
+            },
+        ) else {
             return internal_err!("Statistics can only be evaluated for numeric types");
         };
         Ok(dt)
     }
 }
 
-/// Uniform distribution, represented by its range. If the given range extends towards infinity,
-/// the distribution will be improper -- which is OK. For a more in-depth discussion, see:
+/// Uniform distribution, represented by its range. If the given range extends
+/// towards infinity, the distribution will be improper -- which is OK. For a
+/// more in-depth discussion, see:
 ///
 /// <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>
 /// <https://en.wikipedia.org/wiki/Prior_probability#Improper_priors>
@@ -215,8 +228,8 @@ pub struct UniformDistribution {
     interval: Interval,
 }
 
-/// Exponential distribution with an optional shift. The probability density function (PDF)
-/// is defined as follows:
+/// Exponential distribution with an optional shift. The probability density
+/// function (PDF) is defined as follows:
 ///
 /// For a positive tail (when `positive_tail` is `true`):
 ///
@@ -227,15 +240,17 @@ pub struct UniformDistribution {
 /// `f(x; λ, offset) = λ exp(-λ (offset - x))    for x ≤ offset`
 ///
 ///
-/// In both cases, the PDF is 0 outside the specified domain.
+/// In both cases, the PDF is `0` outside the specified domain.
 ///
-/// For more information, see: <https://en.wikipedia.org/wiki/Exponential_distribution>
+/// For more information, see:
+///
+/// <https://en.wikipedia.org/wiki/Exponential_distribution>
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExponentialDistribution {
     rate: ScalarValue,
     offset: ScalarValue,
-    /// Indicates whether the exponential distribution has a positive tail; i.e. it extends
-    /// towards positive infinity.
+    /// Indicates whether the exponential distribution has a positive tail;
+    /// i.e. it extends towards positive infinity.
     positive_tail: bool,
 }
 
@@ -249,11 +264,8 @@ pub struct GaussianDistribution {
     variance: ScalarValue,
 }
 
-/// Bernoulli distribution with success probability `p`, which always has the
-/// data type [`DataType::Float64`]. If `p` is a null value, the success
-/// probability is unknown.
-///
-/// For a more in-depth discussion, see:
+/// Bernoulli distribution with success probability `p`. If `p` has a null value,
+/// the success probability is unknown. For a more in-depth discussion, see:
 ///
 /// <https://en.wikipedia.org/wiki/Bernoulli_distribution>
 #[derive(Clone, Debug, PartialEq)]
@@ -274,7 +286,7 @@ pub struct UnknownDistribution {
 }
 
 impl UniformDistribution {
-    fn new(interval: Interval) -> Result<Self> {
+    fn try_new(interval: Interval) -> Result<Self> {
         if interval.data_type().eq(&DataType::Boolean) {
             return internal_err!(
                 "Construction of a boolean `Uniform` statistic is prohibited, create a `Bernoulli` statistic instead."
@@ -297,14 +309,11 @@ impl UniformDistribution {
     }
 
     pub fn variance(&self) -> Result<ScalarValue> {
-        let dt = self.interval.lower().data_type();
-        let base_value_ref = self
-            .interval
-            .upper()
-            .sub_checked(self.interval.lower())?
-            .cast_to(&dt)?;
-        let base_pow = base_value_ref.mul_checked(&base_value_ref)?.cast_to(&dt)?;
-        base_pow.div(ScalarValue::from(2).cast_to(&dt)?)
+        let width = self.interval.upper().sub_checked(self.interval.lower())?;
+        let dt = width.data_type();
+        width
+            .mul_checked(&width)?
+            .div(ScalarValue::from(12).cast_to(&dt)?)
     }
 
     pub fn range(&self) -> &Interval {
@@ -313,17 +322,19 @@ impl UniformDistribution {
 }
 
 impl ExponentialDistribution {
-    fn new(rate: ScalarValue, offset: ScalarValue, positive_tail: bool) -> Result<Self> {
+    fn try_new(
+        rate: ScalarValue,
+        offset: ScalarValue,
+        positive_tail: bool,
+    ) -> Result<Self> {
         if offset.is_null() {
             internal_err!(
-                "Offset argument of the Exponential distribution must be non-null"
+                "Offset argument of the Exponential distribution cannot be null"
             )
         } else if rate.is_null() {
-            internal_err!(
-                "Rate argument of Exponential Distribution cannot be a null ScalarValue"
-            )
+            internal_err!("Rate argument of Exponential Distribution cannot be null")
         } else if rate.le(&ScalarValue::new_zero(&rate.data_type())?) {
-            internal_err!("Tried to construct an invalid Exponential statistic")
+            internal_err!("Rate argument of Exponential Distribution must be positive")
         } else {
             Ok(Self {
                 rate,
@@ -370,16 +381,11 @@ impl ExponentialDistribution {
 
     pub fn range(&self) -> Result<Interval> {
         let offset_data_type = self.offset.data_type();
+        let end = ScalarValue::try_from(offset_data_type)?;
         if self.positive_tail {
-            Interval::try_new(
-                self.offset.clone(),
-                ScalarValue::try_from(offset_data_type)?,
-            )
+            Interval::try_new(self.offset.clone(), end)
         } else {
-            Interval::try_new(
-                ScalarValue::try_from(offset_data_type)?,
-                self.offset.clone(),
-            )
+            Interval::try_new(end, self.offset.clone())
         }
     }
 }
