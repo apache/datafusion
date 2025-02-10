@@ -1955,12 +1955,12 @@ async fn test_remove_unnecessary_spm2() -> Result<()> {
 
     let expected_input = [
         "SortPreservingMergeExec: [non_nullable_col@1 ASC], fetch=100",
-        "  MemoryExec: partitions=1, partition_sizes=[0]",
+        "  DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     let expected_optimized = [
         "SortPreservingMergeExec: [non_nullable_col@1 ASC], fetch=100",
         "  SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
-        "    MemoryExec: partitions=1, partition_sizes=[0]",
+        "    DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, input, true);
 
