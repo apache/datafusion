@@ -708,7 +708,8 @@ impl DefaultPhysicalPlanner {
                 let (aggregates, filters, _order_bys): (Vec<_>, Vec<_>, Vec<_>) =
                     multiunzip(agg_filter);
 
-                let initial_aggr = Arc::new(AggregateExec::try_new(
+                let initial_aggr = Arc::new(AggregateExec::
+                try_new(
                     AggregateMode::Partial,
                     groups.clone(),
                     aggregates,

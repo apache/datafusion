@@ -35,6 +35,7 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
 use datafusion_common::{Constraints, Statistics};
+use datafusion_common_runtime::JoinSet;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -47,7 +48,6 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
 use object_store::{GetOptions, GetResultPayload, ObjectStore};
 use tokio::io::AsyncWriteExt;
-use tokio::task::JoinSet;
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]

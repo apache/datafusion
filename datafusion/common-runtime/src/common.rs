@@ -17,7 +17,8 @@
 
 use std::future::Future;
 
-use tokio::task::{JoinError, JoinSet};
+use tokio::task::{JoinError};
+use crate::JoinSet;
 
 /// Helper that  provides a simple API to spawn a single task and join it.
 /// Provides guarantees of aborting on `Drop` to keep it cancel-safe.
@@ -36,6 +37,7 @@ impl<R: 'static> SpawnedTask<R> {
         R: Send,
     {
         let mut inner = JoinSet::new();
+
         inner.spawn(task);
         Self { inner }
     }
