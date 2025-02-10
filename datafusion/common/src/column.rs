@@ -17,7 +17,7 @@
 
 //! Column
 
-use crate::error::_schema_err;
+use crate::error::{_schema_err, add_possible_columns_to_diag};
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow_schema::{Field, FieldRef};
@@ -273,18 +273,11 @@ impl Column {
                         // user which columns are candidates, or which table
                         // they come from. For now, let's list the table names
                         // only.
-                        for qualified_field in qualified_fields {
-                            let (Some(table), _) = qualified_field else {
-                                continue;
-                            };
-                            diagnostic.add_note(
-                                format!(
-                                    "possible reference to '{}' in table '{}'",
-                                    &self.name, table
-                                ),
-                                None,
-                            );
-                        }
+                        add_possible_columns_to_diag(
+                            &mut diagnostic,
+                            &Column::new_unqualified(&self.name),
+                            &columns,
+                        );
                         err.with_diagnostic(diagnostic)
                     });
                 }

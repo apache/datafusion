@@ -27,6 +27,7 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
+use crate::utils::datafusion_strsim::normalized_levenshtein;
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, Diagnostic, TableReference};
 #[cfg(feature = "avro")]
@@ -190,6 +191,11 @@ impl Display for SchemaError {
                     .iter()
                     .map(|column| column.flat_name().to_lowercase())
                     .collect::<Vec<String>>();
+
+                let valid_fields_names = valid_fields
+                    .iter()
+                    .map(|column| column.flat_name())
+                    .collect::<Vec<String>>();
                 if lower_valid_fields.contains(&field.flat_name().to_lowercase()) {
                     write!(
                         f,
@@ -198,7 +204,15 @@ impl Display for SchemaError {
                         field.quoted_flat_name()
                     )?;
                 }
-                if !valid_fields.is_empty() {
+                let field_name = field.name();
+                if let Some(matched) = valid_fields_names
+                    .iter()
+                    .filter(|str| normalized_levenshtein(str, field_name) >= 0.5)
+                    .collect::<Vec<&String>>()
+                    .first()
+                {
+                    write!(f, ". Did you mean '{matched}'?")?;
+                } else if !valid_fields.is_empty() {
                     write!(
                         f,
                         ". Valid fields are {}",
@@ -825,6 +839,27 @@ pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionE
         field: Box::new(Column::new_unqualified(name)),
         valid_fields: schema.columns().to_vec(),
     })
+}
+
+pub fn add_possible_columns_to_diag(
+    diagnostic: &mut Diagnostic,
+    field: &Column,
+    valid_fields: &[Column],
+) {
+    let field_names: Vec<String> = valid_fields
+        .iter()
+        .filter_map(|f| {
+            if normalized_levenshtein(f.name(), field.name()) >= 0.5 {
+                Some(f.flat_name())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for name in field_names {
+        diagnostic.add_note(format!("possible column {}", name), None);
+    }
 }
 
 #[cfg(test)]
