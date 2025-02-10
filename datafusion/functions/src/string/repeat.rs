@@ -145,7 +145,7 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
 fn repeat_impl<'a, T, S>(
     string_array: S,
     number_array: &Int64Array,
-    max_size: usize,
+    max_str_len: usize,
 ) -> Result<ArrayRef>
 where
     T: OffsetSizeTrait,
@@ -156,10 +156,10 @@ where
         |(string, number)| -> Result<(), DataFusionError> {
             match (string, number) {
                 (Some(string), Some(number)) if number >= 0 => {
-                    if number as usize * string.len() > max_size {
+                    if number as usize * string.len() > max_str_len {
                         return exec_err!(
                             "string size overflow on repeat, max size is {}, but got {}",
-                            max_size,
+                            max_str_len,
                             number as usize * string.len()
                         );
                     } else {
