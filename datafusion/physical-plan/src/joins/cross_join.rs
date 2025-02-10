@@ -24,11 +24,11 @@ use super::utils::{
     StatefulStreamResult,
 };
 use crate::coalesce_partitions::CoalescePartitionsExec;
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::{
-    execution_mode_from_children, handle_state, ColumnStatistics, DisplayAs,
-    DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
-    ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    handle_state, ColumnStatistics, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 use arrow::compute::concat_batches;
@@ -46,24 +46,31 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use async_trait::async_trait;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 
-/// Data of the left side
+/// Data of the left side that is buffered into memory
 #[derive(Debug)]
 struct JoinLeftData {
     /// Single RecordBatch with all rows from the left side
     merged_batch: RecordBatch,
     /// Track memory reservation for merged_batch. Relies on drop
     /// semantics to release reservation when JoinLeftData is dropped.
-    #[allow(dead_code)]
-    reservation: MemoryReservation,
+    _reservation: MemoryReservation,
 }
 
 #[allow(rustdoc::private_intra_doc_links)]
-/// executes partitions in parallel and combines them into a set of
-/// partitions by combining all values from the left with all values on the right
+/// Cross Join Execution Plan
 ///
-/// Note that the `Clone` trait is not implemented for this struct due to the
-/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
-/// left side with the processing in each output stream.
+/// This operator is used when there are no predicates between two tables and
+/// returns the Cartesian product of the two tables.
+///
+/// Buffers the left input into memory and then streams batches from each
+/// partition on the right input combining them with the buffered left input
+/// to generate the output.
+///
+/// # Clone / Shared State
+///
+/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
+/// loading of the left side with the processing in each output stream.
+/// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct CrossJoinExec {
     /// left (build) side which gets loaded in memory
@@ -72,10 +79,16 @@ pub struct CrossJoinExec {
     pub right: Arc<dyn ExecutionPlan>,
     /// The schema once the join is applied
     schema: SchemaRef,
-    /// Build-side data
+    /// Buffered copy of left (build) side in memory.
+    ///
+    /// This structure is *shared* across all output streams.
+    ///
+    /// Each output stream waits on the `OnceAsync` to signal the completion of
+    /// the left side loading.
     left_fut: OnceAsync<JoinLeftData>,
     /// Execution plan metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Properties such as schema, equivalence properties, ordering, partitioning, etc.
     cache: PlanProperties,
 }
 
@@ -148,14 +161,12 @@ impl CrossJoinExec {
             left.schema().fields.len(),
         );
 
-        // Determine the execution mode:
-        let mut mode = execution_mode_from_children([left, right]);
-        if mode.is_unbounded() {
-            // If any of the inputs is unbounded, cross join breaks the pipeline.
-            mode = ExecutionMode::PipelineBreaking;
-        }
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            EmissionType::Final,
+            boundedness_from_children([left, right]),
+        )
     }
 }
 
@@ -177,25 +188,28 @@ async fn load_left_input(
 
     // Load all batches and count the rows
     let (batches, _metrics, reservation) = stream
-        .try_fold((Vec::new(), metrics, reservation), |mut acc, batch| async {
-            let batch_size = batch.get_array_memory_size();
-            // Reserve memory for incoming batch
-            acc.2.try_grow(batch_size)?;
-            // Update metrics
-            acc.1.build_mem_used.add(batch_size);
-            acc.1.build_input_batches.add(1);
-            acc.1.build_input_rows.add(batch.num_rows());
-            // Push batch to output
-            acc.0.push(batch);
-            Ok(acc)
-        })
+        .try_fold(
+            (Vec::new(), metrics, reservation),
+            |(mut batches, metrics, mut reservation), batch| async {
+                let batch_size = batch.get_array_memory_size();
+                // Reserve memory for incoming batch
+                reservation.try_grow(batch_size)?;
+                // Update metrics
+                metrics.build_mem_used.add(batch_size);
+                metrics.build_input_batches.add(1);
+                metrics.build_input_rows.add(batch.num_rows());
+                // Push batch to output
+                batches.push(batch);
+                Ok((batches, metrics, reservation))
+            },
+        )
         .await?;
 
     let merged_batch = concat_batches(&left_schema, &batches)?;
 
     Ok(JoinLeftData {
         merged_batch,
-        reservation,
+        _reservation: reservation,
     })
 }
 

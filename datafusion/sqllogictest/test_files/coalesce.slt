@@ -242,6 +242,14 @@ none_set
 statement ok
 drop table test1
 
+# coalesce with utf8view
+query TTT
+select coalesce(arrow_cast(null, 'Utf8View'), arrow_cast('t', 'Utf8')),
+       arrow_typeof(coalesce(arrow_cast(null, 'Utf8View'), arrow_cast('t', 'Utf8'))),
+       arrow_typeof(coalesce(arrow_cast(null, 'Utf8'), arrow_cast('t', 'Utf8View')));
+----
+t Utf8View Utf8View
+
 # test dict coercion with value
 statement ok
 create table t(c varchar) as values ('a'), (null);

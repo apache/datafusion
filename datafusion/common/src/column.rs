@@ -21,7 +21,7 @@ use arrow_schema::{Field, FieldRef};
 
 use crate::error::_schema_err;
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
-use crate::{DFSchema, DataFusionError, Result, SchemaError, TableReference};
+use crate::{DFSchema, Result, SchemaError, TableReference};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
@@ -109,21 +109,23 @@ impl Column {
     /// where `"foo.BAR"` would be parsed to a reference to column named `foo.BAR`
     pub fn from_qualified_name(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, false))
-            .unwrap_or_else(|| Self {
+        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, false)).unwrap_or(
+            Self {
                 relation: None,
                 name: flat_name,
-            })
+            },
+        )
     }
 
     /// Deserialize a fully qualified name string into a column preserving column text case
     pub fn from_qualified_name_ignore_case(flat_name: impl Into<String>) -> Self {
         let flat_name = flat_name.into();
-        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, true))
-            .unwrap_or_else(|| Self {
+        Self::from_idents(&mut parse_identifiers_normalized(&flat_name, true)).unwrap_or(
+            Self {
                 relation: None,
                 name: flat_name,
-            })
+            },
+        )
     }
 
     /// return the column's name.
@@ -228,7 +230,7 @@ impl Column {
                         .collect::<Vec<_>>();
                     for using_col in using_columns {
                         let all_matched = columns.iter().all(|c| using_col.contains(c));
-                        // All matched fields belong to the same using column set, in orther words
+                        // All matched fields belong to the same using column set, in other words
                         // the same join clause. We simply pick the qualifier from the first match.
                         if all_matched {
                             return Ok(columns[0].clone());

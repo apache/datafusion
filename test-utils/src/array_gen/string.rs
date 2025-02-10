@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, UInt32Array};
+use arrow::array::{
+    ArrayRef, GenericStringArray, OffsetSizeTrait, StringViewArray, UInt32Array,
+};
 use rand::rngs::StdRng;
 use rand::Rng;
 
@@ -43,7 +45,7 @@ impl StringArrayGenerator {
             .collect();
 
         // pick num_strings randomly from the distinct string table
-        let indicies: UInt32Array = (0..self.num_strings)
+        let indices: UInt32Array = (0..self.num_strings)
             .map(|_| {
                 if self.rng.gen::<f64>() < self.null_pct {
                     None
@@ -57,7 +59,31 @@ impl StringArrayGenerator {
             .collect();
 
         let options = None;
-        arrow::compute::take(&distinct_strings, &indicies, options).unwrap()
+        arrow::compute::take(&distinct_strings, &indices, options).unwrap()
+    }
+
+    /// Creates a StringViewArray with random strings.
+    pub fn gen_string_view(&mut self) -> ArrayRef {
+        let distinct_string_views: StringViewArray = (0..self.num_distinct_strings)
+            .map(|_| Some(random_string(&mut self.rng, self.max_len)))
+            .collect();
+
+        // pick num_strings randomly from the distinct string table
+        let indices: UInt32Array = (0..self.num_strings)
+            .map(|_| {
+                if self.rng.gen::<f64>() < self.null_pct {
+                    None
+                } else if self.num_distinct_strings > 1 {
+                    let range = 1..(self.num_distinct_strings as u32);
+                    Some(self.rng.gen_range(range))
+                } else {
+                    Some(0)
+                }
+            })
+            .collect();
+
+        let options = None;
+        arrow::compute::take(&distinct_string_views, &indices, options).unwrap()
     }
 }
 

@@ -132,7 +132,8 @@ impl ProjectionExec {
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
-            input.execution_mode(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         ))
     }
 }

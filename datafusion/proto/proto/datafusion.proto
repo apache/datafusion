@@ -59,6 +59,8 @@ message LogicalPlanNode {
     DistinctOnNode distinct_on = 28;
     CopyToNode copy_to = 29;
     UnnestNode unnest = 30;
+    RecursiveQueryNode recursive_query = 31;
+    CteWorkTableScanNode cte_work_table_scan = 32;
   }
 }
 
@@ -505,24 +507,9 @@ message ScalarUDFExprNode {
   optional bytes fun_definition = 3;
 }
 
-enum BuiltInWindowFunction {
-  UNSPECIFIED = 0; // https://protobuf.dev/programming-guides/dos-donts/#unspecified-enum
-  // ROW_NUMBER = 0;
-  //  RANK = 1;
-  //  DENSE_RANK = 2;
-  //  PERCENT_RANK = 3;
-  //  CUME_DIST = 4;
-  //  NTILE = 5;
-  // LAG = 6;
-  // LEAD = 7;
-  FIRST_VALUE = 8;
-  LAST_VALUE = 9;
-  NTH_VALUE = 10;
-}
-
 message WindowExprNode {
   oneof window_function {
-    BuiltInWindowFunction built_in_function = 2;
+    // BuiltInWindowFunction built_in_function = 2;
     string udaf = 3;
     string udwf = 9;
   }
@@ -655,6 +642,7 @@ message PlanType {
     datafusion_common.EmptyMessage FinalPhysicalPlan = 6;
     datafusion_common.EmptyMessage FinalPhysicalPlanWithStats = 10;
     datafusion_common.EmptyMessage FinalPhysicalPlanWithSchema = 12;
+    datafusion_common.EmptyMessage PhysicalPlanError = 13;
   }
 }
 
@@ -840,6 +828,8 @@ message PhysicalExprNode {
     PhysicalLikeExprNode like_expr = 18;
 
     PhysicalExtensionExprNode extension = 19;
+
+    UnknownColumn unknown_column = 20;
   }
 }
 
@@ -848,6 +838,7 @@ message PhysicalScalarUdfNode {
   repeated PhysicalExprNode args = 2;
   optional bytes fun_definition = 3;
   datafusion_common.ArrowType return_type = 4;
+  bool nullable = 5;
 }
 
 message PhysicalAggregateExprNode {
@@ -863,8 +854,9 @@ message PhysicalAggregateExprNode {
 
 message PhysicalWindowExprNode {
   oneof window_function {
-    BuiltInWindowFunction built_in_function = 2;
+    // BuiltInWindowFunction built_in_function = 2;
     string user_defined_aggr_function = 3;
+    string user_defined_window_function = 10;
   }
   repeated PhysicalExprNode args = 4;
   repeated PhysicalExprNode partition_by = 5;
@@ -1078,6 +1070,10 @@ message PhysicalColumn {
   uint32 index = 2;
 }
 
+message UnknownColumn {
+  string name = 1;
+}
+
 message JoinOn {
   PhysicalExprNode left = 1;
   PhysicalExprNode right = 2;
@@ -1247,4 +1243,16 @@ message PartitionStats {
   int64 num_batches = 2;
   int64 num_bytes = 3;
   repeated datafusion_common.ColumnStats column_stats = 4;
+}
+
+message RecursiveQueryNode {
+  string name = 1;
+  LogicalPlanNode static_term = 2;
+  LogicalPlanNode recursive_term = 3;
+  bool is_distinct = 4;
+}
+
+message CteWorkTableScanNode {
+    string name = 1;
+    datafusion_common.Schema schema = 2;
 }

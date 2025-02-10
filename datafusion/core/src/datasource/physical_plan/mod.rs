@@ -139,7 +139,7 @@ impl DisplayAs for FileScanConfig {
 #[derive(Debug)]
 struct FileGroupsDisplay<'a>(&'a [Vec<PartitionedFile>]);
 
-impl<'a> DisplayAs for FileGroupsDisplay<'a> {
+impl DisplayAs for FileGroupsDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         let n_groups = self.0.len();
         let groups = if n_groups == 1 { "group" } else { "groups" };
@@ -171,7 +171,7 @@ impl<'a> DisplayAs for FileGroupsDisplay<'a> {
 #[derive(Debug)]
 pub(crate) struct FileGroupDisplay<'a>(pub &'a [PartitionedFile]);
 
-impl<'a> DisplayAs for FileGroupDisplay<'a> {
+impl DisplayAs for FileGroupDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         write!(f, "[")?;
         match t {
@@ -248,6 +248,8 @@ pub struct FileMeta {
     pub range: Option<FileRange>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    /// Size hint for the metadata of this file
+    pub metadata_size_hint: Option<usize>,
 }
 
 impl FileMeta {
@@ -263,6 +265,7 @@ impl From<ObjectMeta> for FileMeta {
             object_meta,
             range: None,
             extensions: None,
+            metadata_size_hint: None,
         }
     }
 }
@@ -423,9 +426,11 @@ enum RangeCalculation {
 async fn calculate_range(
     file_meta: &FileMeta,
     store: &Arc<dyn ObjectStore>,
+    terminator: Option<u8>,
 ) -> Result<RangeCalculation> {
     let location = file_meta.location();
     let file_size = file_meta.object_meta.size;
+    let newline = terminator.unwrap_or(b'\n');
 
     match file_meta.range {
         None => Ok(RangeCalculation::Range(None)),
@@ -433,13 +438,13 @@ async fn calculate_range(
             let (start, end) = (start as usize, end as usize);
 
             let start_delta = if start != 0 {
-                find_first_newline(store, location, start - 1, file_size).await?
+                find_first_newline(store, location, start - 1, file_size, newline).await?
             } else {
                 0
             };
 
             let end_delta = if end != file_size {
-                find_first_newline(store, location, end - 1, file_size).await?
+                find_first_newline(store, location, end - 1, file_size, newline).await?
             } else {
                 0
             };
@@ -459,7 +464,7 @@ async fn calculate_range(
 /// within an object, such as a file, in an object store.
 ///
 /// This function scans the contents of the object starting from the specified `start` position
-/// up to the `end` position, looking for the first occurrence of a newline (`'\n'`) character.
+/// up to the `end` position, looking for the first occurrence of a newline character.
 /// It returns the position of the first newline relative to the start of the range.
 ///
 /// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
@@ -471,6 +476,7 @@ async fn find_first_newline(
     location: &Path,
     start: usize,
     end: usize,
+    newline: u8,
 ) -> Result<usize> {
     let options = GetOptions {
         range: Some(GetRange::Bounded(start..end)),
@@ -483,7 +489,7 @@ async fn find_first_newline(
     let mut index = 0;
 
     while let Some(chunk) = result_stream.next().await.transpose()? {
-        if let Some(position) = chunk.iter().position(|&byte| byte == b'\n') {
+        if let Some(position) = chunk.iter().position(|&byte| byte == newline) {
             return Ok(index + position);
         }
 
@@ -777,6 +783,7 @@ mod tests {
             range: None,
             statistics: None,
             extensions: None,
+            metadata_size_hint: None,
         }
     }
 }

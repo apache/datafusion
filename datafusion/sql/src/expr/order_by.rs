@@ -23,7 +23,7 @@ use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};
 use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Convert sql [OrderByExpr] to `Vec<Expr>`.
     ///
     /// `input_schema` and `additional_schema` are used to resolve column references in the order-by expressions.

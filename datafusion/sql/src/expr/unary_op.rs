@@ -23,7 +23,7 @@ use datafusion_expr::{
 };
 use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value};
 
-impl<'a, S: ContextProvider> SqlToRel<'a, S> {
+impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_sql_unary_op(
         &self,
         op: UnaryOperator,

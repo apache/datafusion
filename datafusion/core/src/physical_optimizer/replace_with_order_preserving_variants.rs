@@ -29,11 +29,12 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use itertools::izip;
 
 /// For a given `plan`, this object carries the information one needs from its
@@ -126,7 +127,7 @@ fn plan_with_order_preserving_variants(
     {
         // When a `RepartitionExec` doesn't preserve ordering, replace it with
         // a sort-preserving variant if appropriate:
-        let child = sort_input.children[0].plan.clone();
+        let child = Arc::clone(&sort_input.children[0].plan);
         let partitioning = sort_input.plan.output_partitioning().clone();
         sort_input.plan = Arc::new(
             RepartitionExec::try_new(child, partitioning)?.with_preserve_order(),
@@ -135,7 +136,7 @@ fn plan_with_order_preserving_variants(
         return Ok(sort_input);
     } else if is_coalesce_partitions(&sort_input.plan) && is_spm_better {
         let child = &sort_input.children[0].plan;
-        if let Some(ordering) = child.output_ordering().map(Vec::from) {
+        if let Some(ordering) = child.output_ordering() {
             // When the input of a `CoalescePartitionsExec` has an ordering,
             // replace it with a `SortPreservingMergeExec` if appropriate:
             let spm =
@@ -167,7 +168,7 @@ fn plan_with_order_breaking_variants(
         // not required by intermediate operators:
         if maintains
             && (is_sort_preserving_merge(plan)
-                || !required_ordering.map_or(false, |required_ordering| {
+                || !required_ordering.is_some_and(|required_ordering| {
                     node.plan
                         .equivalence_properties()
                         .ordering_satisfy_requirement(&required_ordering)
@@ -184,12 +185,12 @@ fn plan_with_order_breaking_variants(
     if is_repartition(plan) && plan.maintains_input_order()[0] {
         // When a `RepartitionExec` preserves ordering, replace it with a
         // non-sort-preserving variant:
-        let child = sort_input.children[0].plan.clone();
+        let child = Arc::clone(&sort_input.children[0].plan);
         let partitioning = plan.output_partitioning().clone();
         sort_input.plan = Arc::new(RepartitionExec::try_new(child, partitioning)?) as _;
     } else if is_sort_preserving_merge(plan) {
         // Replace `SortPreservingMergeExec` with a `CoalescePartitionsExec`:
-        let child = sort_input.children[0].plan.clone();
+        let child = Arc::clone(&sort_input.children[0].plan);
         let coalesce = CoalescePartitionsExec::new(child);
         sort_input.plan = Arc::new(coalesce) as _;
     } else {
@@ -251,7 +252,8 @@ pub(crate) fn replace_with_order_preserving_variants(
     // For unbounded cases, we replace with the order-preserving variant in any
     // case, as doing so helps fix the pipeline. Also replace if config allows.
     let use_order_preserving_variant = config.optimizer.prefer_existing_sort
-        || !requirements.plan.execution_mode().pipeline_friendly();
+        || (requirements.plan.boundedness().is_unbounded()
+            && requirements.plan.pipeline_behavior() == EmissionType::Final);
 
     // Create an alternate plan with order-preserving variants:
     let mut alternate_plan = plan_with_order_preserving_variants(
@@ -265,7 +267,12 @@ pub(crate) fn replace_with_order_preserving_variants(
     if alternate_plan
         .plan
         .equivalence_properties()
-        .ordering_satisfy(requirements.plan.output_ordering().unwrap_or_default())
+        .ordering_satisfy(
+            requirements
+                .plan
+                .output_ordering()
+                .unwrap_or(LexOrdering::empty()),
+        )
     {
         for child in alternate_plan.children.iter_mut() {
             child.data = false;

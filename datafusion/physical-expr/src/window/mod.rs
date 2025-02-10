@@ -16,17 +16,21 @@
 // under the License.
 
 mod aggregate;
-mod built_in;
-mod built_in_window_function_expr;
-pub(crate) mod nth_value;
 mod sliding_aggregate;
+mod standard;
+mod standard_window_function_expr;
 mod window_expr;
 
+#[deprecated(since = "44.0.0", note = "use StandardWindowExpr")]
+pub type BuiltInWindowExpr = StandardWindowExpr;
+
+#[deprecated(since = "44.0.0", note = "use StandardWindowFunctionExpr")]
+pub type BuiltInWindowFunctionExpr = dyn StandardWindowFunctionExpr;
+
 pub use aggregate::PlainAggregateWindowExpr;
-pub use built_in::BuiltInWindowExpr;
-pub use built_in_window_function_expr::BuiltInWindowFunctionExpr;
 pub use sliding_aggregate::SlidingAggregateWindowExpr;
-pub use window_expr::NthValueKind;
+pub use standard::StandardWindowExpr;
+pub use standard_window_function_expr::StandardWindowFunctionExpr;
 pub use window_expr::PartitionBatches;
 pub use window_expr::PartitionKey;
 pub use window_expr::PartitionWindowAggStates;

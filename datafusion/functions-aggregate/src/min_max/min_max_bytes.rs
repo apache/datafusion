@@ -2,6 +2,7 @@
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
 // regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
 // "License"); you may not use this file except in compliance
 // with the License.  You may obtain a copy of the License at
 //
@@ -338,6 +339,10 @@ impl GroupsAccumulator for MinMaxBytesAccumulator {
 /// This is a heuristic to avoid allocating too many small buffers
 fn capacity_to_view_block_size(data_capacity: usize) -> u32 {
     let max_block_size = 2 * 1024 * 1024;
+    // Avoid block size equal to zero when calling `with_fixed_block_size()`.
+    if data_capacity == 0 {
+        return 1;
+    }
     if let Ok(block_size) = u32::try_from(data_capacity) {
         block_size.min(max_block_size)
     } else {
@@ -444,7 +449,7 @@ impl MinMaxBytesState {
         self.min_max.resize(total_num_groups, None);
         // Minimize value copies by calculating the new min/maxes for each group
         // in this batch (either the existing min/max or the new input value)
-        // and updating the owne values in `self.min_maxes` at most once
+        // and updating the owned values in `self.min_maxes` at most once
         let mut locations = vec![MinMaxLocation::ExistingMinMax; total_num_groups];
 
         // Figure out the new min value for each group
@@ -458,12 +463,12 @@ impl MinMaxBytesState {
                 // previous input value was the min/max, so compare it
                 MinMaxLocation::Input(existing_val) => existing_val,
                 MinMaxLocation::ExistingMinMax => {
-                    let Some(exising_val) = self.min_max[group_index].as_ref() else {
+                    let Some(existing_val) = self.min_max[group_index].as_ref() else {
                         // no existing min/max, so this is the new min/max
                         locations[group_index] = MinMaxLocation::Input(new_val);
                         continue;
                     };
-                    exising_val.as_ref()
+                    existing_val.as_ref()
                 }
             };
 

@@ -17,6 +17,8 @@
 
 //! Collection of testing utility functions that are leveraged by the query optimizer rules
 
+#![allow(missing_docs)]
+
 use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -56,9 +58,7 @@ use datafusion_physical_plan::{
 
 use async_trait::async_trait;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexRequirement, PhysicalSortRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 async fn register_current_csv(
     ctx: &SessionContext,
@@ -419,9 +419,7 @@ impl ExecutionPlan for RequirementsTestExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
-        let requirement = PhysicalSortRequirement::from_sort_exprs(
-            self.required_input_ordering.as_ref().iter(),
-        );
+        let requirement = LexRequirement::from(self.required_input_ordering.clone());
         vec![Some(requirement)]
     }
 

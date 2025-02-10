@@ -33,6 +33,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use crate::common::SharedMemoryReservation;
+use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
 use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
@@ -47,7 +48,6 @@ use crate::joins::utils::{
     NoopBatchTransformer, StatefulStreamResult,
 };
 use crate::{
-    execution_mode_from_children,
     joins::StreamJoinPartitionMode,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
@@ -64,20 +64,17 @@ use arrow::record_batch::RecordBatch;
 use arrow_buffer::ArrowNativeType;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
-use datafusion_common::{internal_err, plan_err, JoinSide, JoinType, Result};
+use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, JoinType, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
-use datafusion_physical_expr::{PhysicalExprRef, PhysicalSortRequirement};
+use datafusion_physical_expr::PhysicalExprRef;
 
 use ahash::RandomState;
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use futures::{ready, Stream, StreamExt};
-use hashbrown::HashSet;
 use parking_lot::Mutex;
 
 const HASHMAP_SHRINK_SCALE_FACTOR: usize = 4;
@@ -278,10 +275,12 @@ impl SymmetricHashJoinExec {
         let output_partitioning =
             symmetric_join_output_partitioning(left, right, &join_type);
 
-        // Determine execution mode:
-        let mode = execution_mode_from_children([left, right]);
-
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type_from_children([left, right]),
+            boundedness_from_children([left, right]),
+        )
     }
 
     /// left stream
@@ -320,13 +319,13 @@ impl SymmetricHashJoinExec {
     }
 
     /// Get left_sort_exprs
-    pub fn left_sort_exprs(&self) -> Option<LexOrderingRef> {
-        self.left_sort_exprs.as_deref()
+    pub fn left_sort_exprs(&self) -> Option<&LexOrdering> {
+        self.left_sort_exprs.as_ref()
     }
 
     /// Get right_sort_exprs
-    pub fn right_sort_exprs(&self) -> Option<LexOrderingRef> {
-        self.right_sort_exprs.as_deref()
+    pub fn right_sort_exprs(&self) -> Option<&LexOrdering> {
+        self.right_sort_exprs.as_ref()
     }
 
     /// Check if order information covers every column in the filter expression.
@@ -418,12 +417,12 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         vec![
             self.left_sort_exprs
                 .as_ref()
-                .map(LexOrdering::iter)
-                .map(PhysicalSortRequirement::from_sort_exprs),
+                .cloned()
+                .map(LexRequirement::from),
             self.right_sort_exprs
                 .as_ref()
-                .map(LexOrdering::iter)
-                .map(PhysicalSortRequirement::from_sort_exprs),
+                .cloned()
+                .map(LexRequirement::from),
         ]
     }
 

@@ -29,11 +29,12 @@ use super::{
     utils::{OnceAsync, OnceFut},
     PartitionMode,
 };
+use crate::execution_plan::{boundedness_from_children, EmissionType};
 use crate::ExecutionPlanProperties;
 use crate::{
     coalesce_partitions::CoalescePartitionsExec,
     common::can_project,
-    execution_mode_from_children, handle_state,
+    handle_state,
     hash_utils::create_hashes,
     joins::utils::{
         adjust_indices_by_join_type, apply_join_filter_to_indices,
@@ -44,9 +45,8 @@ use crate::{
         JoinHashMapType, JoinOn, JoinOnRef, StatefulStreamResult,
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, ExecutionMode, ExecutionPlan,
-    Partitioning, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{
@@ -90,10 +90,11 @@ struct JoinLeftData {
     /// Counter of running probe-threads, potentially
     /// able to update `visited_indices_bitmap`
     probe_threads_counter: AtomicUsize,
-    /// Memory reservation that tracks memory used by `hash_map` hash table
-    /// `batch`. Cleared on drop.
-    #[allow(dead_code)]
-    reservation: MemoryReservation,
+    /// We need to keep this field to maintain accurate memory accounting, even though we don't directly use it.
+    /// Without holding onto this reservation, the recorded memory usage would become inconsistent with actual usage.
+    /// This could hide potential out-of-memory issues, especially when upstream operators increase their memory consumption.
+    /// The MemoryReservation ensures proper tracking of memory resources throughout the join operation's lifecycle.
+    _reservation: MemoryReservation,
 }
 
 impl JoinLeftData {
@@ -110,7 +111,7 @@ impl JoinLeftData {
             batch,
             visited_indices_bitmap,
             probe_threads_counter,
-            reservation,
+            _reservation: reservation,
         }
     }
 
@@ -137,13 +138,13 @@ impl JoinLeftData {
 }
 
 #[allow(rustdoc::private_intra_doc_links)]
-/// Join execution plan: Evaluates eqijoin predicates in parallel on multiple
+/// Join execution plan: Evaluates equijoin predicates in parallel on multiple
 /// partitions using a hash table and an optional filter list to apply post
 /// join.
 ///
 /// # Join Expressions
 ///
-/// This implementation is optimized for evaluating eqijoin predicates  (
+/// This implementation is optimized for evaluating equijoin predicates  (
 /// `<col1> = <col2>`) expressions, which are represented as a list of `Columns`
 /// in [`Self::on`].
 ///
@@ -197,7 +198,7 @@ impl JoinLeftData {
 ///
 ///  Original build-side data   Inserting build-side values into hashmap    Concatenated build-side batch
 ///                                                                         ┌───────────────────────────┐
-///                             hasmap.insert(row-hash, row-idx + offset)   │                      idx  │
+///                             hashmap.insert(row-hash, row-idx + offset)  │                      idx  │
 ///            ┌───────┐                                                    │          ┌───────┐        │
 ///            │ Row 1 │        1) update_hash for batch 3 with offset 0    │          │ Row 6 │    0   │
 ///   Batch 1  │       │           - hashmap.insert(Row 7, idx 1)           │ Batch 3  │       │        │
@@ -295,9 +296,11 @@ impl JoinLeftData {
 ///                       └───────────────┘     └───────────────┘
 /// ```
 ///
-/// Note that the `Clone` trait is not implemented for this struct due to the
-/// `left_fut` [`OnceAsync`], which is used to coordinate the loading of the
-/// left side with the processing in each output stream.
+/// # Clone / Shared State
+///
+/// Note this structure includes a [`OnceAsync`] that is used to coordinate the
+/// loading of the left side with the processing in each output stream.
+/// Therefore it can not be [`Clone`]
 #[derive(Debug)]
 pub struct HashJoinExec {
     /// left (build) side which gets hashed
@@ -314,6 +317,11 @@ pub struct HashJoinExec {
     /// if there is a projection, the schema isn't the same as the output schema.
     join_schema: SchemaRef,
     /// Future that consumes left input and builds the hash table
+    ///
+    /// For CollectLeft partition mode, this structure is *shared* across all output streams.
+    ///
+    /// Each output stream waits on the `OnceAsync` to signal the completion of
+    /// the hash table creation.
     left_fut: OnceAsync<JoinLeftData>,
     /// Shared the `RandomState` for the hashing algorithm
     random_state: RandomState,
@@ -518,24 +526,26 @@ impl HashJoinExec {
             }
         };
 
-        // Determine execution mode by checking whether this join is pipeline
-        // breaking. This happens when the left side is unbounded, or the right
-        // side is unbounded with `Left`, `Full`, `LeftAnti` or `LeftSemi` join types.
-        let pipeline_breaking = left.execution_mode().is_unbounded()
-            || (right.execution_mode().is_unbounded()
-                && matches!(
-                    join_type,
-                    JoinType::Left
-                        | JoinType::Full
-                        | JoinType::LeftAnti
-                        | JoinType::LeftSemi
-                        | JoinType::LeftMark
-                ));
-
-        let mode = if pipeline_breaking {
-            ExecutionMode::PipelineBreaking
+        let emission_type = if left.boundedness().is_unbounded() {
+            EmissionType::Final
+        } else if right.pipeline_behavior() == EmissionType::Incremental {
+            match join_type {
+                // If we only need to generate matched rows from the probe side,
+                // we can emit rows incrementally.
+                JoinType::Inner
+                | JoinType::LeftSemi
+                | JoinType::RightSemi
+                | JoinType::Right
+                | JoinType::RightAnti => EmissionType::Incremental,
+                // If we need to generate unmatched rows from the *build side*,
+                // we need to emit them at the end.
+                JoinType::Left
+                | JoinType::LeftAnti
+                | JoinType::LeftMark
+                | JoinType::Full => EmissionType::Both,
+            }
         } else {
-            execution_mode_from_children([left, right])
+            right.pipeline_behavior()
         };
 
         // If contains projection, update the PlanProperties.
@@ -548,10 +558,12 @@ impl HashJoinExec {
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
+
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
-            mode,
+            emission_type,
+            boundedness_from_children([left, right]),
         ))
     }
 }
@@ -856,7 +868,7 @@ async fn collect_left_input(
             acc.2.build_mem_used.add(batch_size);
             acc.2.build_input_batches.add(1);
             acc.2.build_input_rows.add(batch.num_rows());
-            // Update rowcount
+            // Update row count
             acc.1 += batch.num_rows();
             // Push batch to output
             acc.0.push(batch);
@@ -1032,6 +1044,7 @@ impl BuildSide {
 ///  └─ ProcessProbeBatch
 ///
 /// ```
+#[derive(Debug, Clone)]
 enum HashJoinStreamState {
     /// Initial state for HashJoinStream indicating that build-side data not collected yet
     WaitBuildSide,
@@ -1057,6 +1070,7 @@ impl HashJoinStreamState {
 }
 
 /// Container for HashJoinStreamState::ProcessProbeBatch related data
+#[derive(Debug, Clone)]
 struct ProcessProbeBatchState {
     /// Current probe-side batch
     batch: RecordBatch,
@@ -1573,7 +1587,7 @@ mod tests {
     use rstest_reuse::*;
 
     fn div_ceil(a: usize, b: usize) -> usize {
-        (a + b - 1) / b
+        a.div_ceil(b)
     }
 
     #[template]
@@ -3495,7 +3509,7 @@ mod tests {
         Ok(())
     }
 
-    /// Test for parallelised HashJoinExec with PartitionMode::CollectLeft
+    /// Test for parallelized HashJoinExec with PartitionMode::CollectLeft
     #[tokio::test]
     async fn test_collect_left_multiple_partitions_join() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());

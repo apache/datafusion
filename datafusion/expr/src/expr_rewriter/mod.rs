@@ -314,7 +314,7 @@ impl NamePreserver {
                     | LogicalPlan::Join(_)
                     | LogicalPlan::TableScan(_)
                     | LogicalPlan::Limit(_)
-                    | LogicalPlan::Execute(_)
+                    | LogicalPlan::Statement(_)
             ),
         }
     }

@@ -55,7 +55,7 @@ pub enum TableProviderFilterPushDown {
 pub enum TableType {
     /// An ordinary physical table.
     Base,
-    /// A non-materialised table that itself uses a query internally to provide data.
+    /// A non-materialized table that itself uses a query internally to provide data.
     View,
     /// A transient table.
     Temporary,
@@ -99,7 +99,7 @@ pub trait TableSource: Sync + Send {
     }
 
     /// Tests whether the table provider can make use of any or all filter expressions
-    /// to optimise data retrieval.
+    /// to optimize data retrieval. Only non-volatile expressions are passed to this function.
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],

@@ -18,13 +18,12 @@
 //! FunctionalDependencies keeps track of functional dependencies
 //! inside DFSchema.
 
-use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::vec::IntoIter;
 
 use crate::utils::{merge_and_order_indices, set_difference};
-use crate::{DFSchema, JoinType};
+use crate::{DFSchema, HashSet, JoinType};
 
 /// This object defines a constraint on a table.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]

@@ -33,16 +33,16 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f32_args = vec![ColumnarValue::Array(f32_array)];
         c.bench_function(&format!("isnan f32 array: {}", size), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(isnan.invoke(&f32_args).unwrap())
+                // TODO use invoke_with_args
+                black_box(isnan.invoke_batch(&f32_args, size).unwrap())
             })
         });
         let f64_array = Arc::new(create_primitive_array::<Float64Type>(size, 0.2));
         let f64_args = vec![ColumnarValue::Array(f64_array)];
         c.bench_function(&format!("isnan f64 array: {}", size), |b| {
             b.iter(|| {
-                #[allow(deprecated)] // TODO use invoke_batch
-                black_box(isnan.invoke(&f64_args).unwrap())
+                // TODO use invoke_with_args
+                black_box(isnan.invoke_batch(&f64_args, size).unwrap())
             })
         });
     }

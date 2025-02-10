@@ -16,8 +16,6 @@
 // under the License.
 
 //! Utilizing exact statistics from sources to avoid scanning data
-use std::sync::Arc;
-
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -27,6 +25,7 @@ use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::udaf::{AggregateFunctionExpr, StatisticsArgs};
 use datafusion_physical_plan::{expressions, ExecutionPlan};
+use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
@@ -42,6 +41,7 @@ impl AggregateStatistics {
 }
 
 impl PhysicalOptimizerRule for AggregateStatistics {
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -294,7 +294,7 @@ mod tests {
         let field = &fields[0];
         assert_eq!(field.name(), agg.column_name());
         assert_eq!(field.data_type(), &DataType::Int64);
-        // note that nullabiolity differs
+        // note that nullability differs
 
         assert_eq!(
             as_int64_array(batch.column(0)).unwrap().values(),
@@ -377,7 +377,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        // We introduce an intermediate optimization step between the partial and final aggregtator
+        // We introduce an intermediate optimization step between the partial and final aggregator
         let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg));
 
         let final_agg = AggregateExec::try_new(
@@ -409,7 +409,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        // We introduce an intermediate optimization step between the partial and final aggregtator
+        // We introduce an intermediate optimization step between the partial and final aggregator
         let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg));
 
         let final_agg = AggregateExec::try_new(

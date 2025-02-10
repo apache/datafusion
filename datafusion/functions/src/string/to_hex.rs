@@ -103,7 +103,11 @@ impl ScalarUDFImpl for ToHexFunc {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Int32 => make_scalar_function(to_hex::<Int32Type>, vec![])(args),
             DataType::Int64 => make_scalar_function(to_hex::<Int64Type>, vec![])(args),
@@ -120,12 +124,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_hex_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Converts an integer to a hexadecimal string.")
-            .with_syntax_example("to_hex(int)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Converts an integer to a hexadecimal string.",
+            "to_hex(int)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select to_hex(12345689);
 +-------------------------+
 | to_hex(Int64(12345689)) |
@@ -133,10 +138,9 @@ fn get_to_hex_doc() -> &'static Documentation {
 | bc6159                  |
 +-------------------------+
 ```"#,
-            )
-            .with_standard_argument("int", Some("Integer"))
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("int", Some("Integer"))
+        .build()
     })
 }
 

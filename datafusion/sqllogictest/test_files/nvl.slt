@@ -118,3 +118,33 @@ query I
 SELECT NVL(NULL, NULL);
 ----
 NULL
+
+query T
+SELECT NVL(arrow_cast(text_field, 'Utf8View'), 'zxb') FROM test;
+----
+abc
+def
+ghij
+zxb
+zxc
+zxb
+
+query T
+SELECT NVL(arrow_cast('a', 'Utf8View'), 'zxb');
+----
+a
+
+query T
+SELECT NVL('zxb', arrow_cast('a', 'Utf8View'));
+----
+zxb
+
+query T
+SELECT NVL(NULL, arrow_cast('a', 'Utf8View'));
+----
+a
+
+query T
+SELECT NVL(arrow_cast('a', 'Utf8View'), NULL);
+----
+a

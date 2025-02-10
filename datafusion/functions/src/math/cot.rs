@@ -43,13 +43,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_cot_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_MATH)
-            .with_description("Returns the cotangent of a number.")
-            .with_syntax_example(r#"cot(numeric_expression)"#)
-            .with_standard_argument("numeric_expression", Some("Numeric"))
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_MATH,
+            "Returns the cotangent of a number.",
+            r#"cot(numeric_expression)"#,
+        )
+        .with_standard_argument("numeric_expression", Some("Numeric"))
+        .build()
     })
 }
 
@@ -95,7 +95,11 @@ impl ScalarUDFImpl for CotFunc {
         Some(get_cot_doc())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(cot, vec![])(args)
     }
 }

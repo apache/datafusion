@@ -61,8 +61,8 @@ use crate::physical_plan::{Distribution, ExecutionPlan, InputOrderMode};
 
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_expr::{Partitioning, PhysicalSortRequirement};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr::Partitioning;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -211,27 +211,27 @@ fn replace_with_partial_sort(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan_any = plan.as_any();
     if let Some(sort_plan) = plan_any.downcast_ref::<SortExec>() {
-        let child = sort_plan.children()[0].clone();
-        if !child.execution_mode().is_unbounded() {
+        let child = Arc::clone(sort_plan.children()[0]);
+        if !child.boundedness().is_unbounded() {
             return Ok(plan);
         }
 
         // here we're trying to find the common prefix for sorted columns that is required for the
         // sort and already satisfied by the given ordering
         let child_eq_properties = child.equivalence_properties();
-        let sort_req = PhysicalSortRequirement::from_sort_exprs(sort_plan.expr());
+        let sort_req = LexRequirement::from(sort_plan.expr().clone());
 
         let mut common_prefix_length = 0;
-        while child_eq_properties
-            .ordering_satisfy_requirement(&sort_req[0..common_prefix_length + 1])
-        {
+        while child_eq_properties.ordering_satisfy_requirement(&LexRequirement {
+            inner: sort_req[0..common_prefix_length + 1].to_vec(),
+        }) {
             common_prefix_length += 1;
         }
         if common_prefix_length > 0 {
             return Ok(Arc::new(
                 PartialSortExec::new(
                     LexOrdering::new(sort_plan.expr().to_vec()),
-                    sort_plan.input().clone(),
+                    Arc::clone(sort_plan.input()),
                     common_prefix_length,
                 )
                 .with_preserve_partitioning(sort_plan.preserve_partitioning())
@@ -273,8 +273,8 @@ fn parallelize_sorts(
     {
         // Take the initial sort expressions and requirements
         let (sort_exprs, fetch) = get_sort_exprs(&requirements.plan)?;
-        let sort_reqs = PhysicalSortRequirement::from_sort_exprs(sort_exprs);
-        let sort_exprs = LexOrdering::new(sort_exprs.to_vec());
+        let sort_reqs = LexRequirement::from(sort_exprs.clone());
+        let sort_exprs = sort_exprs.clone();
 
         // If there is a connection between a `CoalescePartitionsExec` and a
         // global sort that satisfy the requirements (i.e. intermediate
@@ -288,7 +288,8 @@ fn parallelize_sorts(
 
         requirements = add_sort_above_with_check(requirements, sort_reqs, fetch);
 
-        let spm = SortPreservingMergeExec::new(sort_exprs, requirements.plan.clone());
+        let spm =
+            SortPreservingMergeExec::new(sort_exprs, Arc::clone(&requirements.plan));
         Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
                 Arc::new(spm.with_fetch(fetch)),
@@ -305,7 +306,7 @@ fn parallelize_sorts(
 
         Ok(Transformed::yes(
             PlanWithCorrespondingCoalescePartitions::new(
-                Arc::new(CoalescePartitionsExec::new(requirements.plan.clone())),
+                Arc::new(CoalescePartitionsExec::new(Arc::clone(&requirements.plan))),
                 false,
                 vec![requirements],
             ),
@@ -391,7 +392,10 @@ fn analyze_immediate_sort_removal(
         let sort_input = sort_exec.input();
         // If this sort is unnecessary, we should remove it:
         if sort_input.equivalence_properties().ordering_satisfy(
-            sort_exec.properties().output_ordering().unwrap_or_default(),
+            sort_exec
+                .properties()
+                .output_ordering()
+                .unwrap_or(LexOrdering::empty()),
         ) {
             node.plan = if !sort_exec.preserve_partitioning()
                 && sort_input.output_partitioning().partition_count() > 1
@@ -413,12 +417,16 @@ fn analyze_immediate_sort_removal(
                         .partition_count()
                         == 1
                     {
-                        Arc::new(GlobalLimitExec::new(sort_input.clone(), 0, Some(fetch)))
+                        Arc::new(GlobalLimitExec::new(
+                            Arc::clone(sort_input),
+                            0,
+                            Some(fetch),
+                        ))
                     } else {
-                        Arc::new(LocalLimitExec::new(sort_input.clone(), fetch))
+                        Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
                     }
                 } else {
-                    sort_input.clone()
+                    Arc::clone(sort_input)
                 }
             };
             for child in node.children.iter_mut() {
@@ -478,7 +486,7 @@ fn adjust_window_sort_removal(
         // Satisfy the ordering requirement so that the window can run:
         let mut child_node = window_tree.children.swap_remove(0);
         child_node = add_sort_above(child_node, reqs, None);
-        let child_plan = child_node.plan.clone();
+        let child_plan = Arc::clone(&child_node.plan);
         window_tree.children.push(child_node);
 
         if window_expr.iter().all(|e| e.uses_bounded_memory()) {
@@ -603,12 +611,12 @@ fn remove_corresponding_sort_from_sub_plan(
         // Replace with variants that do not preserve order.
         if is_sort_preserving_merge(&node.plan) {
             node.children = node.children.swap_remove(0).children;
-            node.plan = node.plan.children().swap_remove(0).clone();
+            node.plan = Arc::clone(node.plan.children().swap_remove(0));
         } else if let Some(repartition) =
             node.plan.as_any().downcast_ref::<RepartitionExec>()
         {
             node.plan = Arc::new(RepartitionExec::try_new(
-                node.children[0].plan.clone(),
+                Arc::clone(&node.children[0].plan),
                 repartition.properties().output_partitioning().clone(),
             )?) as _;
         }
@@ -635,10 +643,10 @@ fn remove_corresponding_sort_from_sub_plan(
     Ok(node)
 }
 
-/// Converts an [ExecutionPlan] trait object to a [LexOrderingRef] when possible.
+/// Converts an [ExecutionPlan] trait object to a [LexOrdering] reference when possible.
 fn get_sort_exprs(
     sort_any: &Arc<dyn ExecutionPlan>,
-) -> Result<(LexOrderingRef, Option<usize>)> {
+) -> Result<(&LexOrdering, Option<usize>)> {
     if let Some(sort_exec) = sort_any.as_any().downcast_ref::<SortExec>() {
         Ok((sort_exec.expr(), sort_exec.fetch()))
     } else if let Some(spm) = sort_any.as_any().downcast_ref::<SortPreservingMergeExec>()
@@ -715,7 +723,7 @@ mod tests {
             let state = session_ctx.state();
 
             // This file has 4 rules that use tree node, apply these rules as in the
-            // EnforSorting::optimize implementation
+            // EnforceSorting::optimize implementation
             // After these operations tree nodes should be in a consistent state.
             // This code block makes sure that these rules doesn't violate tree node integrity.
             {

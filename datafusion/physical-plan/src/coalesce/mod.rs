@@ -180,7 +180,7 @@ impl BatchCoalescer {
 /// Indicates the state of the [`BatchCoalescer`] buffer after the
 /// [`BatchCoalescer::push_batch()`] operation.
 ///
-/// The caller should take diferent actions, depending on the variant returned.
+/// The caller should take different actions, depending on the variant returned.
 pub enum CoalescerState {
     /// Neither the limit nor the target batch size is reached.
     ///

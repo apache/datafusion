@@ -25,9 +25,9 @@ use datafusion_expr::expr::{
     ScalarFunction, Unnest,
 };
 use datafusion_expr::{
-    logical_plan::PlanType, logical_plan::StringifiedPlan, BuiltInWindowFunction, Expr,
-    JoinConstraint, JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound,
-    WindowFrameUnits, WindowFunctionDefinition,
+    logical_plan::PlanType, logical_plan::StringifiedPlan, Expr, JoinConstraint,
+    JoinType, SortExpr, TryCast, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    WindowFunctionDefinition,
 };
 
 use crate::protobuf::RecursionUnnestOption;
@@ -38,6 +38,7 @@ use crate::protobuf::{
         FinalPhysicalPlan, FinalPhysicalPlanWithSchema, FinalPhysicalPlanWithStats,
         InitialLogicalPlan, InitialPhysicalPlan, InitialPhysicalPlanWithSchema,
         InitialPhysicalPlanWithStats, OptimizedLogicalPlan, OptimizedPhysicalPlan,
+        PhysicalPlanError,
     },
     AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
     OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
@@ -115,18 +116,11 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
                 PlanType::FinalPhysicalPlanWithSchema => Some(protobuf::PlanType {
                     plan_type_enum: Some(FinalPhysicalPlanWithSchema(EmptyMessage {})),
                 }),
+                PlanType::PhysicalPlanError => Some(protobuf::PlanType {
+                    plan_type_enum: Some(PhysicalPlanError(EmptyMessage {})),
+                }),
             },
             plan: stringified_plan.plan.to_string(),
-        }
-    }
-}
-
-impl From<&BuiltInWindowFunction> for protobuf::BuiltInWindowFunction {
-    fn from(value: &BuiltInWindowFunction) -> Self {
-        match value {
-            BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            BuiltInWindowFunction::LastValue => Self::LastValue,
-            BuiltInWindowFunction::NthValue => Self::NthValue,
         }
     }
 }
@@ -312,12 +306,6 @@ pub fn serialize_expr(
             null_treatment: _,
         }) => {
             let (window_function, fun_definition) = match fun {
-                WindowFunctionDefinition::BuiltInWindowFunction(fun) => (
-                    protobuf::window_expr_node::WindowFunction::BuiltInFunction(
-                        protobuf::BuiltInWindowFunction::from(fun).into(),
-                    ),
-                    None,
-                ),
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
                     let mut buf = Vec::new();
                     let _ = codec.try_encode_udaf(aggr_udf, &mut buf);

@@ -259,7 +259,7 @@ mod tests {
         assert!(eq_groups.contains(&col_a_expr));
         assert!(eq_groups.contains(&col_b_expr));
 
-        // b and c are aliases. Exising equivalence class should expand,
+        // b and c are aliases. Existing equivalence class should expand,
         // however there shouldn't be any new equivalence class
         eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr)?;
         assert_eq!(eq_properties.eq_group().len(), 1);

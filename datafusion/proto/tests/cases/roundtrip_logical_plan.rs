@@ -23,12 +23,16 @@ use arrow::datatypes::{
     IntervalUnit, Schema, SchemaRef, TimeUnit, UnionFields, UnionMode,
     DECIMAL256_MAX_PRECISION,
 };
+use arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::file_format::json::JsonFormatFactory;
+use datafusion::optimizer::eliminate_nested_union::EliminateNestedUnion;
+use datafusion::optimizer::Optimizer;
 use datafusion_common::parsers::CompressionTypeVariant;
 use prost::Message;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
+use std::mem::size_of_val;
 use std::sync::Arc;
 use std::vec;
 
@@ -47,6 +51,7 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
+use datafusion::functions_window;
 use datafusion::functions_window::expr_fn::{
     cume_dist, dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
 };
@@ -62,7 +67,7 @@ use datafusion_common::{
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, Like, ScalarFunction,
-    Unnest, WildcardOptions,
+    Unnest,
 };
 use datafusion_expr::logical_plan::{Extension, UserDefinedLogicalNodeCore};
 use datafusion_expr::{
@@ -556,7 +561,7 @@ async fn roundtrip_logical_plan_copy_to_json() -> Result<()> {
 
     // Set specific JSON format options
     json_format.compression = CompressionTypeVariant::GZIP;
-    json_format.schema_infer_max_rec = 1000;
+    json_format.schema_infer_max_rec = Some(1000);
 
     let file_type = format_as_file_type(Arc::new(JsonFormatFactory::new_with_options(
         json_format.clone(),
@@ -784,7 +789,7 @@ async fn roundtrip_logical_plan_unnest() -> Result<()> {
         Field::new("a", DataType::Int64, true),
         Field::new(
             "b",
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false))),
             true,
         ),
     ]);
@@ -910,6 +915,9 @@ async fn roundtrip_expr_api() -> Result<()> {
         count_distinct(lit(1)),
         first_value(lit(1), None),
         first_value(lit(1), Some(vec![lit(2).sort(true, true)])),
+        functions_window::nth_value::first_value(lit(1)),
+        functions_window::nth_value::last_value(lit(1)),
+        functions_window::nth_value::nth_value(lit(1), 1),
         avg(lit(1.5)),
         covar_samp(lit(1.5), lit(2.2)),
         covar_pop(lit(1.5), lit(2.2)),
@@ -1605,7 +1613,7 @@ fn round_trip_scalar_types() {
     ];
 
     for test_case in should_pass.into_iter() {
-        let field = Field::new("item", test_case, true);
+        let field = Field::new_list_field(test_case, true);
         let proto: protobuf::Field = (&field).try_into().unwrap();
         let roundtrip: Field = (&proto).try_into().unwrap();
         assert_eq!(format!("{field:?}"), format!("{roundtrip:?}"));
@@ -2053,10 +2061,7 @@ fn roundtrip_unnest() {
 
 #[test]
 fn roundtrip_wildcard() {
-    let test_expr = Expr::Wildcard {
-        qualifier: None,
-        options: WildcardOptions::default(),
-    };
+    let test_expr = wildcard();
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2064,10 +2069,7 @@ fn roundtrip_wildcard() {
 
 #[test]
 fn roundtrip_qualified_wildcard() {
-    let test_expr = Expr::Wildcard {
-        qualifier: Some("foo".into()),
-        options: WildcardOptions::default(),
-    };
+    let test_expr = qualified_wildcard("foo");
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
@@ -2521,4 +2523,63 @@ fn roundtrip_window() {
     roundtrip_expr_test(test_expr5, ctx.clone());
     roundtrip_expr_test(test_expr6, ctx.clone());
     roundtrip_expr_test(text_expr7, ctx);
+}
+
+#[tokio::test]
+async fn roundtrip_recursive_query() {
+    let query = "WITH RECURSIVE cte AS (
+        SELECT 1 as n
+        UNION ALL
+        SELECT n + 1 FROM cte WHERE n < 5
+        )
+        SELECT * FROM cte;";
+
+    let ctx = SessionContext::new();
+    let dataframe = ctx.sql(query).await.unwrap();
+    let plan = dataframe.logical_plan().clone();
+    let output = dataframe.collect().await.unwrap();
+    let bytes = logical_plan_to_bytes(&plan).unwrap();
+
+    let ctx = SessionContext::new();
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx).unwrap();
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    let dataframe = ctx.execute_logical_plan(logical_round_trip).await.unwrap();
+    let output_round_trip = dataframe.collect().await.unwrap();
+
+    assert_eq!(
+        format!("{}", pretty_format_batches(&output).unwrap()),
+        format!("{}", pretty_format_batches(&output_round_trip).unwrap())
+    );
+}
+
+#[tokio::test]
+async fn roundtrip_union_query() -> Result<()> {
+    let query = "SELECT a FROM t1
+        UNION (SELECT a from t1 UNION SELECT a from t2)";
+
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    ctx.register_csv("t2", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let dataframe = ctx.sql(query).await?;
+    let plan = dataframe.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+
+    let ctx = SessionContext::new();
+    ctx.register_csv("t1", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    ctx.register_csv("t2", "tests/testdata/test.csv", CsvReadOptions::default())
+        .await?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    // proto deserialization only supports 2-way union, hence this plan has nested unions
+    // apply the flatten unions optimizer rule to be able to compare
+    let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateNestedUnion::new())]);
+    let unnested = optimizer.optimize(logical_round_trip, &(ctx.state()), |_x, _y| {})?;
+    assert_eq!(
+        format!("{}", plan.display_indent_schema()),
+        format!("{}", unnested.display_indent_schema()),
+    );
+    Ok(())
 }

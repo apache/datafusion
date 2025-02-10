@@ -18,7 +18,7 @@
 //! NoOp placeholder for physical operations
 
 use std::any::Any;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
 use arrow::{
@@ -26,7 +26,6 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
@@ -77,19 +76,5 @@ impl PhysicalExpr for NoOp {
         _children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(self)
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for NoOp {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self == x)
-            .unwrap_or(false)
     }
 }

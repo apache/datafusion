@@ -63,7 +63,11 @@ impl ScalarUDFImpl for NVL2Func {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         nvl2_func(args)
     }
 
@@ -101,10 +105,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_nvl2_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_CONDITIONAL)
-            .with_description("Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.")
-            .with_syntax_example("nvl2(expression1, expression2, expression3)")
+        Documentation::builder(
+            DOC_SECTION_CONDITIONAL,
+            "Returns _expression2_ if _expression1_ is not NULL; otherwise it returns _expression3_.",
+            "nvl2(expression1, expression2, expression3)")
             .with_sql_example(r#"```sql
 > select nvl2(null, 'a', 'b');
 +--------------------------------+
@@ -133,7 +137,6 @@ fn get_nvl2_doc() -> &'static Documentation {
                 "Expression to return if expr1 is null. Can be a constant, column, or function, and any combination of operators."
             )
             .build()
-            .unwrap()
     })
 }
 

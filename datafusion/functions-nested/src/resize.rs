@@ -80,7 +80,11 @@ impl ScalarUDFImpl for ArrayResize {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_resize_inner)(args)
     }
 
@@ -97,12 +101,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_resize_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Resizes the list to contain size elements. Initializes new elements with value or empty if value is not set.",
-            )
-            .with_syntax_example("array_resize(array, size, value)")
+
+            "array_resize(array, size, value)")
             .with_sql_example(
                 r#"```sql
 > select array_resize([1, 2, 3], 5, 0);
@@ -126,7 +129,6 @@ fn get_array_resize_doc() -> &'static Documentation {
                 "Defines new elements' value or empty if value is not set.",
             )
             .build()
-            .unwrap()
     })
 }
 

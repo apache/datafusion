@@ -185,7 +185,7 @@ SELECT MAP([[1,2], [3,4]], ['a', 'b']);
 query error
 SELECT MAP()
 
-query error DataFusion error: Execution error: map requires an even number of arguments, got 1 instead
+query error DataFusion error: Execution error: map requires exactly 2 arguments, got 1 instead
 SELECT MAP(['POST', 'HEAD'])
 
 query error DataFusion error: Execution error: Expected list, large_list or fixed_size_list, got Null

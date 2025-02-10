@@ -67,13 +67,13 @@ CREATE TABLE small_floats(
 ## abs
 
 # abs scalar function
-query III rowsort
+query III
 select abs(64), abs(0), abs(-64);
 ----
 64 0 64
 
 # abs scalar nulls
-query ? rowsort
+query R
 select abs(null);
 ----
 NULL
@@ -1940,7 +1940,7 @@ select position('' in '')
 ----
 1
 
-query error DataFusion error: Error during planning: Error during planning: Int64 and Int64 are not coercible to a common string
+query error DataFusion error: Error during planning: Error during planning: The signature expected NativeType::String but received NativeType::Int64
 select position(1 in 1)
 
 query I

@@ -52,8 +52,8 @@ fn main() {
     let statement = &ast[0];
 
     // create a logical query plan
-    let schema_provider = MySchemaProvider::new();
-    let sql_to_rel = SqlToRel::new(&schema_provider);
+    let context_provider = MyContextProvider::new();
+    let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
 
     // show the plan

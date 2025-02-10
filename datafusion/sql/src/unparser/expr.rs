@@ -18,8 +18,8 @@
 use datafusion_expr::expr::Unnest;
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
-    self, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
-    TimezoneInfo, UnaryOperator,
+    self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
+    Subscript, TimezoneInfo, UnaryOperator,
 };
 use std::sync::Arc;
 use std::vec;
@@ -43,6 +43,8 @@ use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet, Like, Operator, TryCast,
 };
+use sqlparser::ast::helpers::attached_token::AttachedToken;
+use sqlparser::tokenizer::Span;
 
 /// Convert a DataFusion [`Expr`] to [`ast::Expr`]
 ///
@@ -180,25 +182,7 @@ impl Unparser<'_> {
                 })
             }
             Expr::Cast(Cast { expr, data_type }) => {
-                let inner_expr = self.expr_to_sql_inner(expr)?;
-                match data_type {
-                    DataType::Dictionary(_, _) => match inner_expr {
-                        // Dictionary values don't need to be cast to other types when rewritten back to sql
-                        ast::Expr::Value(_) => Ok(inner_expr),
-                        _ => Ok(ast::Expr::Cast {
-                            kind: ast::CastKind::Cast,
-                            expr: Box::new(inner_expr),
-                            data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
-                            format: None,
-                        }),
-                    },
-                    _ => Ok(ast::Expr::Cast {
-                        kind: ast::CastKind::Cast,
-                        expr: Box::new(inner_expr),
-                        data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
-                        format: None,
-                    }),
-                }
+                Ok(self.cast_to_sql(expr, data_type)?)
             }
             Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
@@ -251,6 +235,7 @@ impl Unparser<'_> {
                     name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: None,
@@ -262,6 +247,7 @@ impl Unparser<'_> {
                     over,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
+                    uses_odbc_syntax: false,
                 }))
             }
             Expr::SimilarTo(Like {
@@ -282,6 +268,7 @@ impl Unparser<'_> {
                 expr: Box::new(self.expr_to_sql_inner(expr)?),
                 pattern: Box::new(self.expr_to_sql_inner(pattern)?),
                 escape_char: escape_char.map(|c| c.to_string()),
+                any: false,
             }),
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func.name();
@@ -295,6 +282,7 @@ impl Unparser<'_> {
                     name: ObjectName(vec![Ident {
                         value: func_name.to_string(),
                         quote_style: None,
+                        span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                         duplicate_treatment: agg
@@ -308,6 +296,7 @@ impl Unparser<'_> {
                     over: None,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
+                    uses_odbc_syntax: false,
                 }))
             }
             Expr::ScalarSubquery(subq) => {
@@ -421,12 +410,16 @@ impl Unparser<'_> {
             }
             // TODO: unparsing wildcard addition options
             Expr::Wildcard { qualifier, .. } => {
+                let attached_token = AttachedToken::empty();
                 if let Some(qualifier) = qualifier {
                     let idents: Vec<Ident> =
                         qualifier.to_vec().into_iter().map(Ident::new).collect();
-                    Ok(ast::Expr::QualifiedWildcard(ObjectName(idents)))
+                    Ok(ast::Expr::QualifiedWildcard(
+                        ObjectName(idents),
+                        attached_token,
+                    ))
                 } else {
-                    Ok(ast::Expr::Wildcard)
+                    Ok(ast::Expr::Wildcard(attached_token))
                 }
             }
             Expr::GroupingSet(grouping_set) => match grouping_set {
@@ -476,11 +469,28 @@ impl Unparser<'_> {
         func_name: &str,
         args: &[Expr],
     ) -> Result<ast::Expr> {
+        match func_name {
+            "make_array" => self.make_array_to_sql(args),
+            "array_element" => self.array_element_to_sql(args),
+            "named_struct" => self.named_struct_to_sql(args),
+            "get_field" => self.get_field_to_sql(args),
+            "map" => self.map_to_sql(args),
+            // TODO: support for the construct and access functions of the `map` type
+            _ => self.scalar_function_to_sql_internal(func_name, args),
+        }
+    }
+
+    fn scalar_function_to_sql_internal(
+        &self,
+        func_name: &str,
+        args: &[Expr],
+    ) -> Result<ast::Expr> {
         let args = self.function_args_to_sql(args)?;
         Ok(ast::Expr::Function(Function {
             name: ObjectName(vec![Ident {
                 value: func_name.to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
@@ -492,7 +502,115 @@ impl Unparser<'_> {
             over: None,
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         }))
+    }
+
+    fn make_array_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        let args = args
+            .iter()
+            .map(|e| self.expr_to_sql(e))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ast::Expr::Array(Array {
+            elem: args,
+            named: false,
+        }))
+    }
+
+    fn array_element_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() != 2 {
+            return internal_err!("array_element must have exactly 2 arguments");
+        }
+        let array = self.expr_to_sql(&args[0])?;
+        let index = self.expr_to_sql(&args[1])?;
+        Ok(ast::Expr::Subscript {
+            expr: Box::new(array),
+            subscript: Box::new(Subscript::Index { index }),
+        })
+    }
+
+    fn named_struct_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() % 2 != 0 {
+            return internal_err!("named_struct must have an even number of arguments");
+        }
+
+        let args = args
+            .chunks_exact(2)
+            .map(|chunk| {
+                let key = match &chunk[0] {
+                    Expr::Literal(ScalarValue::Utf8(Some(s))) => self.new_ident_quoted_if_needs(s.to_string()),
+                    _ => return internal_err!("named_struct expects even arguments to be strings, but received: {:?}", &chunk[0])
+                };
+
+                Ok(ast::DictionaryField {
+                    key,
+                    value: Box::new(self.expr_to_sql(&chunk[1])?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(ast::Expr::Dictionary(args))
+    }
+
+    fn get_field_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() != 2 {
+            return internal_err!("get_field must have exactly 2 arguments");
+        }
+
+        let mut id = match &args[0] {
+            Expr::Column(col) => match self.col_to_sql(col)? {
+                ast::Expr::Identifier(ident) => vec![ident],
+                ast::Expr::CompoundIdentifier(idents) => idents,
+                other => return internal_err!("expected col_to_sql to return an Identifier or CompoundIdentifier, but received: {:?}", other),
+            },
+            _ => return internal_err!("get_field expects first argument to be column, but received: {:?}", &args[0]),
+        };
+
+        let field = match &args[1] {
+            Expr::Literal(lit) => self.new_ident_quoted_if_needs(lit.to_string()),
+            _ => {
+                return internal_err!(
+                "get_field expects second argument to be a string, but received: {:?}",
+                &args[0]
+            )
+            }
+        };
+        id.push(field);
+
+        Ok(ast::Expr::CompoundIdentifier(id))
+    }
+
+    fn map_to_sql(&self, args: &[Expr]) -> Result<ast::Expr> {
+        if args.len() != 2 {
+            return internal_err!("map must have exactly 2 arguments");
+        }
+
+        let ast::Expr::Array(Array { elem: keys, .. }) = self.expr_to_sql(&args[0])?
+        else {
+            return internal_err!(
+                "map expects first argument to be an array, but received: {:?}",
+                &args[0]
+            );
+        };
+
+        let ast::Expr::Array(Array { elem: values, .. }) = self.expr_to_sql(&args[1])?
+        else {
+            return internal_err!(
+                "map expects second argument to be an array, but received: {:?}",
+                &args[1]
+            );
+        };
+
+        let entries = keys
+            .into_iter()
+            .zip(values)
+            .map(|(key, value)| ast::MapEntry {
+                key: Box::new(key),
+                value: Box::new(value),
+            })
+            .collect();
+
+        Ok(ast::Expr::Map(ast::Map { entries }))
     }
 
     pub fn sort_to_sql(&self, sort: &Sort) -> Result<ast::OrderByExpr> {
@@ -527,7 +645,11 @@ impl Unparser<'_> {
 
     fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
         if let Some(table_ref) = &col.relation {
-            let mut id = table_ref.to_vec();
+            let mut id = if self.dialect.full_qualified_col() {
+                table_ref.to_vec()
+            } else {
+                vec![table_ref.table().to_string()]
+            };
             id.push(col.name.to_string());
             return Ok(ast::Expr::CompoundIdentifier(
                 id.iter()
@@ -599,6 +721,7 @@ impl Unparser<'_> {
         Ident {
             value: ident,
             quote_style,
+            span: Span::empty(),
         }
     }
 
@@ -606,6 +729,7 @@ impl Unparser<'_> {
         Ident {
             value: str,
             quote_style: None,
+            span: Span::empty(),
         }
     }
 
@@ -623,7 +747,7 @@ impl Unparser<'_> {
     }
 
     /// Given an expression of the form `((a + b) * (c * d))`,
-    /// the parenthesing is redundant if the precedence of the nested expression is already higher
+    /// the parenthesis is redundant if the precedence of the nested expression is already higher
     /// than the surrounding operators' precedence. The above expression would become
     /// `(a + b) * c * d`.
     ///
@@ -772,7 +896,7 @@ impl Unparser<'_> {
             Operator::Plus => Ok(BinaryOperator::Plus),
             Operator::Minus => Ok(BinaryOperator::Minus),
             Operator::Multiply => Ok(BinaryOperator::Multiply),
-            Operator::Divide => Ok(BinaryOperator::Divide),
+            Operator::Divide => Ok(self.dialect.division_operator()),
             Operator::Modulo => Ok(BinaryOperator::Modulo),
             Operator::And => Ok(BinaryOperator::And),
             Operator::Or => Ok(BinaryOperator::Or),
@@ -858,6 +982,31 @@ impl Unparser<'_> {
             data_type: ast::DataType::Time(None, TimezoneInfo::None),
             format: None,
         })
+    }
+
+    // Explicit type cast on ast::Expr::Value is not needed by underlying engine for certain types
+    // For example: CAST(Utf8("binary_value") AS Binary) and  CAST(Utf8("dictionary_value") AS Dictionary)
+    fn cast_to_sql(&self, expr: &Expr, data_type: &DataType) -> Result<ast::Expr> {
+        let inner_expr = self.expr_to_sql_inner(expr)?;
+        match inner_expr {
+            ast::Expr::Value(_) => match data_type {
+                DataType::Dictionary(_, _) | DataType::Binary | DataType::BinaryView => {
+                    Ok(inner_expr)
+                }
+                _ => Ok(ast::Expr::Cast {
+                    kind: ast::CastKind::Cast,
+                    expr: Box::new(inner_expr),
+                    data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                    format: None,
+                }),
+            },
+            _ => Ok(ast::Expr::Cast {
+                kind: ast::CastKind::Cast,
+                expr: Box::new(inner_expr),
+                data_type: self.arrow_dtype_to_ast_dtype(data_type)?,
+                format: None,
+            }),
+        }
     }
 
     /// DataFusion ScalarValues sometimes require a ast::Expr to construct.
@@ -1097,7 +1246,7 @@ impl Unparser<'_> {
     /// MySQL requires INTERVAL sql to be in the format: INTERVAL 1 YEAR + INTERVAL 1 MONTH + INTERVAL 1 DAY etc
     /// `<https://dev.mysql.com/doc/refman/8.4/en/expressions.html#temporal-intervals>`
     /// Interval sequence can't be wrapped in brackets - (INTERVAL 1 YEAR + INTERVAL 1 MONTH ...) so we need to generate
-    /// a single INTERVAL expression so it works correct for interval substraction cases
+    /// a single INTERVAL expression so it works correct for interval subtraction cases
     /// MySQL supports the DAY_MICROSECOND unit type (format is DAYS HOURS:MINUTES:SECONDS.MICROSECONDS), but it is not supported by sqlparser
     /// so we calculate the best single interval to represent the provided duration
     fn interval_to_mysql_expr(
@@ -1346,6 +1495,7 @@ impl Unparser<'_> {
             name: ObjectName(vec![Ident {
                 value: "UNNEST".to_string(),
                 quote_style: None,
+                span: Span::empty(),
             }]),
             args: ast::FunctionArguments::List(ast::FunctionArgumentList {
                 duplicate_treatment: None,
@@ -1357,6 +1507,7 @@ impl Unparser<'_> {
             over: None,
             within_group: vec![],
             parameters: ast::FunctionArguments::None,
+            uses_odbc_syntax: false,
         }))
     }
 
@@ -1410,9 +1561,7 @@ impl Unparser<'_> {
             }
             DataType::Utf8 => Ok(self.dialect.utf8_cast_dtype()),
             DataType::LargeUtf8 => Ok(self.dialect.large_utf8_cast_dtype()),
-            DataType::Utf8View => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
+            DataType::Utf8View => Ok(self.dialect.utf8_cast_dtype()),
             DataType::List(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1472,19 +1621,22 @@ mod tests {
     use datafusion_common::TableReference;
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
-        case, col, cube, exists, grouping_set, interval_datetime_lit,
+        case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
         table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
+    use datafusion_functions::expr_fn::{get_field, named_struct};
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::sum;
+    use datafusion_functions_nested::expr_fn::{array_element, make_array};
+    use datafusion_functions_nested::map::map;
     use datafusion_functions_window::row_number::row_number_udwf;
 
     use crate::unparser::dialect::{
-        CustomDialect, CustomDialectBuilder, DateFieldExtractStyle, Dialect,
-        PostgreSqlDialect,
+        CharacterLengthStyle, CustomDialect, CustomDialectBuilder, DateFieldExtractStyle,
+        Dialect, PostgreSqlDialect,
     };
 
     use super::*;
@@ -1520,7 +1672,11 @@ mod tests {
             Ok(DataType::Int32)
         }
 
-        fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_batch(
+            &self,
+            _args: &[ColumnarValue],
+            _number_rows: usize,
+        ) -> Result<ColumnarValue> {
             unimplemented!("DummyUDF::invoke")
         }
     }
@@ -1532,7 +1688,7 @@ mod tests {
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
             .project(vec![Expr::Wildcard {
                 qualifier: None,
-                options: WildcardOptions::default(),
+                options: Box::new(WildcardOptions::default()),
             }])?
             .filter(col("a").eq(lit(1)))?
             .build()?;
@@ -1545,7 +1701,7 @@ mod tests {
                     name: "c".to_string(),
                 })
                 .gt(lit(4)),
-                r#"(a.b.c > 4)"#,
+                r#"(b.c > 4)"#,
             ),
             (
                 case(col("a"))
@@ -1724,10 +1880,7 @@ mod tests {
             (sum(col("a")), r#"sum(a)"#),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
-                        qualifier: None,
-                        options: WildcardOptions::default(),
-                    }])
+                    .call(vec![wildcard()])
                     .distinct()
                     .build()
                     .unwrap(),
@@ -1735,10 +1888,7 @@ mod tests {
             ),
             (
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
-                        qualifier: None,
-                        options: WildcardOptions::default(),
-                    }])
+                    .call(vec![wildcard()])
                     .filter(lit(true))
                     .build()
                     .unwrap(),
@@ -1882,7 +2032,22 @@ mod tests {
                         name: "array_col".to_string(),
                     })),
                 }),
-                r#"UNNEST("schema"."table".array_col)"#,
+                r#"UNNEST("table".array_col)"#,
+            ),
+            (make_array(vec![lit(1), lit(2), lit(3)]), "[1, 2, 3]"),
+            (array_element(col("array_col"), lit(1)), "array_col[1]"),
+            (
+                array_element(make_array(vec![lit(1), lit(2), lit(3)]), lit(1)),
+                "[1, 2, 3][1]",
+            ),
+            (
+                named_struct(vec![lit("a"), lit("1"), lit("b"), lit(2)]),
+                "{a: '1', b: 2}",
+            ),
+            (get_field(col("a.b"), "c"), "a.b.c"),
+            (
+                map(vec![lit("a"), lit("b")], vec![lit(1), lit(2)]),
+                "MAP {'a': 1, 'b': 2}",
             ),
         ];
 
@@ -2000,6 +2165,33 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_character_length_scalar_to_expr() {
+        let tests = [
+            (CharacterLengthStyle::Length, "length(x)"),
+            (CharacterLengthStyle::CharacterLength, "character_length(x)"),
+        ];
+
+        for (style, expected) in tests {
+            let dialect = CustomDialectBuilder::new()
+                .with_character_length_style(style)
+                .build();
+            let unparser = Unparser::new(&dialect);
+
+            let expr = ScalarUDF::new_from_impl(
+                datafusion_functions::unicode::character_length::CharacterLengthFunc::new(
+                ),
+            )
+            .call(vec![col("x")]);
+
+            let ast = unparser.expr_to_sql(&expr).expect("to be unparsed");
+
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
@@ -2149,6 +2341,39 @@ mod tests {
             (
                 Expr::Literal(ScalarValue::Float32(Some(-2.989f32))),
                 "-2.989",
+            ),
+        ];
+        for (value, expected) in tests {
+            let dialect = CustomDialectBuilder::new().build();
+            let unparser = Unparser::new(&dialect);
+
+            let ast = unparser.expr_to_sql(&value).expect("to be unparsed");
+            let actual = format!("{ast}");
+
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn test_cast_value_to_binary_expr() {
+        let tests = [
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                        "blah".to_string(),
+                    )))),
+                    data_type: DataType::Binary,
+                }),
+                "'blah'",
+            ),
+            (
+                Expr::Cast(Cast {
+                    expr: Box::new(Expr::Literal(ScalarValue::Utf8(Some(
+                        "blah".to_string(),
+                    )))),
+                    data_type: DataType::BinaryView,
+                }),
+                "'blah'",
             ),
         ];
         for (value, expected) in tests {
@@ -2370,6 +2595,32 @@ mod tests {
     }
 
     #[test]
+    fn custom_dialect_division_operator() -> Result<()> {
+        let default_dialect = CustomDialectBuilder::new().build();
+        let duckdb_dialect = CustomDialectBuilder::new()
+            .with_division_operator(BinaryOperator::DuckIntegerDivide)
+            .build();
+
+        for (dialect, expected) in
+            [(default_dialect, "(a / b)"), (duckdb_dialect, "(a // b)")]
+        {
+            let unparser = Unparser::new(&dialect);
+            let expr = Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(col("a")),
+                op: Operator::Divide,
+                right: Box::new(col("b")),
+            });
+            let ast = unparser.expr_to_sql(&expr)?;
+
+            let actual = format!("{}", ast);
+            let expected = expected.to_string();
+
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_cast_value_to_dict_expr() {
         let tests = [(
             Expr::Cast(Cast {
@@ -2423,6 +2674,52 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_utf8_view_to_sql() -> Result<()> {
+        let dialect = CustomDialectBuilder::new()
+            .with_utf8_cast_dtype(ast::DataType::Char(None))
+            .build();
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Utf8View)?;
+
+        assert_eq!(ast_dtype, ast::DataType::Char(None));
+
+        let expr = cast(col("a"), DataType::Utf8View);
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+        let expected = r#"CAST(a AS CHAR)"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = col("a").eq(lit(ScalarValue::Utf8View(Some("hello".to_string()))));
+        let ast = unparser.expr_to_sql(&expr)?;
+
+        let actual = format!("{}", ast);
+        let expected = r#"(a = 'hello')"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = col("a").is_not_null();
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        let actual = format!("{}", ast);
+        let expected = r#"a IS NOT NULL"#.to_string();
+
+        assert_eq!(actual, expected);
+
+        let expr = col("a").is_null();
+
+        let ast = unparser.expr_to_sql(&expr)?;
+        let actual = format!("{}", ast);
+        let expected = r#"a IS NULL"#.to_string();
+
+        assert_eq!(actual, expected);
+
         Ok(())
     }
 }

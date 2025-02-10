@@ -25,19 +25,22 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
+use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::spill::{read_spill_as_stream, spill_record_batches};
+use crate::spill::{
+    get_record_batch_memory_size, read_spill_as_stream, spill_record_batches,
+};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
-    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionMode,
-    ExecutionPlan, ExecutionPlanProperties, Partitioning, PlanProperties,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
+    ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
+    Statistics,
 };
 
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
@@ -52,11 +55,8 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrderingRef, PhysicalSortRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
-use crate::execution_plan::CardinalityEffect;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -203,39 +203,54 @@ impl ExternalSorterMetrics {
 ///  in_mem_batches
 /// ```
 struct ExternalSorter {
-    /// schema of the output (and the input)
+    // ========================================================================
+    // PROPERTIES:
+    // Fields that define the sorter's configuration and remain constant
+    // ========================================================================
+    /// Schema of the output (and the input)
     schema: SchemaRef,
-    /// Potentially unsorted in memory buffer
-    in_mem_batches: Vec<RecordBatch>,
-    /// if `Self::in_mem_batches` are sorted
-    in_mem_batches_sorted: bool,
-    /// If data has previously been spilled, the locations of the
-    /// spill files (in Arrow IPC format)
-    spills: Vec<RefCountedTempFile>,
     /// Sort expressions
     expr: Arc<[PhysicalSortExpr]>,
-    /// Runtime metrics
-    metrics: ExternalSorterMetrics,
-    /// If Some, the maximum number of output rows that will be
-    /// produced.
+    /// If Some, the maximum number of output rows that will be produced
     fetch: Option<usize>,
-    /// Reservation for in_mem_batches
-    reservation: MemoryReservation,
-    /// Reservation for the merging of in-memory batches. If the sort
-    /// might spill, `sort_spill_reservation_bytes` will be
-    /// pre-reserved to ensure there is some space for this sort/merge.
-    merge_reservation: MemoryReservation,
-    /// A handle to the runtime to get spill files
-    runtime: Arc<RuntimeEnv>,
     /// The target number of rows for output batches
     batch_size: usize,
-    /// How much memory to reserve for performing in-memory sort/merges
-    /// prior to spilling.
-    sort_spill_reservation_bytes: usize,
     /// If the in size of buffered memory batches is below this size,
     /// the data will be concatenated and sorted in place rather than
     /// sort/merged.
     sort_in_place_threshold_bytes: usize,
+
+    // ========================================================================
+    // STATE BUFFERS:
+    // Fields that hold intermediate data during sorting
+    // ========================================================================
+    /// Potentially unsorted in memory buffer
+    in_mem_batches: Vec<RecordBatch>,
+    /// if `Self::in_mem_batches` are sorted
+    in_mem_batches_sorted: bool,
+
+    /// If data has previously been spilled, the locations of the
+    /// spill files (in Arrow IPC format)
+    spills: Vec<RefCountedTempFile>,
+
+    // ========================================================================
+    // EXECUTION RESOURCES:
+    // Fields related to managing execution resources and monitoring performance.
+    // ========================================================================
+    /// Runtime metrics
+    metrics: ExternalSorterMetrics,
+    /// A handle to the runtime to get spill files
+    runtime: Arc<RuntimeEnv>,
+    /// Reservation for in_mem_batches
+    reservation: MemoryReservation,
+
+    /// Reservation for the merging of in-memory batches. If the sort
+    /// might spill, `sort_spill_reservation_bytes` will be
+    /// pre-reserved to ensure there is some space for this sort/merge.
+    merge_reservation: MemoryReservation,
+    /// How much memory to reserve for performing in-memory sort/merges
+    /// prior to spilling.
+    sort_spill_reservation_bytes: usize,
 }
 
 impl ExternalSorter {
@@ -288,10 +303,12 @@ impl ExternalSorter {
         }
         self.reserve_memory_for_merge()?;
 
-        let size = input.get_array_memory_size();
+        let size = get_record_batch_memory_size(&input);
+
         if self.reservation.try_grow(size).is_err() {
             let before = self.reservation.size();
             self.in_mem_sort().await?;
+
             // Sorting may have freed memory, especially if fetch is `Some`
             //
             // As such we check again, and if the memory usage has dropped by
@@ -344,10 +361,12 @@ impl ExternalSorter {
                 streams.push(stream);
             }
 
+            let expressions: LexOrdering = self.expr.iter().cloned().collect();
+
             StreamingMergeBuilder::new()
                 .with_streams(streams)
                 .with_schema(Arc::clone(&self.schema))
-                .with_expressions(self.expr.to_vec().as_slice())
+                .with_expressions(expressions.as_ref())
                 .with_metrics(self.metrics.baseline.clone())
                 .with_batch_size(self.batch_size)
                 .with_fetch(self.fetch)
@@ -426,7 +445,7 @@ impl ExternalSorter {
         let size: usize = self
             .in_mem_batches
             .iter()
-            .map(|x| x.get_array_memory_size())
+            .map(get_record_batch_memory_size)
             .sum();
 
         // Reserve headroom for next sort/merge
@@ -521,7 +540,8 @@ impl ExternalSorter {
             // Concatenate memory batches together and sort
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
             self.in_mem_batches.clear();
-            self.reservation.try_resize(batch.get_array_memory_size())?;
+            self.reservation
+                .try_resize(get_record_batch_memory_size(&batch))?;
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation);
         }
@@ -530,16 +550,19 @@ impl ExternalSorter {
             .into_iter()
             .map(|batch| {
                 let metrics = self.metrics.baseline.intermediate();
-                let reservation = self.reservation.split(batch.get_array_memory_size());
+                let reservation =
+                    self.reservation.split(get_record_batch_memory_size(&batch));
                 let input = self.sort_batch_stream(batch, metrics, reservation)?;
                 Ok(spawn_buffered(input, 1))
             })
             .collect::<Result<_>>()?;
 
+        let expressions: LexOrdering = self.expr.iter().cloned().collect();
+
         StreamingMergeBuilder::new()
             .with_streams(streams)
             .with_schema(Arc::clone(&self.schema))
-            .with_expressions(self.expr.as_ref())
+            .with_expressions(expressions.as_ref())
             .with_metrics(metrics)
             .with_batch_size(self.batch_size)
             .with_fetch(self.fetch)
@@ -557,11 +580,11 @@ impl ExternalSorter {
         metrics: BaselineMetrics,
         reservation: MemoryReservation,
     ) -> Result<SendableRecordBatchStream> {
-        assert_eq!(batch.get_array_memory_size(), reservation.size());
+        assert_eq!(get_record_batch_memory_size(&batch), reservation.size());
         let schema = batch.schema();
 
         let fetch = self.fetch;
-        let expressions = Arc::clone(&self.expr);
+        let expressions: LexOrdering = self.expr.iter().cloned().collect();
         let stream = futures::stream::once(futures::future::lazy(move |_| {
             let timer = metrics.elapsed_compute().timer();
             let sorted = sort_batch(&batch, &expressions, fetch)?;
@@ -575,7 +598,7 @@ impl ExternalSorter {
     }
 
     /// If this sort may spill, pre-allocates
-    /// `sort_spill_reservation_bytes` of memory to gurarantee memory
+    /// `sort_spill_reservation_bytes` of memory to guarantee memory
     /// left for the in memory sort/merge.
     fn reserve_memory_for_merge(&mut self) -> Result<()> {
         // Reserve headroom for next merge sort
@@ -603,7 +626,7 @@ impl Debug for ExternalSorter {
 
 pub fn sort_batch(
     batch: &RecordBatch,
-    expressions: LexOrderingRef,
+    expressions: &LexOrdering,
     fetch: Option<usize>,
 ) -> Result<RecordBatch> {
     let sort_columns = expressions
@@ -740,11 +763,15 @@ impl SortExec {
     /// can be dropped.
     pub fn with_fetch(&self, fetch: Option<usize>) -> Self {
         let mut cache = self.cache.clone();
-        if fetch.is_some() && self.cache.execution_mode == ExecutionMode::Unbounded {
-            // When a theoretically unnecessary sort becomes a top-K (which
-            // sometimes arises as an intermediate state before full removal),
-            // its execution mode should become `Bounded`.
-            cache.execution_mode = ExecutionMode::Bounded;
+        // If the SortExec can emit incrementally (that means the sort requirements
+        // and properties of the input match), the SortExec can generate its result
+        // without scanning the entire input when a fetch value exists.
+        let is_pipeline_friendly = matches!(
+            self.cache.emission_type,
+            EmissionType::Incremental | EmissionType::Both
+        );
+        if fetch.is_some() && is_pipeline_friendly {
+            cache = cache.with_boundedness(Boundedness::Bounded);
         }
         SortExec {
             input: Arc::clone(&self.input),
@@ -762,8 +789,8 @@ impl SortExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> LexOrderingRef {
-        self.expr.as_ref()
+    pub fn expr(&self) -> &LexOrdering {
+        &self.expr
     }
 
     /// If `Some(fetch)`, limits output to only the first "fetch" items
@@ -790,19 +817,39 @@ impl SortExec {
         preserve_partitioning: bool,
     ) -> PlanProperties {
         // Determine execution mode:
-        let sort_satisfied = input.equivalence_properties().ordering_satisfy_requirement(
-            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter())
-                .inner
-                .as_slice(),
-        );
-        let mode = match input.execution_mode() {
-            ExecutionMode::Unbounded if sort_satisfied => ExecutionMode::Unbounded,
-            ExecutionMode::Bounded => ExecutionMode::Bounded,
-            _ => ExecutionMode::PipelineBreaking,
+        let requirement = LexRequirement::from(sort_exprs);
+        let sort_satisfied = input
+            .equivalence_properties()
+            .ordering_satisfy_requirement(&requirement);
+
+        // The emission type depends on whether the input is already sorted:
+        // - If already sorted, we can emit results in the same way as the input
+        // - If not sorted, we must wait until all data is processed to emit results (Final)
+        let emission_type = if sort_satisfied {
+            input.pipeline_behavior()
+        } else {
+            EmissionType::Final
+        };
+
+        // The boundedness depends on whether the input is already sorted:
+        // - If already sorted, we have the same property as the input
+        // - If not sorted and input is unbounded, we require infinite memory and generates
+        //   unbounded data (not practical).
+        // - If not sorted and input is bounded, then the SortExec is bounded, too.
+        let boundedness = if sort_satisfied {
+            input.boundedness()
+        } else {
+            match input.boundedness() {
+                Boundedness::Unbounded { .. } => Boundedness::Unbounded {
+                    requires_infinite_memory: true,
+                },
+                bounded => bounded,
+            }
         };
 
         // Calculate equivalence properties; i.e. reset the ordering equivalence
         // class with the new ordering:
+        let sort_exprs = LexOrdering::from(requirement);
         let eq_properties = input
             .equivalence_properties()
             .clone()
@@ -812,7 +859,12 @@ impl SortExec {
         let output_partitioning =
             Self::output_partitioning_helper(input, preserve_partitioning);
 
-        PlanProperties::new(eq_properties, output_partitioning, mode)
+        PlanProperties::new(
+            eq_properties,
+            output_partitioning,
+            emission_type,
+            boundedness,
+        )
     }
 }
 
@@ -890,11 +942,7 @@ impl ExecutionPlan for SortExec {
         let sort_satisfied = self
             .input
             .equivalence_properties()
-            .ordering_satisfy_requirement(
-                PhysicalSortRequirement::from_sort_exprs(self.expr.iter())
-                    .inner
-                    .as_slice(),
-            );
+            .ordering_satisfy_requirement(&LexRequirement::from(self.expr.clone()));
 
         match (sort_satisfied, self.fetch.as_ref()) {
             (true, Some(fetch)) => Ok(Box::pin(LimitStream::new(
@@ -913,7 +961,6 @@ impl ExecutionPlan for SortExec {
                     context.session_config().batch_size(),
                     context.runtime_env(),
                     &self.metrics_set,
-                    partition,
                 )?;
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
@@ -1002,6 +1049,7 @@ mod tests {
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::collect;
+    use crate::execution_plan::Boundedness;
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::test;
@@ -1045,8 +1093,14 @@ mod tests {
             eq_properties.add_new_orderings(vec![LexOrdering::new(vec![
                 PhysicalSortExpr::new_default(Arc::new(Column::new("c1", 0))),
             ])]);
-            let mode = ExecutionMode::Unbounded;
-            PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1), mode)
+            PlanProperties::new(
+                eq_properties,
+                Partitioning::UnknownPartitioning(1),
+                EmissionType::Final,
+                Boundedness::Unbounded {
+                    requires_infinite_memory: false,
+                },
+            )
         }
     }
 
@@ -1201,9 +1255,9 @@ mod tests {
 
         assert_eq!(metrics.output_rows().unwrap(), 10000);
         assert!(metrics.elapsed_compute().unwrap() > 0);
-        assert_eq!(metrics.spill_count().unwrap(), 4);
-        assert_eq!(metrics.spilled_bytes().unwrap(), 38784);
-        assert_eq!(metrics.spilled_rows().unwrap(), 9600);
+        assert_eq!(metrics.spill_count().unwrap(), 3);
+        assert_eq!(metrics.spilled_bytes().unwrap(), 36000);
+        assert_eq!(metrics.spilled_rows().unwrap(), 9000);
 
         let columns = result[0].columns();
 
@@ -1326,7 +1380,7 @@ mod tests {
         // Data is correct
         assert_eq!(&vec![expected_batch], &result);
 
-        // explicitlty ensure the metadata is present
+        // explicitly ensure the metadata is present
         assert_eq!(result[0].schema().fields()[0].metadata(), &field_metadata);
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
 
@@ -1340,7 +1394,7 @@ mod tests {
             Field::new("a", DataType::Int32, true),
             Field::new(
                 "b",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 true,
             ),
         ]));
@@ -1385,7 +1439,7 @@ mod tests {
 
         assert_eq!(DataType::Int32, *sort_exec.schema().field(0).data_type());
         assert_eq!(
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
             *sort_exec.schema().field(1).data_type()
         );
 

@@ -37,15 +37,16 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = { workspace = true }
-chrono = { workspace = true }
 dashmap = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
 futures = { workspace = true }
-hashbrown = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
 url = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }

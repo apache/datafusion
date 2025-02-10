@@ -21,22 +21,21 @@ use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::{
-    expressions::{Literal, NthValue, PhysicalSortExpr},
-    ExecutionPlan, ExecutionPlanProperties, InputOrderMode, PhysicalExpr,
+    expressions::PhysicalSortExpr, ExecutionPlan, ExecutionPlanProperties,
+    InputOrderMode, PhysicalExpr,
 };
 
 use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef};
-use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
-    BuiltInWindowFunction, PartitionEvaluator, ReversedUDWF, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    PartitionEvaluator, ReversedUDWF, WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::equivalence::collapse_lex_req;
 use datafusion_physical_expr::{
     reverse_order_bys,
-    window::{BuiltInWindowFunctionExpr, SlidingAggregateWindowExpr},
+    window::{SlidingAggregateWindowExpr, StandardWindowFunctionExpr},
     ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
 use itertools::Itertools;
@@ -51,9 +50,9 @@ use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::expressions::Column;
 pub use datafusion_physical_expr::window::{
-    BuiltInWindowExpr, PlainAggregateWindowExpr, WindowExpr,
+    PlainAggregateWindowExpr, StandardWindowExpr, WindowExpr,
 };
-use datafusion_physical_expr_common::sort_expr::{LexOrderingRef, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::LexRequirement;
 pub use window_agg_exec::WindowAggExec;
 
 /// Build field from window function and add it into schema
@@ -98,20 +97,12 @@ pub fn create_window_expr(
     name: String,
     args: &[Arc<dyn PhysicalExpr>],
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: LexOrderingRef,
+    order_by: &LexOrdering,
     window_frame: Arc<WindowFrame>,
     input_schema: &Schema,
     ignore_nulls: bool,
 ) -> Result<Arc<dyn WindowExpr>> {
     Ok(match fun {
-        WindowFunctionDefinition::BuiltInWindowFunction(fun) => {
-            Arc::new(BuiltInWindowExpr::new(
-                create_built_in_window_expr(fun, args, input_schema, name, ignore_nulls)?,
-                partition_by,
-                order_by,
-                window_frame,
-            ))
-        }
         WindowFunctionDefinition::AggregateUDF(fun) => {
             let aggregate = AggregateExprBuilder::new(Arc::clone(fun), args.to_vec())
                 .schema(Arc::new(input_schema.clone()))
@@ -126,8 +117,7 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
-        // TODO: Ordering not supported for Window UDFs yet
-        WindowFunctionDefinition::WindowUDF(fun) => Arc::new(BuiltInWindowExpr::new(
+        WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
             create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
             partition_by,
             order_by,
@@ -139,7 +129,7 @@ pub fn create_window_expr(
 /// Creates an appropriate [`WindowExpr`] based on the window frame and
 fn window_expr_from_aggregate_expr(
     partition_by: &[Arc<dyn PhysicalExpr>],
-    order_by: LexOrderingRef,
+    order_by: &LexOrdering,
     window_frame: Arc<WindowFrame>,
     aggregate: Arc<AggregateFunctionExpr>,
 ) -> Arc<dyn WindowExpr> {
@@ -163,97 +153,48 @@ fn window_expr_from_aggregate_expr(
     }
 }
 
-fn get_signed_integer(value: ScalarValue) -> Result<i64> {
-    if value.is_null() {
-        return Ok(0);
-    }
-
-    if !value.data_type().is_integer() {
-        return exec_err!("Expected an integer value");
-    }
-
-    value.cast_to(&DataType::Int64)?.try_into()
-}
-
-fn create_built_in_window_expr(
-    fun: &BuiltInWindowFunction,
-    args: &[Arc<dyn PhysicalExpr>],
-    input_schema: &Schema,
-    name: String,
-    ignore_nulls: bool,
-) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
-    // derive the output datatype from incoming schema
-    let out_data_type: &DataType = input_schema.field_with_name(&name)?.data_type();
-
-    Ok(match fun {
-        BuiltInWindowFunction::NthValue => {
-            let arg = Arc::clone(&args[0]);
-            let n = get_signed_integer(
-                args[1]
-                    .as_any()
-                    .downcast_ref::<Literal>()
-                    .ok_or_else(|| {
-                        exec_datafusion_err!("Expected a signed integer literal for the second argument of nth_value, got {}", args[1])
-                    })?
-                    .value()
-                    .clone(),
-            )?;
-            Arc::new(NthValue::nth(
-                name,
-                arg,
-                out_data_type.clone(),
-                n,
-                ignore_nulls,
-            )?)
-        }
-        BuiltInWindowFunction::FirstValue => {
-            let arg = Arc::clone(&args[0]);
-            Arc::new(NthValue::first(
-                name,
-                arg,
-                out_data_type.clone(),
-                ignore_nulls,
-            ))
-        }
-        BuiltInWindowFunction::LastValue => {
-            let arg = Arc::clone(&args[0]);
-            Arc::new(NthValue::last(
-                name,
-                arg,
-                out_data_type.clone(),
-                ignore_nulls,
-            ))
-        }
-    })
-}
-
-/// Creates a `BuiltInWindowFunctionExpr` suitable for a user defined window function
-fn create_udwf_window_expr(
+/// Creates a `StandardWindowFunctionExpr` suitable for a user defined window function
+pub fn create_udwf_window_expr(
     fun: &Arc<WindowUDF>,
     args: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
     name: String,
     ignore_nulls: bool,
-) -> Result<Arc<dyn BuiltInWindowFunctionExpr>> {
+) -> Result<Arc<dyn StandardWindowFunctionExpr>> {
     // need to get the types into an owned vec for some reason
     let input_types: Vec<_> = args
         .iter()
         .map(|arg| arg.data_type(input_schema))
         .collect::<Result<_>>()?;
 
-    Ok(Arc::new(WindowUDFExpr {
+    let udwf_expr = Arc::new(WindowUDFExpr {
         fun: Arc::clone(fun),
         args: args.to_vec(),
         input_types,
         name,
         is_reversed: false,
         ignore_nulls,
-    }))
+    });
+
+    // Early validation of input expressions
+    // We create a partition evaluator because in the user-defined window
+    // implementation this is where code for parsing input expressions
+    // exist. The benefits are:
+    // - If any of the input expressions are invalid we catch them early
+    // in the planning phase, rather than during execution.
+    // - Maintains compatibility with built-in (now removed) window
+    // functions validation behavior.
+    // - Predictable and reliable error handling.
+    // See discussion here:
+    // https://github.com/apache/datafusion/pull/13201#issuecomment-2454209975
+    let _ = udwf_expr.create_evaluator()?;
+
+    Ok(udwf_expr)
 }
 
-/// Implements [`BuiltInWindowFunctionExpr`] for [`WindowUDF`]
+/// Implements [`StandardWindowFunctionExpr`] for [`WindowUDF`]
 #[derive(Clone, Debug)]
-struct WindowUDFExpr {
+pub struct WindowUDFExpr {
     fun: Arc<WindowUDF>,
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Display name
@@ -268,7 +209,13 @@ struct WindowUDFExpr {
     ignore_nulls: bool,
 }
 
-impl BuiltInWindowFunctionExpr for WindowUDFExpr {
+impl WindowUDFExpr {
+    pub fn fun(&self) -> &Arc<WindowUDF> {
+        &self.fun
+    }
+}
+
+impl StandardWindowFunctionExpr for WindowUDFExpr {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -297,7 +244,7 @@ impl BuiltInWindowFunctionExpr for WindowUDFExpr {
         &self.name
     }
 
-    fn reverse_expr(&self) -> Option<Arc<dyn BuiltInWindowFunctionExpr>> {
+    fn reverse_expr(&self) -> Option<Arc<dyn StandardWindowFunctionExpr>> {
         match self.fun.reverse_expr() {
             ReversedUDWF::Identical => Some(Arc::new(self.clone())),
             ReversedUDWF::NotSupported => None,
@@ -398,10 +345,9 @@ pub(crate) fn window_equivalence_properties(
         .extend(input.equivalence_properties().clone());
 
     for expr in window_expr {
-        if let Some(builtin_window_expr) =
-            expr.as_any().downcast_ref::<BuiltInWindowExpr>()
+        if let Some(udf_window_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
         {
-            builtin_window_expr.add_equal_orderings(&mut window_eq_properties);
+            udf_window_expr.add_equal_orderings(&mut window_eq_properties);
         }
     }
     window_eq_properties
@@ -437,7 +383,7 @@ pub fn get_best_fitting_window(
         } else {
             return Ok(None);
         };
-    let is_unbounded = input.execution_mode().is_unbounded();
+    let is_unbounded = input.boundedness().is_unbounded();
     if !is_unbounded && input_order_mode != InputOrderMode::Sorted {
         // Executor has bounded input and `input_order_mode` is not `InputOrderMode::Sorted`
         // in this case removing the sort is not helpful, return:
@@ -497,7 +443,7 @@ pub fn get_best_fitting_window(
 /// the mode this window operator should work in to accommodate the existing ordering.
 pub fn get_window_mode(
     partitionby_exprs: &[Arc<dyn PhysicalExpr>],
-    orderby_keys: LexOrderingRef,
+    orderby_keys: &LexOrdering,
     input: &Arc<dyn ExecutionPlan>,
 ) -> Option<(bool, InputOrderMode)> {
     let input_eqs = input.equivalence_properties().clone();
@@ -516,9 +462,8 @@ pub fn get_window_mode(
     // Treat partition by exprs as constant. During analysis of requirements are satisfied.
     let const_exprs = partitionby_exprs.iter().map(ConstExpr::from);
     let partition_by_eqs = input_eqs.with_constants(const_exprs);
-    let order_by_reqs = PhysicalSortRequirement::from_sort_exprs(orderby_keys.iter());
-    let reverse_order_by_reqs =
-        PhysicalSortRequirement::from_sort_exprs(reverse_order_bys(orderby_keys).iter());
+    let order_by_reqs = LexRequirement::from(orderby_keys.clone());
+    let reverse_order_by_reqs = LexRequirement::from(reverse_order_bys(orderby_keys));
     for (should_swap, order_by_reqs) in
         [(false, order_by_reqs), (true, reverse_order_by_reqs)]
     {
@@ -699,7 +644,7 @@ mod tests {
                 "count".to_owned(),
                 &[col("a", &schema)?],
                 &[],
-                LexOrderingRef::default(),
+                &LexOrdering::default(),
                 Arc::new(WindowFrame::new(None)),
                 schema.as_ref(),
                 false,

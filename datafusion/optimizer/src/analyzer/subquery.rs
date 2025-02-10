@@ -78,7 +78,7 @@ pub fn check_subquery_expr(
             match outer_plan {
                 LogicalPlan::Projection(_)
                 | LogicalPlan::Filter(_) => Ok(()),
-                LogicalPlan::Aggregate(Aggregate {group_expr, aggr_expr,..}) => {
+                LogicalPlan::Aggregate(Aggregate { group_expr, aggr_expr, .. }) => {
                     if group_expr.contains(expr) && !aggr_expr.contains(expr) {
                         // TODO revisit this validation logic
                         plan_err!(
@@ -87,7 +87,7 @@ pub fn check_subquery_expr(
                     } else {
                         Ok(())
                     }
-                },
+                }
                 _ => plan_err!(
                     "Correlated scalar subquery can only be used in Projection, Filter, Aggregate plan nodes"
                 )
@@ -128,6 +128,7 @@ fn check_correlations_in_subquery(inner_plan: &LogicalPlan) -> Result<()> {
 }
 
 // Recursively check the unsupported outer references in the sub query plan.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
 fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Result<()> {
     if !can_contain_outer_ref && inner_plan.contains_outer_reference() {
         return plan_err!("Accessing outer reference columns is not allowed in the plan");
@@ -161,7 +162,8 @@ fn check_inner_plan(inner_plan: &LogicalPlan, can_contain_outer_ref: bool) -> Re
         | LogicalPlan::Limit(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::Subquery(_)
-        | LogicalPlan::SubqueryAlias(_) => {
+        | LogicalPlan::SubqueryAlias(_)
+        | LogicalPlan::Unnest(_) => {
             inner_plan.apply_children(|plan| {
                 check_inner_plan(plan, can_contain_outer_ref)?;
                 Ok(TreeNodeRecursion::Continue)

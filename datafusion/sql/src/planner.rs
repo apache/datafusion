@@ -24,10 +24,10 @@ use arrow_schema::*;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
 };
+use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
-use sqlparser::ast::{TimezoneInfo, Value};
 
 use datafusion_common::TableReference;
 use datafusion_common::{
@@ -38,7 +38,7 @@ use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
 
-use crate::utils::{make_decimal_type, value_to_string};
+use crate::utils::make_decimal_type;
 pub use datafusion_expr::planner::ContextProvider;
 
 /// SQL parser options
@@ -56,7 +56,7 @@ impl Default for ParserOptions {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
-            enable_options_value_normalization: true,
+            enable_options_value_normalization: false,
         }
     }
 }
@@ -83,32 +83,6 @@ impl IdentNormalizer {
             crate::utils::normalize_ident(ident)
         } else {
             ident.value
-        }
-    }
-}
-
-/// Value Normalizer
-#[derive(Debug)]
-pub struct ValueNormalizer {
-    normalize: bool,
-}
-
-impl Default for ValueNormalizer {
-    fn default() -> Self {
-        Self { normalize: true }
-    }
-}
-
-impl ValueNormalizer {
-    pub fn new(normalize: bool) -> Self {
-        Self { normalize }
-    }
-
-    pub fn normalize(&self, value: Value) -> Option<String> {
-        match (value_to_string(&value), self.normalize) {
-            (Some(s), true) => Some(s.to_ascii_lowercase()),
-            (Some(s), false) => Some(s),
-            (None, _) => None,
         }
     }
 }
@@ -254,7 +228,6 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
     pub(crate) ident_normalizer: IdentNormalizer,
-    pub(crate) value_normalizer: ValueNormalizer,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -266,13 +239,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
     pub fn new_with_options(context_provider: &'a S, options: ParserOptions) -> Self {
         let ident_normalize = options.enable_ident_normalization;
-        let options_value_normalize = options.enable_options_value_normalization;
 
         SqlToRel {
             context_provider,
             options,
             ident_normalizer: IdentNormalizer::new(ident_normalize),
-            value_normalizer: ValueNormalizer::new(options_value_normalize),
         }
     }
 
@@ -339,7 +310,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: LogicalPlan,
         alias: TableAlias,
     ) -> Result<LogicalPlan> {
-        let plan = self.apply_expr_alias(plan, alias.columns)?;
+        let idents = alias.columns.into_iter().map(|c| c.name).collect();
+        let plan = self.apply_expr_alias(plan, idents)?;
 
         LogicalPlanBuilder::from(plan)
             .alias(TableReference::bare(
@@ -401,6 +373,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     pub(crate) fn convert_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
+        // First check if any of the registered type_planner can handle this type
+        if let Some(type_planner) = self.context_provider.get_type_planner() {
+            if let Some(data_type) = type_planner.plan_type(sql_type)? {
+                return Ok(data_type);
+            }
+        }
+
+        // If no type_planner can handle this type, use the default conversion
         match sql_type {
             SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
                 // Arrays may be multi-dimensional.
@@ -460,7 +440,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     || matches!(tz_info, TimezoneInfo::WithTimeZone)
                 {
                     // Timestamp With Time Zone
-                    // INPUT : [SQLDataType]   TimestampTz + [RuntimeConfig] Time Zone
+                    // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Some(Time Zone)>
                     self.context_provider.options().execution.time_zone.clone()
                 } else {
@@ -483,7 +463,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 {
                     Ok(DataType::Time64(TimeUnit::Nanosecond))
                 } else {
-                    // We dont support TIMETZ and TIME WITH TIME ZONE for now
+                    // We don't support TIMETZ and TIME WITH TIME ZONE for now
                     not_impl_err!(
                         "Unsupported SQL type {sql_type:?}"
                     )
@@ -534,7 +514,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Regclass
             | SQLDataType::Custom(_, _)
             | SQLDataType::Array(_)
-            | SQLDataType::Enum(_)
+            | SQLDataType::Enum(_, _)
             | SQLDataType::Set(_)
             | SQLDataType::MediumInt(_)
             | SQLDataType::UnsignedMediumInt(_)
@@ -578,6 +558,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::Nullable(_)
             | SQLDataType::LowCardinality(_)
             | SQLDataType::Trigger
+            // MySQL datatypes
+            | SQLDataType::TinyBlob
+            | SQLDataType::MediumBlob
+            | SQLDataType::LongBlob
+            | SQLDataType::TinyText
+            | SQLDataType::MediumText
+            | SQLDataType::LongText
+            | SQLDataType::Bit(_)
+            |SQLDataType::BitVarying(_)
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),
@@ -614,40 +603,76 @@ pub fn object_name_to_table_reference(
     idents_to_table_reference(idents, enable_normalization)
 }
 
+struct IdentTaker {
+    normalizer: IdentNormalizer,
+    idents: Vec<Ident>,
+}
+
+/// Take the next identifier from the back of idents, panic'ing if
+/// there are none left
+impl IdentTaker {
+    fn new(idents: Vec<Ident>, enable_normalization: bool) -> Self {
+        Self {
+            normalizer: IdentNormalizer::new(enable_normalization),
+            idents,
+        }
+    }
+
+    fn take(&mut self) -> String {
+        let ident = self.idents.pop().expect("no more identifiers");
+        self.normalizer.normalize(ident)
+    }
+
+    /// Returns the number of remaining identifiers
+    fn len(&self) -> usize {
+        self.idents.len()
+    }
+}
+
+// impl Display for a nicer error message
+impl std::fmt::Display for IdentTaker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut first = true;
+        for ident in self.idents.iter() {
+            if !first {
+                write!(f, ".")?;
+            }
+            write!(f, "{}", ident)?;
+            first = false;
+        }
+
+        Ok(())
+    }
+}
+
 /// Create a [`TableReference`] after normalizing the specified identifier
 pub(crate) fn idents_to_table_reference(
     idents: Vec<Ident>,
     enable_normalization: bool,
 ) -> Result<TableReference> {
-    struct IdentTaker(Vec<Ident>);
-    /// Take the next identifier from the back of idents, panic'ing if
-    /// there are none left
-    impl IdentTaker {
-        fn take(&mut self, enable_normalization: bool) -> String {
-            let ident = self.0.pop().expect("no more identifiers");
-            IdentNormalizer::new(enable_normalization).normalize(ident)
-        }
-    }
+    let mut taker = IdentTaker::new(idents, enable_normalization);
 
-    let mut taker = IdentTaker(idents);
-
-    match taker.0.len() {
+    match taker.len() {
         1 => {
-            let table = taker.take(enable_normalization);
+            let table = taker.take();
             Ok(TableReference::bare(table))
         }
         2 => {
-            let table = taker.take(enable_normalization);
-            let schema = taker.take(enable_normalization);
+            let table = taker.take();
+            let schema = taker.take();
             Ok(TableReference::partial(schema, table))
         }
         3 => {
-            let table = taker.take(enable_normalization);
-            let schema = taker.take(enable_normalization);
-            let catalog = taker.take(enable_normalization);
+            let table = taker.take();
+            let schema = taker.take();
+            let catalog = taker.take();
             Ok(TableReference::full(catalog, schema, table))
         }
-        _ => plan_err!("Unsupported compound identifier '{:?}'", taker.0),
+        _ => plan_err!(
+            "Unsupported compound identifier '{}'. Expected 1, 2 or 3 parts, got {}",
+            taker,
+            taker.len()
+        ),
     }
 }
 

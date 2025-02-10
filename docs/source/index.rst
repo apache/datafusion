@@ -103,6 +103,7 @@ To get started, see
 
    user-guide/introduction
    user-guide/example-usage
+   user-guide/concepts-readings-events
    user-guide/crate-configuration
    user-guide/cli/index
    user-guide/dataframe

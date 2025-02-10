@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::ArrayData;
@@ -25,7 +25,7 @@ use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_schema::{DataType, Field, SchemaBuilder};
 
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, HashSet, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_MAP;
 use datafusion_expr::{
@@ -214,9 +214,9 @@ impl ScalarUDFImpl for MapFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() % 2 != 0 {
+        if arg_types.len() != 2 {
             return exec_err!(
-                "map requires an even number of arguments, got {} instead",
+                "map requires exactly 2 arguments, got {} instead",
                 arg_types.len()
             );
         }
@@ -238,7 +238,11 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_map_batch(args)
     }
 
@@ -251,43 +255,42 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_map_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-                Documentation::builder()
-                    .with_doc_section(DOC_SECTION_MAP)
-                    .with_description(
+                Documentation::builder(
+                    DOC_SECTION_MAP,
                         "Returns an Arrow map with the specified key-value pairs.\n\n\
-                        The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null."
-                    )
-                    .with_syntax_example(
+                        The `make_map` function creates a map from two lists: one for keys and one for values. Each key must be unique and non-null.",
+
                         "map(key, value)\nmap(key: value)\nmake_map(['key1', 'key2'], ['value1', 'value2'])"
                     )
                     .with_sql_example(
-                        r#"```sql
-        -- Using map function
-        SELECT MAP('type', 'test');
-        ----
-        {type: test}
-        
-        SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
-        ----
-        {POST: 41, HEAD: 33, PATCH: }
-        
-        SELECT MAP([[1,2], [3,4]], ['a', 'b']);
-        ----
-        {[1, 2]: a, [3, 4]: b}
-        
-        SELECT MAP { 'a': 1, 'b': 2 };
-        ----
-        {a: 1, b: 2}
-        
-        -- Using make_map function
-        SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
-        ----
-        {POST: 41, HEAD: 33}
-        
-        SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
-        ----
-        {key1: value1, key2: }
-        ```"#
+                        r#"
+```sql
+-- Using map function
+SELECT MAP('type', 'test');
+----
+{type: test}
+
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+----
+{POST: 41, HEAD: 33, PATCH: }
+
+SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+----
+{[1, 2]: a, [3, 4]: b}
+
+SELECT MAP { 'a': 1, 'b': 2 };
+----
+{a: 1, b: 2}
+
+-- Using make_map function
+SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
+----
+{POST: 41, HEAD: 33}
+
+SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
+----
+{key1: value1, key2: }
+```"#,
                     )
                     .with_argument(
                         "key",
@@ -300,7 +303,6 @@ fn get_map_doc() -> &'static Documentation {
                         For `make_map`: The list of values to be mapped to the corresponding keys."
                     )
                     .build()
-                    .unwrap()
             })
 }
 
@@ -371,7 +373,6 @@ fn get_element_type(data_type: &DataType) -> Result<&DataType> {
 /// | +-------+ |      | +-------+ |
 /// +-----------+      +-----------+
 /// ```text
-
 fn make_map_array_internal<O: OffsetSizeTrait>(
     keys: ArrayRef,
     values: ArrayRef,

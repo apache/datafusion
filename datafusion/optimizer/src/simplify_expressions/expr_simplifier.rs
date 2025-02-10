@@ -43,12 +43,13 @@ use datafusion_expr::{
     utils::{iter_conjunction, iter_conjunction_owned},
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
-use indexmap::IndexSet;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
+use indexmap::IndexSet;
+use regex::Regex;
 
 use super::inlist_simplifier::ShortenInListSimplifier;
 use super::utils::*;
@@ -488,7 +489,7 @@ enum ConstSimplifyResult {
     SimplifyRuntimeError(DataFusionError, Expr),
 }
 
-impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
+impl TreeNodeRewriter for ConstEvaluator<'_> {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
@@ -709,7 +710,7 @@ impl<'a, S> Simplifier<'a, S> {
     }
 }
 
-impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
+impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
     type Node = Expr;
 
     /// rewrite the expression simplifying any constant expressions
@@ -1470,19 +1471,70 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             }) => Transformed::yes(simplify_regex_expr(left, op, right)?),
 
             // Rules for Like
-            Expr::Like(Like {
-                expr,
-                pattern,
-                negated,
-                escape_char: _,
-                case_insensitive: _,
-            }) if !is_null(&expr)
-                && matches!(
-                    pattern.as_ref(),
-                    Expr::Literal(ScalarValue::Utf8(Some(pattern_str))) if pattern_str == "%"
-                ) =>
-            {
-                Transformed::yes(lit(!negated))
+            Expr::Like(like) => {
+                // `\` is implicit escape, see https://github.com/apache/datafusion/issues/13291
+                let escape_char = like.escape_char.unwrap_or('\\');
+                match as_string_scalar(&like.pattern) {
+                    Some((data_type, pattern_str)) => {
+                        match pattern_str {
+                            None => return Ok(Transformed::yes(lit_bool_null())),
+                            Some(pattern_str) if pattern_str == "%" => {
+                                // exp LIKE '%' is
+                                //   - when exp is not NULL, it's true
+                                //   - when exp is NULL, it's NULL
+                                // exp NOT LIKE '%' is
+                                //   - when exp is not NULL, it's false
+                                //   - when exp is NULL, it's NULL
+                                let result_for_non_null = lit(!like.negated);
+                                Transformed::yes(if !info.nullable(&like.expr)? {
+                                    result_for_non_null
+                                } else {
+                                    Expr::Case(Case {
+                                        expr: Some(Box::new(Expr::IsNotNull(like.expr))),
+                                        when_then_expr: vec![(
+                                            Box::new(lit(true)),
+                                            Box::new(result_for_non_null),
+                                        )],
+                                        else_expr: None,
+                                    })
+                                })
+                            }
+                            Some(pattern_str)
+                                if pattern_str.contains("%%")
+                                    && !pattern_str.contains(escape_char) =>
+                            {
+                                // Repeated occurrences of wildcard are redundant so remove them
+                                // exp LIKE '%%'  --> exp LIKE '%'
+                                let simplified_pattern = Regex::new("%%+")
+                                    .unwrap()
+                                    .replace_all(pattern_str, "%")
+                                    .to_string();
+                                Transformed::yes(Expr::Like(Like {
+                                    pattern: Box::new(to_string_scalar(
+                                        data_type,
+                                        Some(simplified_pattern),
+                                    )),
+                                    ..like
+                                }))
+                            }
+                            Some(pattern_str)
+                                if !pattern_str
+                                    .contains(['%', '_', escape_char].as_ref()) =>
+                            {
+                                // If the pattern does not contain any wildcards, we can simplify the like expression to an equality expression
+                                // TODO: handle escape characters
+                                Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                                    left: like.expr.clone(),
+                                    op: if like.negated { NotEq } else { Eq },
+                                    right: like.pattern.clone(),
+                                }))
+                            }
+
+                            Some(_pattern_str) => Transformed::no(Expr::Like(like)),
+                        }
+                    }
+                    None => Transformed::no(Expr::Like(like)),
+                }
             }
 
             // a is not null/unknown --> true (if a is not nullable)
@@ -1678,6 +1730,24 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
             // no additional rewrites possible
             expr => Transformed::no(expr),
         })
+    }
+}
+
+fn as_string_scalar(expr: &Expr) -> Option<(DataType, &Option<String>)> {
+    match expr {
+        Expr::Literal(ScalarValue::Utf8(s)) => Some((DataType::Utf8, s)),
+        Expr::Literal(ScalarValue::LargeUtf8(s)) => Some((DataType::LargeUtf8, s)),
+        Expr::Literal(ScalarValue::Utf8View(s)) => Some((DataType::Utf8View, s)),
+        _ => None,
+    }
+}
+
+fn to_string_scalar(data_type: DataType, value: Option<String>) -> Expr {
+    match data_type {
+        DataType::Utf8 => Expr::Literal(ScalarValue::Utf8(value)),
+        DataType::LargeUtf8 => Expr::Literal(ScalarValue::LargeUtf8(value)),
+        DataType::Utf8View => Expr::Literal(ScalarValue::Utf8View(value)),
+        _ => unreachable!(),
     }
 }
 
@@ -2777,16 +2847,31 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("f_o")));
 
         // empty cases
-        assert_change(regex_match(col("c1"), lit("")), lit(true));
-        assert_change(regex_not_match(col("c1"), lit("")), lit(false));
-        assert_change(regex_imatch(col("c1"), lit("")), lit(true));
-        assert_change(regex_not_imatch(col("c1"), lit("")), lit(false));
+        assert_change(
+            regex_match(col("c1"), lit("")),
+            if_not_null(col("c1"), true),
+        );
+        assert_change(
+            regex_not_match(col("c1"), lit("")),
+            if_not_null(col("c1"), false),
+        );
+        assert_change(
+            regex_imatch(col("c1"), lit("")),
+            if_not_null(col("c1"), true),
+        );
+        assert_change(
+            regex_not_imatch(col("c1"), lit("")),
+            if_not_null(col("c1"), false),
+        );
 
         // single character
-        assert_change(regex_match(col("c1"), lit("x")), like(col("c1"), "%x%"));
+        assert_change(regex_match(col("c1"), lit("x")), col("c1").like(lit("%x%")));
 
         // single word
-        assert_change(regex_match(col("c1"), lit("foo")), like(col("c1"), "%foo%"));
+        assert_change(
+            regex_match(col("c1"), lit("foo")),
+            col("c1").like(lit("%foo%")),
+        );
 
         // regular expressions that match an exact literal
         assert_change(regex_match(col("c1"), lit("^$")), col("c1").eq(lit("")));
@@ -2873,44 +2958,55 @@ mod tests {
         assert_no_change(regex_match(col("c1"), lit("$foo^")));
 
         // regular expressions that match a partial literal
-        assert_change(regex_match(col("c1"), lit("^foo")), like(col("c1"), "foo%"));
-        assert_change(regex_match(col("c1"), lit("foo$")), like(col("c1"), "%foo"));
+        assert_change(
+            regex_match(col("c1"), lit("^foo")),
+            col("c1").like(lit("foo%")),
+        );
+        assert_change(
+            regex_match(col("c1"), lit("foo$")),
+            col("c1").like(lit("%foo")),
+        );
         assert_change(
             regex_match(col("c1"), lit("^foo|bar$")),
-            like(col("c1"), "foo%").or(like(col("c1"), "%bar")),
+            col("c1").like(lit("foo%")).or(col("c1").like(lit("%bar"))),
         );
 
         // OR-chain
         assert_change(
             regex_match(col("c1"), lit("foo|bar|baz")),
-            like(col("c1"), "%foo%")
-                .or(like(col("c1"), "%bar%"))
-                .or(like(col("c1"), "%baz%")),
+            col("c1")
+                .like(lit("%foo%"))
+                .or(col("c1").like(lit("%bar%")))
+                .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_match(col("c1"), lit("foo|x|baz")),
-            like(col("c1"), "%foo%")
-                .or(like(col("c1"), "%x%"))
-                .or(like(col("c1"), "%baz%")),
+            col("c1")
+                .like(lit("%foo%"))
+                .or(col("c1").like(lit("%x%")))
+                .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_not_match(col("c1"), lit("foo|bar|baz")),
-            not_like(col("c1"), "%foo%")
-                .and(not_like(col("c1"), "%bar%"))
-                .and(not_like(col("c1"), "%baz%")),
+            col("c1")
+                .not_like(lit("%foo%"))
+                .and(col("c1").not_like(lit("%bar%")))
+                .and(col("c1").not_like(lit("%baz%"))),
         );
         // both anchored expressions (translated to equality) and unanchored
         assert_change(
             regex_match(col("c1"), lit("foo|^x$|baz")),
-            like(col("c1"), "%foo%")
+            col("c1")
+                .like(lit("%foo%"))
                 .or(col("c1").eq(lit("x")))
-                .or(like(col("c1"), "%baz%")),
+                .or(col("c1").like(lit("%baz%"))),
         );
         assert_change(
             regex_not_match(col("c1"), lit("foo|^bar$|baz")),
-            not_like(col("c1"), "%foo%")
+            col("c1")
+                .not_like(lit("%foo%"))
                 .and(col("c1").not_eq(lit("bar")))
-                .and(not_like(col("c1"), "%baz%")),
+                .and(col("c1").not_like(lit("%baz%"))),
         );
         // Too many patterns (MAX_REGEX_ALTERNATIONS_EXPANSION)
         assert_no_change(regex_match(col("c1"), lit("foo|bar|baz|blarg|bozo|etc")));
@@ -2957,46 +3053,6 @@ mod tests {
             left: Box::new(left),
             op: Operator::RegexNotIMatch,
             right: Box::new(right),
-        })
-    }
-
-    fn like(expr: Expr, pattern: &str) -> Expr {
-        Expr::Like(Like {
-            negated: false,
-            expr: Box::new(expr),
-            pattern: Box::new(lit(pattern)),
-            escape_char: None,
-            case_insensitive: false,
-        })
-    }
-
-    fn not_like(expr: Expr, pattern: &str) -> Expr {
-        Expr::Like(Like {
-            negated: true,
-            expr: Box::new(expr),
-            pattern: Box::new(lit(pattern)),
-            escape_char: None,
-            case_insensitive: false,
-        })
-    }
-
-    fn ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::Like(Like {
-            negated: false,
-            expr: Box::new(expr),
-            pattern: Box::new(lit(pattern)),
-            escape_char: None,
-            case_insensitive: true,
-        })
-    }
-
-    fn not_ilike(expr: Expr, pattern: &str) -> Expr {
-        Expr::Like(Like {
-            negated: true,
-            expr: Box::new(expr),
-            pattern: Box::new(lit(pattern)),
-            escape_char: None,
-            case_insensitive: true,
         })
     }
 
@@ -3605,33 +3661,122 @@ mod tests {
     }
 
     #[test]
-    fn test_like_and_ilke() {
-        // test non-null values
-        let expr = like(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(true));
-
-        let expr = not_like(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(false));
-
-        let expr = ilike(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(true));
-
-        let expr = not_ilike(col("c1"), "%");
-        assert_eq!(simplify(expr), lit(false));
-
-        // test null values
+    fn test_like_and_ilike() {
         let null = lit(ScalarValue::Utf8(None));
-        let expr = like(null.clone(), "%");
+
+        // expr [NOT] [I]LIKE NULL
+        let expr = col("c1").like(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_like(null.clone(), "%");
+        let expr = col("c1").not_like(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = ilike(null.clone(), "%");
+        let expr = col("c1").ilike(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
 
-        let expr = not_ilike(null, "%");
+        let expr = col("c1").not_ilike(null.clone());
         assert_eq!(simplify(expr), lit_bool_null());
+
+        // expr [NOT] [I]LIKE '%'
+        let expr = col("c1").like(lit("%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), true));
+
+        let expr = col("c1").not_like(lit("%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), false));
+
+        let expr = col("c1").ilike(lit("%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), true));
+
+        let expr = col("c1").not_ilike(lit("%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), false));
+
+        // expr [NOT] [I]LIKE '%%'
+        let expr = col("c1").like(lit("%%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), true));
+
+        let expr = col("c1").not_like(lit("%%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), false));
+
+        let expr = col("c1").ilike(lit("%%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), true));
+
+        let expr = col("c1").not_ilike(lit("%%"));
+        assert_eq!(simplify(expr), if_not_null(col("c1"), false));
+
+        // not_null_expr [NOT] [I]LIKE '%'
+        let expr = col("c1_non_null").like(lit("%"));
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = col("c1_non_null").not_like(lit("%"));
+        assert_eq!(simplify(expr), lit(false));
+
+        let expr = col("c1_non_null").ilike(lit("%"));
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = col("c1_non_null").not_ilike(lit("%"));
+        assert_eq!(simplify(expr), lit(false));
+
+        // not_null_expr [NOT] [I]LIKE '%%'
+        let expr = col("c1_non_null").like(lit("%%"));
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = col("c1_non_null").not_like(lit("%%"));
+        assert_eq!(simplify(expr), lit(false));
+
+        let expr = col("c1_non_null").ilike(lit("%%"));
+        assert_eq!(simplify(expr), lit(true));
+
+        let expr = col("c1_non_null").not_ilike(lit("%%"));
+        assert_eq!(simplify(expr), lit(false));
+
+        // null_constant [NOT] [I]LIKE '%'
+        let expr = null.clone().like(lit("%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_like(lit("%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().ilike(lit("%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_ilike(lit("%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        // null_constant [NOT] [I]LIKE '%%'
+        let expr = null.clone().like(lit("%%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_like(lit("%%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().ilike(lit("%%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_ilike(lit("%%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        // null_constant [NOT] [I]LIKE 'a%'
+        let expr = null.clone().like(lit("a%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_like(lit("a%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().ilike(lit("a%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        let expr = null.clone().not_ilike(lit("a%"));
+        assert_eq!(simplify(expr), lit_bool_null());
+
+        // expr [NOT] [I]LIKE with pattern without wildcards
+        let expr = col("c1").like(lit("a"));
+        assert_eq!(simplify(expr), col("c1").eq(lit("a")));
+        let expr = col("c1").not_like(lit("a"));
+        assert_eq!(simplify(expr), col("c1").not_eq(lit("a")));
+        let expr = col("c1").like(lit("a_"));
+        assert_eq!(simplify(expr), col("c1").like(lit("a_")));
+        let expr = col("c1").not_like(lit("a_"));
+        assert_eq!(simplify(expr), col("c1").not_like(lit("a_")));
     }
 
     #[test]
@@ -3786,7 +3931,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_common_factor_conjuction_in_disjunction() {
+    fn simplify_common_factor_conjunction_in_disjunction() {
         let props = ExecutionProps::new();
         let schema = boolean_test_schema();
         let simplifier =
@@ -4007,6 +4152,7 @@ mod tests {
             Ok(DataType::Int16)
         }
     }
+
     #[test]
     fn test_optimize_volatile_conditions() {
         let fun = Arc::new(ScalarUDF::new_from_impl(VolatileUdf::new()));
@@ -4042,5 +4188,13 @@ mod tests {
                     .and((rand.clone().eq(lit(0))).or(rand.clone().eq(lit(0))))
             );
         }
+    }
+
+    fn if_not_null(expr: Expr, then: bool) -> Expr {
+        Expr::Case(Case {
+            expr: Some(expr.is_not_null().into()),
+            when_then_expr: vec![(lit(true).into(), lit(then).into())],
+            else_expr: None,
+        })
     }
 }

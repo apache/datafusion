@@ -23,12 +23,14 @@ use datafusion_substrait::logical_plan::{
     consumer::from_substrait_plan, producer::to_substrait_plan,
 };
 use std::cmp::Ordering;
+use std::mem::size_of_val;
 
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DFSchemaRef};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, PartitionEvaluator, Repartition, UserDefinedLogicalNode,
     Values, Volatility,
@@ -37,8 +39,6 @@ use datafusion::optimizer::simplify_expressions::expr_simplifier::THRESHOLD_INLI
 use datafusion::prelude::*;
 use std::hash::Hash;
 use std::sync::Arc;
-
-use datafusion::execution::session_state::SessionStateBuilder;
 use substrait::proto::extensions::simple_extension_declaration::MappingType;
 use substrait::proto::rel::RelType;
 use substrait::proto::{plan_rel, Plan, Rel};
@@ -200,6 +200,16 @@ async fn select_with_filter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn select_with_filter_sort_limit() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a > 1 ORDER BY b ASC LIMIT 2").await
+}
+
+#[tokio::test]
+async fn select_with_filter_sort_limit_offset() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a > 1 ORDER BY b ASC LIMIT 2 OFFSET 1").await
+}
+
+#[tokio::test]
 async fn select_with_reused_functions() -> Result<()> {
     let ctx = create_context().await?;
     let sql = "SELECT * FROM data WHERE a > 1 AND a < 10 AND b > 0";
@@ -239,17 +249,20 @@ async fn select_with_filter_bool_expr() -> Result<()> {
 
 #[tokio::test]
 async fn select_with_limit() -> Result<()> {
-    roundtrip_fill_na("SELECT * FROM data LIMIT 100").await
+    roundtrip_fill_na("SELECT * FROM data LIMIT 100").await?;
+    roundtrip_fill_na("SELECT * FROM data LIMIT 98+100/50").await
 }
 
 #[tokio::test]
 async fn select_without_limit() -> Result<()> {
-    roundtrip_fill_na("SELECT * FROM data OFFSET 10").await
+    roundtrip_fill_na("SELECT * FROM data OFFSET 10").await?;
+    roundtrip_fill_na("SELECT * FROM data OFFSET 5+7-2").await
 }
 
 #[tokio::test]
 async fn select_with_limit_offset() -> Result<()> {
-    roundtrip("SELECT * FROM data LIMIT 200 OFFSET 10").await
+    roundtrip("SELECT * FROM data LIMIT 200 OFFSET 10").await?;
+    roundtrip("SELECT * FROM data LIMIT 100+100 OFFSET 20/2").await
 }
 
 #[tokio::test]
@@ -408,6 +421,16 @@ async fn cast_decimal_to_int() -> Result<()> {
 #[tokio::test]
 async fn implicit_cast() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE a = b").await
+}
+
+#[tokio::test]
+async fn try_cast_decimal_to_int() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a = TRY_CAST(b AS int)").await
+}
+
+#[tokio::test]
+async fn try_cast_decimal_to_string() -> Result<()> {
+    roundtrip("SELECT * FROM data WHERE a = TRY_CAST(b AS string)").await
 }
 
 #[tokio::test]
@@ -978,8 +1001,8 @@ async fn extension_logical_plan() -> Result<()> {
         }),
     });
 
-    let proto = to_substrait_plan(&ext_plan, &ctx)?;
-    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let proto = to_substrait_plan(&ext_plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
 
     let plan1str = format!("{ext_plan}");
     let plan2str = format!("{plan2}");
@@ -1080,8 +1103,8 @@ async fn roundtrip_repartition_roundrobin() -> Result<()> {
         partitioning_scheme: Partitioning::RoundRobinBatch(8),
     });
 
-    let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     assert_eq!(format!("{plan}"), format!("{plan2}"));
@@ -1097,8 +1120,8 @@ async fn roundtrip_repartition_hash() -> Result<()> {
         partitioning_scheme: Partitioning::Hash(vec![col("data.a")], 8),
     });
 
-    let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     assert_eq!(format!("{plan}"), format!("{plan2}"));
@@ -1112,7 +1135,7 @@ fn check_post_join_filters(rel: &Rel) -> Result<()> {
             // check if join filter is None
             if join.post_join_filter.is_some() {
                 plan_err!(
-                    "DataFusion generated Susbtrait plan cannot have post_join_filter in JoinRel"
+                    "DataFusion generated Substrait plan cannot have post_join_filter in JoinRel"
                 )
             } else {
                 // recursively check JoinRels
@@ -1198,8 +1221,8 @@ async fn assert_expected_plan_unoptimized(
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_unoptimized_plan();
-    let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
 
     println!("{plan}");
     println!("{plan2}");
@@ -1224,8 +1247,8 @@ async fn assert_expected_plan(
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan}");
@@ -1249,7 +1272,7 @@ async fn assert_expected_plan_substrait(
 ) -> Result<()> {
     let ctx = create_context().await?;
 
-    let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+    let plan = from_substrait_plan(&ctx.state(), &substrait_plan).await?;
 
     let plan = ctx.state().optimize(&plan)?;
 
@@ -1264,7 +1287,7 @@ async fn assert_substrait_sql(substrait_plan: Plan, sql: &str) -> Result<()> {
 
     let expected = ctx.sql(sql).await?.into_optimized_plan()?;
 
-    let plan = from_substrait_plan(&ctx, &substrait_plan).await?;
+    let plan = from_substrait_plan(&ctx.state(), &substrait_plan).await?;
 
     let plan = ctx.state().optimize(&plan)?;
 
@@ -1279,8 +1302,8 @@ async fn roundtrip_fill_na(sql: &str) -> Result<()> {
     let ctx = create_context().await?;
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
-    let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     // Format plan string and replace all None's with 0
@@ -1300,12 +1323,12 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     let ctx = create_context().await?;
 
     let df_a = ctx.sql(sql_with_alias).await?;
-    let proto_a = to_substrait_plan(&df_a.into_optimized_plan()?, &ctx)?;
-    let plan_with_alias = from_substrait_plan(&ctx, &proto_a).await?;
+    let proto_a = to_substrait_plan(&df_a.into_optimized_plan()?, &ctx.state())?;
+    let plan_with_alias = from_substrait_plan(&ctx.state(), &proto_a).await?;
 
     let df = ctx.sql(sql_no_alias).await?;
-    let proto = to_substrait_plan(&df.into_optimized_plan()?, &ctx)?;
-    let plan = from_substrait_plan(&ctx, &proto).await?;
+    let proto = to_substrait_plan(&df.into_optimized_plan()?, &ctx.state())?;
+    let plan = from_substrait_plan(&ctx.state(), &proto).await?;
 
     println!("{plan_with_alias}");
     println!("{plan}");
@@ -1322,8 +1345,8 @@ async fn roundtrip_logical_plan_with_ctx(
     plan: LogicalPlan,
     ctx: SessionContext,
 ) -> Result<Box<Plan>> {
-    let proto = to_substrait_plan(&plan, &ctx)?;
-    let plan2 = from_substrait_plan(&ctx, &proto).await?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
     println!("{plan}");
@@ -1442,10 +1465,14 @@ async fn create_all_type_context() -> Result<SessionContext> {
         Field::new("utf8_col", DataType::Utf8, true),
         Field::new("large_utf8_col", DataType::LargeUtf8, true),
         Field::new("view_utf8_col", DataType::Utf8View, true),
-        Field::new_list("list_col", Field::new("item", DataType::Int64, true), true),
+        Field::new_list(
+            "list_col",
+            Field::new_list_field(DataType::Int64, true),
+            true,
+        ),
         Field::new_list(
             "large_list_col",
-            Field::new("item", DataType::Int64, true),
+            Field::new_list_field(DataType::Int64, true),
             true,
         ),
         Field::new("decimal_128_col", DataType::Decimal128(10, 2), true),

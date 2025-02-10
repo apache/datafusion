@@ -28,7 +28,10 @@ use arrow::datatypes::SchemaRef;
 use datafusion::{
     error::{DataFusionError, Result},
     physical_expr::EquivalenceProperties,
-    physical_plan::{ExecutionMode, PlanProperties},
+    physical_plan::{
+        execution_plan::{Boundedness, EmissionType},
+        PlanProperties,
+    },
     prelude::SessionContext,
 };
 use datafusion_proto::{
@@ -53,8 +56,11 @@ pub struct FFI_PlanProperties {
     pub output_partitioning:
         unsafe extern "C" fn(plan: &Self) -> RResult<RVec<u8>, RStr<'static>>,
 
-    /// Return the execution mode of the plan.
-    pub execution_mode: unsafe extern "C" fn(plan: &Self) -> FFI_ExecutionMode,
+    /// Return the emission type of the plan.
+    pub emission_type: unsafe extern "C" fn(plan: &Self) -> FFI_EmissionType,
+
+    /// Indicate boundedness of the plan and its memory requirements.
+    pub boundedness: unsafe extern "C" fn(plan: &Self) -> FFI_Boundedness,
 
     /// The output ordering is a [`PhysicalSortExprNodeCollection`] protobuf message
     /// serialized into bytes to pass across the FFI boundary.
@@ -98,12 +104,20 @@ unsafe extern "C" fn output_partitioning_fn_wrapper(
     ROk(output_partitioning.into())
 }
 
-unsafe extern "C" fn execution_mode_fn_wrapper(
+unsafe extern "C" fn emission_type_fn_wrapper(
     properties: &FFI_PlanProperties,
-) -> FFI_ExecutionMode {
+) -> FFI_EmissionType {
     let private_data = properties.private_data as *const PlanPropertiesPrivateData;
     let props = &(*private_data).props;
-    props.execution_mode().into()
+    props.emission_type.into()
+}
+
+unsafe extern "C" fn boundedness_fn_wrapper(
+    properties: &FFI_PlanProperties,
+) -> FFI_Boundedness {
+    let private_data = properties.private_data as *const PlanPropertiesPrivateData;
+    let props = &(*private_data).props;
+    props.boundedness.into()
 }
 
 unsafe extern "C" fn output_ordering_fn_wrapper(
@@ -164,7 +178,8 @@ impl From<&PlanProperties> for FFI_PlanProperties {
 
         FFI_PlanProperties {
             output_partitioning: output_partitioning_fn_wrapper,
-            execution_mode: execution_mode_fn_wrapper,
+            emission_type: emission_type_fn_wrapper,
+            boundedness: boundedness_fn_wrapper,
             output_ordering: output_ordering_fn_wrapper,
             schema: schema_fn_wrapper,
             release: release_fn_wrapper,
@@ -220,9 +235,6 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             RErr(e) => Err(DataFusionError::Plan(e.to_string())),
         }?;
 
-        let execution_mode: ExecutionMode =
-            unsafe { (ffi_props.execution_mode)(&ffi_props).into() };
-
         let eq_properties = match orderings {
             Some(ordering) => {
                 EquivalenceProperties::new_with_orderings(Arc::new(schema), &[ordering])
@@ -230,40 +242,82 @@ impl TryFrom<FFI_PlanProperties> for PlanProperties {
             None => EquivalenceProperties::new(Arc::new(schema)),
         };
 
+        let emission_type: EmissionType =
+            unsafe { (ffi_props.emission_type)(&ffi_props).into() };
+
+        let boundedness: Boundedness =
+            unsafe { (ffi_props.boundedness)(&ffi_props).into() };
+
         Ok(PlanProperties::new(
             eq_properties,
             partitioning,
-            execution_mode,
+            emission_type,
+            boundedness,
         ))
     }
 }
 
-/// FFI safe version of [`ExecutionMode`].
+/// FFI safe version of [`Boundedness`].
 #[repr(C)]
 #[allow(non_camel_case_types)]
 #[derive(Clone, StableAbi)]
-pub enum FFI_ExecutionMode {
+pub enum FFI_Boundedness {
     Bounded,
-    Unbounded,
-    PipelineBreaking,
+    Unbounded { requires_infinite_memory: bool },
 }
 
-impl From<ExecutionMode> for FFI_ExecutionMode {
-    fn from(value: ExecutionMode) -> Self {
+impl From<Boundedness> for FFI_Boundedness {
+    fn from(value: Boundedness) -> Self {
         match value {
-            ExecutionMode::Bounded => FFI_ExecutionMode::Bounded,
-            ExecutionMode::Unbounded => FFI_ExecutionMode::Unbounded,
-            ExecutionMode::PipelineBreaking => FFI_ExecutionMode::PipelineBreaking,
+            Boundedness::Bounded => FFI_Boundedness::Bounded,
+            Boundedness::Unbounded {
+                requires_infinite_memory,
+            } => FFI_Boundedness::Unbounded {
+                requires_infinite_memory,
+            },
         }
     }
 }
 
-impl From<FFI_ExecutionMode> for ExecutionMode {
-    fn from(value: FFI_ExecutionMode) -> Self {
+impl From<FFI_Boundedness> for Boundedness {
+    fn from(value: FFI_Boundedness) -> Self {
         match value {
-            FFI_ExecutionMode::Bounded => ExecutionMode::Bounded,
-            FFI_ExecutionMode::Unbounded => ExecutionMode::Unbounded,
-            FFI_ExecutionMode::PipelineBreaking => ExecutionMode::PipelineBreaking,
+            FFI_Boundedness::Bounded => Boundedness::Bounded,
+            FFI_Boundedness::Unbounded {
+                requires_infinite_memory,
+            } => Boundedness::Unbounded {
+                requires_infinite_memory,
+            },
+        }
+    }
+}
+
+/// FFI safe version of [`EmissionType`].
+#[repr(C)]
+#[allow(non_camel_case_types)]
+#[derive(Clone, StableAbi)]
+pub enum FFI_EmissionType {
+    Incremental,
+    Final,
+    Both,
+}
+
+impl From<EmissionType> for FFI_EmissionType {
+    fn from(value: EmissionType) -> Self {
+        match value {
+            EmissionType::Incremental => FFI_EmissionType::Incremental,
+            EmissionType::Final => FFI_EmissionType::Final,
+            EmissionType::Both => FFI_EmissionType::Both,
+        }
+    }
+}
+
+impl From<FFI_EmissionType> for EmissionType {
+    fn from(value: FFI_EmissionType) -> Self {
+        match value {
+            FFI_EmissionType::Incremental => EmissionType::Incremental,
+            FFI_EmissionType::Final => EmissionType::Final,
+            FFI_EmissionType::Both => EmissionType::Both,
         }
     }
 }
@@ -283,7 +337,8 @@ mod tests {
         let original_props = PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(3),
-            ExecutionMode::Unbounded,
+            EmissionType::Incremental,
+            Boundedness::Bounded,
         );
 
         let local_props_ptr = FFI_PlanProperties::from(&original_props);

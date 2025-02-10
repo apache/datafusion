@@ -17,10 +17,9 @@
 
 use std::any::Any;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::{cast_with_options, CastOptions};
@@ -32,12 +31,26 @@ use datafusion_common::{not_impl_err, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and returns NULL on invalid cast
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct TryCastExpr {
     /// The expression to cast
     expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
     cast_type: DataType,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for TryCastExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.expr.eq(&other.expr) && self.cast_type == other.cast_type
+    }
+}
+
+impl Hash for TryCastExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.expr.hash(state);
+        self.cast_type.hash(state);
+    }
 }
 
 impl TryCastExpr {
@@ -109,20 +122,6 @@ impl PhysicalExpr for TryCastExpr {
             Arc::clone(&children[0]),
             self.cast_type.clone(),
         )))
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for TryCastExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.expr.eq(&x.expr) && self.cast_type == x.cast_type)
-            .unwrap_or(false)
     }
 }
 

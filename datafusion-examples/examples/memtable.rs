@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 
-/// This example demonstrates executing a simple query against a Memtable
+/// This example demonstrates executing a simple query against a [`MemTable`]
 #[tokio::main]
 async fn main() -> Result<()> {
     let mem_table = create_memtable()?;

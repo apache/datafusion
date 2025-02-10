@@ -572,9 +572,9 @@ pub struct CsvOptions {
     /// Compression type
     #[prost(enumeration = "CompressionTypeVariant", tag = "5")]
     pub compression: i32,
-    /// Max records for schema inference
-    #[prost(uint64, tag = "6")]
-    pub schema_infer_max_rec: u64,
+    /// Optional max records for schema inference
+    #[prost(uint64, optional, tag = "6")]
+    pub schema_infer_max_rec: ::core::option::Option<u64>,
     /// Optional date format
     #[prost(string, tag = "7")]
     pub date_format: ::prost::alloc::string::String,
@@ -593,17 +593,20 @@ pub struct CsvOptions {
     /// Optional representation of null value
     #[prost(string, tag = "12")]
     pub null_value: ::prost::alloc::string::String,
+    /// Optional representation of null loading regex
+    #[prost(string, tag = "13")]
+    pub null_regex: ::prost::alloc::string::String,
     /// Optional comment character as a byte
-    #[prost(bytes = "vec", tag = "13")]
+    #[prost(bytes = "vec", tag = "14")]
     pub comment: ::prost::alloc::vec::Vec<u8>,
     /// Indicates if quotes are doubled
-    #[prost(bytes = "vec", tag = "14")]
+    #[prost(bytes = "vec", tag = "15")]
     pub double_quote: ::prost::alloc::vec::Vec<u8>,
     /// Indicates if newlines are supported in values
-    #[prost(bytes = "vec", tag = "15")]
+    #[prost(bytes = "vec", tag = "16")]
     pub newlines_in_values: ::prost::alloc::vec::Vec<u8>,
     /// Optional terminator character as a byte
-    #[prost(bytes = "vec", tag = "16")]
+    #[prost(bytes = "vec", tag = "17")]
     pub terminator: ::prost::alloc::vec::Vec<u8>,
 }
 /// Options controlling CSV format
@@ -612,9 +615,9 @@ pub struct JsonOptions {
     /// Compression type
     #[prost(enumeration = "CompressionTypeVariant", tag = "1")]
     pub compression: i32,
-    /// Max records for schema inference
-    #[prost(uint64, tag = "2")]
-    pub schema_infer_max_rec: u64,
+    /// Optional max records for schema inference
+    #[prost(uint64, optional, tag = "2")]
+    pub schema_infer_max_rec: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableParquetOptions {

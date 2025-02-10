@@ -35,7 +35,7 @@ use datafusion::datasource::physical_plan::{AvroExec, CsvExec};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
-use datafusion::physical_expr::{LexOrdering, PhysicalExprRef, PhysicalSortRequirement};
+use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExprRef};
 use datafusion::physical_plan::aggregates::AggregateMode;
 use datafusion::physical_plan::aggregates::{AggregateExec, PhysicalGroupBy};
 use datafusion::physical_plan::analyze::AnalyzeExec;
@@ -64,7 +64,7 @@ use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_expr::{AggregateUDF, ScalarUDF};
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use crate::common::{byte_to_string, str_to_byte};
 use crate::physical_plan::from_proto::{
@@ -1037,7 +1037,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             &sink_schema,
                             extension_codec,
                         )
-                        .map(|item| PhysicalSortRequirement::from_sort_exprs(&item.inner))
+                        .map(LexRequirement::from)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
@@ -1067,7 +1067,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             &sink_schema,
                             extension_codec,
                         )
-                        .map(|item| PhysicalSortRequirement::from_sort_exprs(&item.inner))
+                        .map(LexRequirement::from)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
@@ -1104,9 +1104,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 &sink_schema,
                                 extension_codec,
                             )
-                            .map(|item| {
-                                PhysicalSortRequirement::from_sort_exprs(&item.inner)
-                            })
+                            .map(LexRequirement::from)
                         })
                         .transpose()?;
                     Ok(Arc::new(DataSinkExec::new(
@@ -2119,6 +2117,14 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
     }
 
     fn try_encode_udaf(&self, _node: &AggregateUDF, _buf: &mut Vec<u8>) -> Result<()> {
+        Ok(())
+    }
+
+    fn try_decode_udwf(&self, name: &str, _buf: &[u8]) -> Result<Arc<WindowUDF>> {
+        not_impl_err!("PhysicalExtensionCodec is not provided for window function {name}")
+    }
+
+    fn try_encode_udwf(&self, _node: &WindowUDF, _buf: &mut Vec<u8>) -> Result<()> {
         Ok(())
     }
 }

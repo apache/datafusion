@@ -25,12 +25,14 @@ use arrow::array::{
     OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::{Int64, LargeUtf8, Utf8, Utf8View};
+use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
+use datafusion_common::types::{logical_int64, logical_string};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
+use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr_common::signature::TypeSignatureClass;
 
 #[derive(Debug)]
 pub struct RepeatFunc {
@@ -46,14 +48,10 @@ impl Default for RepeatFunc {
 impl RepeatFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
+            signature: Signature::coercible(
                 vec![
-                    // Planner attempts coercion to the target type starting with the most preferred candidate.
-                    // For example, given input `(Utf8View, Int64)`, it first tries coercing to `(Utf8View, Int64)`.
-                    // If that fails, it proceeds to `(Utf8, Int64)`.
-                    TypeSignature::Exact(vec![Utf8View, Int64]),
-                    TypeSignature::Exact(vec![Utf8, Int64]),
-                    TypeSignature::Exact(vec![LargeUtf8, Int64]),
+                    TypeSignatureClass::Native(logical_string()),
+                    TypeSignatureClass::Native(logical_int64()),
                 ],
                 Volatility::Immutable,
             ),
@@ -78,7 +76,11 @@ impl ScalarUDFImpl for RepeatFunc {
         utf8_to_str_type(&arg_types[0], "repeat")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(repeat, vec![])(args)
     }
 
@@ -91,14 +93,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_repeat_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Returns a string with an input string repeated a specified number.",
-            )
-            .with_syntax_example("repeat(str, n)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns a string with an input string repeated a specified number.",
+            "repeat(str, n)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select repeat('data', 3);
 +-------------------------------+
 | repeat(Utf8("data"),Int64(3)) |
@@ -106,11 +107,10 @@ fn get_repeat_doc() -> &'static Documentation {
 | datadatadata                  |
 +-------------------------------+
 ```"#,
-            )
-            .with_standard_argument("str", Some("String"))
-            .with_argument("n", "Number of times to repeat the input string.")
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("str", Some("String"))
+        .with_argument("n", "Number of times to repeat the input string.")
+        .build()
     })
 }
 
@@ -175,7 +175,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("Pg")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
             ],
@@ -186,7 +186,7 @@ mod tests {
         );
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(None)),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
             ],
@@ -197,7 +197,7 @@ mod tests {
         );
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("Pg")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
@@ -209,7 +209,7 @@ mod tests {
 
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("Pg")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
             ],
@@ -220,7 +220,7 @@ mod tests {
         );
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(None)),
                 ColumnarValue::Scalar(ScalarValue::Int64(Some(4))),
             ],
@@ -231,7 +231,7 @@ mod tests {
         );
         test_function!(
             RepeatFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8View(Some(String::from("Pg")))),
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],

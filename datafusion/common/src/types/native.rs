@@ -24,7 +24,7 @@ use arrow::compute::can_cast_types;
 use arrow_schema::{
     DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
 };
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 /// Representation of a type that DataFusion can handle natively. It is a subset
 /// of the physical variants in Arrow's native [`DataType`].
@@ -183,6 +183,12 @@ pub enum NativeType {
     Map(LogicalFieldRef),
 }
 
+impl Display for NativeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NativeType::{self:?}")
+    }
+}
+
 impl LogicalType for NativeType {
     fn native(&self) -> &NativeType {
         self
@@ -239,6 +245,8 @@ impl LogicalType for NativeType {
             (Self::FixedSizeBinary(size), _) => FixedSizeBinary(*size),
             (Self::String, LargeBinary) => LargeUtf8,
             (Self::String, BinaryView) => Utf8View,
+            // We don't cast to another kind of string type if the origin one is already a string type
+            (Self::String, Utf8 | LargeUtf8 | Utf8View) => origin.to_owned(),
             (Self::String, data_type) if can_cast_types(data_type, &Utf8View) => Utf8View,
             (Self::String, data_type) if can_cast_types(data_type, &LargeUtf8) => {
                 LargeUtf8
@@ -348,6 +356,12 @@ impl LogicalType for NativeType {
 // mapping solutions to provide backwards compatibility while transitioning from
 // the purely physical system to a logical / physical system.
 
+impl From<&DataType> for NativeType {
+    fn from(value: &DataType) -> Self {
+        value.clone().into()
+    }
+}
+
 impl From<DataType> for NativeType {
     fn from(value: DataType) -> Self {
         use NativeType::*;
@@ -392,8 +406,58 @@ impl From<DataType> for NativeType {
     }
 }
 
-impl From<&DataType> for NativeType {
-    fn from(value: &DataType) -> Self {
-        value.clone().into()
+impl NativeType {
+    #[inline]
+    pub fn is_numeric(&self) -> bool {
+        use NativeType::*;
+        matches!(
+            self,
+            UInt8
+                | UInt16
+                | UInt32
+                | UInt64
+                | Int8
+                | Int16
+                | Int32
+                | Int64
+                | Float16
+                | Float32
+                | Float64
+                | Decimal(_, _)
+        )
+    }
+
+    #[inline]
+    pub fn is_integer(&self) -> bool {
+        use NativeType::*;
+        matches!(
+            self,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64
+        )
+    }
+
+    #[inline]
+    pub fn is_timestamp(&self) -> bool {
+        matches!(self, NativeType::Timestamp(_, _))
+    }
+
+    #[inline]
+    pub fn is_date(&self) -> bool {
+        matches!(self, NativeType::Date)
+    }
+
+    #[inline]
+    pub fn is_time(&self) -> bool {
+        matches!(self, NativeType::Time(_))
+    }
+
+    #[inline]
+    pub fn is_interval(&self) -> bool {
+        matches!(self, NativeType::Interval(_))
+    }
+
+    #[inline]
+    pub fn is_duration(&self) -> bool {
+        matches!(self, NativeType::Duration(_))
     }
 }

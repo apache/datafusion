@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the sort preserving merge plan
+//! [`SortPreservingMergeExec`] merges multiple sorted streams into one sorted stream.
 
 use std::any::Any;
 use std::sync::Arc;
@@ -32,19 +32,28 @@ use crate::{
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::PhysicalSortRequirement;
 
-use datafusion_physical_expr_common::sort_expr::{
-    LexOrdering, LexOrderingRef, LexRequirement,
-};
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use log::{debug, trace};
 
 /// Sort preserving merge execution plan
 ///
-/// This takes an input execution plan and a list of sort expressions, and
-/// provided each partition of the input plan is sorted with respect to
-/// these sort expressions, this operator will yield a single partition
-/// that is also sorted with respect to them
+/// # Overview
+///
+/// This operator implements a K-way merge. It is used to merge multiple sorted
+/// streams into a single sorted stream and is highly optimized.
+///
+/// ## Inputs:
+///
+/// 1. A list of sort expressions
+/// 2. An input plan, where each partition is sorted with respect to
+///    these sort expressions.
+///
+/// ## Output:
+///
+/// 1. A single partition that is also sorted with respect to the expressions
+///
+/// ## Diagram
 ///
 /// ```text
 /// ┌─────────────────────────┐
@@ -58,12 +67,12 @@ use log::{debug, trace};
 /// ┌─────────────────────────┐  │  └───────────────────┘    └─┬─────┴───────────────────────┘
 /// │ ╔═══╦═══╗               │  │
 /// │ ║ B ║ E ║     ...       │──┘                             │
-/// │ ╚═══╩═══╝               │              Note Stable Sort: the merged stream
-/// └─────────────────────────┘                places equal rows from stream 1
+/// │ ╚═══╩═══╝               │              Stable sort if `enable_round_robin_repartition=false`:
+/// └─────────────────────────┘              the merged stream places equal rows from stream 1
 ///   Stream 2
 ///
 ///
-///  Input Streams                                             Output stream
+///  Input Partitions                                          Output Partition
 ///    (sorted)                                                  (sorted)
 /// ```
 ///
@@ -73,7 +82,7 @@ use log::{debug, trace};
 /// the output and inputs are not polled again.
 #[derive(Debug, Clone)]
 pub struct SortPreservingMergeExec {
-    /// Input plan
+    /// Input plan with sorted partitions
     input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: LexOrdering,
@@ -83,7 +92,9 @@ pub struct SortPreservingMergeExec {
     fetch: Option<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
+    /// Use round-robin selection of tied winners of loser tree
+    ///
+    /// See [`Self::with_round_robin_repartition`] for more information.
     enable_round_robin_repartition: bool,
 }
 
@@ -108,6 +119,14 @@ impl SortPreservingMergeExec {
     }
 
     /// Sets the selection strategy of tied winners of the loser tree algorithm
+    ///
+    /// If true (the default) equal output rows are placed in the merged stream
+    /// in round robin fashion. This approach consumes input streams at more
+    /// even rates when there are many rows with the same sort key.
+    ///
+    /// If false, equal output rows are always placed in the merged stream in
+    /// the order of the inputs, resulting in potentially slower execution but a
+    /// stable output order.
     pub fn with_round_robin_repartition(
         mut self,
         enable_round_robin_repartition: bool,
@@ -122,8 +141,8 @@ impl SortPreservingMergeExec {
     }
 
     /// Sort expressions
-    pub fn expr(&self) -> LexOrderingRef {
-        &self.expr
+    pub fn expr(&self) -> &LexOrdering {
+        self.expr.as_ref()
     }
 
     /// Fetch
@@ -131,7 +150,8 @@ impl SortPreservingMergeExec {
         self.fetch
     }
 
-    /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    /// Creates the cache object that stores the plan properties
+    /// such as schema, equivalence properties, ordering, partitioning, etc.
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         ordering: LexOrdering,
@@ -142,7 +162,8 @@ impl SortPreservingMergeExec {
         PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
-            input.execution_mode(),               // Execution Mode
+            input.pipeline_behavior(),            // Pipeline Behavior
+            input.boundedness(),                  // Boundedness
         )
     }
 }
@@ -205,9 +226,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
-        vec![Some(PhysicalSortRequirement::from_sort_exprs(
-            self.expr.iter(),
-        ))]
+        vec![Some(LexRequirement::from(self.expr.clone()))]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -340,6 +359,7 @@ mod tests {
     use super::*;
     use crate::coalesce_batches::CoalesceBatchesExec;
     use crate::coalesce_partitions::CoalescePartitionsExec;
+    use crate::execution_plan::{Boundedness, EmissionType};
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::metrics::{MetricValue, Timestamp};
@@ -348,7 +368,7 @@ mod tests {
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending, make_partition};
-    use crate::{collect, common, ExecutionMode};
+    use crate::{collect, common};
 
     use arrow::array::{ArrayRef, Int32Array, StringArray, TimestampNanosecondArray};
     use arrow::compute::SortOptions;
@@ -763,7 +783,7 @@ mod tests {
 
     // Split the provided record batch into multiple batch_size record batches
     fn split_batch(sorted: &RecordBatch, batch_size: usize) -> Vec<RecordBatch> {
-        let batches = (sorted.num_rows() + batch_size - 1) / batch_size;
+        let batches = sorted.num_rows().div_ceil(batch_size);
 
         // Split the sorted RecordBatch into multiple
         (0..batches)
@@ -1285,8 +1305,14 @@ mod tests {
                 .iter()
                 .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
                 .collect::<LexOrdering>()]);
-            let mode = ExecutionMode::Unbounded;
-            PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3), mode)
+            PlanProperties::new(
+                eq_properties,
+                Partitioning::Hash(columns, 3),
+                EmissionType::Incremental,
+                Boundedness::Unbounded {
+                    requires_infinite_memory: false,
+                },
+            )
         }
     }
 

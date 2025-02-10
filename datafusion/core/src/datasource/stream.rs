@@ -62,7 +62,7 @@ impl TableProviderFactory for StreamTableFactory {
         let header = if let Ok(opt) = cmd
             .options
             .get("format.has_header")
-            .map(|has_header| bool::from_str(has_header))
+            .map(|has_header| bool::from_str(has_header.to_lowercase().as_str()))
             .transpose()
         {
             opt.unwrap_or(false)
@@ -101,7 +101,7 @@ impl FromStr for StreamEncoding {
         match s.to_ascii_lowercase().as_str() {
             "csv" => Ok(Self::Csv),
             "json" => Ok(Self::Json),
-            _ => plan_err!("Unrecognised StreamEncoding {}", s),
+            _ => plan_err!("Unrecognized StreamEncoding {}", s),
         }
     }
 }
@@ -187,7 +187,7 @@ impl StreamProvider for FileStreamProvider {
 
     fn reader(&self) -> Result<Box<dyn RecordBatchReader>> {
         let file = File::open(&self.location)?;
-        let schema = self.schema.clone();
+        let schema = Arc::clone(&self.schema);
         match &self.encoding {
             StreamEncoding::Csv => {
                 let reader = arrow::csv::ReaderBuilder::new(schema)
@@ -311,7 +311,7 @@ impl TableProvider for StreamTable {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.0.source.schema().clone()
+        Arc::clone(self.0.source.schema())
     }
 
     fn constraints(&self) -> Option<&Constraints> {
@@ -338,8 +338,8 @@ impl TableProvider for StreamTable {
         };
 
         Ok(Arc::new(StreamingTableExec::try_new(
-            self.0.source.schema().clone(),
-            vec![Arc::new(StreamRead(self.0.clone())) as _],
+            Arc::clone(self.0.source.schema()),
+            vec![Arc::new(StreamRead(Arc::clone(&self.0))) as _],
             projection,
             projected_schema,
             true,
@@ -365,8 +365,8 @@ impl TableProvider for StreamTable {
 
         Ok(Arc::new(DataSinkExec::new(
             input,
-            Arc::new(StreamWrite(self.0.clone())),
-            self.0.source.schema().clone(),
+            Arc::new(StreamWrite(Arc::clone(&self.0))),
+            Arc::clone(self.0.source.schema()),
             ordering,
         )))
     }
@@ -381,8 +381,8 @@ impl PartitionStream for StreamRead {
     }
 
     fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
-        let config = self.0.clone();
-        let schema = self.0.source.schema().clone();
+        let config = Arc::clone(&self.0);
+        let schema = Arc::clone(self.0.source.schema());
         let mut builder = RecordBatchReceiverStreamBuilder::new(schema, 2);
         let tx = builder.tx();
         builder.spawn_blocking(move || {
@@ -422,7 +422,7 @@ impl DataSink for StreamWrite {
         mut data: SendableRecordBatchStream,
         _context: &Arc<TaskContext>,
     ) -> Result<u64> {
-        let config = self.0.clone();
+        let config = Arc::clone(&self.0);
         let (sender, mut receiver) = tokio::sync::mpsc::channel::<RecordBatch>(2);
         // Note: FIFO Files support poll so this could use AsyncFd
         let write_task = SpawnedTask::spawn_blocking(move || {

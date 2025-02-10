@@ -22,14 +22,12 @@ use std::sync::Arc;
 use substrait::proto::expression_reference::ExprType;
 
 use datafusion::arrow::datatypes::{Field, IntervalUnit};
-use datafusion::logical_expr::{
-    Distinct, FetchType, Like, Partitioning, SkipType, WindowFrameUnits,
-};
+use datafusion::logical_expr::{Distinct, Like, Partitioning, TryCast, WindowFrameUnits};
 use datafusion::{
     arrow::datatypes::{DataType, TimeUnit},
     error::{DataFusionError, Result},
     logical_expr::{WindowFrame, WindowFrameBound},
-    prelude::{JoinType, SessionContext},
+    prelude::JoinType,
     scalar::ScalarValue,
 };
 
@@ -45,7 +43,7 @@ use datafusion::arrow::array::{Array, GenericListArray, OffsetSizeTrait};
 use datafusion::arrow::temporal_conversions::NANOSECONDS;
 use datafusion::common::{
     exec_err, internal_err, not_impl_err, plan_err, substrait_datafusion_err,
-    substrait_err, DFSchemaRef, ToDFSchema,
+    substrait_err, DFSchema, DFSchemaRef, ToDFSchema,
 };
 #[allow(unused_imports)]
 use datafusion::logical_expr::expr::{
@@ -55,6 +53,8 @@ use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Opera
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
+use substrait::proto::expression::cast::FailureBehavior;
+use substrait::proto::expression::field_reference::{RootReference, RootType};
 use substrait::proto::expression::literal::interval_day_to_second::PrecisionMode;
 use substrait::proto::expression::literal::map::KeyValue;
 use substrait::proto::expression::literal::{
@@ -67,7 +67,8 @@ use substrait::proto::read_rel::VirtualTable;
 use substrait::proto::rel_common::EmitKind;
 use substrait::proto::rel_common::EmitKind::Emit;
 use substrait::proto::{
-    rel_common, ExchangeRel, ExpressionReference, ExtendedExpression, RelCommon,
+    fetch_rel, rel_common, ExchangeRel, ExpressionReference, ExtendedExpression,
+    RelCommon,
 };
 use substrait::{
     proto::{
@@ -100,8 +101,13 @@ use substrait::{
     version,
 };
 
+use super::state::SubstraitPlanningState;
+
 /// Convert DataFusion LogicalPlan to Substrait Plan
-pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box<Plan>> {
+pub fn to_substrait_plan(
+    plan: &LogicalPlan,
+    state: &dyn SubstraitPlanningState,
+) -> Result<Box<Plan>> {
     let mut extensions = Extensions::default();
     // Parse relation nodes
     // Generate PlanRel(s)
@@ -113,7 +119,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
 
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
-            input: Some(*to_substrait_rel(&plan, ctx, &mut extensions)?),
+            input: Some(*to_substrait_rel(&plan, state, &mut extensions)?),
             names: to_substrait_named_struct(plan.schema())?.names,
         })),
     }];
@@ -144,7 +150,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, ctx: &SessionContext) -> Result<Box
 pub fn to_substrait_extended_expr(
     exprs: &[(&Expr, &Field)],
     schema: &DFSchemaRef,
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
 ) -> Result<Box<ExtendedExpression>> {
     let mut extensions = Extensions::default();
 
@@ -152,7 +158,7 @@ pub fn to_substrait_extended_expr(
         .iter()
         .map(|(expr, field)| {
             let substrait_expr = to_substrait_rex(
-                ctx,
+                state,
                 expr,
                 schema,
                 /*col_ref_offset=*/ 0,
@@ -183,7 +189,7 @@ pub fn to_substrait_extended_expr(
 #[allow(deprecated)]
 pub fn to_substrait_rel(
     plan: &LogicalPlan,
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     extensions: &mut Extensions,
 ) -> Result<Box<Rel>> {
     match plan {
@@ -284,7 +290,7 @@ pub fn to_substrait_rel(
             let expressions = p
                 .expr
                 .iter()
-                .map(|e| to_substrait_rex(ctx, e, p.input.schema(), 0, extensions))
+                .map(|e| to_substrait_rex(state, e, p.input.schema(), 0, extensions))
                 .collect::<Result<Vec<_>>>()?;
 
             let emit_kind = create_project_remapping(
@@ -300,16 +306,16 @@ pub fn to_substrait_rel(
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Project(Box::new(ProjectRel {
                     common: Some(common),
-                    input: Some(to_substrait_rel(p.input.as_ref(), ctx, extensions)?),
+                    input: Some(to_substrait_rel(p.input.as_ref(), state, extensions)?),
                     expressions,
                     advanced_extension: None,
                 }))),
             }))
         }
         LogicalPlan::Filter(filter) => {
-            let input = to_substrait_rel(filter.input.as_ref(), ctx, extensions)?;
+            let input = to_substrait_rel(filter.input.as_ref(), state, extensions)?;
             let filter_expr = to_substrait_rex(
-                ctx,
+                state,
                 &filter.predicate,
                 filter.input.schema(),
                 0,
@@ -325,44 +331,80 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::Limit(limit) => {
-            let input = to_substrait_rel(limit.input.as_ref(), ctx, extensions)?;
-            let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
-                return not_impl_err!("Non-literal limit fetch");
-            };
-            let SkipType::Literal(skip) = limit.get_skip_type()? else {
-                return not_impl_err!("Non-literal limit skip");
-            };
+            let input = to_substrait_rel(limit.input.as_ref(), state, extensions)?;
+            let empty_schema = Arc::new(DFSchema::empty());
+            let offset_mode = limit
+                .skip
+                .as_ref()
+                .map(|expr| {
+                    to_substrait_rex(state, expr.as_ref(), &empty_schema, 0, extensions)
+                })
+                .transpose()?
+                .map(Box::new)
+                .map(fetch_rel::OffsetMode::OffsetExpr);
+            let count_mode = limit
+                .fetch
+                .as_ref()
+                .map(|expr| {
+                    to_substrait_rex(state, expr.as_ref(), &empty_schema, 0, extensions)
+                })
+                .transpose()?
+                .map(Box::new)
+                .map(fetch_rel::CountMode::CountExpr);
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Fetch(Box::new(FetchRel {
                     common: None,
                     input: Some(input),
-                    offset: skip as i64,
-                    // use -1 to signal that ALL records should be returned
-                    count: fetch.map(|f| f as i64).unwrap_or(-1),
+                    offset_mode,
+                    count_mode,
                     advanced_extension: None,
                 }))),
             }))
         }
-        LogicalPlan::Sort(sort) => {
-            let input = to_substrait_rel(sort.input.as_ref(), ctx, extensions)?;
-            let sort_fields = sort
-                .expr
+        LogicalPlan::Sort(datafusion::logical_expr::Sort { expr, input, fetch }) => {
+            let sort_fields = expr
                 .iter()
-                .map(|e| substrait_sort_field(ctx, e, sort.input.schema(), extensions))
+                .map(|e| substrait_sort_field(state, e, input.schema(), extensions))
                 .collect::<Result<Vec<_>>>()?;
-            Ok(Box::new(Rel {
+
+            let input = to_substrait_rel(input.as_ref(), state, extensions)?;
+
+            let sort_rel = Box::new(Rel {
                 rel_type: Some(RelType::Sort(Box::new(SortRel {
                     common: None,
                     input: Some(input),
                     sorts: sort_fields,
                     advanced_extension: None,
                 }))),
-            }))
+            });
+
+            match fetch {
+                Some(amount) => {
+                    let count_mode =
+                        Some(fetch_rel::CountMode::CountExpr(Box::new(Expression {
+                            rex_type: Some(RexType::Literal(Literal {
+                                nullable: false,
+                                type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
+                                literal_type: Some(LiteralType::I64(*amount as i64)),
+                            })),
+                        })));
+                    Ok(Box::new(Rel {
+                        rel_type: Some(RelType::Fetch(Box::new(FetchRel {
+                            common: None,
+                            input: Some(sort_rel),
+                            offset_mode: None,
+                            count_mode,
+                            advanced_extension: None,
+                        }))),
+                    }))
+                }
+                None => Ok(sort_rel),
+            }
         }
         LogicalPlan::Aggregate(agg) => {
-            let input = to_substrait_rel(agg.input.as_ref(), ctx, extensions)?;
+            let input = to_substrait_rel(agg.input.as_ref(), state, extensions)?;
             let (grouping_expressions, groupings) = to_substrait_groupings(
-                ctx,
+                state,
                 &agg.group_expr,
                 agg.input.schema(),
                 extensions,
@@ -370,7 +412,9 @@ pub fn to_substrait_rel(
             let measures = agg
                 .aggr_expr
                 .iter()
-                .map(|e| to_substrait_agg_measure(ctx, e, agg.input.schema(), extensions))
+                .map(|e| {
+                    to_substrait_agg_measure(state, e, agg.input.schema(), extensions)
+                })
                 .collect::<Result<Vec<_>>>()?;
 
             Ok(Box::new(Rel {
@@ -386,7 +430,7 @@ pub fn to_substrait_rel(
         }
         LogicalPlan::Distinct(Distinct::All(plan)) => {
             // Use Substrait's AggregateRel with empty measures to represent `select distinct`
-            let input = to_substrait_rel(plan.as_ref(), ctx, extensions)?;
+            let input = to_substrait_rel(plan.as_ref(), state, extensions)?;
             // Get grouping keys from the input relation's number of output fields
             let grouping = (0..plan.schema().fields().len())
                 .map(substrait_field_ref)
@@ -407,8 +451,8 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::Join(join) => {
-            let left = to_substrait_rel(join.left.as_ref(), ctx, extensions)?;
-            let right = to_substrait_rel(join.right.as_ref(), ctx, extensions)?;
+            let left = to_substrait_rel(join.left.as_ref(), state, extensions)?;
+            let right = to_substrait_rel(join.right.as_ref(), state, extensions)?;
             let join_type = to_substrait_jointype(join.join_type);
             // we only support basic joins so return an error for anything not yet supported
             match join.join_constraint {
@@ -421,7 +465,7 @@ pub fn to_substrait_rel(
             let in_join_schema = join.left.schema().join(join.right.schema())?;
             let join_filter = match &join.filter {
                 Some(filter) => Some(to_substrait_rex(
-                    ctx,
+                    state,
                     filter,
                     &Arc::new(in_join_schema),
                     0,
@@ -438,7 +482,7 @@ pub fn to_substrait_rel(
                 Operator::Eq
             };
             let join_on = to_substrait_join_expr(
-                ctx,
+                state,
                 &join.on,
                 eq_op,
                 join.left.schema(),
@@ -479,13 +523,13 @@ pub fn to_substrait_rel(
         LogicalPlan::SubqueryAlias(alias) => {
             // Do nothing if encounters SubqueryAlias
             // since there is no corresponding relation type in Substrait
-            to_substrait_rel(alias.input.as_ref(), ctx, extensions)
+            to_substrait_rel(alias.input.as_ref(), state, extensions)
         }
         LogicalPlan::Union(union) => {
             let input_rels = union
                 .inputs
                 .iter()
-                .map(|input| to_substrait_rel(input.as_ref(), ctx, extensions))
+                .map(|input| to_substrait_rel(input.as_ref(), state, extensions))
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .map(|ptr| *ptr)
@@ -500,7 +544,7 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::Window(window) => {
-            let input = to_substrait_rel(window.input.as_ref(), ctx, extensions)?;
+            let input = to_substrait_rel(window.input.as_ref(), state, extensions)?;
 
             // create a field reference for each input field
             let mut expressions = (0..window.input.schema().fields().len())
@@ -510,7 +554,7 @@ pub fn to_substrait_rel(
             // process and add each window function expression
             for expr in &window.window_expr {
                 expressions.push(to_substrait_rex(
-                    ctx,
+                    state,
                     expr,
                     window.input.schema(),
                     0,
@@ -539,7 +583,7 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::Repartition(repartition) => {
-            let input = to_substrait_rel(repartition.input.as_ref(), ctx, extensions)?;
+            let input = to_substrait_rel(repartition.input.as_ref(), state, extensions)?;
             let partition_count = match repartition.partitioning_scheme {
                 Partitioning::RoundRobinBatch(num) => num,
                 Partitioning::Hash(_, num) => num,
@@ -585,8 +629,7 @@ pub fn to_substrait_rel(
             }))
         }
         LogicalPlan::Extension(extension_plan) => {
-            let extension_bytes = ctx
-                .state()
+            let extension_bytes = state
                 .serializer_registry()
                 .serialize_logical_plan(extension_plan.node.as_ref())?;
             let detail = ProtoAny {
@@ -597,7 +640,7 @@ pub fn to_substrait_rel(
                 .node
                 .inputs()
                 .into_iter()
-                .map(|plan| to_substrait_rel(plan, ctx, extensions))
+                .map(|plan| to_substrait_rel(plan, state, extensions))
                 .collect::<Result<Vec<_>>>()?;
             let rel_type = match inputs_rel.len() {
                 0 => RelType::ExtensionLeaf(ExtensionLeafRel {
@@ -687,7 +730,7 @@ fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
 }
 
 fn to_substrait_join_expr(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     join_conditions: &Vec<(Expr, Expr)>,
     eq_op: Operator,
     left_schema: &DFSchemaRef,
@@ -698,10 +741,10 @@ fn to_substrait_join_expr(
     let mut exprs: Vec<Expression> = vec![];
     for (left, right) in join_conditions {
         // Parse left
-        let l = to_substrait_rex(ctx, left, left_schema, 0, extensions)?;
+        let l = to_substrait_rex(state, left, left_schema, 0, extensions)?;
         // Parse right
         let r = to_substrait_rex(
-            ctx,
+            state,
             right,
             right_schema,
             left_schema.fields().len(), // offset to return the correct index
@@ -770,7 +813,7 @@ pub fn operator_to_name(op: Operator) -> &'static str {
 
 #[allow(deprecated)]
 pub fn parse_flat_grouping_exprs(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     exprs: &[Expr],
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -780,7 +823,7 @@ pub fn parse_flat_grouping_exprs(
     let mut grouping_expressions = vec![];
 
     for e in exprs {
-        let rex = to_substrait_rex(ctx, e, schema, 0, extensions)?;
+        let rex = to_substrait_rex(state, e, schema, 0, extensions)?;
         grouping_expressions.push(rex.clone());
         ref_group_exprs.push(rex);
         expression_references.push((ref_group_exprs.len() - 1) as u32);
@@ -792,7 +835,7 @@ pub fn parse_flat_grouping_exprs(
 }
 
 pub fn to_substrait_groupings(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     exprs: &[Expr],
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -808,7 +851,7 @@ pub fn to_substrait_groupings(
                     .iter()
                     .map(|set| {
                         parse_flat_grouping_exprs(
-                            ctx,
+                            state,
                             set,
                             schema,
                             extensions,
@@ -826,7 +869,7 @@ pub fn to_substrait_groupings(
                         .rev()
                         .map(|set| {
                             parse_flat_grouping_exprs(
-                                ctx,
+                                state,
                                 set,
                                 schema,
                                 extensions,
@@ -837,7 +880,7 @@ pub fn to_substrait_groupings(
                 }
             },
             _ => Ok(vec![parse_flat_grouping_exprs(
-                ctx,
+                state,
                 exprs,
                 schema,
                 extensions,
@@ -845,7 +888,7 @@ pub fn to_substrait_groupings(
             )?]),
         },
         _ => Ok(vec![parse_flat_grouping_exprs(
-            ctx,
+            state,
             exprs,
             schema,
             extensions,
@@ -857,7 +900,7 @@ pub fn to_substrait_groupings(
 
 #[allow(deprecated)]
 pub fn to_substrait_agg_measure(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     expr: &Expr,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -865,13 +908,13 @@ pub fn to_substrait_agg_measure(
     match expr {
         Expr::AggregateFunction(expr::AggregateFunction { func, args, distinct, filter, order_by, null_treatment: _, }) => {
                     let sorts = if let Some(order_by) = order_by {
-                        order_by.iter().map(|expr| to_substrait_sort_field(ctx, expr, schema, extensions)).collect::<Result<Vec<_>>>()?
+                        order_by.iter().map(|expr| to_substrait_sort_field(state, expr, schema, extensions)).collect::<Result<Vec<_>>>()?
                     } else {
                         vec![]
                     };
                     let mut arguments: Vec<FunctionArgument> = vec![];
                     for arg in args {
-                        arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(ctx, arg, schema, 0, extensions)?)) });
+                        arguments.push(FunctionArgument { arg_type: Some(ArgType::Value(to_substrait_rex(state, arg, schema, 0, extensions)?)) });
                     }
                     let function_anchor = extensions.register_function(func.name().to_string());
                     Ok(Measure {
@@ -889,14 +932,14 @@ pub fn to_substrait_agg_measure(
                             options: vec![],
                         }),
                         filter: match filter {
-                            Some(f) => Some(to_substrait_rex(ctx, f, schema, 0, extensions)?),
+                            Some(f) => Some(to_substrait_rex(state, f, schema, 0, extensions)?),
                             None => None
                         }
                     })
 
         }
         Expr::Alias(Alias{expr,..})=> {
-            to_substrait_agg_measure(ctx, expr, schema, extensions)
+            to_substrait_agg_measure(state, expr, schema, extensions)
         }
         _ => internal_err!(
             "Expression must be compatible with aggregation. Unsupported expression: {:?}. ExpressionType: {:?}",
@@ -908,7 +951,7 @@ pub fn to_substrait_agg_measure(
 
 /// Converts sort expression to corresponding substrait `SortField`
 fn to_substrait_sort_field(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -920,7 +963,7 @@ fn to_substrait_sort_field(
         (false, false) => SortDirection::DescNullsLast,
     };
     Ok(SortField {
-        expr: Some(to_substrait_rex(ctx, &sort.expr, schema, 0, extensions)?),
+        expr: Some(to_substrait_rex(state, &sort.expr, schema, 0, extensions)?),
         sort_kind: Some(SortKind::Direction(sort_kind.into())),
     })
 }
@@ -977,7 +1020,7 @@ pub fn make_binary_op_scalar_func(
 /// * `extensions` - Substrait extension info. Contains registered function information
 #[allow(deprecated)]
 pub fn to_substrait_rex(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     expr: &Expr,
     schema: &DFSchemaRef,
     col_ref_offset: usize,
@@ -991,10 +1034,10 @@ pub fn to_substrait_rex(
         }) => {
             let substrait_list = list
                 .iter()
-                .map(|x| to_substrait_rex(ctx, x, schema, col_ref_offset, extensions))
+                .map(|x| to_substrait_rex(state, x, schema, col_ref_offset, extensions))
                 .collect::<Result<Vec<Expression>>>()?;
             let substrait_expr =
-                to_substrait_rex(ctx, expr, schema, col_ref_offset, extensions)?;
+                to_substrait_rex(state, expr, schema, col_ref_offset, extensions)?;
 
             let substrait_or_list = Expression {
                 rex_type: Some(RexType::SingularOrList(Box::new(SingularOrList {
@@ -1026,7 +1069,7 @@ pub fn to_substrait_rex(
             for arg in &fun.args {
                 arguments.push(FunctionArgument {
                     arg_type: Some(ArgType::Value(to_substrait_rex(
-                        ctx,
+                        state,
                         arg,
                         schema,
                         col_ref_offset,
@@ -1055,11 +1098,11 @@ pub fn to_substrait_rex(
             if *negated {
                 // `expr NOT BETWEEN low AND high` can be translated into (expr < low OR high < expr)
                 let substrait_expr =
-                    to_substrait_rex(ctx, expr, schema, col_ref_offset, extensions)?;
+                    to_substrait_rex(state, expr, schema, col_ref_offset, extensions)?;
                 let substrait_low =
-                    to_substrait_rex(ctx, low, schema, col_ref_offset, extensions)?;
+                    to_substrait_rex(state, low, schema, col_ref_offset, extensions)?;
                 let substrait_high =
-                    to_substrait_rex(ctx, high, schema, col_ref_offset, extensions)?;
+                    to_substrait_rex(state, high, schema, col_ref_offset, extensions)?;
 
                 let l_expr = make_binary_op_scalar_func(
                     &substrait_expr,
@@ -1083,11 +1126,11 @@ pub fn to_substrait_rex(
             } else {
                 // `expr BETWEEN low AND high` can be translated into (low <= expr AND expr <= high)
                 let substrait_expr =
-                    to_substrait_rex(ctx, expr, schema, col_ref_offset, extensions)?;
+                    to_substrait_rex(state, expr, schema, col_ref_offset, extensions)?;
                 let substrait_low =
-                    to_substrait_rex(ctx, low, schema, col_ref_offset, extensions)?;
+                    to_substrait_rex(state, low, schema, col_ref_offset, extensions)?;
                 let substrait_high =
-                    to_substrait_rex(ctx, high, schema, col_ref_offset, extensions)?;
+                    to_substrait_rex(state, high, schema, col_ref_offset, extensions)?;
 
                 let l_expr = make_binary_op_scalar_func(
                     &substrait_low,
@@ -1115,8 +1158,8 @@ pub fn to_substrait_rex(
             substrait_field_ref(index + col_ref_offset)
         }
         Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
-            let l = to_substrait_rex(ctx, left, schema, col_ref_offset, extensions)?;
-            let r = to_substrait_rex(ctx, right, schema, col_ref_offset, extensions)?;
+            let l = to_substrait_rex(state, left, schema, col_ref_offset, extensions)?;
+            let r = to_substrait_rex(state, right, schema, col_ref_offset, extensions)?;
 
             Ok(make_binary_op_scalar_func(&l, &r, *op, extensions))
         }
@@ -1131,7 +1174,7 @@ pub fn to_substrait_rex(
                 // Base expression exists
                 ifs.push(IfClause {
                     r#if: Some(to_substrait_rex(
-                        ctx,
+                        state,
                         e,
                         schema,
                         col_ref_offset,
@@ -1144,14 +1187,14 @@ pub fn to_substrait_rex(
             for (r#if, then) in when_then_expr {
                 ifs.push(IfClause {
                     r#if: Some(to_substrait_rex(
-                        ctx,
+                        state,
                         r#if,
                         schema,
                         col_ref_offset,
                         extensions,
                     )?),
                     then: Some(to_substrait_rex(
-                        ctx,
+                        state,
                         then,
                         schema,
                         col_ref_offset,
@@ -1163,7 +1206,7 @@ pub fn to_substrait_rex(
             // Parse outer `else`
             let r#else: Option<Box<Expression>> = match else_expr {
                 Some(e) => Some(Box::new(to_substrait_rex(
-                    ctx,
+                    state,
                     e,
                     schema,
                     col_ref_offset,
@@ -1176,26 +1219,39 @@ pub fn to_substrait_rex(
                 rex_type: Some(RexType::IfThen(Box::new(IfThen { ifs, r#else }))),
             })
         }
-        Expr::Cast(Cast { expr, data_type }) => {
-            Ok(Expression {
-                rex_type: Some(RexType::Cast(Box::new(
-                    substrait::proto::expression::Cast {
-                        r#type: Some(to_substrait_type(data_type, true)?),
-                        input: Some(Box::new(to_substrait_rex(
-                            ctx,
-                            expr,
-                            schema,
-                            col_ref_offset,
-                            extensions,
-                        )?)),
-                        failure_behavior: 0, // FAILURE_BEHAVIOR_UNSPECIFIED
-                    },
-                ))),
-            })
-        }
+        Expr::Cast(Cast { expr, data_type }) => Ok(Expression {
+            rex_type: Some(RexType::Cast(Box::new(
+                substrait::proto::expression::Cast {
+                    r#type: Some(to_substrait_type(data_type, true)?),
+                    input: Some(Box::new(to_substrait_rex(
+                        state,
+                        expr,
+                        schema,
+                        col_ref_offset,
+                        extensions,
+                    )?)),
+                    failure_behavior: FailureBehavior::ThrowException.into(),
+                },
+            ))),
+        }),
+        Expr::TryCast(TryCast { expr, data_type }) => Ok(Expression {
+            rex_type: Some(RexType::Cast(Box::new(
+                substrait::proto::expression::Cast {
+                    r#type: Some(to_substrait_type(data_type, true)?),
+                    input: Some(Box::new(to_substrait_rex(
+                        state,
+                        expr,
+                        schema,
+                        col_ref_offset,
+                        extensions,
+                    )?)),
+                    failure_behavior: FailureBehavior::ReturnNull.into(),
+                },
+            ))),
+        }),
         Expr::Literal(value) => to_substrait_literal_expr(value, extensions),
         Expr::Alias(Alias { expr, .. }) => {
-            to_substrait_rex(ctx, expr, schema, col_ref_offset, extensions)
+            to_substrait_rex(state, expr, schema, col_ref_offset, extensions)
         }
         Expr::WindowFunction(WindowFunction {
             fun,
@@ -1212,7 +1268,7 @@ pub fn to_substrait_rex(
             for arg in args {
                 arguments.push(FunctionArgument {
                     arg_type: Some(ArgType::Value(to_substrait_rex(
-                        ctx,
+                        state,
                         arg,
                         schema,
                         col_ref_offset,
@@ -1223,12 +1279,12 @@ pub fn to_substrait_rex(
             // partition by expressions
             let partition_by = partition_by
                 .iter()
-                .map(|e| to_substrait_rex(ctx, e, schema, col_ref_offset, extensions))
+                .map(|e| to_substrait_rex(state, e, schema, col_ref_offset, extensions))
                 .collect::<Result<Vec<_>>>()?;
             // order by expressions
             let order_by = order_by
                 .iter()
-                .map(|e| substrait_sort_field(ctx, e, schema, extensions))
+                .map(|e| substrait_sort_field(state, e, schema, extensions))
                 .collect::<Result<Vec<_>>>()?;
             // window frame
             let bounds = to_substrait_bounds(window_frame)?;
@@ -1249,7 +1305,7 @@ pub fn to_substrait_rex(
             escape_char,
             case_insensitive,
         }) => make_substrait_like_expr(
-            ctx,
+            state,
             *case_insensitive,
             *negated,
             expr,
@@ -1265,10 +1321,10 @@ pub fn to_substrait_rex(
             negated,
         }) => {
             let substrait_expr =
-                to_substrait_rex(ctx, expr, schema, col_ref_offset, extensions)?;
+                to_substrait_rex(state, expr, schema, col_ref_offset, extensions)?;
 
             let subquery_plan =
-                to_substrait_rel(subquery.subquery.as_ref(), ctx, extensions)?;
+                to_substrait_rel(subquery.subquery.as_ref(), state, extensions)?;
 
             let substrait_subquery = Expression {
                 rex_type: Some(RexType::Subquery(Box::new(Subquery {
@@ -1301,7 +1357,7 @@ pub fn to_substrait_rex(
             }
         }
         Expr::Not(arg) => to_substrait_unary_scalar_fn(
-            ctx,
+            state,
             "not",
             arg,
             schema,
@@ -1309,7 +1365,7 @@ pub fn to_substrait_rex(
             extensions,
         ),
         Expr::IsNull(arg) => to_substrait_unary_scalar_fn(
-            ctx,
+            state,
             "is_null",
             arg,
             schema,
@@ -1317,7 +1373,7 @@ pub fn to_substrait_rex(
             extensions,
         ),
         Expr::IsNotNull(arg) => to_substrait_unary_scalar_fn(
-            ctx,
+            state,
             "is_not_null",
             arg,
             schema,
@@ -1325,7 +1381,7 @@ pub fn to_substrait_rex(
             extensions,
         ),
         Expr::IsTrue(arg) => to_substrait_unary_scalar_fn(
-            ctx,
+            state,
             "is_true",
             arg,
             schema,
@@ -1333,7 +1389,7 @@ pub fn to_substrait_rex(
             extensions,
         ),
         Expr::IsFalse(arg) => to_substrait_unary_scalar_fn(
-            ctx,
+            state,
             "is_false",
             arg,
             schema,
@@ -1341,7 +1397,7 @@ pub fn to_substrait_rex(
             extensions,
         ),
         Expr::IsUnknown(arg) => to_substrait_unary_scalar_fn(
-            ctx,
+            state,
             "is_unknown",
             arg,
             schema,
@@ -1349,7 +1405,7 @@ pub fn to_substrait_rex(
             extensions,
         ),
         Expr::IsNotTrue(arg) => to_substrait_unary_scalar_fn(
-            ctx,
+            state,
             "is_not_true",
             arg,
             schema,
@@ -1357,7 +1413,7 @@ pub fn to_substrait_rex(
             extensions,
         ),
         Expr::IsNotFalse(arg) => to_substrait_unary_scalar_fn(
-            ctx,
+            state,
             "is_not_false",
             arg,
             schema,
@@ -1365,7 +1421,7 @@ pub fn to_substrait_rex(
             extensions,
         ),
         Expr::IsNotUnknown(arg) => to_substrait_unary_scalar_fn(
-            ctx,
+            state,
             "is_not_unknown",
             arg,
             schema,
@@ -1373,7 +1429,7 @@ pub fn to_substrait_rex(
             extensions,
         ),
         Expr::Negative(arg) => to_substrait_unary_scalar_fn(
-            ctx,
+            state,
             "negate",
             arg,
             schema,
@@ -1674,7 +1730,7 @@ fn make_substrait_window_function(
 #[allow(deprecated)]
 #[allow(clippy::too_many_arguments)]
 fn make_substrait_like_expr(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     ignore_case: bool,
     negated: bool,
     expr: &Expr,
@@ -1689,8 +1745,8 @@ fn make_substrait_like_expr(
     } else {
         extensions.register_function("like".to_string())
     };
-    let expr = to_substrait_rex(ctx, expr, schema, col_ref_offset, extensions)?;
-    let pattern = to_substrait_rex(ctx, pattern, schema, col_ref_offset, extensions)?;
+    let expr = to_substrait_rex(state, expr, schema, col_ref_offset, extensions)?;
+    let pattern = to_substrait_rex(state, pattern, schema, col_ref_offset, extensions)?;
     let escape_char = to_substrait_literal_expr(
         &ScalarValue::Utf8(escape_char.map(|c| c.to_string())),
         extensions,
@@ -2088,7 +2144,7 @@ fn to_substrait_literal_expr(
 
 /// Util to generate substrait [RexType::ScalarFunction] with one argument
 fn to_substrait_unary_scalar_fn(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     fn_name: &str,
     arg: &Expr,
     schema: &DFSchemaRef,
@@ -2096,7 +2152,8 @@ fn to_substrait_unary_scalar_fn(
     extensions: &mut Extensions,
 ) -> Result<Expression> {
     let function_anchor = extensions.register_function(fn_name.to_string());
-    let substrait_expr = to_substrait_rex(ctx, arg, schema, col_ref_offset, extensions)?;
+    let substrait_expr =
+        to_substrait_rex(state, arg, schema, col_ref_offset, extensions)?;
 
     Ok(Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
@@ -2129,7 +2186,7 @@ fn try_to_substrait_field_reference(
                         }),
                     )),
                 })),
-                root_type: None,
+                root_type: Some(RootType::RootReference(RootReference {})),
             })
         }
         _ => substrait_err!("Expect a `Column` expr, but found {expr:?}"),
@@ -2137,7 +2194,7 @@ fn try_to_substrait_field_reference(
 }
 
 fn substrait_sort_field(
-    ctx: &SessionContext,
+    state: &dyn SubstraitPlanningState,
     sort: &Sort,
     schema: &DFSchemaRef,
     extensions: &mut Extensions,
@@ -2147,7 +2204,7 @@ fn substrait_sort_field(
         asc,
         nulls_first,
     } = sort;
-    let e = to_substrait_rex(ctx, expr, schema, 0, extensions)?;
+    let e = to_substrait_rex(state, expr, schema, 0, extensions)?;
     let d = match (asc, nulls_first) {
         (true, true) => SortDirection::AscNullsFirst,
         (true, false) => SortDirection::AscNullsLast,
@@ -2171,7 +2228,7 @@ fn substrait_field_ref(index: usize) -> Result<Expression> {
                     }),
                 )),
             })),
-            root_type: None,
+            root_type: Some(RootType::RootReference(RootReference {})),
         }))),
     })
 }
@@ -2182,6 +2239,7 @@ mod test {
     use crate::logical_plan::consumer::{
         from_substrait_extended_expr, from_substrait_literal_without_names,
         from_substrait_named_struct, from_substrait_type_without_names,
+        DefaultSubstraitConsumer,
     };
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use datafusion::arrow::array::{
@@ -2190,6 +2248,17 @@ mod test {
     use datafusion::arrow::datatypes::{Field, Fields, Schema};
     use datafusion::common::scalar::ScalarStructBuilder;
     use datafusion::common::DFSchema;
+    use datafusion::execution::{SessionState, SessionStateBuilder};
+    use datafusion::prelude::SessionContext;
+    use std::sync::OnceLock;
+
+    static TEST_SESSION_STATE: OnceLock<SessionState> = OnceLock::new();
+    static TEST_EXTENSIONS: OnceLock<Extensions> = OnceLock::new();
+    fn test_consumer() -> DefaultSubstraitConsumer<'static> {
+        let extensions = TEST_EXTENSIONS.get_or_init(Extensions::default);
+        let state = TEST_SESSION_STATE.get_or_init(|| SessionContext::default().state());
+        DefaultSubstraitConsumer::new(extensions, state)
+    }
 
     #[test]
     fn round_trip_literals() -> Result<()> {
@@ -2315,7 +2384,7 @@ mod test {
         let mut extensions = Extensions::default();
         let substrait_literal = to_substrait_literal(&scalar, &mut extensions)?;
         let roundtrip_scalar =
-            from_substrait_literal_without_names(&substrait_literal, &extensions)?;
+            from_substrait_literal_without_names(&test_consumer(), &substrait_literal)?;
         assert_eq!(scalar, roundtrip_scalar);
         Ok(())
     }
@@ -2394,9 +2463,29 @@ mod test {
         // As DataFusion doesn't consider nullability as a property of the type, but field,
         // it doesn't matter if we set nullability to true or false here.
         let substrait = to_substrait_type(&dt, true)?;
-        let roundtrip_dt =
-            from_substrait_type_without_names(&substrait, &Extensions::default())?;
+        let consumer = test_consumer();
+        let roundtrip_dt = from_substrait_type_without_names(&consumer, &substrait)?;
         assert_eq!(dt, roundtrip_dt);
+        Ok(())
+    }
+
+    #[test]
+    fn to_field_reference() -> Result<()> {
+        let expression = substrait_field_ref(2)?;
+
+        match &expression.rex_type {
+            Some(RexType::Selection(field_ref)) => {
+                assert_eq!(
+                    field_ref
+                        .root_type
+                        .clone()
+                        .expect("root type should be set"),
+                    RootType::RootReference(RootReference {})
+                );
+            }
+
+            _ => panic!("Should not be anything other than field reference"),
+        }
         Ok(())
     }
 
@@ -2408,7 +2497,7 @@ mod test {
                 "struct",
                 DataType::Struct(Fields::from(vec![Field::new(
                     "inner",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
                     true,
                 )])),
                 true,
@@ -2426,22 +2515,22 @@ mod test {
         );
 
         let roundtrip_schema =
-            from_substrait_named_struct(&named_struct, &Extensions::default())?;
+            from_substrait_named_struct(&test_consumer(), &named_struct)?;
         assert_eq!(schema.as_ref(), &roundtrip_schema);
         Ok(())
     }
 
     #[tokio::test]
     async fn extended_expressions() -> Result<()> {
-        let ctx = SessionContext::new();
+        let state = SessionStateBuilder::default().build();
 
         // One expression, empty input schema
         let expr = Expr::Literal(ScalarValue::Int32(Some(42)));
         let field = Field::new("out", DataType::Int32, false);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
         let substrait =
-            to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &ctx)?;
-        let roundtrip_expr = from_substrait_extended_expr(&ctx, &substrait).await?;
+            to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &state)?;
+        let roundtrip_expr = from_substrait_extended_expr(&state, &substrait).await?;
 
         assert_eq!(roundtrip_expr.input_schema, empty_schema);
         assert_eq!(roundtrip_expr.exprs.len(), 1);
@@ -2463,9 +2552,9 @@ mod test {
         let substrait = to_substrait_extended_expr(
             &[(&expr1, &out1), (&expr2, &out2)],
             &input_schema,
-            &ctx,
+            &state,
         )?;
-        let roundtrip_expr = from_substrait_extended_expr(&ctx, &substrait).await?;
+        let roundtrip_expr = from_substrait_extended_expr(&state, &substrait).await?;
 
         assert_eq!(roundtrip_expr.input_schema, input_schema);
         assert_eq!(roundtrip_expr.exprs.len(), 2);
@@ -2485,14 +2574,14 @@ mod test {
 
     #[tokio::test]
     async fn invalid_extended_expression() {
-        let ctx = SessionContext::new();
+        let state = SessionStateBuilder::default().build();
 
         // Not ok if input schema is missing field referenced by expr
         let expr = Expr::Column("missing".into());
         let field = Field::new("out", DataType::Int32, false);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
 
-        let err = to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &ctx);
+        let err = to_substrait_extended_expr(&[(&expr, &field)], &empty_schema, &state);
 
         assert!(matches!(err, Err(DataFusionError::SchemaError(_, _))));
     }

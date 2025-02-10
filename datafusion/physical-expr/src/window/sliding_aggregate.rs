@@ -33,7 +33,7 @@ use crate::window::{
 use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// A window expr that takes the form of an aggregate function that
 /// can be incrementally computed over sliding windows.
@@ -52,13 +52,13 @@ impl SlidingAggregateWindowExpr {
     pub fn new(
         aggregate: Arc<AggregateFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
-        order_by: LexOrderingRef,
+        order_by: &LexOrdering,
         window_frame: Arc<WindowFrame>,
     ) -> Self {
         Self {
             aggregate,
             partition_by: partition_by.to_vec(),
-            order_by: LexOrdering::from_ref(order_by),
+            order_by: order_by.clone(),
             window_frame,
         }
     }
@@ -108,7 +108,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
         &self.partition_by
     }
 
-    fn order_by(&self) -> LexOrderingRef {
+    fn order_by(&self) -> &LexOrdering {
         self.order_by.as_ref()
     }
 

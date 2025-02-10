@@ -14,7 +14,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 //! Object store implementation used for testing
+
 use crate::execution::context::SessionState;
 use crate::execution::session_state::SessionStateBuilder;
 use crate::prelude::SessionContext;

@@ -83,6 +83,7 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
             DataType::Date64 | DataType::Date32 | DataType::Timestamp(_, None) => args[0]
                 .cast_to(&DataType::Timestamp(TimeUnit::Second, None), None)?
                 .cast_to(&DataType::Int64, None),
+            #[allow(deprecated)] // TODO: migrate to invoke_with_args
             DataType::Utf8 => ToTimestampSecondsFunc::new()
                 .invoke_batch(args, batch_size)?
                 .cast_to(&DataType::Int64, None),
@@ -100,10 +101,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_to_unixtime_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_DATETIME)
-            .with_description("Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.")
-            .with_syntax_example("to_unixtime(expression[, ..., format_n])")
+        Documentation::builder(
+            DOC_SECTION_DATETIME,
+            "Converts a value to seconds since the unix epoch (`1970-01-01T00:00:00Z`). Supports strings, dates, timestamps and double types as input. Strings are parsed as RFC3339 (e.g. '2023-07-20T05:44:00') if no [Chrono formats](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) are provided.",
+            "to_unixtime(expression[, ..., format_n])")
             .with_argument(
                 "expression",
                 "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
@@ -127,6 +128,5 @@ fn get_to_unixtime_doc() -> &'static Documentation {
 ```
 "#)
             .build()
-            .unwrap()
     })
 }

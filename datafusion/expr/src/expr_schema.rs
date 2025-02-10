@@ -99,6 +99,7 @@ impl ExprSchemable for Expr {
     /// expression refers to a column that does not exist in the
     /// schema, or when the expression is incorrectly typed
     /// (e.g. `[utf8] + [bool]`).
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
             Expr::Alias(Alias { expr, name, .. }) => match &**expr {
@@ -213,13 +214,13 @@ impl ExprSchemable for Expr {
             }) => get_result_type(&left.get_type(schema)?, op, &right.get_type(schema)?),
             Expr::Like { .. } | Expr::SimilarTo { .. } => Ok(DataType::Boolean),
             Expr::Placeholder(Placeholder { data_type, .. }) => {
-                data_type.clone().ok_or_else(|| {
-                    plan_datafusion_err!(
-                        "Placeholder type could not be resolved. Make sure that the \
-                         placeholder is bound to a concrete type, e.g. by providing \
-                         parameter values."
-                    )
-                })
+                if let Some(dtype) = data_type {
+                    Ok(dtype.clone())
+                } else {
+                    // If the placeholder's type hasn't been specified, treat it as
+                    // null (unspecified placeholders generate an error during planning)
+                    Ok(DataType::Null)
+                }
             }
             Expr::Wildcard { .. } => Ok(DataType::Null),
             Expr::GroupingSet(_) => {
@@ -347,6 +348,7 @@ impl ExprSchemable for Expr {
         match self {
             Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
             Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
+            Expr::Cast(Cast { expr, .. }) => expr.metadata(schema),
             _ => Ok(HashMap::new()),
         }
     }
@@ -478,12 +480,6 @@ impl Expr {
             .map(|e| e.get_type(schema))
             .collect::<Result<Vec<_>>>()?;
         match fun {
-            WindowFunctionDefinition::BuiltInWindowFunction(window_fun) => {
-                let return_type = window_fun.return_type(&data_types)?;
-                let nullable =
-                    !["RANK", "NTILE", "CUME_DIST"].contains(&window_fun.name());
-                Ok((return_type, nullable))
-            }
             WindowFunctionDefinition::AggregateUDF(udaf) => {
                 let new_types = data_types_with_aggregate_udf(&data_types, udaf)
                     .map_err(|err| {
@@ -681,13 +677,11 @@ mod tests {
             .with_data_type(DataType::Int32)
             .with_metadata(meta.clone());
 
-        // col and alias should be metadata-preserving
+        // col, alias, and cast should be metadata-preserving
         assert_eq!(meta, expr.metadata(&schema).unwrap());
         assert_eq!(meta, expr.clone().alias("bar").metadata(&schema).unwrap());
-
-        // cast should drop input metadata since the type has changed
         assert_eq!(
-            HashMap::new(),
+            meta,
             expr.clone()
                 .cast_to(&DataType::Int64, &schema)
                 .unwrap()

@@ -42,7 +42,7 @@ use crate::utils::{
 };
 use crate::{
     and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
-    TableProviderFilterPushDown, TableSource, WriteOp,
+    Statement, TableProviderFilterPushDown, TableSource, WriteOp,
 };
 
 use super::dml::InsertOp;
@@ -58,6 +58,7 @@ use datafusion_common::{
     UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
+
 use indexmap::IndexSet;
 
 /// Default table name for unnamed table
@@ -154,11 +155,11 @@ impl LogicalPlanBuilder {
         }
         // Ensure that the static term and the recursive term have the same number of fields
         let static_fields_len = self.plan.schema().fields().len();
-        let recurive_fields_len = recursive_term.schema().fields().len();
-        if static_fields_len != recurive_fields_len {
+        let recursive_fields_len = recursive_term.schema().fields().len();
+        if static_fields_len != recursive_fields_len {
             return plan_err!(
                 "Non-recursive term and recursive term must have the same number of columns ({} != {})",
-                static_fields_len, recurive_fields_len
+                static_fields_len, recursive_fields_len
             );
         }
         // Ensure that the recursive term has the same field types as the static term
@@ -218,7 +219,7 @@ impl LogicalPlanBuilder {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
-        let n_cols = values[0].len();
+        let n_cols = schema.fields().len();
         if n_cols == 0 {
             return plan_err!("Values list cannot be zero length");
         }
@@ -253,7 +254,7 @@ impl LogicalPlanBuilder {
                     if can_cast_types(&data_type, field_type) {
                     } else {
                         return exec_err!(
-                            "type mistmatch and can't cast to got {} and {}",
+                            "type mismatch and can't cast to got {} and {}",
                             data_type,
                             field_type
                         );
@@ -500,11 +501,13 @@ impl LogicalPlanBuilder {
 
     /// Make a builder for a prepare logical plan from the builder's plan
     pub fn prepare(self, name: String, data_types: Vec<DataType>) -> Result<Self> {
-        Ok(Self::new(LogicalPlan::Prepare(Prepare {
-            name,
-            data_types,
-            input: self.plan,
-        })))
+        Ok(Self::new(LogicalPlan::Statement(Statement::Prepare(
+            Prepare {
+                name,
+                data_types,
+                input: self.plan,
+            },
+        ))))
     }
 
     /// Limit the number of rows returned
@@ -777,7 +780,7 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, filter, false)
     }
 
-    /// Apply a join with using the specified expressions.
+    /// Apply a join using the specified expressions.
     ///
     /// Note that DataFusion automatically optimizes joins, including
     /// identifying and optimizing equality predicates.
@@ -1200,12 +1203,20 @@ impl LogicalPlanBuilder {
         Ok(Arc::unwrap_or_clone(self.plan))
     }
 
-    /// Apply a join with the expression on constraint.
+    /// Apply a join with both explicit equijoin and non equijoin predicates.
     ///
-    /// equi_exprs are "equijoin" predicates expressions on the existing and right inputs, respectively.
+    /// Note this is a low level API that requires identifying specific
+    /// predicate types. Most users should use  [`join_on`](Self::join_on) that
+    /// automatically identifies predicates appropriately.
     ///
-    /// filter: any other filter expression to apply during the join. equi_exprs predicates are likely
-    /// to be evaluated more quickly than the filter expressions
+    /// `equi_exprs` defines equijoin predicates, of the form `l = r)` for each
+    /// `(l, r)` tuple. `l`, the first element of the tuple, must only refer
+    /// to columns from the existing input. `r`, the second element of the tuple,
+    /// must only refer to columns from the right input.
+    ///
+    /// `filter` contains any other other filter expression to apply during the
+    /// join. Note that `equi_exprs` predicates are evaluated more efficiently
+    /// than the filter expressions, so they are preferred.
     pub fn join_with_expr_keys(
         self,
         right: LogicalPlan,
@@ -1220,25 +1231,24 @@ impl LogicalPlanBuilder {
         let join_key_pairs = equi_exprs
             .0
             .into_iter()
-            .zip(equi_exprs.1.into_iter())
+            .zip(equi_exprs.1)
             .map(|(l, r)| {
                 let left_key = l.into();
                 let right_key = r.into();
-
-                let mut left_using_columns = HashSet::new();
+                let mut left_using_columns  = HashSet::new();
                 expr_to_columns(&left_key, &mut left_using_columns)?;
                 let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
                     left_key,
-                    &[&[self.plan.schema(), right.schema()]],
-                    &[left_using_columns],
+                    &[&[self.plan.schema()]],
+                    &[],
                 )?;
 
                 let mut right_using_columns = HashSet::new();
                 expr_to_columns(&right_key, &mut right_using_columns)?;
                 let normalized_right_key = normalize_col_with_schemas_and_ambiguity_check(
                     right_key,
-                    &[&[self.plan.schema(), right.schema()]],
-                    &[right_using_columns],
+                    &[&[right.schema()]],
+                    &[],
                 )?;
 
                 // find valid equijoin
@@ -1625,7 +1635,7 @@ pub fn wrap_projection_for_join_if_necessary(
         .iter()
         .map(|key| {
             // The display_name() of cast expression will ignore the cast info, and show the inner expression name.
-            // If we do not add alais, it will throw same field name error in the schema when adding projection.
+            // If we do not add alias, it will throw same field name error in the schema when adding projection.
             // For example:
             //    input scan : [a, b, c],
             //    join keys: [cast(a as int)]
@@ -1766,7 +1776,7 @@ pub fn get_unnested_columns(
             let new_field = Arc::new(Field::new(
                 col_name, data_type,
                 // Unnesting may produce NULLs even if the list is not null.
-                // For example: unnset([1], []) -> 1, null
+                // For example: unnest([1], []) -> 1, null
                 true,
             ));
             let column = Column::from_name(col_name);
@@ -2423,7 +2433,7 @@ mod tests {
             ],
             false,
         );
-        let string_field = Field::new("item", DataType::Utf8, false);
+        let string_field = Field::new_list_field(DataType::Utf8, false);
         let strings_field = Field::new_list("item", string_field.clone(), false);
         let schema = Schema::new(vec![
             Field::new("scalar", DataType::UInt32, false),

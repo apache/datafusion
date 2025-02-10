@@ -47,7 +47,6 @@ use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::{col, lit, Expr, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::{self, BoxStream};
 use object_store::{
     path::Path, GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta,
@@ -97,7 +96,7 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
     assert!(pred.as_any().is::<BinaryExpr>());
     let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
 
-    assert_eq!(pred, expected.as_any());
+    assert_eq!(pred, expected.as_ref());
 
     Ok(())
 }
@@ -184,7 +183,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     max_limit += 1;
     let last_batch = results
         .last()
-        .expect("There shouled be at least one record batch returned");
+        .expect("There should be at least one record batch returned");
     let last_row_idx = last_batch.num_rows() - 1;
     let mut min_limit =
         match ScalarValue::try_from_array(last_batch.column(0), last_row_idx)? {
@@ -569,7 +568,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
 
     assert!(
         result.is_err(),
-        "Dupplicate qualified name should raise error"
+        "Duplicate qualified name should raise error"
     );
     Ok(())
 }

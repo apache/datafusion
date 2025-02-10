@@ -168,5 +168,74 @@ LIMIT 1;
 2020-09-08T13:42:29.190855123Z
 
 
+
+# distinct (aggregate) alone
+query P
+SELECT
+    DISTINCT ts as dist
+FROM table_with_metadata;
+----
+2020-09-08T13:42:29.190855123
+
+# cast alone
+query D
+SELECT
+    ts::DATE as casted
+FROM table_with_metadata;
+----
+2020-09-08
+2020-09-08
+2020-09-08
+
+# Regression test: distinct with cast
+query D
+SELECT DISTINCT (ts::DATE) AS dist
+    FROM table_with_metadata;
+----
+2020-09-08
+
+
+
+# count distinct with group by
+query II
+SELECT
+    id AS grp,
+    COUNT(DISTINCT nonnull_name) as dist
+FROM table_with_metadata
+GROUP BY grp
+order by 1 asc nulls last;
+----
+1 1
+3 1
+NULL 1
+
+# count (not distinct) & cast, with group by
+query TI
+SELECT
+    CAST(id AS TEXT) AS grp,
+    COUNT(nonnull_name) as dist
+FROM table_with_metadata
+GROUP BY grp
+order by 1 asc nulls last;
+----
+1 1
+3 1
+NULL 1
+
+# Regression test: count distinct & cast, with group by
+query TI
+SELECT
+    CAST(id AS TEXT) AS grp,
+    COUNT(DISTINCT nonnull_name) as dist
+FROM table_with_metadata
+GROUP BY grp
+order by 1 asc nulls last;
+----
+1 1
+3 1
+NULL 1
+
+
+
 statement ok
 drop table table_with_metadata;

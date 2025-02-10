@@ -16,12 +16,11 @@
 // under the License.
 
 use datafusion::execution::SessionStateDefaults;
-use datafusion_common::{not_impl_err, Result};
+use datafusion_common::{not_impl_err, HashSet, Result};
 use datafusion_expr::{
     aggregate_doc_sections, scalar_doc_sections, window_doc_sections, AggregateUDF,
     DocSection, Documentation, ScalarUDF, WindowUDF,
 };
-use hashbrown::HashSet;
 use itertools::Itertools;
 use std::env::args;
 use std::fmt::Write as _;
@@ -83,6 +82,30 @@ fn print_window_docs() -> Result<String> {
     }
 
     print_docs(providers, window_doc_sections::doc_sections())
+}
+
+// Temporary method useful to semi automate
+// the migration of UDF documentation generation from code based
+// to attribute based
+// To be removed
+#[allow(dead_code)]
+fn save_doc_code_text(documentation: &Documentation, name: &str) {
+    let attr_text = documentation.to_doc_attribute();
+
+    let file_path = format!("{}.txt", name);
+    if std::path::Path::new(&file_path).exists() {
+        std::fs::remove_file(&file_path).unwrap();
+    }
+
+    // Open the file in append mode, create it if it doesn't exist
+    let mut file = std::fs::OpenOptions::new()
+        .append(true) // Open in append mode
+        .create(true) // Create the file if it doesn't exist
+        .open(file_path)
+        .unwrap();
+
+    use std::io::Write;
+    file.write_all(attr_text.as_bytes()).unwrap();
 }
 
 fn print_docs(
@@ -158,6 +181,9 @@ fn print_docs(
             let Some(documentation) = documentation else {
                 unreachable!()
             };
+
+            // Temporary for doc gen migration, see `save_doc_code_text` comments
+            // save_doc_code_text(documentation, &name);
 
             // first, the name, description and syntax example
             let _ = write!(

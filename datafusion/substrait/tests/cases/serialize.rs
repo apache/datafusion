@@ -45,7 +45,7 @@ mod tests {
         // Read substrait plan from file
         let proto = serializer::deserialize(path).await?;
         // Check plan equality
-        let plan = from_substrait_plan(&ctx, &proto).await?;
+        let plan = from_substrait_plan(&ctx.state(), &proto).await?;
         let plan_str_ref = format!("{plan_ref}");
         let plan_str = format!("{plan}");
         assert_eq!(plan_str_ref, plan_str);
@@ -60,7 +60,7 @@ mod tests {
         let ctx = create_context().await?;
         let table = provider_as_source(ctx.table_provider("data").await?);
         let table_scan = LogicalPlanBuilder::scan("data", table, None)?.build()?;
-        let convert_result = to_substrait_plan(&table_scan, &ctx);
+        let convert_result = to_substrait_plan(&table_scan, &ctx.state());
         assert!(convert_result.is_ok());
 
         Ok(())
@@ -78,7 +78,9 @@ mod tests {
             \n  TableScan: data projection=[a, b]",
         );
 
-        let plan = to_substrait_plan(&datafusion_plan, &ctx)?.as_ref().clone();
+        let plan = to_substrait_plan(&datafusion_plan, &ctx.state())?
+            .as_ref()
+            .clone();
 
         let relation = plan.relations.first().unwrap().rel_type.as_ref();
         let root_rel = match relation {
@@ -121,7 +123,9 @@ mod tests {
             \n    TableScan: data projection=[a, b, c]",
         );
 
-        let plan = to_substrait_plan(&datafusion_plan, &ctx)?.as_ref().clone();
+        let plan = to_substrait_plan(&datafusion_plan, &ctx.state())?
+            .as_ref()
+            .clone();
 
         let relation = plan.relations.first().unwrap().rel_type.as_ref();
         let root_rel = match relation {

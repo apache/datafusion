@@ -49,7 +49,7 @@ use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
+    internal_datafusion_err, internal_err, not_impl_err, DataFusionError, GetExt,
     DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
@@ -63,7 +63,7 @@ use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 use log::debug;
 use object_store::buffered::BufWriter;
 use parquet::arrow::arrow_writer::{
@@ -323,9 +323,7 @@ impl FileFormat for ParquetFormat {
         let ext = self.get_ext();
         match file_compression_type.get_variant() {
             CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
-            _ => Err(DataFusionError::Internal(
-                "Parquet FileFormat does not support compression.".into(),
-            )),
+            _ => internal_err!("Parquet FileFormat does not support compression."),
         }
     }
 
@@ -434,7 +432,7 @@ impl FileFormat for ParquetFormat {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
         }
 
-        let sink_schema = conf.output_schema().clone();
+        let sink_schema = Arc::clone(conf.output_schema());
         let sink = Arc::new(ParquetSink::new(conf, self.options.clone()));
 
         Ok(Arc::new(DataSinkExec::new(
@@ -479,7 +477,7 @@ impl<'a> ObjectStoreFetch<'a> {
     }
 }
 
-impl<'a> MetadataFetch for ObjectStoreFetch<'a> {
+impl MetadataFetch for ObjectStoreFetch<'_> {
     fn fetch(
         &mut self,
         range: Range<usize>,
@@ -748,7 +746,7 @@ impl ParquetSink {
                 schema.metadata().clone(),
             ))
         } else {
-            self.config.output_schema().clone()
+            Arc::clone(self.config.output_schema())
         }
     }
 
@@ -833,7 +831,7 @@ impl DataSink for ParquetSink {
                 let mut writer = self
                     .create_async_arrow_writer(
                         &path,
-                        object_store.clone(),
+                        Arc::clone(&object_store),
                         parquet_props.writer_options().clone(),
                     )
                     .await?;
@@ -857,7 +855,7 @@ impl DataSink for ParquetSink {
                     // manage compressed blocks themselves.
                     FileCompressionType::UNCOMPRESSED,
                     &path,
-                    object_store.clone(),
+                    Arc::clone(&object_store),
                 )
                 .await?;
                 let schema = self.get_writer_schema();
@@ -1044,8 +1042,8 @@ fn spawn_parquet_parallel_serialization_task(
         let max_row_group_rows = writer_props.max_row_group_size();
         let (mut column_writer_handles, mut col_array_channels) =
             spawn_column_parallel_row_group_writer(
-                schema.clone(),
-                writer_props.clone(),
+                Arc::clone(&schema),
+                Arc::clone(&writer_props),
                 max_buffer_rb,
                 &pool,
             )?;
@@ -1057,15 +1055,23 @@ fn spawn_parquet_parallel_serialization_task(
             // function.
             loop {
                 if current_rg_rows + rb.num_rows() < max_row_group_rows {
-                    send_arrays_to_col_writers(&col_array_channels, &rb, schema.clone())
-                        .await?;
+                    send_arrays_to_col_writers(
+                        &col_array_channels,
+                        &rb,
+                        Arc::clone(&schema),
+                    )
+                    .await?;
                     current_rg_rows += rb.num_rows();
                     break;
                 } else {
                     let rows_left = max_row_group_rows - current_rg_rows;
                     let a = rb.slice(0, rows_left);
-                    send_arrays_to_col_writers(&col_array_channels, &a, schema.clone())
-                        .await?;
+                    send_arrays_to_col_writers(
+                        &col_array_channels,
+                        &a,
+                        Arc::clone(&schema),
+                    )
+                    .await?;
 
                     // Signal the parallel column writers that the RowGroup is done, join and finalize RowGroup
                     // on a separate task, so that we can immediately start on the next RG before waiting
@@ -1088,8 +1094,8 @@ fn spawn_parquet_parallel_serialization_task(
 
                     (column_writer_handles, col_array_channels) =
                         spawn_column_parallel_row_group_writer(
-                            schema.clone(),
-                            writer_props.clone(),
+                            Arc::clone(&schema),
+                            Arc::clone(&writer_props),
                             max_buffer_rb,
                             &pool,
                         )?;
@@ -1192,15 +1198,15 @@ async fn output_single_parquet_file_parallelized(
     let launch_serialization_task = spawn_parquet_parallel_serialization_task(
         data,
         serialize_tx,
-        output_schema.clone(),
-        arc_props.clone(),
+        Arc::clone(&output_schema),
+        Arc::clone(&arc_props),
         parallel_options,
         Arc::clone(&pool),
     );
     let file_metadata = concatenate_parallel_row_groups(
         serialize_rx,
-        output_schema.clone(),
-        arc_props.clone(),
+        Arc::clone(&output_schema),
+        Arc::clone(&arc_props),
         object_store_writer,
         pool,
     )
@@ -1306,7 +1312,7 @@ mod tests {
 
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::physical_plan::metrics::MetricValue;
-    use crate::prelude::{SessionConfig, SessionContext};
+    use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use arrow::array::{Array, ArrayRef, StringArray};
     use arrow_array::types::Int32Type;
     use arrow_array::{DictionaryArray, Int32Array, Int64Array};
@@ -1317,8 +1323,8 @@ mod tests {
         as_float64_array, as_int32_array, as_timestamp_nanosecond_array,
     };
     use datafusion_common::config::ParquetOptions;
-    use datafusion_common::ScalarValue;
     use datafusion_common::ScalarValue::Utf8;
+    use datafusion_common::{assert_batches_eq, ScalarValue};
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
@@ -2243,6 +2249,59 @@ mod tests {
             .unwrap_or(Arc::new(ParquetFormat::new()));
 
         scan_format(state, &*format, &testdata, file_name, projection, limit).await
+    }
+
+    /// Test that 0-byte files don't break while reading
+    #[tokio::test]
+    async fn test_read_empty_parquet() -> Result<()> {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let path = format!("{}/empty.parquet", tmp_dir.path().to_string_lossy());
+        File::create(&path).await?;
+
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(&path, ParquetReadOptions::default())
+            .await
+            .expect("read_parquet should succeed");
+
+        let result = df.collect().await?;
+        #[rustfmt::skip]
+        let expected = ["++",
+            "++"];
+        assert_batches_eq!(expected, &result);
+
+        Ok(())
+    }
+
+    /// Test that 0-byte files don't break while reading
+    #[tokio::test]
+    async fn test_read_partitioned_empty_parquet() -> Result<()> {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let partition_dir = tmp_dir.path().join("col1=a");
+        std::fs::create_dir(&partition_dir).unwrap();
+        File::create(partition_dir.join("empty.parquet"))
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(
+                tmp_dir.path().to_str().unwrap(),
+                ParquetReadOptions::new()
+                    .table_partition_cols(vec![("col1".to_string(), DataType::Utf8)]),
+            )
+            .await
+            .expect("read_parquet should succeed");
+
+        let result = df.collect().await?;
+        #[rustfmt::skip]
+        let expected = ["++",
+            "++"];
+        assert_batches_eq!(expected, &result);
+
+        Ok(())
     }
 
     fn build_ctx(store_url: &url::Url) -> Arc<TaskContext> {

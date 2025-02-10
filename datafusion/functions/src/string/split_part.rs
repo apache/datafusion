@@ -81,7 +81,11 @@ impl ScalarUDFImpl for SplitPartFunc {
         utf8_to_str_type(&arg_types[0], "split_part")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         // First, determine if any of the arguments is an Array
         let len = args.iter().find_map(|arg| match arg {
             ColumnarValue::Array(a) => Some(a.len()),
@@ -186,10 +190,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_split_part_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Splits a string based on a specified delimiter and returns the substring in the specified position.")
-            .with_syntax_example("split_part(str, delimiter, pos)")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Splits a string based on a specified delimiter and returns the substring in the specified position.",
+            "split_part(str, delimiter, pos)")
             .with_sql_example(r#"```sql
 > select split_part('1.2.3.4.5', '.', 3);
 +--------------------------------------------------+
@@ -202,7 +206,6 @@ fn get_split_part_doc() -> &'static Documentation {
             .with_argument("delimiter", "String or character to split on.")
             .with_argument("pos", "Position of the part to return.")
             .build()
-            .unwrap()
     })
 }
 
@@ -267,7 +270,7 @@ mod tests {
     fn test_functions() -> Result<()> {
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
@@ -281,7 +284,7 @@ mod tests {
         );
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
@@ -295,7 +298,7 @@ mod tests {
         );
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),
@@ -309,7 +312,7 @@ mod tests {
         );
         test_function!(
             SplitPartFunc::new(),
-            &[
+            vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from(
                     "abc~@~def~@~ghi"
                 )))),

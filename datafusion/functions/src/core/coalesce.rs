@@ -74,7 +74,11 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     /// coalesce evaluates to the first value which is not NULL
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         // do not accept 0 arguments.
         if args.is_empty() {
             return exec_err!(
@@ -150,10 +154,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_coalesce_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_CONDITIONAL)
-            .with_description("Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.")
-            .with_syntax_example("coalesce(expression1[, ..., expression_n])")
+        Documentation::builder(
+            DOC_SECTION_CONDITIONAL,
+            "Returns the first of its arguments that is not _null_. Returns _null_ if all arguments are _null_. This function is often used to substitute a default value for _null_ values.",
+            "coalesce(expression1[, ..., expression_n])")
             .with_sql_example(r#"```sql
 > select coalesce(null, null, 'datafusion');
 +----------------------------------------+
@@ -168,7 +172,6 @@ fn get_coalesce_doc() -> &'static Documentation {
                 "Expression to use if previous expressions are _null_. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary."
             )
             .build()
-            .unwrap()
     })
 }
 

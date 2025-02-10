@@ -15,20 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
 use crate::{
-    config::SessionConfig,
-    memory_pool::MemoryPool,
-    registry::FunctionRegistry,
-    runtime_env::{RuntimeEnv, RuntimeEnvBuilder},
+    config::SessionConfig, memory_pool::MemoryPool, registry::FunctionRegistry,
+    runtime_env::RuntimeEnv,
 };
 use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use std::collections::HashSet;
+use std::{collections::HashMap, sync::Arc};
 
 /// Task Execution Context
 ///
@@ -57,9 +52,7 @@ pub struct TaskContext {
 
 impl Default for TaskContext {
     fn default() -> Self {
-        let runtime = RuntimeEnvBuilder::new()
-            .build_arc()
-            .expect("default runtime created successfully");
+        let runtime = Arc::new(RuntimeEnv::default());
 
         // Create a default task context, mostly useful for testing
         Self {
@@ -123,6 +116,18 @@ impl TaskContext {
     /// Return the [RuntimeEnv] associated with this [TaskContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         Arc::clone(&self.runtime)
+    }
+
+    pub fn scalar_functions(&self) -> &HashMap<String, Arc<ScalarUDF>> {
+        &self.scalar_functions
+    }
+
+    pub fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
+        &self.aggregate_functions
+    }
+
+    pub fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
+        &self.window_functions
     }
 
     /// Update the [`SessionConfig`]

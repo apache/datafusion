@@ -34,8 +34,7 @@ use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_expr::type_coercion::functions::data_types_with_aggregate_udf;
 use datafusion_expr::{
-    BuiltInWindowFunction, WindowFrame, WindowFrameBound, WindowFrameUnits,
-    WindowFunctionDefinition,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
 };
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
@@ -45,10 +44,13 @@ use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use test_utils::add_empty_batches;
 
 use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion_common::HashMap;
 use datafusion_functions_window::lead_lag::{lag_udwf, lead_udwf};
+use datafusion_functions_window::nth_value::{
+    first_value_udwf, last_value_udwf, nth_value_udwf,
+};
 use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use hashbrown::HashMap;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -297,9 +299,7 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     Linear,
                 )?);
                 let task_ctx = ctx.task_ctx();
-                let mut collected_results =
-                    collect(running_window_exec, task_ctx).await?;
-                collected_results.retain(|batch| batch.num_rows() > 0);
+                let collected_results = collect(running_window_exec, task_ctx).await?;
                 let input_batch_sizes = batches
                     .iter()
                     .map(|batch| batch.num_rows())
@@ -308,6 +308,8 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                     .iter()
                     .map(|batch| batch.num_rows())
                     .collect::<Vec<_>>();
+                // There should be no empty batches at results
+                assert!(result_batch_sizes.iter().all(|e| *e > 0));
                 if causal {
                     // For causal window frames, we can generate results immediately
                     // for each input batch. Hence, batch sizes should match.
@@ -418,27 +420,21 @@ fn get_random_function(
     window_fn_map.insert(
         "first_value",
         (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::FirstValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(first_value_udwf()),
             vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "last_value",
         (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::LastValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(last_value_udwf()),
             vec![arg.clone()],
         ),
     );
     window_fn_map.insert(
         "nth_value",
         (
-            WindowFunctionDefinition::BuiltInWindowFunction(
-                BuiltInWindowFunction::NthValue,
-            ),
+            WindowFunctionDefinition::WindowUDF(nth_value_udwf()),
             vec![
                 arg.clone(),
                 lit(ScalarValue::Int64(Some(rng.gen_range(1..10)))),
@@ -692,8 +688,8 @@ async fn run_window_test(
     let collected_running = collect(running_window_exec, task_ctx)
         .await?
         .into_iter()
-        .filter(|b| b.num_rows() > 0)
         .collect::<Vec<_>>();
+    assert!(collected_running.iter().all(|rb| rb.num_rows() > 0));
 
     // BoundedWindowAggExec should produce more chunk than the usual WindowAggExec.
     // Otherwise it means that we cannot generate result in running mode.

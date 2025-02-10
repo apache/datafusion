@@ -20,7 +20,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 use std::mem::size_of_val;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::compute::{self, lexsort_to_indices, take_arrays, SortColumn};
@@ -29,15 +29,15 @@ use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::aggregate_doc_sections::DOC_SECTION_GENERAL;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ArrayFunctionSignature, Documentation, Expr,
-    ExprFunctionExt, Signature, SortExpr, TypeSignature, Volatility,
+    Accumulator, AggregateUDFImpl, Documentation, Expr, ExprFunctionExt, Signature,
+    SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::utils::get_sort_options;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_macros::user_doc;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 create_func!(FirstValue, first_value_udaf);
 
@@ -55,6 +55,20 @@ pub fn first_value(expression: Expr, order_by: Option<Vec<SortExpr>>) -> Expr {
     }
 }
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.",
+    syntax_example = "first_value(expression [ORDER BY expression])",
+    sql_example = r#"```sql
+> SELECT first_value(column_name ORDER BY other_column) FROM table_name;
++-----------------------------------------------+
+| first_value(column_name ORDER BY other_column)|
++-----------------------------------------------+
+| first_element                                 |
++-----------------------------------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 pub struct FirstValue {
     signature: Signature,
     requirement_satisfied: bool,
@@ -79,15 +93,7 @@ impl Default for FirstValue {
 impl FirstValue {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    // TODO: we can introduce more strict signature that only numeric of array types are allowed
-                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
-                    TypeSignature::Numeric(1),
-                    TypeSignature::Uniform(1, vec![DataType::Utf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::any(1, Volatility::Immutable),
             requirement_satisfied: false,
         }
     }
@@ -130,7 +136,7 @@ impl AggregateUDFImpl for FirstValue {
         FirstValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            LexOrdering::from_ref(acc_args.ordering_req),
+            acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -169,33 +175,8 @@ impl AggregateUDFImpl for FirstValue {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_first_value_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_first_value_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.",
-            )
-            .with_syntax_example("first_value(expression [ORDER BY expression])")
-            .with_sql_example(r#"```sql
-> SELECT first_value(column_name ORDER BY other_column) FROM table_name;
-+-----------------------------------------------+
-| first_value(column_name ORDER BY other_column)|
-+-----------------------------------------------+
-| first_element                                 |
-+-----------------------------------------------+
-```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
-    })
 }
 
 #[derive(Debug)]
@@ -382,6 +363,20 @@ make_udaf_expr_and_func!(
     last_value_udaf
 );
 
+#[user_doc(
+    doc_section(label = "General Functions"),
+    description = "Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.",
+    syntax_example = "last_value(expression [ORDER BY expression])",
+    sql_example = r#"```sql
+> SELECT last_value(column_name ORDER BY other_column) FROM table_name;
++-----------------------------------------------+
+| last_value(column_name ORDER BY other_column) |
++-----------------------------------------------+
+| last_element                                  |
++-----------------------------------------------+
+```"#,
+    standard_argument(name = "expression",)
+)]
 pub struct LastValue {
     signature: Signature,
     requirement_satisfied: bool,
@@ -406,15 +401,7 @@ impl Default for LastValue {
 impl LastValue {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    // TODO: we can introduce more strict signature that only numeric of array types are allowed
-                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array),
-                    TypeSignature::Numeric(1),
-                    TypeSignature::Uniform(1, vec![DataType::Utf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::any(1, Volatility::Immutable),
             requirement_satisfied: false,
         }
     }
@@ -455,7 +442,7 @@ impl AggregateUDFImpl for LastValue {
         LastValueAccumulator::try_new(
             acc_args.return_type,
             &ordering_dtypes,
-            LexOrdering::from_ref(acc_args.ordering_req),
+            acc_args.ordering_req.clone(),
             acc_args.ignore_nulls,
         )
         .map(|acc| Box::new(acc.with_requirement_satisfied(requirement_satisfied)) as _)
@@ -501,31 +488,8 @@ impl AggregateUDFImpl for LastValue {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_last_value_doc())
+        self.doc()
     }
-}
-
-fn get_last_value_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_GENERAL)
-            .with_description(
-                "Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.",
-            )
-            .with_syntax_example("last_value(expression [ORDER BY expression])")
-            .with_sql_example(r#"```sql
-> SELECT last_value(column_name ORDER BY other_column) FROM table_name;
-+-----------------------------------------------+
-| last_value(column_name ORDER BY other_column) |
-+-----------------------------------------------+
-| last_element                                  |
-+-----------------------------------------------+
-```"#,
-            )
-            .with_standard_argument("expression", None)
-            .build()
-            .unwrap()
-    })
 }
 
 #[derive(Debug)]
@@ -723,10 +687,7 @@ fn filter_states_according_to_is_set(
 }
 
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
-fn convert_to_sort_cols(
-    arrs: &[ArrayRef],
-    sort_exprs: LexOrderingRef,
-) -> Vec<SortColumn> {
+fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<SortColumn> {
     arrs.iter()
         .zip(sort_exprs.iter())
         .map(|(item, sort_expr)| SortColumn {

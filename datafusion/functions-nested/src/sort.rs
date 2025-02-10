@@ -70,13 +70,10 @@ impl ScalarUDFImpl for ArraySort {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match &arg_types[0] {
-            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(Field::new(
-                "item",
-                field.data_type().clone(),
-                true,
-            )))),
-            LargeList(field) => Ok(LargeList(Arc::new(Field::new(
-                "item",
+            List(field) | FixedSizeList(field, _) => Ok(List(Arc::new(
+                Field::new_list_field(field.data_type().clone(), true),
+            ))),
+            LargeList(field) => Ok(LargeList(Arc::new(Field::new_list_field(
                 field.data_type().clone(),
                 true,
             )))),
@@ -86,7 +83,11 @@ impl ScalarUDFImpl for ArraySort {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_sort_inner)(args)
     }
 
@@ -103,12 +104,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_sort_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Sort array.",
-            )
-            .with_syntax_example("array_sort(array, desc, nulls_first)")
+
+            "array_sort(array, desc, nulls_first)")
             .with_sql_example(
                 r#"```sql
 > select array_sort([3, 1, 2]);
@@ -132,7 +132,6 @@ fn get_array_sort_doc() -> &'static Documentation {
                 "Whether to sort nulls first(`NULLS FIRST` or `NULLS LAST`).",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -196,7 +195,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .collect::<Vec<&dyn Array>>();
 
     let list_arr = ListArray::new(
-        Arc::new(Field::new("item", data_type, true)),
+        Arc::new(Field::new_list_field(data_type, true)),
         OffsetBuffer::from_lengths(array_lengths),
         Arc::new(compute::concat(elements.as_slice())?),
         Some(NullBuffer::new(buffer)),

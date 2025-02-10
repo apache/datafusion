@@ -30,7 +30,6 @@ pub mod concat;
 pub mod concat_ws;
 pub mod contains;
 pub mod ends_with;
-pub mod initcap;
 pub mod levenshtein;
 pub mod lower;
 pub mod ltrim;
@@ -45,28 +44,27 @@ pub mod to_hex;
 pub mod upper;
 pub mod uuid;
 // create UDFs
-make_udf_function!(ascii::AsciiFunc, ASCII, ascii);
-make_udf_function!(bit_length::BitLengthFunc, BIT_LENGTH, bit_length);
-make_udf_function!(btrim::BTrimFunc, BTRIM, btrim);
-make_udf_function!(chr::ChrFunc, CHR, chr);
-make_udf_function!(concat::ConcatFunc, CONCAT, concat);
-make_udf_function!(concat_ws::ConcatWsFunc, CONCAT_WS, concat_ws);
-make_udf_function!(ends_with::EndsWithFunc, ENDS_WITH, ends_with);
-make_udf_function!(initcap::InitcapFunc, INITCAP, initcap);
-make_udf_function!(levenshtein::LevenshteinFunc, LEVENSHTEIN, levenshtein);
-make_udf_function!(ltrim::LtrimFunc, LTRIM, ltrim);
-make_udf_function!(lower::LowerFunc, LOWER, lower);
-make_udf_function!(octet_length::OctetLengthFunc, OCTET_LENGTH, octet_length);
-make_udf_function!(overlay::OverlayFunc, OVERLAY, overlay);
-make_udf_function!(repeat::RepeatFunc, REPEAT, repeat);
-make_udf_function!(replace::ReplaceFunc, REPLACE, replace);
-make_udf_function!(rtrim::RtrimFunc, RTRIM, rtrim);
-make_udf_function!(starts_with::StartsWithFunc, STARTS_WITH, starts_with);
-make_udf_function!(split_part::SplitPartFunc, SPLIT_PART, split_part);
-make_udf_function!(to_hex::ToHexFunc, TO_HEX, to_hex);
-make_udf_function!(upper::UpperFunc, UPPER, upper);
-make_udf_function!(uuid::UuidFunc, UUID, uuid);
-make_udf_function!(contains::ContainsFunc, CONTAINS, contains);
+make_udf_function!(ascii::AsciiFunc, ascii);
+make_udf_function!(bit_length::BitLengthFunc, bit_length);
+make_udf_function!(btrim::BTrimFunc, btrim);
+make_udf_function!(chr::ChrFunc, chr);
+make_udf_function!(concat::ConcatFunc, concat);
+make_udf_function!(concat_ws::ConcatWsFunc, concat_ws);
+make_udf_function!(ends_with::EndsWithFunc, ends_with);
+make_udf_function!(levenshtein::LevenshteinFunc, levenshtein);
+make_udf_function!(ltrim::LtrimFunc, ltrim);
+make_udf_function!(lower::LowerFunc, lower);
+make_udf_function!(octet_length::OctetLengthFunc, octet_length);
+make_udf_function!(overlay::OverlayFunc, overlay);
+make_udf_function!(repeat::RepeatFunc, repeat);
+make_udf_function!(replace::ReplaceFunc, replace);
+make_udf_function!(rtrim::RtrimFunc, rtrim);
+make_udf_function!(starts_with::StartsWithFunc, starts_with);
+make_udf_function!(split_part::SplitPartFunc, split_part);
+make_udf_function!(to_hex::ToHexFunc, to_hex);
+make_udf_function!(upper::UpperFunc, upper);
+make_udf_function!(uuid::UuidFunc, uuid);
+make_udf_function!(contains::ContainsFunc, contains);
 pub mod expr_fn {
     use datafusion_expr::Expr;
 
@@ -94,10 +92,6 @@ pub mod expr_fn {
         ends_with,
         "Returns true if the `string` ends with the `suffix`, false otherwise.",
         string suffix
-    ),(
-        initcap,
-        "Converts the first letter of each word in `string` in uppercase and the remaining characters in lowercase",
-        string
     ),(
         levenshtein,
         "Returns the Levenshtein distance between the two given strings",
@@ -151,7 +145,7 @@ pub mod expr_fn {
         "returns uuid v4 as a string value",
     ), (
         contains,
-        "Return true if search_string is found within string. treated it like a reglike",
+        "Return true if search_string is found within string.",
     ));
 
     #[doc = "Removes all characters, spaces by default, from both sides of a string"]
@@ -177,7 +171,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         concat(),
         concat_ws(),
         ends_with(),
-        initcap(),
         levenshtein(),
         lower(),
         ltrim(),

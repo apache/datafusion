@@ -62,15 +62,15 @@ static ENCODE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_encode_doc() -> &'static Documentation {
     ENCODE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_BINARY_STRING)
-            .with_description("Encode binary data into a textual representation.")
-            .with_syntax_example("encode(expression, format)")
-            .with_argument("expression", "Expression containing string or binary data")
-            .with_argument("format", "Supported formats are: `base64`, `hex`")
-            .with_related_udf("decode")
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_BINARY_STRING,
+            "Encode binary data into a textual representation.",
+            "encode(expression, format)",
+        )
+        .with_argument("expression", "Expression containing string or binary data")
+        .with_argument("format", "Supported formats are: `base64`, `hex`")
+        .with_related_udf("decode")
+        .build()
     })
 }
 
@@ -90,7 +90,11 @@ impl ScalarUDFImpl for EncodeFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         encode(args)
     }
 
@@ -108,7 +112,7 @@ impl ScalarUDFImpl for EncodeFunc {
         }
 
         match arg_types[0] {
-            DataType::Utf8 | DataType::Binary | DataType::Null => {
+            DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::Null => {
                 Ok(vec![DataType::Utf8; 2])
             }
             DataType::LargeUtf8 | DataType::LargeBinary => {
@@ -149,15 +153,15 @@ static DECODE_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_decode_doc() -> &'static Documentation {
     DECODE_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_BINARY_STRING)
-            .with_description("Decode binary data from textual representation in string.")
-            .with_syntax_example("decode(expression, format)")
-            .with_argument("expression", "Expression containing encoded string data")
-            .with_argument("format", "Same arguments as [encode](#encode)")
-            .with_related_udf("encode")
-            .build()
-            .unwrap()
+        Documentation::builder(
+            DOC_SECTION_BINARY_STRING,
+            "Decode binary data from textual representation in string.",
+            "decode(expression, format)",
+        )
+        .with_argument("expression", "Expression containing encoded string data")
+        .with_argument("format", "Same arguments as [encode](#encode)")
+        .with_related_udf("encode")
+        .build()
     })
 }
 
@@ -177,7 +181,11 @@ impl ScalarUDFImpl for DecodeFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         decode(args)
     }
 
@@ -195,7 +203,7 @@ impl ScalarUDFImpl for DecodeFunc {
         }
 
         match arg_types[0] {
-            DataType::Utf8 | DataType::Binary | DataType::Null => {
+            DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::Null => {
                 Ok(vec![DataType::Binary, DataType::Utf8])
             }
             DataType::LargeUtf8 | DataType::LargeBinary => {
@@ -224,6 +232,7 @@ fn encode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8 => encoding.encode_utf8_array::<i32>(a.as_ref()),
             DataType::LargeUtf8 => encoding.encode_utf8_array::<i64>(a.as_ref()),
+            DataType::Utf8View => encoding.encode_utf8_array::<i32>(a.as_ref()),
             DataType::Binary => encoding.encode_binary_array::<i32>(a.as_ref()),
             DataType::LargeBinary => encoding.encode_binary_array::<i64>(a.as_ref()),
             other => exec_err!(
@@ -237,6 +246,9 @@ fn encode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
                 }
                 ScalarValue::LargeUtf8(a) => Ok(encoding
                     .encode_large_scalar(a.as_ref().map(|s: &String| s.as_bytes()))),
+                ScalarValue::Utf8View(a) => {
+                    Ok(encoding.encode_scalar(a.as_ref().map(|s: &String| s.as_bytes())))
+                }
                 ScalarValue::Binary(a) => Ok(
                     encoding.encode_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))
                 ),
@@ -255,6 +267,7 @@ fn decode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8 => encoding.decode_utf8_array::<i32>(a.as_ref()),
             DataType::LargeUtf8 => encoding.decode_utf8_array::<i64>(a.as_ref()),
+            DataType::Utf8View => encoding.decode_utf8_array::<i32>(a.as_ref()),
             DataType::Binary => encoding.decode_binary_array::<i32>(a.as_ref()),
             DataType::LargeBinary => encoding.decode_binary_array::<i64>(a.as_ref()),
             other => exec_err!(
@@ -268,6 +281,9 @@ fn decode_process(value: &ColumnarValue, encoding: Encoding) -> Result<ColumnarV
                 }
                 ScalarValue::LargeUtf8(a) => encoding
                     .decode_large_scalar(a.as_ref().map(|s: &String| s.as_bytes())),
+                ScalarValue::Utf8View(a) => {
+                    encoding.decode_scalar(a.as_ref().map(|s: &String| s.as_bytes()))
+                }
                 ScalarValue::Binary(a) => {
                     encoding.decode_scalar(a.as_ref().map(|v: &Vec<u8>| v.as_slice()))
                 }
@@ -512,7 +528,7 @@ impl FromStr for Encoding {
     }
 }
 
-/// Encodes the given data, accepts Binary, LargeBinary, Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
+/// Encodes the given data, accepts Binary, LargeBinary, Utf8, Utf8View or LargeUtf8 and returns a [`ColumnarValue`].
 /// Second argument is the encoding to use.
 /// Standard encodings are base64 and hex.
 fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -524,7 +540,7 @@ fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
     let encoding = match &args[1] {
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
+            ScalarValue::Utf8(Some(method)) | ScalarValue::Utf8View(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
                 method.parse::<Encoding>()
             }
             _ => not_impl_err!(
@@ -538,7 +554,7 @@ fn encode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     encode_process(&args[0], encoding)
 }
 
-/// Decodes the given data, accepts Binary, LargeBinary, Utf8 or LargeUtf8 and returns a [`ColumnarValue`].
+/// Decodes the given data, accepts Binary, LargeBinary, Utf8, Utf8View or LargeUtf8 and returns a [`ColumnarValue`].
 /// Second argument is the encoding to use.
 /// Standard encodings are base64 and hex.
 fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -550,7 +566,7 @@ fn decode(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
     let encoding = match &args[1] {
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
+            ScalarValue::Utf8(Some(method)) | ScalarValue::Utf8View(Some(method)) | ScalarValue::LargeUtf8(Some(method)) => {
                 method.parse::<Encoding>()
             }
             _ => not_impl_err!(

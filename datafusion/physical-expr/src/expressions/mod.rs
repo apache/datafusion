@@ -35,7 +35,6 @@ mod unknown_column;
 
 /// Module with some convenient methods used in expression building
 pub use crate::aggregate::stats::StatsType;
-pub use crate::window::nth_value::NthValue;
 pub use crate::PhysicalSortExpr;
 
 pub use binary::{binary, similar_to, BinaryExpr};

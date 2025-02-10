@@ -24,8 +24,10 @@ mod data_utils;
 
 use crate::criterion::Criterion;
 use arrow::datatypes::{DataType, Field, Fields, Schema};
+use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
+use datafusion_common::ScalarValue;
 use itertools::Itertools;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -120,6 +122,29 @@ fn register_clickbench_hits_table() -> SessionContext {
         rt.block_on(async { ctx.table("hits").await.unwrap().count().await.unwrap() });
     assert!(count > 0);
     ctx
+}
+
+/// Target of this benchmark: control that placeholders replacing does not get slower,
+/// if the query does not contain placeholders at all.
+fn benchmark_with_param_values_many_columns(ctx: &SessionContext, b: &mut Bencher) {
+    const COLUMNS_NUM: usize = 200;
+    let mut aggregates = String::new();
+    for i in 0..COLUMNS_NUM {
+        if i > 0 {
+            aggregates.push_str(", ");
+        }
+        aggregates.push_str(format!("MAX(a{})", i).as_str());
+    }
+    // SELECT max(attr0), ..., max(attrN) FROM t1.
+    let query = format!("SELECT {} FROM t1", aggregates);
+    let statement = ctx.state().sql_to_statement(&query, "Generic").unwrap();
+    let rt = Runtime::new().unwrap();
+    let plan =
+        rt.block_on(async { ctx.state().statement_to_plan(statement).await.unwrap() });
+    b.iter(|| {
+        let plan = plan.clone();
+        criterion::black_box(plan.with_param_values(vec![ScalarValue::from(1)]).unwrap());
+    });
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -387,6 +412,10 @@ fn criterion_benchmark(c: &mut Criterion) {
                 physical_plan(&clickbench_ctx, sql)
             }
         })
+    });
+
+    c.bench_function("with_param_values_many_columns", |b| {
+        benchmark_with_param_values_many_columns(&ctx, b);
     });
 }
 

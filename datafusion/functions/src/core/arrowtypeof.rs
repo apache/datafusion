@@ -58,7 +58,11 @@ impl ScalarUDFImpl for ArrowTypeOfFunc {
         Ok(DataType::Utf8)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         if args.len() != 1 {
             return exec_err!(
                 "arrow_typeof function requires 1 arguments, got {}",
@@ -81,12 +85,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_arrowtypeof_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_OTHER)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_OTHER,
                 "Returns the name of the underlying [Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) of the expression.",
-            )
-            .with_syntax_example("arrow_typeof(expression)")
+
+            "arrow_typeof(expression)")
             .with_sql_example(
                 r#"```sql
 > select arrow_typeof('foo'), arrow_typeof(1);
@@ -100,6 +103,5 @@ fn get_arrowtypeof_doc() -> &'static Documentation {
             )
             .with_argument("expression", "Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.")
             .build()
-            .unwrap()
     })
 }

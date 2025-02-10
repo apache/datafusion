@@ -113,7 +113,7 @@ npx prettier@2.3.2 --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
-TARGET_FILE="docs/source/user-guide/sql/window_functions_new.md"
+TARGET_FILE="docs/source/user-guide/sql/window_functions.md"
 PRINT_WINDOW_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --bin print_functions_docs -- window"
 
 echo "Inserting header"
@@ -146,13 +146,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 -->
 
 
-# Window Functions (NEW)
-
-Note: this documentation is in the process of being migrated to be  [automatically created from the codebase].
-Please see the [Window Functions (Old)](window_functions.md) page for
-the rest of the documentation.
-
-[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
+# Window Functions
 
 A _window function_ performs a calculation across a set of table rows that are somehow related to the current row.
 This is comparable to the type of calculation that can be done with an aggregate function.

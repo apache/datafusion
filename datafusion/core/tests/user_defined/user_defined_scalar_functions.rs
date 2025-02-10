@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -28,10 +27,6 @@ use arrow_array::{
     Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
 };
 use arrow_schema::{DataType, Field, Schema};
-use parking_lot::Mutex;
-use regex::Regex;
-use sqlparser::ast::Ident;
-
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
@@ -39,7 +34,8 @@ use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
-    not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, Result, ScalarValue,
+    not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, HashMap, Result,
+    ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -48,6 +44,10 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
+use parking_lot::Mutex;
+use regex::Regex;
+use sqlparser::ast::Ident;
+use sqlparser::tokenizer::Span;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -209,11 +209,11 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("{} function does not accept arguments", self.name())
-    }
-
-    fn invoke_no_args(&self, _number_rows: usize) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
     }
 }
@@ -251,7 +251,7 @@ async fn test_row_mismatch_error_in_scalar_udf() -> Result<()> {
             .err()
             .unwrap()
             .to_string(),
-        "UDF returned a different number of rows than expected"
+        "Internal error: UDF buggy_func returned a different number of rows than expected. Expected: 2, Got: 1"
     );
     Ok(())
 }
@@ -520,10 +520,6 @@ impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        not_impl_err!("index_with_offset function does not accept arguments")
-    }
-
     fn invoke_batch(
         &self,
         args: &[ColumnarValue],
@@ -720,7 +716,11 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(ExprSimplifyResult::Simplified(new_expr))
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         unimplemented!("Function should have been simplified prior to evaluation")
     }
 }
@@ -848,7 +848,11 @@ impl ScalarUDFImpl for TakeUDF {
     }
 
     // The actual implementation
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let take_idx = match &args[2] {
             ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) if v < &2 => *v as usize,
             _ => unreachable!(),
@@ -956,7 +960,11 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
         Ok(self.return_type.clone())
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!("This function should not get invoked!")
     }
 
@@ -1179,6 +1187,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
             name: Some(Ident {
                 value: "name".into(),
                 quote_style: None,
+                span: Span::empty(),
             }),
             data_type: DataType::Utf8,
             default_expr: None,
@@ -1188,6 +1197,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
             language: Some(Ident {
                 value: "plrust".into(),
                 quote_style: None,
+                span: Span::empty(),
             }),
             behavior: None,
             function_body: Some(lit(body)),
@@ -1240,7 +1250,11 @@ impl ScalarUDFImpl for MyRegexUdf {
         }
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args {
             [ColumnarValue::Scalar(ScalarValue::Utf8(value))] => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Boolean(

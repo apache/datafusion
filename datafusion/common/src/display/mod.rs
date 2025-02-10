@@ -62,6 +62,8 @@ pub enum PlanType {
     FinalPhysicalPlanWithStats,
     /// The final with schema, fully optimized physical plan which would be executed
     FinalPhysicalPlanWithSchema,
+    /// An error creating the physical plan
+    PhysicalPlanError,
 }
 
 impl Display for PlanType {
@@ -91,6 +93,7 @@ impl Display for PlanType {
             PlanType::FinalPhysicalPlanWithSchema => {
                 write!(f, "physical_plan_with_schema")
             }
+            PlanType::PhysicalPlanError => write!(f, "physical_plan_error"),
         }
     }
 }
@@ -118,7 +121,9 @@ impl StringifiedPlan {
     /// `verbose_mode = true` will display all available plans
     pub fn should_display(&self, verbose_mode: bool) -> bool {
         match self.plan_type {
-            PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan => true,
+            PlanType::FinalLogicalPlan
+            | PlanType::FinalPhysicalPlan
+            | PlanType::PhysicalPlanError => true,
             _ => verbose_mode,
         }
     }

@@ -25,8 +25,8 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_common::internal_err;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::DataFusionError;
 use datafusion_common::GetExt;
 use datafusion_common::DEFAULT_AVRO_EXTENSION;
 use datafusion_physical_expr::PhysicalExpr;
@@ -105,9 +105,7 @@ impl FileFormat for AvroFormat {
         let ext = self.get_ext();
         match file_compression_type.get_variant() {
             CompressionTypeVariant::UNCOMPRESSED => Ok(ext),
-            _ => Err(DataFusionError::Internal(
-                "Avro FileFormat does not support compression.".into(),
-            )),
+            _ => internal_err!("Avro FileFormat does not support compression."),
         }
     }
 

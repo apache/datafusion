@@ -281,7 +281,7 @@ fn is_supported_type(data_type: &DataType) -> bool {
         || is_supported_dictionary_type(data_type)
 }
 
-/// Returns true if [[UnwrapCastExprRewriter]] suppors this numeric type
+/// Returns true if [[UnwrapCastExprRewriter]] support this numeric type
 fn is_supported_numeric_type(data_type: &DataType) -> bool {
     matches!(
         data_type,

@@ -64,10 +64,10 @@
 //!  let plan = df.into_optimized_plan()?;
 //!
 //!  // Convert the plan into a substrait (protobuf) Plan
-//!  let substrait_plan = logical_plan::producer::to_substrait_plan(&plan, &ctx)?;
+//!  let substrait_plan = logical_plan::producer::to_substrait_plan(&plan, &ctx.state())?;
 //!
 //!  // Receive a substrait protobuf from somewhere, and turn it into a LogicalPlan
-//!  let logical_round_trip = logical_plan::consumer::from_substrait_plan(&ctx, &substrait_plan).await?;
+//!  let logical_round_trip = logical_plan::consumer::from_substrait_plan(&ctx.state(), &substrait_plan).await?;
 //!  let logical_round_trip = ctx.state().optimize(&logical_round_trip)?;
 //!  assert_eq!(format!("{:?}", plan), format!("{:?}", logical_round_trip));
 //! # Ok(())
@@ -75,6 +75,7 @@
 //! ```
 pub mod extensions;
 pub mod logical_plan;
+#[cfg(feature = "physical")]
 pub mod physical_plan;
 pub mod serializer;
 pub mod variation_const;

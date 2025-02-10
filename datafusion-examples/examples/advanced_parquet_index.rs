@@ -82,7 +82,7 @@ use url::Url;
 /// Specifically, this example illustrates how to:
 /// 1. Use [`ParquetFileReaderFactory`] to avoid re-reading parquet metadata on each query
 /// 2. Use [`PruningPredicate`] for predicate analysis
-/// 3. Pass a row group selection to [`ParuetExec`]
+/// 3. Pass a row group selection to [`ParquetExec`]
 /// 4. Pass a row selection (within a row group) to [`ParquetExec`]
 ///
 /// Note this is a *VERY* low level example for people who want to build their
@@ -211,7 +211,7 @@ async fn main() -> Result<()> {
     //
     // Note: in order to prune pages, the Page Index must be loaded and the
     // ParquetExec will load it on demand if not present. To avoid a second IO
-    // during query, this example loaded the Page Index pre-emptively by setting
+    // during query, this example loaded the Page Index preemptively by setting
     // `ArrowReader::with_page_index` in `IndexedFile::try_new`
     provider.set_use_row_selection(true);
     println!("** Select data, predicate `id = 950`");
@@ -229,9 +229,9 @@ async fn main() -> Result<()> {
 /// `file1.parquet` contains values `0..1000`
 #[derive(Debug)]
 pub struct IndexTableProvider {
-    /// Where the file is stored (cleanup on drop)
-    #[allow(dead_code)]
-    tmpdir: TempDir,
+    /// Pointer to temporary file storage. Keeping it in scope to prevent temporary folder
+    /// to be deleted prematurely
+    _tmpdir: TempDir,
     /// The file that is being read.
     indexed_file: IndexedFile,
     /// The underlying object store
@@ -250,7 +250,7 @@ impl IndexTableProvider {
 
         Ok(Self {
             indexed_file,
-            tmpdir,
+            _tmpdir: tmpdir,
             object_store,
             use_row_selections: AtomicBool::new(false),
         })

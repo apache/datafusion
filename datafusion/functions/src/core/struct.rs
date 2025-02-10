@@ -101,7 +101,11 @@ impl ScalarUDFImpl for StructFunc {
         Ok(DataType::Struct(Fields::from(return_fields)))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         struct_expr(args)
     }
 
@@ -114,12 +118,12 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_struct_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRUCT)
-            .with_description("Returns an Arrow struct using the specified input expressions optionally named.
+        Documentation::builder(
+            DOC_SECTION_STRUCT,
+            "Returns an Arrow struct using the specified input expressions optionally named.
 Fields in the returned struct use the optional name or the `cN` naming convention.
-For example: `c0`, `c1`, `c2`, etc.")
-            .with_syntax_example("struct(expression1[, ..., expression_n])")
+For example: `c0`, `c1`, `c2`, etc.",
+            "struct(expression1[, ..., expression_n])")
             .with_sql_example(r#"For example, this query converts two columns `a` and `b` to a single column with
 a struct type of fields `field_a` and `c1`:
 ```sql
@@ -154,6 +158,5 @@ select struct(a as field_a, b) from t;
                 "expression1, expression_n",
                 "Expression to include in the output struct. Can be a constant, column, or function, any combination of arithmetic or string operators.")
             .build()
-            .unwrap()
     })
 }

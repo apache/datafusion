@@ -55,6 +55,7 @@ use datafusion_physical_expr::{
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::execution_plan::EmissionType;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
@@ -274,7 +275,7 @@ impl PhysicalOptimizerRule for EnforceDistribution {
 fn adjust_input_keys_ordering(
     mut requirements: PlanWithKeyRequirements,
 ) -> Result<Transformed<PlanWithKeyRequirements>> {
-    let plan = requirements.plan.clone();
+    let plan = Arc::clone(&requirements.plan);
 
     if let Some(HashJoinExec {
         left,
@@ -295,8 +296,8 @@ fn adjust_input_keys_ordering(
                     Vec<SortOptions>,
                 )| {
                     HashJoinExec::try_new(
-                        left.clone(),
-                        right.clone(),
+                        Arc::clone(left),
+                        Arc::clone(right),
                         new_conditions.0,
                         filter.clone(),
                         join_type,
@@ -362,8 +363,8 @@ fn adjust_input_keys_ordering(
             Vec<SortOptions>,
         )| {
             SortMergeJoinExec::try_new(
-                left.clone(),
-                right.clone(),
+                Arc::clone(left),
+                Arc::clone(right),
                 new_conditions.0,
                 filter.clone(),
                 *join_type,
@@ -495,8 +496,8 @@ fn reorder_aggregate_keys(
                         PhysicalGroupBy::new_single(new_group_exprs),
                         agg_exec.aggr_expr().to_vec(),
                         agg_exec.filter_expr().to_vec(),
-                        agg_exec.input().clone(),
-                        agg_exec.input_schema.clone(),
+                        Arc::clone(agg_exec.input()),
+                        Arc::clone(&agg_exec.input_schema),
                     )?);
                     // Build new group expressions that correspond to the output
                     // of the "reordered" aggregator:
@@ -514,11 +515,11 @@ fn reorder_aggregate_keys(
                         new_group_by,
                         agg_exec.aggr_expr().to_vec(),
                         agg_exec.filter_expr().to_vec(),
-                        partial_agg.clone(),
+                        Arc::clone(&partial_agg) as _,
                         agg_exec.input_schema(),
                     )?);
 
-                    agg_node.plan = new_final_agg.clone();
+                    agg_node.plan = Arc::clone(&new_final_agg) as _;
                     agg_node.data.clear();
                     agg_node.children = vec![PlanWithKeyRequirements::new(
                         partial_agg as _,
@@ -617,15 +618,15 @@ pub(crate) fn reorder_join_keys_to_inputs(
                 left.equivalence_properties(),
                 right.equivalence_properties(),
             );
-            if positions.map_or(false, |idxs| !idxs.is_empty()) {
+            if positions.is_some_and(|idxs| !idxs.is_empty()) {
                 let JoinKeyPairs {
                     left_keys,
                     right_keys,
                 } = join_keys;
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
                 return Ok(Arc::new(HashJoinExec::try_new(
-                    left.clone(),
-                    right.clone(),
+                    Arc::clone(left),
+                    Arc::clone(right),
                     new_join_on,
                     filter.clone(),
                     join_type,
@@ -664,8 +665,8 @@ pub(crate) fn reorder_join_keys_to_inputs(
                     .map(|idx| sort_options[positions[idx]])
                     .collect();
                 return SortMergeJoinExec::try_new(
-                    left.clone(),
-                    right.clone(),
+                    Arc::clone(left),
+                    Arc::clone(right),
                     new_join_on,
                     filter.clone(),
                     *join_type,
@@ -726,19 +727,19 @@ fn try_reorder(
     } else if !equivalence_properties.eq_group().is_empty() {
         normalized_expected = expected
             .iter()
-            .map(|e| eq_groups.normalize_expr(e.clone()))
+            .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
             .collect();
 
         normalized_left_keys = join_keys
             .left_keys
             .iter()
-            .map(|e| eq_groups.normalize_expr(e.clone()))
+            .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
             .collect();
 
         normalized_right_keys = join_keys
             .right_keys
             .iter()
-            .map(|e| eq_groups.normalize_expr(e.clone()))
+            .map(|e| eq_groups.normalize_expr(Arc::clone(e)))
             .collect();
 
         if physical_exprs_equal(&normalized_expected, &normalized_left_keys)
@@ -761,8 +762,8 @@ fn try_reorder(
     let mut new_left_keys = vec![];
     let mut new_right_keys = vec![];
     for pos in positions.iter() {
-        new_left_keys.push(join_keys.left_keys[*pos].clone());
-        new_right_keys.push(join_keys.right_keys[*pos].clone());
+        new_left_keys.push(Arc::clone(&join_keys.left_keys[*pos]));
+        new_right_keys.push(Arc::clone(&join_keys.right_keys[*pos]));
     }
     let pairs = JoinKeyPairs {
         left_keys: new_left_keys,
@@ -800,7 +801,7 @@ fn expected_expr_positions(
 fn extract_join_keys(on: &[(PhysicalExprRef, PhysicalExprRef)]) -> JoinKeyPairs {
     let (left_keys, right_keys) = on
         .iter()
-        .map(|(l, r)| (l.clone() as _, r.clone() as _))
+        .map(|(l, r)| (Arc::clone(l) as _, Arc::clone(r) as _))
         .unzip();
     JoinKeyPairs {
         left_keys,
@@ -815,7 +816,7 @@ fn new_join_conditions(
     new_left_keys
         .iter()
         .zip(new_right_keys.iter())
-        .map(|(l_key, r_key)| (l_key.clone(), r_key.clone()))
+        .map(|(l_key, r_key)| (Arc::clone(l_key), Arc::clone(r_key)))
         .collect()
 }
 
@@ -844,8 +845,9 @@ fn add_roundrobin_on_top(
         // - Usage of order preserving variants is not desirable
         // (determined by flag `config.optimizer.prefer_existing_sort`)
         let partitioning = Partitioning::RoundRobinBatch(n_target);
-        let repartition = RepartitionExec::try_new(input.plan.clone(), partitioning)?
-            .with_preserve_order();
+        let repartition =
+            RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
+                .with_preserve_order();
 
         let new_plan = Arc::new(repartition) as _;
 
@@ -902,8 +904,9 @@ fn add_hash_on_top(
         // - Usage of order preserving variants is not desirable (per the flag
         //   `config.optimizer.prefer_existing_sort`).
         let partitioning = dist.create_partitioning(n_target);
-        let repartition = RepartitionExec::try_new(input.plan.clone(), partitioning)?
-            .with_preserve_order();
+        let repartition =
+            RepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
+                .with_preserve_order();
         let plan = Arc::new(repartition) as _;
 
         return Ok(DistributionContext::new(plan, true, vec![input]));
@@ -946,7 +949,7 @@ fn add_spm_on_top(
                 .with_fetch(fetch.take()),
             ) as _
         } else {
-            Arc::new(CoalescePartitionsExec::new(input.plan.clone())) as _
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(&input.plan))) as _
         };
 
         DistributionContext::new(new_plan, true, vec![input])
@@ -1042,7 +1045,7 @@ fn replace_order_preserving_variants(
     {
         if repartition.preserve_order() {
             context.plan = Arc::new(RepartitionExec::try_new(
-                context.children[0].plan.clone(),
+                Arc::clone(&context.children[0].plan),
                 repartition.partitioning().clone(),
             )?);
             return Ok((context, None));
@@ -1173,12 +1176,17 @@ fn ensure_distribution(
     let should_use_estimates = config
         .execution
         .use_row_number_estimates_to_optimize_partitioning;
-    let is_unbounded = dist_context.plan.execution_mode().is_unbounded();
+    let unbounded_and_pipeline_friendly = dist_context.plan.boundedness().is_unbounded()
+        && matches!(
+            dist_context.plan.pipeline_behavior(),
+            EmissionType::Incremental | EmissionType::Both
+        );
     // Use order preserving variants either of the conditions true
     // - it is desired according to config
     // - when plan is unbounded
+    // - when it is pipeline friendly (can incrementally produce results)
     let order_preserving_variants_desirable =
-        is_unbounded || config.optimizer.prefer_existing_sort;
+        unbounded_and_pipeline_friendly || config.optimizer.prefer_existing_sort;
 
     // Remove unnecessary repartition from the physical plan if any
     let (
@@ -1261,7 +1269,7 @@ fn ensure_distribution(
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
                     }
-                    // When inserting hash is necessary to satisy hash requirement, insert hash repartition.
+                    // When inserting hash is necessary to satisfy hash requirement, insert hash repartition.
                     if hash_necessary {
                         child =
                             add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
@@ -1325,7 +1333,10 @@ fn ensure_distribution(
     )
     .collect::<Result<Vec<_>>>()?;
 
-    let children_plans = children.iter().map(|c| c.plan.clone()).collect::<Vec<_>>();
+    let children_plans = children
+        .iter()
+        .map(|c| Arc::clone(&c.plan))
+        .collect::<Vec<_>>();
 
     plan = if plan.as_any().is::<UnionExec>()
         && !config.optimizer.prefer_existing_union
@@ -1455,7 +1466,6 @@ pub(crate) mod tests {
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::{
         expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
-        PhysicalSortRequirement,
     };
     use datafusion_physical_expr_common::sort_expr::LexRequirement;
     use datafusion_physical_plan::PlanProperties;
@@ -1487,7 +1497,8 @@ pub(crate) mod tests {
             PlanProperties::new(
                 input.equivalence_properties().clone(), // Equivalence Properties
                 input.output_partitioning().clone(),    // Output Partitioning
-                input.execution_mode(),                 // Execution Mode
+                input.pipeline_behavior(),              // Pipeline Behavior
+                input.boundedness(),                    // Boundedness
             )
         }
     }
@@ -1528,9 +1539,7 @@ pub(crate) mod tests {
             if self.expr.is_empty() {
                 vec![None]
             } else {
-                vec![Some(PhysicalSortRequirement::from_sort_exprs(
-                    self.expr.iter(),
-                ))]
+                vec![Some(LexRequirement::from(self.expr.clone()))]
             }
         }
 
@@ -2856,11 +2865,11 @@ pub(crate) mod tests {
                     ],
                 // Should include 7 RepartitionExecs (4 hash, 3 round-robin), 4 SortExecs
                 // Since ordering of the left child is not preserved after SortMergeJoin
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
                 //   when mode is Inner, Left, LeftSemi, LeftAnti
                 // Similarly, since partitioning of the left side is not preserved
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional Hash Repartition after SortMergeJoin in contrast the test
                 //   cases when mode is Inner, Left, LeftSemi, LeftAnti
                 _ => vec![
@@ -2908,11 +2917,11 @@ pub(crate) mod tests {
                     ],
                 // Should include 8 RepartitionExecs (4 hash, 8 round-robin), 4 SortExecs
                 // Since ordering of the left child is not preserved after SortMergeJoin
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional SortExec after SortMergeJoin in contrast the test cases
                 //   when mode is Inner, Left, LeftSemi, LeftAnti
                 // Similarly, since partitioning of the left side is not preserved
-                // when mode is Right, RgihtSemi, RightAnti, Full
+                // when mode is Right, RightSemi, RightAnti, Full
                 // - We need to add one additional Hash Repartition and Roundrobin repartition after
                 //   SortMergeJoin in contrast the test cases when mode is Inner, Left, LeftSemi, LeftAnti
                 _ => vec![

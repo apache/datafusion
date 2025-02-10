@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
+use datafusion_common::HashMap;
 use datafusion_common::{resources_datafusion_err, DataFusionError, Result};
-use hashbrown::HashMap;
 use log::debug;
 use parking_lot::Mutex;
 use std::{
@@ -62,7 +62,7 @@ pub struct GreedyMemoryPool {
 }
 
 impl GreedyMemoryPool {
-    /// Allocate up to `limit` bytes
+    /// Create a new pool that can allocate up to `pool_size` bytes
     pub fn new(pool_size: usize) -> Self {
         debug!("Created new GreedyMemoryPool(pool_size={pool_size})");
         Self {

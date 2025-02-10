@@ -82,7 +82,11 @@ impl ScalarUDFImpl for ArrayPosition {
         Ok(UInt64)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_position_inner)(args)
     }
 
@@ -99,12 +103,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_position_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns the position of the first occurrence of the specified element in the array.",
-            )
-            .with_syntax_example("array_position(array, element)\narray_position(array, element, index)")
+
+            "array_position(array, element)\narray_position(array, element, index)")
             .with_sql_example(
                 r#"```sql
 > select array_position([1, 2, 2, 3, 1, 4], 2);
@@ -134,7 +137,6 @@ fn get_array_position_doc() -> &'static Documentation {
                 "Index at which to start searching.",
             )
             .build()
-            .unwrap()
     })
 }
 
@@ -250,10 +252,14 @@ impl ScalarUDFImpl for ArrayPositions {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(List(Arc::new(Field::new("item", UInt64, true))))
+        Ok(List(Arc::new(Field::new_list_field(UInt64, true))))
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_positions_inner)(args)
     }
 
@@ -268,12 +274,11 @@ impl ScalarUDFImpl for ArrayPositions {
 
 fn get_array_positions_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Searches for an element in the array, returns all occurrences.",
-            )
-            .with_syntax_example("array_positions(array, element)")
+
+            "array_positions(array, element)")
             .with_sql_example(
                 r#"```sql
 > select array_positions([1, 2, 2, 3, 1, 4], 2);
@@ -293,7 +298,6 @@ fn get_array_positions_doc() -> &'static Documentation {
                 "Element to search for positions in the array.",
             )
             .build()
-            .unwrap()
     })
 }
 

@@ -921,13 +921,14 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
                 .newlines_in_values
                 .map_or_else(Vec::new, |h| vec![h as u8]),
             compression: compression.into(),
-            schema_infer_max_rec: opts.schema_infer_max_rec as u64,
+            schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
             date_format: opts.date_format.clone().unwrap_or_default(),
             datetime_format: opts.datetime_format.clone().unwrap_or_default(),
             timestamp_format: opts.timestamp_format.clone().unwrap_or_default(),
             timestamp_tz_format: opts.timestamp_tz_format.clone().unwrap_or_default(),
             time_format: opts.time_format.clone().unwrap_or_default(),
             null_value: opts.null_value.clone().unwrap_or_default(),
+            null_regex: opts.null_regex.clone().unwrap_or_default(),
             comment: opts.comment.map_or_else(Vec::new, |h| vec![h]),
         })
     }
@@ -940,7 +941,7 @@ impl TryFrom<&JsonOptions> for protobuf::JsonOptions {
         let compression: protobuf::CompressionTypeVariant = opts.compression.into();
         Ok(protobuf::JsonOptions {
             compression: compression.into(),
-            schema_infer_max_rec: opts.schema_infer_max_rec as u64,
+            schema_infer_max_rec: opts.schema_infer_max_rec.map(|h| h as u64),
         })
     }
 }

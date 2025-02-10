@@ -170,7 +170,7 @@ impl ListingTableUrl {
                 if ignore_subdirectory {
                     segments
                         .next()
-                        .map_or(false, |file_name| glob.matches(file_name))
+                        .is_some_and(|file_name| glob.matches(file_name))
                 } else {
                     let stripped = segments.join(DELIMITER);
                     glob.matches(&stripped)
@@ -191,6 +191,17 @@ impl ListingTableUrl {
     }
 
     /// Returns the file extension of the last path segment if it exists
+    ///
+    /// Examples:
+    /// ```rust
+    /// use datafusion::datasource::listing::ListingTableUrl;
+    /// let url = ListingTableUrl::parse("file:///foo/bar.csv").unwrap();
+    /// assert_eq!(url.file_extension(), Some("csv"));
+    /// let url = ListingTableUrl::parse("file:///foo/bar").unwrap();
+    /// assert_eq!(url.file_extension(), None);
+    /// let url = ListingTableUrl::parse("file:///foo/bar.").unwrap();
+    /// assert_eq!(url.file_extension(), None);
+    /// ```
     pub fn file_extension(&self) -> Option<&str> {
         if let Some(segments) = self.url.path_segments() {
             if let Some(last_segment) = segments.last() {

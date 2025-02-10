@@ -20,9 +20,9 @@
 
 use crate::utils::split_disjunction;
 use crate::{split_conjunction, PhysicalExpr};
-use datafusion_common::{Column, ScalarValue};
+use datafusion_common::{Column, HashMap, ScalarValue};
 use datafusion_expr::Operator;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
@@ -124,7 +124,7 @@ impl LiteralGuarantee {
             // for an `AND` conjunction to be true, all terms individually must be true
             .fold(GuaranteeBuilder::new(), |builder, expr| {
                 if let Some(cel) = ColOpLit::try_new(expr) {
-                    return builder.aggregate_conjunct(cel);
+                    builder.aggregate_conjunct(cel)
                 } else if let Some(inlist) = expr
                     .as_any()
                     .downcast_ref::<crate::expressions::InListExpr>()
@@ -412,7 +412,7 @@ impl<'a> ColOpLit<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::OnceLock;
+    use std::sync::LazyLock;
 
     use super::*;
     use crate::planner::logical2physical;
@@ -808,7 +808,7 @@ mod test {
             vec![not_in_guarantee("b", [1, 2, 3]), in_guarantee("b", [3, 4])],
         );
         // b IN (1, 2, 3) OR b = 2
-        // TODO this should be in_guarantee("b", [1, 2, 3]) but currently we don't support to anylize this kind of disjunction. Only `ColOpLit OR ColOpLit` is supported.
+        // TODO this should be in_guarantee("b", [1, 2, 3]) but currently we don't support to analyze this kind of disjunction. Only `ColOpLit OR ColOpLit` is supported.
         test_analyze(
             col("b")
                 .in_list(vec![lit(1), lit(2), lit(3)], false)
@@ -863,13 +863,12 @@ mod test {
 
     // Schema for testing
     fn schema() -> SchemaRef {
-        Arc::clone(SCHEMA.get_or_init(|| {
+        static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
             Arc::new(Schema::new(vec![
                 Field::new("a", DataType::Utf8, false),
                 Field::new("b", DataType::Int32, false),
             ]))
-        }))
+        });
+        Arc::clone(&SCHEMA)
     }
-
-    static SCHEMA: OnceLock<SchemaRef> = OnceLock::new();
 }

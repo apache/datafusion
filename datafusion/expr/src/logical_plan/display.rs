@@ -14,16 +14,17 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
 //! This module provides logic for displaying LogicalPlans in various styles
 
 use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Execute,
-    Expr, Filter, Join, Limit, LogicalPlan, Partitioning, Prepare, Projection,
-    RecursiveQuery, Repartition, Sort, Subquery, SubqueryAlias,
-    TableProviderFilterPushDown, TableScan, Unnest, Values, Window,
+    expr_vec_fmt, Aggregate, DescribeTable, Distinct, DistinctOn, DmlStatement, Expr,
+    Filter, Join, Limit, LogicalPlan, Partitioning, Projection, RecursiveQuery,
+    Repartition, Sort, Subquery, SubqueryAlias, TableProviderFilterPushDown, TableScan,
+    Unnest, Values, Window,
 };
 
 use crate::dml::CopyTo;
@@ -58,7 +59,7 @@ impl<'a, 'b> IndentVisitor<'a, 'b> {
     }
 }
 
-impl<'n, 'a, 'b> TreeNodeVisitor<'n> for IndentVisitor<'a, 'b> {
+impl<'n> TreeNodeVisitor<'n> for IndentVisitor<'_, '_> {
     type Node = LogicalPlan;
 
     fn f_down(
@@ -112,7 +113,7 @@ impl<'n, 'a, 'b> TreeNodeVisitor<'n> for IndentVisitor<'a, 'b> {
 pub fn display_schema(schema: &Schema) -> impl fmt::Display + '_ {
     struct Wrapper<'a>(&'a Schema);
 
-    impl<'a> fmt::Display for Wrapper<'a> {
+    impl fmt::Display for Wrapper<'_> {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             write!(f, "[")?;
             for (idx, field) in self.0.fields().iter().enumerate() {
@@ -180,7 +181,7 @@ impl<'a, 'b> GraphvizVisitor<'a, 'b> {
     }
 }
 
-impl<'n, 'a, 'b> TreeNodeVisitor<'n> for GraphvizVisitor<'a, 'b> {
+impl<'n> TreeNodeVisitor<'n> for GraphvizVisitor<'_, '_> {
     type Node = LogicalPlan;
 
     fn f_down(
@@ -617,24 +618,6 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Detail": format!("{:?}", e.node)
                 })
             }
-            LogicalPlan::Prepare(Prepare {
-                name, data_types, ..
-            }) => {
-                json!({
-                    "Node Type": "Prepare",
-                    "Name": name,
-                    "Data Types": format!("{:?}", data_types)
-                })
-            }
-            LogicalPlan::Execute(Execute {
-                name, parameters, ..
-            }) => {
-                json!({
-                    "Node Type": "Execute",
-                    "Name": name,
-                    "Parameters": expr_vec_fmt!(parameters),
-                })
-            }
             LogicalPlan::DescribeTable(DescribeTable { .. }) => {
                 json!({
                     "Node Type": "DescribeTable"
@@ -671,7 +654,7 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
     }
 }
 
-impl<'n, 'a, 'b> TreeNodeVisitor<'n> for PgJsonVisitor<'a, 'b> {
+impl<'n> TreeNodeVisitor<'n> for PgJsonVisitor<'_, '_> {
     type Node = LogicalPlan;
 
     fn f_down(

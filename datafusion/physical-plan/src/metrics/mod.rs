@@ -28,7 +28,7 @@ use std::{
     sync::Arc,
 };
 
-use hashbrown::HashMap;
+use datafusion_common::HashMap;
 
 // public exports
 pub use baseline::{BaselineMetrics, RecordOutput};
@@ -376,7 +376,7 @@ impl ExecutionPlanMetricsSet {
     }
 }
 
-/// `name=value` pairs identifiying a metric. This concept is called various things
+/// `name=value` pairs identifying a metric. This concept is called various things
 /// in various different systems:
 ///
 /// "labels" in

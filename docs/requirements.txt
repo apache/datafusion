@@ -20,3 +20,4 @@ pydata-sphinx-theme==0.8.0
 myst-parser
 maturin
 jinja2
+setuptools>=48.0.0

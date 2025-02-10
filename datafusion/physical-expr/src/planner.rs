@@ -28,7 +28,7 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::{Alias, Cast, InList, ScalarFunction};
+use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
 use datafusion_expr::var_provider::is_system_variables;
 use datafusion_expr::var_provider::VarType;
 use datafusion_expr::{
@@ -200,8 +200,11 @@ pub fn create_physical_expr(
             escape_char,
             case_insensitive,
         }) => {
-            if escape_char.is_some() {
-                return exec_err!("LIKE does not support escape_char");
+            // `\` is the implicit escape, see https://github.com/apache/datafusion/issues/13291
+            if escape_char.unwrap_or('\\') != '\\' {
+                return exec_err!(
+                    "LIKE does not support escape_char other than the backslash (\\)"
+                );
             }
             let physical_expr =
                 create_physical_expr(expr, input_dfschema, execution_props)?;
@@ -358,6 +361,9 @@ pub fn create_physical_expr(
                 expressions::in_list(value_expr, list_exprs, negated, input_schema)
             }
         },
+        Expr::Placeholder(Placeholder { id, .. }) => {
+            exec_err!("Placeholder '{id}' was not provided a value for execution.")
+        }
         other => {
             not_impl_err!("Physical plan does not support logical expression {other:?}")
         }

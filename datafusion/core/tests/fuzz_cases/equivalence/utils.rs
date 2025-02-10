@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-//
+
 use datafusion::physical_plan::expressions::col;
 use datafusion::physical_plan::expressions::Column;
 use datafusion_physical_expr::{ConstExpr, EquivalenceProperties, PhysicalSortExpr};
@@ -32,7 +32,7 @@ use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion_physical_expr::equivalence::{EquivalenceClass, ProjectionMapping};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexOrderingRef};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use itertools::izip;
 use rand::prelude::*;
@@ -184,7 +184,7 @@ fn add_equal_conditions_test() -> Result<()> {
     assert!(eq_groups.contains(&col_a_expr));
     assert!(eq_groups.contains(&col_b_expr));
 
-    // b and c are aliases. Exising equivalence class should expand,
+    // b and c are aliases. Existing equivalence class should expand,
     // however there shouldn't be any new equivalence class
     eq_properties.add_equal_conditions(&col_b_expr, &col_c_expr)?;
     assert_eq!(eq_properties.eq_group().len(), 1);
@@ -465,7 +465,7 @@ pub fn generate_table_for_orderings(
 
     // prune out rows that is invalid according to remaining orderings.
     for ordering in orderings.iter().skip(1) {
-        let sort_columns = get_sort_columns(&batch, ordering.as_ref())?;
+        let sort_columns = get_sort_columns(&batch, ordering)?;
 
         // Collect sort options and values into separate vectors.
         let (sort_options, sort_col_values): (Vec<_>, Vec<_>) = sort_columns
@@ -530,7 +530,7 @@ fn generate_random_f64_array(
 // Helper function to get sort columns from a batch
 fn get_sort_columns(
     batch: &RecordBatch,
-    ordering: LexOrderingRef,
+    ordering: &LexOrdering,
 ) -> Result<Vec<SortColumn>> {
     ordering
         .iter()
@@ -581,7 +581,11 @@ impl ScalarUDFImpl for TestScalarUDF {
         Ok(input[0].sort_properties)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(args)?;
 
         let arr: ArrayRef = match args[0].data_type() {

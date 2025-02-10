@@ -1512,7 +1512,7 @@ impl serde::Serialize for CsvOptions {
         if self.compression != 0 {
             len += 1;
         }
-        if self.schema_infer_max_rec != 0 {
+        if self.schema_infer_max_rec.is_some() {
             len += 1;
         }
         if !self.date_format.is_empty() {
@@ -1531,6 +1531,9 @@ impl serde::Serialize for CsvOptions {
             len += 1;
         }
         if !self.null_value.is_empty() {
+            len += 1;
+        }
+        if !self.null_regex.is_empty() {
             len += 1;
         }
         if !self.comment.is_empty() {
@@ -1571,10 +1574,10 @@ impl serde::Serialize for CsvOptions {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.compression)))?;
             struct_ser.serialize_field("compression", &v)?;
         }
-        if self.schema_infer_max_rec != 0 {
+        if let Some(v) = self.schema_infer_max_rec.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&self.schema_infer_max_rec).as_str())?;
+            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&v).as_str())?;
         }
         if !self.date_format.is_empty() {
             struct_ser.serialize_field("dateFormat", &self.date_format)?;
@@ -1593,6 +1596,9 @@ impl serde::Serialize for CsvOptions {
         }
         if !self.null_value.is_empty() {
             struct_ser.serialize_field("nullValue", &self.null_value)?;
+        }
+        if !self.null_regex.is_empty() {
+            struct_ser.serialize_field("nullRegex", &self.null_regex)?;
         }
         if !self.comment.is_empty() {
             #[allow(clippy::needless_borrow)]
@@ -1644,6 +1650,8 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             "timeFormat",
             "null_value",
             "nullValue",
+            "null_regex",
+            "nullRegex",
             "comment",
             "double_quote",
             "doubleQuote",
@@ -1666,6 +1674,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
             TimestampTzFormat,
             TimeFormat,
             NullValue,
+            NullRegex,
             Comment,
             DoubleQuote,
             NewlinesInValues,
@@ -1703,6 +1712,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                             "timestampTzFormat" | "timestamp_tz_format" => Ok(GeneratedField::TimestampTzFormat),
                             "timeFormat" | "time_format" => Ok(GeneratedField::TimeFormat),
                             "nullValue" | "null_value" => Ok(GeneratedField::NullValue),
+                            "nullRegex" | "null_regex" => Ok(GeneratedField::NullRegex),
                             "comment" => Ok(GeneratedField::Comment),
                             "doubleQuote" | "double_quote" => Ok(GeneratedField::DoubleQuote),
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
@@ -1738,6 +1748,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                 let mut timestamp_tz_format__ = None;
                 let mut time_format__ = None;
                 let mut null_value__ = None;
+                let mut null_regex__ = None;
                 let mut comment__ = None;
                 let mut double_quote__ = None;
                 let mut newlines_in_values__ = None;
@@ -1787,7 +1798,7 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 return Err(serde::de::Error::duplicate_field("schemaInferMaxRec"));
                             }
                             schema_infer_max_rec__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                         GeneratedField::DateFormat => {
@@ -1825,6 +1836,12 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                                 return Err(serde::de::Error::duplicate_field("nullValue"));
                             }
                             null_value__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::NullRegex => {
+                            if null_regex__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("nullRegex"));
+                            }
+                            null_regex__ = Some(map_.next_value()?);
                         }
                         GeneratedField::Comment => {
                             if comment__.is_some() {
@@ -1866,13 +1883,14 @@ impl<'de> serde::Deserialize<'de> for CsvOptions {
                     quote: quote__.unwrap_or_default(),
                     escape: escape__.unwrap_or_default(),
                     compression: compression__.unwrap_or_default(),
-                    schema_infer_max_rec: schema_infer_max_rec__.unwrap_or_default(),
+                    schema_infer_max_rec: schema_infer_max_rec__,
                     date_format: date_format__.unwrap_or_default(),
                     datetime_format: datetime_format__.unwrap_or_default(),
                     timestamp_format: timestamp_format__.unwrap_or_default(),
                     timestamp_tz_format: timestamp_tz_format__.unwrap_or_default(),
                     time_format: time_format__.unwrap_or_default(),
                     null_value: null_value__.unwrap_or_default(),
+                    null_regex: null_regex__.unwrap_or_default(),
                     comment: comment__.unwrap_or_default(),
                     double_quote: double_quote__.unwrap_or_default(),
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
@@ -3929,7 +3947,7 @@ impl serde::Serialize for JsonOptions {
         if self.compression != 0 {
             len += 1;
         }
-        if self.schema_infer_max_rec != 0 {
+        if self.schema_infer_max_rec.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.JsonOptions", len)?;
@@ -3938,10 +3956,10 @@ impl serde::Serialize for JsonOptions {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.compression)))?;
             struct_ser.serialize_field("compression", &v)?;
         }
-        if self.schema_infer_max_rec != 0 {
+        if let Some(v) = self.schema_infer_max_rec.as_ref() {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
-            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&self.schema_infer_max_rec).as_str())?;
+            struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&v).as_str())?;
         }
         struct_ser.end()
     }
@@ -4019,14 +4037,14 @@ impl<'de> serde::Deserialize<'de> for JsonOptions {
                                 return Err(serde::de::Error::duplicate_field("schemaInferMaxRec"));
                             }
                             schema_infer_max_rec__ = 
-                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                                map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
                     }
                 }
                 Ok(JsonOptions {
                     compression: compression__.unwrap_or_default(),
-                    schema_infer_max_rec: schema_infer_max_rec__.unwrap_or_default(),
+                    schema_infer_max_rec: schema_infer_max_rec__,
                 })
             }
         }

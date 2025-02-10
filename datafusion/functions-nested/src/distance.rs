@@ -17,24 +17,23 @@
 
 //! [ScalarUDFImpl] definitions for array_distance function.
 
-use crate::utils::{downcast_arg, make_scalar_function};
+use crate::utils::make_scalar_function;
 use arrow_array::{
     Array, ArrayRef, Float64Array, LargeListArray, ListArray, OffsetSizeTrait,
 };
 use arrow_schema::DataType;
 use arrow_schema::DataType::{FixedSizeList, Float64, LargeList, List};
-use core::any::type_name;
 use datafusion_common::cast::{
     as_float32_array, as_float64_array, as_generic_list_array, as_int32_array,
     as_int64_array,
 };
 use datafusion_common::utils::coerced_fixed_size_list_to_list;
-use datafusion_common::DataFusionError;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, internal_datafusion_err, Result};
 use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_functions::{downcast_arg, downcast_named_arg};
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
@@ -96,7 +95,11 @@ impl ScalarUDFImpl for ArrayDistance {
         Ok(result)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_distance_inner)(args)
     }
 
@@ -113,12 +116,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_array_distance_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns the Euclidean distance between two input arrays of equal length.",
-            )
-            .with_syntax_example("array_distance(array1, array2)")
+
+            "array_distance(array1, array2)")
             .with_sql_example(
                 r#"```sql
 > select array_distance([1, 2], [1, 4]);
@@ -138,7 +140,6 @@ fn get_array_distance_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 

@@ -96,7 +96,11 @@ impl ScalarUDFImpl for ChrFunc {
         Ok(Utf8)
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(chr, vec![])(args)
     }
 
@@ -109,14 +113,13 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_chr_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description(
-                "Returns the character with the specified ASCII or Unicode code value.",
-            )
-            .with_syntax_example("chr(expression)")
-            .with_sql_example(
-                r#"```sql
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns the character with the specified ASCII or Unicode code value.",
+            "chr(expression)",
+        )
+        .with_sql_example(
+            r#"```sql
 > select chr(128640);
 +--------------------+
 | chr(Int64(128640)) |
@@ -124,10 +127,9 @@ fn get_chr_doc() -> &'static Documentation {
 | 🚀                 |
 +--------------------+ 
 ```"#,
-            )
-            .with_standard_argument("expression", Some("String"))
-            .with_related_udf("ascii")
-            .build()
-            .unwrap()
+        )
+        .with_standard_argument("expression", Some("String"))
+        .with_related_udf("ascii")
+        .build()
     })
 }

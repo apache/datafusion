@@ -126,24 +126,21 @@ Alice 50 Alice 1
 Alice 50 Alice 2
 Bob 1 NULL NULL
 
-# Uncomment when filtered FULL moved
-# full join with join filter
-#query TITI rowsort
-#SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t2.b * 50 > t1.b
-#----
-#Alice 100 NULL NULL
-#Alice 50 Alice 2
-#Bob 1 NULL NULL
-#NULL NULL Alice 1
+query TITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t2.b * 50 > t1.b
+----
+Alice 100 NULL NULL
+Alice 50 Alice 2
+Bob 1 NULL NULL
+NULL NULL Alice 1
 
-# Uncomment when filtered FULL moved
-#query TITI rowsort
-#SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t1.b > t2.b + 50
-#----
-#Alice 100 Alice 1
-#Alice 100 Alice 2
-#Alice 50 NULL NULL
-#Bob 1 NULL NULL
+query TITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t1.b > t2.b + 50
+----
+Alice 100 Alice 1
+Alice 100 Alice 2
+Alice 50 NULL NULL
+Bob 1 NULL NULL
 
 statement ok
 DROP TABLE t1;

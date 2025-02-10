@@ -104,7 +104,11 @@ impl ScalarUDFImpl for ArrowCastFunc {
         data_type_from_args(args)
     }
 
-    fn invoke(&self, _args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        _args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         internal_err!("arrow_cast should have been simplified to cast")
     }
 
@@ -143,10 +147,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_arrow_cast_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_OTHER)
-            .with_description("Casts a value to a specific Arrow data type.")
-            .with_syntax_example("arrow_cast(expression, datatype)")
+        Documentation::builder(
+            DOC_SECTION_OTHER,
+            "Casts a value to a specific Arrow data type.",
+            "arrow_cast(expression, datatype)")
             .with_sql_example(
                 r#"```sql
 > select arrow_cast(-5, 'Int8') as a,
@@ -164,7 +168,6 @@ fn get_arrow_cast_doc() -> &'static Documentation {
             .with_argument("expression", "Expression to cast. The expression can be a constant, column, or function, and any combination of operators.")
             .with_argument("datatype", "[Arrow data type](https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html) name to cast to, as a string. The format is the same as that returned by [`arrow_typeof`]")
             .build()
-            .unwrap()
     })
 }
 

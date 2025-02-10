@@ -547,7 +547,9 @@ trunc(numeric_expression[, decimal_places])
 ## Conditional Functions
 
 - [coalesce](#coalesce)
+- [greatest](#greatest)
 - [ifnull](#ifnull)
+- [least](#least)
 - [nullif](#nullif)
 - [nvl](#nvl)
 - [nvl2](#nvl2)
@@ -575,9 +577,55 @@ coalesce(expression1[, ..., expression_n])
 +----------------------------------------+
 ```
 
+### `greatest`
+
+Returns the greatest value in a list of expressions. Returns _null_ if all expressions are _null_.
+
+```
+greatest(expression1[, ..., expression_n])
+```
+
+#### Arguments
+
+- **expression1, expression_n**: Expressions to compare and return the greatest value.. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary.
+
+#### Example
+
+```sql
+> select greatest(4, 7, 5);
++---------------------------+
+| greatest(4,7,5)           |
++---------------------------+
+| 7                         |
++---------------------------+
+```
+
 ### `ifnull`
 
 _Alias of [nvl](#nvl)._
+
+### `least`
+
+Returns the smallest value in a list of expressions. Returns _null_ if all expressions are _null_.
+
+```
+least(expression1[, ..., expression_n])
+```
+
+#### Arguments
+
+- **expression1, expression_n**: Expressions to compare and return the smallest value. Can be a constant, column, or function, and any combination of arithmetic operators. Pass as many expression arguments as necessary.
+
+#### Example
+
+```sql
+> select least(4, 7, 5);
++---------------------------+
+| least(4,7,5)              |
++---------------------------+
+| 4                         |
++---------------------------+
+```
 
 ### `nullif`
 
@@ -1954,6 +2002,32 @@ The following intervals are supported:
 - years
 - century
 
+#### Example
+
+```sql
+-- Bin the timestamp into 1 day intervals
+> SELECT date_bin(interval '1 day', time) as bin
+FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
++---------------------+
+| bin                 |
++---------------------+
+| 2023-01-01T00:00:00 |
+| 2023-01-03T00:00:00 |
++---------------------+
+2 row(s) fetched.
+
+-- Bin the timestamp into 1 day intervals starting at 3AM on  2023-01-01
+> SELECT date_bin(interval '1 day', time,  '2023-01-01T03:00:00') as bin
+FROM VALUES ('2023-01-01T18:18:18Z'), ('2023-01-03T19:00:03Z')  t(time);
++---------------------+
+| bin                 |
++---------------------+
+| 2023-01-01T03:00:00 |
+| 2023-01-03T03:00:00 |
++---------------------+
+2 row(s) fetched.
+```
+
 ### `date_format`
 
 _Alias of [to_char](#to_char)._
@@ -3081,26 +3155,26 @@ array_position(array, element, index)
 
 ### `array_prepend`
 
-Appends an element to the end of an array.
+Prepends an element to the beginning of an array.
 
 ```
-array_append(array, element)
+array_prepend(element, array)
 ```
 
 #### Arguments
 
+- **element**: Element to prepend to the array.
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **element**: Element to append to the array.
 
 #### Example
 
 ```sql
-> select array_append([1, 2, 3], 4);
-+--------------------------------------+
-| array_append(List([1,2,3]),Int64(4)) |
-+--------------------------------------+
-| [1, 2, 3, 4]                         |
-+--------------------------------------+
+> select array_prepend(1, [2, 3, 4]);
++---------------------------------------+
+| array_prepend(Int64(1),List([2,3,4])) |
++---------------------------------------+
+| [1, 2, 3, 4]                          |
++---------------------------------------+
 ```
 
 #### Aliases
@@ -3443,13 +3517,14 @@ array_sort(array, desc, nulls_first)
 Converts each element to its text representation.
 
 ```
-array_to_string(array, delimiter)
+array_to_string(array, delimiter[, null_string])
 ```
 
 #### Arguments
 
 - **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
 - **delimiter**: Array element separator.
+- **null_string**: Optional. String to replace null values in the array. If not provided, nulls will be handled by default behavior.
 
 #### Example
 
@@ -3824,26 +3899,33 @@ range(start, stop, step)
 
 ### `string_to_array`
 
-Converts each element to its text representation.
+Splits a string into an array of substrings based on a delimiter. Any substrings matching the optional `null_str` argument are replaced with NULL.
 
 ```
-array_to_string(array, delimiter)
+string_to_array(str, delimiter[, null_str])
 ```
 
 #### Arguments
 
-- **array**: Array expression. Can be a constant, column, or function, and any combination of array operators.
-- **delimiter**: Array element separator.
+- **str**: String expression to split.
+- **delimiter**: Delimiter string to split on.
+- **null_str**: Substring values to be replaced with `NULL`.
 
 #### Example
 
 ```sql
-> select array_to_string([[1, 2, 3, 4], [5, 6, 7, 8]], ',');
-+----------------------------------------------------+
-| array_to_string(List([1,2,3,4,5,6,7,8]),Utf8(",")) |
-+----------------------------------------------------+
-| 1,2,3,4,5,6,7,8                                    |
-+----------------------------------------------------+
+> select string_to_array('abc##def', '##');
++-----------------------------------+
+| string_to_array(Utf8('abc##def'))  |
++-----------------------------------+
+| ['abc', 'def']                    |
++-----------------------------------+
+> select string_to_array('abc def', ' ', 'def');
++---------------------------------------------+
+| string_to_array(Utf8('abc def'), Utf8(' '), Utf8('def')) |
++---------------------------------------------+
+| ['abc', NULL]                               |
++---------------------------------------------+
 ```
 
 #### Aliases
@@ -3983,44 +4065,42 @@ make_map(['key1', 'key2'], ['value1', 'value2'])
 
 #### Example
 
-````sql
-        -- Using map function
-        SELECT MAP('type', 'test');
-        ----
-        {type: test}
+```sql
+-- Using map function
+SELECT MAP('type', 'test');
+----
+{type: test}
 
-        SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
-        ----
-        {POST: 41, HEAD: 33, PATCH: }
+SELECT MAP(['POST', 'HEAD', 'PATCH'], [41, 33, null]);
+----
+{POST: 41, HEAD: 33, PATCH: }
 
-        SELECT MAP([[1,2], [3,4]], ['a', 'b']);
-        ----
-        {[1, 2]: a, [3, 4]: b}
+SELECT MAP([[1,2], [3,4]], ['a', 'b']);
+----
+{[1, 2]: a, [3, 4]: b}
 
-        SELECT MAP { 'a': 1, 'b': 2 };
-        ----
-        {a: 1, b: 2}
+SELECT MAP { 'a': 1, 'b': 2 };
+----
+{a: 1, b: 2}
 
-        -- Using make_map function
-        SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
-        ----
-        {POST: 41, HEAD: 33}
+-- Using make_map function
+SELECT MAKE_MAP(['POST', 'HEAD'], [41, 33]);
+----
+{POST: 41, HEAD: 33}
 
-        SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
-        ----
-        {key1: value1, key2: }
-        ```
-
+SELECT MAKE_MAP(['key1', 'key2'], ['value1', null]);
+----
+{key1: value1, key2: }
+```
 
 ### `map_extract`
 
 Returns a list containing the value for the given key or an empty list if the key is not present in the map.
 
-````
-
+```
 map_extract(map, key)
+```
 
-````
 #### Arguments
 
 - **map**: Map expression. Can be a constant, column, or function, and any combination of map operators.
@@ -4040,7 +4120,7 @@ SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
 SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
 ----
 []
-````
+```
 
 #### Aliases
 

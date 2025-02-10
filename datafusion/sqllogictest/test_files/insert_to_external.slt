@@ -610,7 +610,7 @@ select count(distinct e) from test_column_defaults
 
 # Expect all rows to be true as now() was inserted into the table
 query B rowsort
-select e < now() from test_column_defaults
+select e <= now() from test_column_defaults
 ----
 true
 true

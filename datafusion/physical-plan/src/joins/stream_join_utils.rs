@@ -32,7 +32,7 @@ use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
 use arrow_schema::{Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    arrow_datafusion_err, DataFusionError, JoinSide, Result, ScalarValue,
+    arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,
 };
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
@@ -40,9 +40,8 @@ use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
-use datafusion_physical_expr_common::sort_expr::LexOrderingRef;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use hashbrown::raw::RawTable;
-use hashbrown::HashSet;
 
 /// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
 impl JoinHashMapType for PruningJoinHashMap {
@@ -745,8 +744,8 @@ pub fn prepare_sorted_exprs(
     filter: &JoinFilter,
     left: &Arc<dyn ExecutionPlan>,
     right: &Arc<dyn ExecutionPlan>,
-    left_sort_exprs: LexOrderingRef,
-    right_sort_exprs: LexOrderingRef,
+    left_sort_exprs: &LexOrdering,
+    right_sort_exprs: &LexOrdering,
 ) -> Result<(SortedFilterExpr, SortedFilterExpr, ExprIntervalGraph)> {
     let err = || {
         datafusion_common::plan_datafusion_err!("Filter does not include the child order")

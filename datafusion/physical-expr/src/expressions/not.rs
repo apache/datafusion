@@ -19,10 +19,9 @@
 
 use std::any::Any;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::physical_expr::down_cast_any_ref;
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
@@ -31,10 +30,23 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
 /// Not expression
-#[derive(Debug, Hash)]
+#[derive(Debug, Eq)]
 pub struct NotExpr {
     /// Input expression
     arg: Arc<dyn PhysicalExpr>,
+}
+
+// Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
+impl PartialEq for NotExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.arg.eq(&other.arg)
+    }
+}
+
+impl Hash for NotExpr {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.arg.hash(state);
+    }
 }
 
 impl NotExpr {
@@ -100,23 +112,8 @@ impl PhysicalExpr for NotExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(NotExpr::new(Arc::clone(&children[0]))))
     }
-
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         children[0].not()
-    }
-
-    fn dyn_hash(&self, state: &mut dyn Hasher) {
-        let mut s = state;
-        self.hash(&mut s);
-    }
-}
-
-impl PartialEq<dyn Any> for NotExpr {
-    fn eq(&self, other: &dyn Any) -> bool {
-        down_cast_any_ref(other)
-            .downcast_ref::<Self>()
-            .map(|x| self.arg.eq(&x.arg))
-            .unwrap_or(false)
     }
 }
 
@@ -130,7 +127,7 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use arrow::{array::BooleanArray, datatypes::*};
-    use std::sync::OnceLock;
+    use std::sync::LazyLock;
 
     #[test]
     fn neg_op() -> Result<()> {
@@ -193,10 +190,9 @@ mod tests {
     }
 
     fn schema() -> SchemaRef {
-        Arc::clone(SCHEMA.get_or_init(|| {
+        static SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| {
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, true)]))
-        }))
+        });
+        Arc::clone(&SCHEMA)
     }
-
-    static SCHEMA: OnceLock<SchemaRef> = OnceLock::new();
 }

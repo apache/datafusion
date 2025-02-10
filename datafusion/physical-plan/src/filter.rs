@@ -272,10 +272,12 @@ impl FilterExec {
                 output_partitioning.project(&projection_mapping, &eq_properties);
             eq_properties = eq_properties.project(&projection_mapping, out_schema);
         }
+
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
-            input.execution_mode(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         ))
     }
 }

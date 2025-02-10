@@ -17,7 +17,6 @@
 
 //! [`Optimizer`] and [`OptimizerRule`]
 
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -29,7 +28,7 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{internal_err, DFSchema, DataFusionError, Result};
+use datafusion_common::{internal_err, DFSchema, DataFusionError, HashSet, Result};
 use datafusion_expr::logical_plan::LogicalPlan;
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -69,7 +68,6 @@ use crate::utils::log_plan;
 ///
 /// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
 /// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_optimizer_rule
-
 pub trait OptimizerRule: Debug {
     /// Try and rewrite `plan` to an optimized form, returning None if the plan
     /// cannot be optimized by this rule.
@@ -303,7 +301,7 @@ impl<'a> Rewriter<'a> {
     }
 }
 
-impl<'a> TreeNodeRewriter for Rewriter<'a> {
+impl TreeNodeRewriter for Rewriter<'_> {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {

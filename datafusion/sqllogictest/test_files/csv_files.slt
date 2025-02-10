@@ -350,15 +350,33 @@ col2 TEXT
 LOCATION '../core/tests/data/cr_terminator.csv'
 OPTIONS ('format.terminator' E'\r', 'format.has_header' 'true');
 
-# TODO: It should be passed but got the error: External error: query failed: DataFusion error: Object Store error: Generic LocalFileSystem error: Requested range was invalid
-# See the issue: https://github.com/apache/datafusion/issues/12328
-# query TT
-# select * from stored_table_with_cr_terminator;
-# ----
-# id0 value0
-# id1 value1
-# id2 value2
-# id3 value3
+# Check single-thread reading of CSV with custom line terminator
+statement ok
+SET datafusion.optimizer.repartition_file_min_size = 10485760;
+
+query TT
+select * from stored_table_with_cr_terminator;
+----
+id0 value0
+id1 value1
+id2 value2
+id3 value3
+
+# Check repartitioned reading of CSV with custom line terminator
+statement ok
+SET datafusion.optimizer.repartition_file_min_size = 1;
+
+query TT
+select * from stored_table_with_cr_terminator order by col1;
+----
+id0 value0
+id1 value1
+id2 value2
+id3 value3
+
+# Reset repartition_file_min_size to default value
+statement ok
+SET datafusion.optimizer.repartition_file_min_size = 10485760;
 
 statement ok
 drop table stored_table_with_cr_terminator;

@@ -18,7 +18,7 @@
 //! Define a plan for unnesting values in columns that contain a list type.
 
 use std::cmp::{self, Ordering};
-use std::collections::HashMap;
+use std::task::{ready, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -37,17 +37,16 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{cast, is_not_null, kernels, sum};
 use arrow::datatypes::{DataType, Int64Type, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_array::{Int64Array, Scalar, StructArray};
+use arrow_array::{new_null_array, Int64Array, Scalar, StructArray};
 use arrow_ord::cmp::lt;
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, Result, UnnestOptions,
+    exec_datafusion_err, exec_err, internal_err, HashMap, HashSet, Result, UnnestOptions,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use hashbrown::HashSet;
 use log::trace;
 
 /// Unnest the given columns (either with type struct or list)
@@ -101,12 +100,11 @@ impl UnnestExec {
         input: &Arc<dyn ExecutionPlan>,
         schema: SchemaRef,
     ) -> PlanProperties {
-        let eq_properties = EquivalenceProperties::new(schema);
-
         PlanProperties::new(
-            eq_properties,
-            input.output_partitioning().clone(),
-            input.execution_mode(),
+            EquivalenceProperties::new(schema),
+            input.output_partitioning().to_owned(),
+            input.pipeline_behavior(),
+            input.boundedness(),
         )
     }
 
@@ -285,7 +283,7 @@ impl Stream for UnnestStream {
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
+    ) -> Poll<Option<Self::Item>> {
         self.poll_next_impl(cx)
     }
 }
@@ -296,28 +294,31 @@ impl UnnestStream {
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Result<RecordBatch>>> {
-        self.input
-            .poll_next_unpin(cx)
-            .map(|maybe_batch| match maybe_batch {
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        loop {
+            return Poll::Ready(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
                     let timer = self.metrics.elapsed_compute.timer();
+                    self.metrics.input_batches.add(1);
+                    self.metrics.input_rows.add(batch.num_rows());
                     let result = build_batch(
                         &batch,
                         &self.schema,
                         &self.list_type_columns,
                         &self.struct_column_indices,
                         &self.options,
-                    );
-                    self.metrics.input_batches.add(1);
-                    self.metrics.input_rows.add(batch.num_rows());
-                    if let Ok(ref batch) = result {
-                        timer.done();
-                        self.metrics.output_batches.add(1);
-                        self.metrics.output_rows.add(batch.num_rows());
-                    }
+                    )?;
+                    timer.done();
+                    let Some(result_batch) = result else {
+                        continue;
+                    };
+                    self.metrics.output_batches.add(1);
+                    self.metrics.output_rows.add(result_batch.num_rows());
 
-                    Some(result)
+                    // Empty record batches should not be emitted.
+                    // They need to be treated as  [`Option<RecordBatch>`]es and handled separately
+                    debug_assert!(result_batch.num_rows() > 0);
+                    Some(Ok(result_batch))
                 }
                 other => {
                     trace!(
@@ -331,7 +332,8 @@ impl UnnestStream {
                     );
                     other
                 }
-            })
+            });
+        }
     }
 }
 
@@ -426,7 +428,7 @@ fn list_unnest_at_level(
     temp_unnested_arrs: &mut HashMap<ListUnnest, ArrayRef>,
     level_to_unnest: usize,
     options: &UnnestOptions,
-) -> Result<(Vec<ArrayRef>, usize)> {
+) -> Result<Option<Vec<ArrayRef>>> {
     // Extract unnestable columns at this level
     let (arrs_to_unnest, list_unnest_specs): (Vec<Arc<dyn Array>>, Vec<_>) =
         list_type_unnests
@@ -462,7 +464,7 @@ fn list_unnest_at_level(
         })? as usize
     };
     if total_length == 0 {
-        return Ok((vec![], 0));
+        return Ok(None);
     }
 
     // Unnest all the list arrays
@@ -470,18 +472,38 @@ fn list_unnest_at_level(
         unnest_list_arrays(arrs_to_unnest.as_ref(), unnested_length, total_length)?;
 
     // Create the take indices array for other columns
-    let take_indices = create_take_indicies(unnested_length, total_length);
-
-    // Dimension of arrays in batch is untouched, but the values are repeated
-    // as the side effect of unnesting
-    let ret = repeat_arrs_from_indices(batch, &take_indices)?;
+    let take_indices = create_take_indices(unnested_length, total_length);
     unnested_temp_arrays
         .into_iter()
         .zip(list_unnest_specs.iter())
         .for_each(|(flatten_arr, unnesting)| {
             temp_unnested_arrs.insert(*unnesting, flatten_arr);
         });
-    Ok((ret, total_length))
+
+    let repeat_mask: Vec<bool> = batch
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            // Check if the column is needed in future levels (levels below the current one)
+            let needed_in_future_levels = list_type_unnests.iter().any(|unnesting| {
+                unnesting.index_in_input_schema == i && unnesting.depth < level_to_unnest
+            });
+
+            // Check if the column is involved in unnesting at any level
+            let is_involved_in_unnesting = list_type_unnests
+                .iter()
+                .any(|unnesting| unnesting.index_in_input_schema == i);
+
+            // Repeat columns needed in future levels or not unnested.
+            needed_in_future_levels || !is_involved_in_unnesting
+        })
+        .collect();
+
+    // Dimension of arrays in batch is untouched, but the values are repeated
+    // as the side effect of unnesting
+    let ret = repeat_arrs_from_indices(batch, &take_indices, &repeat_mask)?;
+
+    Ok(Some(ret))
 }
 struct UnnestingResult {
     arr: ArrayRef,
@@ -550,7 +572,7 @@ fn build_batch(
     list_type_columns: &[ListUnnest],
     struct_column_indices: &HashSet<usize>,
     options: &UnnestOptions,
-) -> Result<RecordBatch> {
+) -> Result<Option<RecordBatch>> {
     let transformed = match list_type_columns.len() {
         0 => flatten_struct_cols(batch.columns(), schema, struct_column_indices),
         _ => {
@@ -571,16 +593,16 @@ fn build_batch(
                     true => batch.columns(),
                     false => &flatten_arrs,
                 };
-                let (temp_result, num_rows) = list_unnest_at_level(
+                let Some(temp_result) = list_unnest_at_level(
                     input,
                     list_type_columns,
                     &mut temp_unnested_result,
                     depth,
                     options,
-                )?;
-                if num_rows == 0 {
-                    return Ok(RecordBatch::new_empty(Arc::clone(schema)));
-                }
+                )?
+                else {
+                    return Ok(None);
+                };
                 flatten_arrs = temp_result;
             }
             let unnested_array_map: HashMap<usize, Vec<UnnestingResult>> =
@@ -664,8 +686,8 @@ fn build_batch(
 
             flatten_struct_cols(&ret, schema, struct_column_indices)
         }
-    };
-    transformed
+    }?;
+    Ok(Some(transformed))
 }
 
 /// Find the longest list length among the given list arrays for each row.
@@ -817,14 +839,14 @@ fn unnest_list_array(
     capacity: usize,
 ) -> Result<ArrayRef> {
     let values = list_array.values();
-    let mut take_indicies_builder = PrimitiveArray::<Int64Type>::builder(capacity);
+    let mut take_indices_builder = PrimitiveArray::<Int64Type>::builder(capacity);
     for row in 0..list_array.len() {
         let mut value_length = 0;
         if !list_array.is_null(row) {
             let (start, end) = list_array.value_offsets(row);
             value_length = end - start;
             for i in start..end {
-                take_indicies_builder.append_value(i)
+                take_indices_builder.append_value(i)
             }
         }
         let target_length = length_array.value(row);
@@ -834,17 +856,17 @@ fn unnest_list_array(
         );
         // Pad with NULL values
         for _ in value_length..target_length {
-            take_indicies_builder.append_null();
+            take_indices_builder.append_null();
         }
     }
     Ok(kernels::take::take(
         &values,
-        &take_indicies_builder.finish(),
+        &take_indices_builder.finish(),
         None,
     )?)
 }
 
-/// Creates take indicies that will be used to expand all columns except for the list type
+/// Creates take indices that will be used to expand all columns except for the list type
 /// [`columns`](UnnestExec::list_column_indices) that is being unnested.
 /// Every column value needs to be repeated multiple times according to the length array.
 ///
@@ -853,13 +875,13 @@ fn unnest_list_array(
 /// ```ignore
 /// [2, 3, 1]
 /// ```
-/// Then `create_take_indicies` will return an array like this
+/// Then [`create_take_indices`] will return an array like this
 ///
 /// ```ignore
 /// [0, 0, 1, 1, 1, 2]
 /// ```
 ///
-fn create_take_indicies(
+fn create_take_indices(
     length_array: &PrimitiveArray<Int64Type>,
     capacity: usize,
 ) -> PrimitiveArray<Int64Type> {
@@ -877,8 +899,11 @@ fn create_take_indicies(
     builder.finish()
 }
 
-/// Create the batch given an arrays and a `indices` array
-/// that is used by the take kernel to copy values.
+/// Create a batch of arrays based on an input `batch` and a `indices` array.
+/// The `indices` array is used by the take kernel to repeat values in the arrays
+/// that are marked with `true` in the `repeat_mask`. Arrays marked with `false`
+/// in the `repeat_mask` will be replaced with arrays filled with nulls of the
+/// appropriate length.
 ///
 /// For example if we have the following batch:
 ///
@@ -908,14 +933,35 @@ fn create_take_indicies(
 /// c2: 'a', 'b', 'c', 'c', 'c', null, 'd', 'd'
 /// ```
 ///
+/// The `repeat_mask` determines whether an array's values are repeated or replaced with nulls.
+/// For example, if the `repeat_mask` is:
+///
+/// ```ignore
+/// [true, false]
+/// ```
+///
+/// The final batch will look like:
+///
+/// ```ignore
+/// c1: 1, null, 2, 3, 4, null, 5, 6  // Repeated using `indices`
+/// c2: null, null, null, null, null, null, null, null  // Replaced with nulls
+///
 fn repeat_arrs_from_indices(
     batch: &[ArrayRef],
     indices: &PrimitiveArray<Int64Type>,
+    repeat_mask: &[bool],
 ) -> Result<Vec<Arc<dyn Array>>> {
     batch
         .iter()
-        .map(|arr| Ok(kernels::take::take(arr, indices, None)?))
-        .collect::<Result<_>>()
+        .zip(repeat_mask.iter())
+        .map(|(arr, &repeat)| {
+            if repeat {
+                Ok(kernels::take::take(arr, indices, None)?)
+            } else {
+                Ok(new_null_array(arr.data_type(), arr.len()))
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -965,7 +1011,7 @@ mod tests {
         offsets.push(OffsetSize::from_usize(values.len()).unwrap());
         valid.append(true);
 
-        let field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
         GenericListArray::<OffsetSize>::new(
             field,
             OffsetBuffer::new(offsets.into()),
@@ -991,7 +1037,7 @@ mod tests {
             None,
             None,
         ]));
-        let field = Arc::new(Field::new("item", DataType::Utf8, true));
+        let field = Arc::new(Field::new_list_field(DataType::Utf8, true));
         let valid = NullBuffer::from(vec![true, false, true, false, true, true]);
         FixedSizeListArray::new(field, 2, values, Some(valid))
     }
@@ -1074,7 +1120,7 @@ mod tests {
         let out_schema = Arc::new(Schema::new(vec![
             Field::new(
                 "col1_unnest_placeholder_depth_1",
-                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
                 true,
             ),
             Field::new("col1_unnest_placeholder_depth_2", DataType::Int32, true),
@@ -1108,7 +1154,8 @@ mod tests {
                 preserve_nulls: true,
                 recursions: vec![],
             },
-        )?;
+        )?
+        .unwrap();
 
         let expected = &[
 "+---------------------------------+---------------------------------+---------------------------------+",
@@ -1239,11 +1286,11 @@ mod tests {
     }
 
     #[test]
-    fn test_create_take_indicies() -> Result<()> {
+    fn test_create_take_indices() -> Result<()> {
         let length_array = Int64Array::from(vec![2, 3, 1]);
-        let take_indicies = create_take_indicies(&length_array, 6);
+        let take_indices = create_take_indices(&length_array, 6);
         let expected = Int64Array::from(vec![0, 0, 1, 1, 1, 2]);
-        assert_eq!(take_indicies, expected);
+        assert_eq!(take_indices, expected);
         Ok(())
     }
 }

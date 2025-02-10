@@ -16,9 +16,8 @@
 // under the License.
 
 //! [`EliminateCrossJoin`] converts `CROSS JOIN` to `INNER JOIN` if join predicates are available.
-use std::sync::Arc;
-
 use crate::{OptimizerConfig, OptimizerRule};
+use std::sync::Arc;
 
 use crate::join_key_set::JoinKeySet;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -80,6 +79,7 @@ impl OptimizerRule for EliminateCrossJoin {
         true
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn rewrite(
         &self,
         plan: LogicalPlan,
@@ -93,7 +93,7 @@ impl OptimizerRule for EliminateCrossJoin {
         let parent_predicate = if let LogicalPlan::Filter(filter) = plan {
             // if input isn't a join that can potentially be rewritten
             // avoid unwrapping the input
-            let rewriteable = matches!(
+            let rewritable = matches!(
                 filter.input.as_ref(),
                 LogicalPlan::Join(Join {
                     join_type: JoinType::Inner,
@@ -101,7 +101,7 @@ impl OptimizerRule for EliminateCrossJoin {
                 })
             );
 
-            if !rewriteable {
+            if !rewritable {
                 // recursively try to rewrite children
                 return rewrite_children(self, LogicalPlan::Filter(filter), config);
             }
@@ -650,7 +650,7 @@ mod tests {
             "    Inner Join: t1.a = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "      Inner Join: t1.a = t3.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
             "        TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-            "        TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]", 
+            "        TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]",
             "      TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]"
         ];
 
@@ -1236,10 +1236,10 @@ mod tests {
             .build()?;
 
         let expected = vec![
-              "Filter: t1.a + UInt32(100) = t2.a * UInt32(2) OR t2.b = t1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-              "  Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-              "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-              "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+            "Filter: t1.a + UInt32(100) = t2.a * UInt32(2) OR t2.b = t1.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  Cross Join:  [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
         ];
 
         assert_optimized_plan_eq(plan, expected);
@@ -1292,10 +1292,10 @@ mod tests {
             .build()?;
 
         let expected = vec![
-        "Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-        "  Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
-        "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
-        "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
+            "Filter: t2.c < UInt32(15) OR t2.c = UInt32(688) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "  Inner Join: t1.a + UInt32(100) = t2.a * UInt32(2) [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]",
+            "    TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]",
         ];
 
         assert_optimized_plan_eq(plan, expected);

@@ -77,7 +77,11 @@ impl ScalarUDFImpl for OverlayFunc {
         utf8_to_str_type(&arg_types[0], "overlay")
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {
                 make_scalar_function(overlay::<i32>, vec![])(args)
@@ -96,10 +100,10 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_overlay_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_STRING)
-            .with_description("Returns the string which is replaced by another string from the specified position and specified count length.")
-            .with_syntax_example("overlay(str PLACING substr FROM pos [FOR count])")
+        Documentation::builder(
+            DOC_SECTION_STRING,
+            "Returns the string which is replaced by another string from the specified position and specified count length.",
+            "overlay(str PLACING substr FROM pos [FOR count])")
             .with_sql_example(r#"```sql
 > select overlay('Txxxxas' placing 'hom' from 2 for 4);
 +--------------------------------------------------------+
@@ -113,7 +117,6 @@ fn get_overlay_doc() -> &'static Documentation {
             .with_argument("pos", "The start position to start the replace in str.")
             .with_argument("count", "The count of characters to be replaced from start position of str. If not specified, will use substr length instead.")
             .build()
-            .unwrap()
     })
 }
 

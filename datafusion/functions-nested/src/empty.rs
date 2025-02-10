@@ -73,7 +73,11 @@ impl ScalarUDFImpl for ArrayEmpty {
         })
     }
 
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    fn invoke_batch(
+        &self,
+        args: &[ColumnarValue],
+        _number_rows: usize,
+    ) -> Result<ColumnarValue> {
         make_scalar_function(array_empty_inner)(args)
     }
 
@@ -90,12 +94,11 @@ static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
 
 fn get_empty_doc() -> &'static Documentation {
     DOCUMENTATION.get_or_init(|| {
-        Documentation::builder()
-            .with_doc_section(DOC_SECTION_ARRAY)
-            .with_description(
+        Documentation::builder(
+            DOC_SECTION_ARRAY,
                 "Returns 1 for an empty array or 0 for a non-empty array.",
-            )
-            .with_syntax_example("empty(array)")
+
+            "empty(array)")
             .with_sql_example(
                 r#"```sql
 > select empty([1]);
@@ -111,7 +114,6 @@ fn get_empty_doc() -> &'static Documentation {
                 "Array expression. Can be a constant, column, or function, and any combination of array operators.",
             )
             .build()
-            .unwrap()
     })
 }
 
