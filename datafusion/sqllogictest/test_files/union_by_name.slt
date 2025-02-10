@@ -75,7 +75,7 @@ query error
 ----
 DataFusion error: SanityCheckPlan
 caused by
-Error during planning: Plan: ["SortPreservingMergeExec: [x@1 ASC NULLS LAST]", "  UnionExec", "    SortExec: expr=[x@1 ASC NULLS LAST], preserve_partitioning=[true]", "      ProjectionExec: expr=[NULL as Int64(5), x@0 as x]", "        UnionExec", "          MemoryExec: partitions=1, partition_sizes=[1]", "          MemoryExec: partitions=1, partition_sizes=[1]", "    ProjectionExec: expr=[5 as Int64(5), NULL as x]", "      PlaceholderRowExec"] does not satisfy order requirements: [x@1 ASC NULLS LAST]. Child-0 order: []
+Error during planning: Plan: ["SortPreservingMergeExec: [x@1 ASC NULLS LAST]", "  UnionExec", "    SortExec: expr=[x@1 ASC NULLS LAST], preserve_partitioning=[true]", "      ProjectionExec: expr=[NULL as Int64(5), x@0 as x]", "        UnionExec", "          DataSourceExec: partitions=1, partition_sizes=[1]", "          DataSourceExec: partitions=1, partition_sizes=[1]", "    ProjectionExec: expr=[5 as Int64(5), NULL as x]", "      PlaceholderRowExec"] does not satisfy order requirements: [x@1 ASC NULLS LAST]. Child-0 order: []
 
 
 query II
@@ -92,7 +92,7 @@ query error
 ----
 DataFusion error: SanityCheckPlan
 caused by
-Error during planning: Plan: ["SortPreservingMergeExec: [x@1 ASC NULLS LAST]", "  UnionExec", "    SortExec: expr=[x@1 ASC NULLS LAST], preserve_partitioning=[true]", "      ProjectionExec: expr=[NULL as Int64(5), x@0 as x]", "        UnionExec", "          MemoryExec: partitions=1, partition_sizes=[1]", "          ProjectionExec: expr=[y@0 as x]", "            MemoryExec: partitions=1, partition_sizes=[1]", "    ProjectionExec: expr=[5 as Int64(5), NULL as x]", "      PlaceholderRowExec"] does not satisfy order requirements: [x@1 ASC NULLS LAST]. Child-0 order: []
+Error during planning: Plan: ["SortPreservingMergeExec: [x@1 ASC NULLS LAST]", "  UnionExec", "    SortExec: expr=[x@1 ASC NULLS LAST], preserve_partitioning=[true]", "      ProjectionExec: expr=[NULL as Int64(5), x@0 as x]", "        UnionExec", "          DataSourceExec: partitions=1, partition_sizes=[1]", "          ProjectionExec: expr=[y@0 as x]", "            DataSourceExec: partitions=1, partition_sizes=[1]", "    ProjectionExec: expr=[5 as Int64(5), NULL as x]", "      PlaceholderRowExec"] does not satisfy order requirements: [x@1 ASC NULLS LAST]. Child-0 order: []
 
 
 
