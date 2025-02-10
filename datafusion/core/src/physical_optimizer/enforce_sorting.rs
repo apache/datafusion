@@ -371,9 +371,10 @@ fn ensure_sorting(
         return adjust_window_sort_removal(requirements).map(Transformed::yes);
     } else if is_sort_preserving_merge(plan)
         && child_node.plan.output_partitioning().partition_count() <= 1
+        && plan.fetch().is_none()
     {
         // This `SortPreservingMergeExec` is unnecessary, input already has a
-        // single partition.
+        // single partition and no fetch is required:
         let child_node = requirements.children.swap_remove(0);
         return Ok(Transformed::yes(child_node));
     }
