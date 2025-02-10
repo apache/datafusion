@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_ranges() -> Result<()> {
+    fn test_evaluate_bounds() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let child_interval = Interval::make(Some(-2), Some(1))?;
         let negative_expr_interval = Interval::make(Some(-1), Some(2))?;
@@ -358,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn test_propagate_ranges() -> Result<()> {
+    fn test_propagate_constraints() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let original_child_interval = Interval::make(Some(-2), Some(3))?;
         let negative_expr_interval = Interval::make(Some(0), Some(4))?;

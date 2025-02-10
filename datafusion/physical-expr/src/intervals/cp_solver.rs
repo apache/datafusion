@@ -466,7 +466,7 @@ impl ExprIntervalGraph {
         given_range: Interval,
     ) -> Result<PropagationResult> {
         self.assign_intervals(leaf_bounds);
-        let bounds = self.evaluate_ranges()?;
+        let bounds = self.evaluate_bounds()?;
         // There are three possible cases to consider:
         // (1) given_range ⊇ bounds => Nothing to propagate
         // (2) ∅ ⊂ (given_range ∩ bounds) ⊂ bounds => Can propagate
@@ -476,7 +476,7 @@ impl ExprIntervalGraph {
             Ok(PropagationResult::CannotPropagate)
         } else if bounds.contains(&given_range)? != Interval::CERTAINLY_FALSE {
             // Second case:
-            let result = self.propagate_ranges(given_range);
+            let result = self.propagate_constraints(given_range);
             self.update_intervals(leaf_bounds);
             result
         } else {
@@ -548,11 +548,11 @@ impl ExprIntervalGraph {
     /// // Evaluate bounds for the composite expression:
     /// graph.assign_intervals(&intervals);
     /// assert_eq!(
-    ///     graph.evaluate_ranges().unwrap(),
+    ///     graph.evaluate_bounds().unwrap(),
     ///     &Interval::make(Some(20), Some(30)).unwrap(),
     /// )
     /// ```
-    pub fn evaluate_ranges(&mut self) -> Result<&Interval> {
+    pub fn evaluate_bounds(&mut self) -> Result<&Interval> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(node) = dfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
@@ -573,7 +573,10 @@ impl ExprIntervalGraph {
 
     /// Updates/shrinks bounds for leaf expressions using interval arithmetic
     /// via a top-down traversal.
-    fn propagate_ranges(&mut self, given_range: Interval) -> Result<PropagationResult> {
+    fn propagate_constraints(
+        &mut self,
+        given_range: Interval,
+    ) -> Result<PropagationResult> {
         // Adjust the root node with the given range:
         if let Some(interval) = self.graph[self.root].interval.intersect(given_range)? {
             self.graph[self.root].interval = interval;
@@ -1374,7 +1377,7 @@ mod tests {
     }
 
     #[test]
-    fn test_propagate_ranges_singleton_interval_at_right() -> Result<()> {
+    fn test_propagate_constraints_singleton_interval_at_right() -> Result<()> {
         let expression = BinaryExpr::new(
             Arc::new(Column::new("ts_column", 0)),
             Operator::Plus,
@@ -1447,7 +1450,7 @@ mod tests {
     }
 
     #[test]
-    fn test_propagate_ranges_column_interval_at_left() -> Result<()> {
+    fn test_propagate_constraints_column_interval_at_left() -> Result<()> {
         let expression = BinaryExpr::new(
             Arc::new(Column::new("interval_column", 1)),
             Operator::Plus,

@@ -358,7 +358,7 @@ mod tests {
         expected: Interval,
     ) {
         let input = vec![&interval];
-        let result = udf.evaluate_ranges(&input).unwrap();
+        let result = udf.evaluate_bounds(&input).unwrap();
         assert_eq!(
             result,
             expected,

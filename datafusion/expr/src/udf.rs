@@ -277,8 +277,8 @@ impl ScalarUDF {
     ///
     /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
     /// then the output interval would be `[0, 3]`.
-    pub fn evaluate_ranges(&self, inputs: &[&Interval]) -> Result<Interval> {
-        self.inner.evaluate_ranges(inputs)
+    pub fn evaluate_bounds(&self, inputs: &[&Interval]) -> Result<Interval> {
+        self.inner.evaluate_bounds(inputs)
     }
 
     /// Updates bounds for child expressions, given a known interval for this
@@ -303,12 +303,12 @@ impl ScalarUDF {
     ///
     /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
     /// input `a` is given as `[-7, 3]`, then propagation would return `[-5, 3]`.
-    pub fn propagate_ranges(
+    pub fn propagate_constraints(
         &self,
         interval: &Interval,
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        self.inner.propagate_ranges(interval, inputs)
+        self.inner.propagate_constraints(interval, inputs)
     }
 
     /// Calculates the [`SortProperties`] of this function based on its
@@ -733,7 +733,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// If the function is `ABS(a)`, and the input interval is `a: [-3, 2]`,
     /// then the output interval would be `[0, 3]`.
-    fn evaluate_ranges(&self, _input: &[&Interval]) -> Result<Interval> {
+    fn evaluate_bounds(&self, _input: &[&Interval]) -> Result<Interval> {
         // We cannot assume the input datatype is the same of output type.
         Interval::make_unbounded(&DataType::Null)
     }
@@ -760,7 +760,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     ///
     /// If the function is `ABS(a)`, the current `interval` is `[4, 5]` and the
     /// input `a` is given as `[-7, 3]`, then propagation would return `[-5, 3]`.
-    fn propagate_ranges(
+    fn propagate_constraints(
         &self,
         _interval: &Interval,
         _inputs: &[&Interval],
@@ -936,16 +936,16 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.short_circuits()
     }
 
-    fn evaluate_ranges(&self, input: &[&Interval]) -> Result<Interval> {
-        self.inner.evaluate_ranges(input)
+    fn evaluate_bounds(&self, input: &[&Interval]) -> Result<Interval> {
+        self.inner.evaluate_bounds(input)
     }
 
-    fn propagate_ranges(
+    fn propagate_constraints(
         &self,
         interval: &Interval,
         inputs: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        self.inner.propagate_ranges(interval, inputs)
+        self.inner.propagate_constraints(interval, inputs)
     }
 
     fn output_ordering(&self, inputs: &[ExprProperties]) -> Result<SortProperties> {

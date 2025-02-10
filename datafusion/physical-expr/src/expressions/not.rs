@@ -179,30 +179,30 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_ranges() -> Result<()> {
+    fn test_evaluate_bounds() -> Result<()> {
         // Note that `None` for boolean intervals is converted to `Some(false)`
         // / `Some(true)` by `Interval::make`, so it is not explicitly tested
         // here
 
         // if the bounds are all booleans (false, true) so is the negation
-        assert_evaluate_ranges(
+        assert_evaluate_bounds(
             Interval::make(Some(false), Some(true))?,
             Interval::make(Some(false), Some(true))?,
         )?;
         // (true, false) is not tested because it is not a valid interval (lower
         // bound is greater than upper bound)
-        assert_evaluate_ranges(
+        assert_evaluate_bounds(
             Interval::make(Some(true), Some(true))?,
             Interval::make(Some(false), Some(false))?,
         )?;
-        assert_evaluate_ranges(
+        assert_evaluate_bounds(
             Interval::make(Some(false), Some(false))?,
             Interval::make(Some(true), Some(true))?,
         )?;
         Ok(())
     }
 
-    fn assert_evaluate_ranges(
+    fn assert_evaluate_bounds(
         interval: Interval,
         expected_interval: Interval,
     ) -> Result<()> {
