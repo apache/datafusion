@@ -4730,70 +4730,67 @@ mod tests {
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(6.0), Some(18.0))?;
 
-        for parent_interval in [
-            Interval::CERTAINLY_TRUE, /*, Interval::CERTAINLY_FALSE*/
-        ] {
-            let parent = StatisticsV2::new_uniform(parent_interval);
-            let children = vec![
-                vec![
-                    StatisticsV2::new_uniform(left_interval.clone())?,
-                    StatisticsV2::new_uniform(right_interval.clone())?,
-                ],
-                vec![
-                    StatisticsV2::new_unknown(
-                        ScalarValue::Float64(Some(6.)),
-                        ScalarValue::Float64(Some(6.)),
-                        ScalarValue::Null,
-                        left_interval.clone(),
-                    )?,
-                    StatisticsV2::new_uniform(right_interval.clone())?,
-                ],
-                vec![
-                    StatisticsV2::new_uniform(left_interval.clone())?,
-                    StatisticsV2::new_unknown(
-                        ScalarValue::Float64(Some(12.)),
-                        ScalarValue::Float64(Some(12.)),
-                        ScalarValue::Null,
-                        right_interval.clone(),
-                    )?,
-                ],
-                vec![
-                    StatisticsV2::new_unknown(
-                        ScalarValue::Float64(Some(6.)),
-                        ScalarValue::Float64(Some(6.)),
-                        ScalarValue::UInt64(None),
-                        left_interval.clone(),
-                    )?,
-                    StatisticsV2::new_unknown(
-                        ScalarValue::Float64(Some(12.)),
-                        ScalarValue::Float64(Some(12.)),
-                        ScalarValue::Null,
-                        right_interval.clone(),
-                    )?,
-                ],
-            ];
+        let parent = StatisticsV2::new_bernoulli(get_one().clone());
+        let children = vec![
+            vec![
+                StatisticsV2::new_uniform(left_interval.clone())?,
+                StatisticsV2::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                StatisticsV2::new_unknown(
+                    ScalarValue::Float64(Some(6.)),
+                    ScalarValue::Float64(Some(6.)),
+                    ScalarValue::Null,
+                    left_interval.clone(),
+                )?,
+                StatisticsV2::new_uniform(right_interval.clone())?,
+            ],
+            vec![
+                StatisticsV2::new_uniform(left_interval.clone())?,
+                StatisticsV2::new_unknown(
+                    ScalarValue::Float64(Some(12.)),
+                    ScalarValue::Float64(Some(12.)),
+                    ScalarValue::Null,
+                    right_interval.clone(),
+                )?,
+            ],
+            vec![
+                StatisticsV2::new_unknown(
+                    ScalarValue::Float64(Some(6.)),
+                    ScalarValue::Float64(Some(6.)),
+                    ScalarValue::UInt64(None),
+                    left_interval.clone(),
+                )?,
+                StatisticsV2::new_unknown(
+                    ScalarValue::Float64(Some(12.)),
+                    ScalarValue::Float64(Some(12.)),
+                    ScalarValue::Null,
+                    right_interval.clone(),
+                )?,
+            ],
+        ];
 
-            let ops = vec![
-                Operator::Eq,
-                Operator::Gt,
-                Operator::GtEq,
-                Operator::Lt,
-                Operator::LtEq,
-            ];
+        let ops = vec![
+            Operator::Eq,
+            Operator::Gt,
+            Operator::GtEq,
+            Operator::Lt,
+            Operator::LtEq,
+        ];
 
-            for child_view in children {
-                let child_view = child_view.iter().collect::<Vec<_>>();
-                for op in &ops {
-                    let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
-                    assert!(expr
-                        .propagate_statistics(
-                            parent.as_ref().unwrap(),
-                            child_view.as_slice()
-                        )?
-                        .is_some());
-                }
+        for child_view in children {
+            let child_view = child_view.iter().collect::<Vec<_>>();
+            for op in &ops {
+                let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
+                assert!(expr
+                    .propagate_statistics(
+                        parent.as_ref().unwrap(),
+                        child_view.as_slice()
+                    )?
+                    .is_some());
             }
         }
+
         Ok(())
     }
 }
