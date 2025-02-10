@@ -1093,6 +1093,31 @@ pub fn split_conjunction(expr: &Expr) -> Vec<&Expr> {
     split_conjunction_impl(expr, vec![])
 }
 
+/// Splits a conjunctive [`Expr`] such as `A OR B OR C` => `[A, B, C]`
+///
+/// See [`split_disjunction`] for more details and an example.
+pub fn split_disjunction(expr: &Expr) -> Vec<&Expr> {
+    split_disjunction_impl(expr, vec![])
+}
+
+fn split_disjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&'a Expr> {
+    match expr {
+        Expr::BinaryExpr(BinaryExpr {
+            right,
+            op: Operator::Or,
+            left,
+        }) => {
+            let exprs = split_disjunction_impl(left, exprs);
+            split_disjunction_impl(right, exprs)
+        }
+        Expr::Alias(Alias { expr, .. }) => split_disjunction_impl(expr, exprs),
+        other => {
+            exprs.push(other);
+            exprs
+        }
+    }
+}
+
 fn split_conjunction_impl<'a>(expr: &'a Expr, mut exprs: Vec<&'a Expr>) -> Vec<&'a Expr> {
     match expr {
         Expr::BinaryExpr(BinaryExpr {

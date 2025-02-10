@@ -24,6 +24,13 @@ AS VALUES
     (3, 'math', 4, 2025)
 ;
 
+-- explain select s.name, e.curriculum from students s, exams e where s.id=e.sid
+-- and (s.major='math') and e.grade < (
+--    select avg(e2.grade) from exams e2 where s.id=e2.sid or (
+--        s.year<e2.date and e2.curriculum=s.major -- all exams taken by the elder students in the same major
+--    )
+--)
+
 query TTR
 select s.name, e.curriculum, pulled.m as standard_grade from students s, exams e, (
     select avg(e2.grade) as m, id ,d.year ,d.major from (

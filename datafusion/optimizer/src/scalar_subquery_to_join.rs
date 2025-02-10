@@ -21,6 +21,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
+use crate::decorrelate_general::GeneralPullUpCorrelatedExpr;
 use crate::optimizer::ApplyOrder;
 use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -297,11 +298,15 @@ fn build_join(
     subquery_alias: &str,
 ) -> Result<Option<(LogicalPlan, HashMap<String, Expr>)>> {
     let subquery_plan = subquery.subquery.as_ref();
-    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+    let mut pull_up = GeneralPullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let new_plan = subquery_plan.clone().rewrite(&mut pull_up).data()?;
+
     if !pull_up.can_pull_up {
         return Ok(None);
     }
+
+    println!("before rewrite: {}", subquery_plan);
+    println!("ater rewrite: {}", new_plan);
 
     let collected_count_expr_map =
         pull_up.collected_count_expr_map.get(&new_plan).cloned();
@@ -314,12 +319,19 @@ fn build_join(
         .correlated_subquery_cols_map
         .values()
         .for_each(|cols| all_correlated_cols.extend(cols.clone()));
+    println!("========\ncorrelated cols");
+    for col in &all_correlated_cols {
+        println!("{}", col);
+    }
+    println!("====================");
 
     // alias the join filter
     let join_filter_opt =
         conjunction(pull_up.join_filters).map_or(Ok(None), |filter| {
             replace_qualified_name(filter, &all_correlated_cols, subquery_alias).map(Some)
         })?;
+    // TODO: build domain from filter input
+    // select distinct columns from filter input
 
     // join our sub query into the main plan
     let new_plan = if join_filter_opt.is_none() {
@@ -336,6 +348,7 @@ fn build_join(
             }
         }
     } else {
+        println!("++++++++++++++++filter input: {}", filter_input);
         // left join if correlated, grouping by the join keys so we don't change row count
         LogicalPlanBuilder::from(filter_input.clone())
             .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
