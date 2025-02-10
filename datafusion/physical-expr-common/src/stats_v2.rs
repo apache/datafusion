@@ -133,7 +133,7 @@ impl StatisticsV2 {
             Uniform(uni) => uni.median(),
             Exponential(e) => e.median(),
             Gaussian(g) => Ok(g.median().clone()),
-            Bernoulli(b) => Ok(b.median()),
+            Bernoulli(b) => Ok(b.median().clone()),
             Unknown(unk) => Ok(unk.median().clone()),
         }
     }
@@ -178,11 +178,11 @@ impl StatisticsV2 {
     /// Returns the data type of the statistics.
     pub fn data_type(&self) -> DataType {
         match &self {
-            Uniform(u) => u.interval.data_type(),
+            Uniform(uni) => uni.interval.data_type(),
             Exponential(e) => e.offset.data_type(),
             Gaussian(g) => g.mean.data_type(),
             Bernoulli(_) => DataType::Boolean,
-            Unknown(c) => c.range.data_type(),
+            Unknown(unk) => unk.range.data_type(),
         }
     }
 
@@ -286,10 +286,6 @@ impl UniformDistribution {
         Ok(Self { interval })
     }
 
-    pub fn range(&self) -> &Interval {
-        &self.interval
-    }
-
     pub fn mean(&self) -> Result<ScalarValue> {
         let dt = self.interval.lower().data_type();
         self.interval
@@ -303,15 +299,18 @@ impl UniformDistribution {
     }
 
     pub fn variance(&self) -> Result<ScalarValue> {
+        let dt = self.interval.lower().data_type();
         let base_value_ref = self
             .interval
             .upper()
             .sub_checked(self.interval.lower())?
-            .cast_to(&DataType::Float64)?;
-        let base_pow = base_value_ref
-            .mul_checked(&base_value_ref)?
-            .cast_to(&DataType::Float64)?;
-        base_pow.div(ScalarValue::Float64(Some(12.)))
+            .cast_to(&dt)?;
+        let base_pow = base_value_ref.mul_checked(&base_value_ref)?.cast_to(&dt)?;
+        base_pow.div(ScalarValue::from(2).cast_to(&dt)?)
+    }
+
+    pub fn range(&self) -> &Interval {
+        &self.interval
     }
 }
 
@@ -350,23 +349,18 @@ impl ExponentialDistribution {
 
     pub fn mean(&self) -> Result<ScalarValue> {
         let one = ScalarValue::new_one(&self.offset.data_type())?;
-        one.div(&self.rate)?
-            .add_checked(&self.offset)
-            .map(|abs_mean| {
-                if self.positive_tail {
-                    Ok(abs_mean)
-                } else {
-                    abs_mean.arithmetic_negate()
-                }
-            })?
+        if self.positive_tail {
+            self.offset.add_checked(one.div(&self.rate)?)
+        } else {
+            self.offset.sub_checked(one.div(&self.rate)?)
+        }
     }
 
     pub fn median(&self) -> Result<ScalarValue> {
-        let abs_median = get_ln_two().div(&self.rate)?.add_checked(&self.offset)?;
         if self.positive_tail {
-            Ok(abs_median)
+            self.offset.add_checked(get_ln_two().div(&self.rate)?)
         } else {
-            abs_median.arithmetic_negate()
+            self.offset.sub_checked(get_ln_two().div(&self.rate)?)
         }
     }
 
@@ -425,7 +419,7 @@ impl GaussianDistribution {
 impl BernoulliDistribution {
     fn new(p: ScalarValue) -> Result<Self> {
         if p.is_null() {
-            Ok(Self { p: p.clone() })
+            Ok(Self { p })
         } else if p.data_type().eq(&DataType::Float64) {
             let zero = ScalarValue::new_zero(&DataType::Float64)?;
             let one = ScalarValue::new_one(&DataType::Float64)?;
@@ -447,11 +441,11 @@ impl BernoulliDistribution {
         &self.p
     }
 
-    pub fn median(&self) -> ScalarValue {
+    pub fn median(&self) -> &ScalarValue {
         if self.p.gt(&ScalarValue::Float64(Some(0.5))) {
-            get_one().clone()
+            get_one()
         } else {
-            get_zero().clone()
+            get_zero()
         }
     }
 
