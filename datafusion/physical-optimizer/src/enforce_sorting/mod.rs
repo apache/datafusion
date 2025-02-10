@@ -375,8 +375,13 @@ pub fn ensure_sorting(
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
         // This `SortPreservingMergeExec` is unnecessary, input already has a
-        // single partition.
-        let child_node = requirements.children.swap_remove(0);
+        // single partition and no fetch is required.
+        let mut child_node = requirements.children.swap_remove(0);
+        if let Some(fetch) = plan.fetch() {
+            // Add the limit exec if the spm has a fetch
+            child_node.plan =
+                Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
+        }
         return Ok(Transformed::yes(child_node));
     }
 
