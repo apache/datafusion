@@ -138,6 +138,44 @@ impl PhysicalExpr for NotExpr {
             _ => internal_err!("NotExpr cannot used with non-boolean datatypes"),
         }
     }
+
+    fn propagate_statistics(
+        &self,
+        parent_stat: &StatisticsV2,
+        children_stat: &[&StatisticsV2],
+    ) -> Result<Option<Vec<StatisticsV2>>> {
+        debug_assert_eq!(children_stat.len(), 1, "NotExpr should have only one child");
+        // https://github.com/apache/datafusion/blob/85fbde2661bdb462fc498dc18f055c44f229604c/datafusion/expr/src/expr.rs#L241
+        let err_msg = "NotExpr cannot used with non-boolean datatypes";
+
+        match parent_stat {
+            Bernoulli(parent) => match &children_stat[0] {
+                Bernoulli(child) => {
+                    if parent.range() == Interval::CERTAINLY_TRUE {
+                        if child.range() == Interval::CERTAINLY_TRUE {
+                            Ok(None)
+                        } else {
+                            Ok(Some(vec![StatisticsV2::new_bernoulli(
+                                get_zero().clone(),
+                            )?]))
+                        }
+                    } else if parent.range() == Interval::CERTAINLY_FALSE {
+                        if child.range() == Interval::CERTAINLY_FALSE {
+                            Ok(None)
+                        } else {
+                            Ok(Some(vec![StatisticsV2::new_bernoulli(
+                                get_one().clone(),
+                            )?]))
+                        }
+                    } else {
+                        Ok(Some(vec![]))
+                    }
+                }
+                _ => internal_err!("{}", err_msg),
+            },
+            _ => internal_err!("{}", err_msg),
+        }
+    }
 }
 
 /// Creates a unary expression NOT

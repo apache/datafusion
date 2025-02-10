@@ -186,9 +186,9 @@ impl PhysicalExpr for NegativeExpr {
         match parent_stat {
             Uniform(_) | Unknown(_) => match children_stat[0] {
                 Uniform(_) | Unknown(_) => {
-                    let propagated =
-                        self.propagate_constraints(&parent_range, &[&child_range])?;
-                    if let Some(propagated) = propagated {
+                    if let Some(propagated) =
+                        self.propagate_constraints(&parent_range, &[&child_range])?
+                    {
                         Ok(Some(vec![StatisticsV2::new_from_interval(&propagated[0])?]))
                     } else {
                         Ok(None)
