@@ -48,7 +48,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         let udf = date_trunc();
 
         b.iter(|| {
-            // TODO use invoke_with_args
             black_box(
                 udf.invoke_batch(&[precision.clone(), timestamps.clone()], batch_len)
                     .expect("date_trunc should work on valid values"),
