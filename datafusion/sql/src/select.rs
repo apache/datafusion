@@ -211,24 +211,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Self::calc_missing_columns(&select_exprs_post_aggr, &order_by_rex)?;
 
         // do ambiguous_distinct_check if select in distinct case
-        if select.distinct.is_some() {
-            let input = projected_plan.inputs()[0];
-
-            let mut missing_exprs = missing_cols
+        if !missing_cols.is_empty() && select.distinct.is_some() {
+            let missing_col_names = missing_cols
                 .iter()
-                .map(|c| normalize_col(Expr::Column(c.clone()), input))
-                .collect::<Result<Vec<_>>>()?;
+                .map(|col| col.flat_name())
+                .collect::<String>();
 
-            // Do not let duplicate columns to be added, some of the
-            // missing_cols may be already present but without the new
-            // projected alias.
-            missing_exprs.retain(|e| !select_exprs.contains(e));
-
-            LogicalPlanBuilder::ambiguous_distinct_check(
-                &missing_exprs,
-                &missing_cols,
-                &select_exprs,
-            )?;
+            return plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list");
         }
         let add_missing_cols = !missing_cols.is_empty();
         missing_cols
