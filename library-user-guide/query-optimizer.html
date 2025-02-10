@@ -509,13 +509,13 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#providing-custom-rules">
-   Providing Custom Rules
+  <a class="reference internal nav-link" href="#writing-optimization-rules">
+   Writing Optimization Rules
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#writing-optimization-rules">
-   Writing Optimization Rules
+  <a class="reference internal nav-link" href="#providing-custom-rules">
+   Providing Custom Rules
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
@@ -544,18 +544,13 @@
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#exprvisitor">
-     ExprVisitor
+    <a class="reference internal nav-link" href="#recursively-walk-an-expression-tree">
+     Recursively walk an expression tree
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#rewriting-expressions">
-     Rewriting Expressions
-    </a>
-   </li>
-   <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#optimize-children">
-     optimize_children
+     Rewriting expressions
     </a>
    </li>
    <li class="toc-h3 nav-item toc-entry">
@@ -628,18 +623,28 @@ they execute more quickly while still computing the same result.</p>
 <h2>Running the Optimizer<a class="headerlink" href="#running-the-optimizer" title="Link to this heading">¶</a></h2>
 <p>The following code demonstrates the basic flow of creating the optimizer with a default set of optimization rules
 and applying it to a logical plan to produce an optimized logical plan.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// We need a logical plan as the starting point. There are many ways to build a logical plan:</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="n">lit</span><span class="p">,</span><span class="w"> </span><span class="n">LogicalPlan</span><span class="p">,</span><span class="w"> </span><span class="n">LogicalPlanBuilder</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">optimizer</span><span class="p">::{</span><span class="n">OptimizerRule</span><span class="p">,</span><span class="w"> </span><span class="n">OptimizerContext</span><span class="p">,</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">};</span>
+
+<span class="c1">// We need a logical plan as the starting point. There are many ways to build a logical plan:</span>
 <span class="c1">//</span>
 <span class="c1">// The `datafusion-expr` crate provides a LogicalPlanBuilder</span>
 <span class="c1">// The `datafusion-sql` crate provides a SQL query planner that can create a LogicalPlan from SQL</span>
 <span class="c1">// The `datafusion` crate provides a DataFrame API that can create a LogicalPlan</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">logical_plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">..</span><span class="p">.</span>
 
-<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">OptimizerContext</span><span class="p">::</span><span class="n">default</span><span class="p">();</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">optimizer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="o">&amp;</span><span class="n">config</span><span class="p">);</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">optimized_plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">optimizer</span><span class="p">.</span><span class="n">optimize</span><span class="p">(</span><span class="o">&amp;</span><span class="n">logical_plan</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">config</span><span class="p">,</span><span class="w"> </span><span class="n">observe</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">initial_logical_plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">LogicalPlanBuilder</span><span class="p">::</span><span class="n">empty</span><span class="p">(</span><span class="kc">false</span><span class="p">).</span><span class="n">build</span><span class="p">().</span><span class="n">unwrap</span><span class="p">();</span>
 
-<span class="k">fn</span><span class="w"> </span><span class="nf">observe</span><span class="p">(</span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span><span class="w"> </span><span class="n">rule</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="c1">// use builtin rules or customized rules</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">rules</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Arc</span><span class="o">&lt;</span><span class="k">dyn</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Send</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nb">Sync</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[];</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">optimizer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">::</span><span class="n">with_rules</span><span class="p">(</span><span class="n">rules</span><span class="p">);</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">OptimizerContext</span><span class="p">::</span><span class="n">new</span><span class="p">().</span><span class="n">with_max_passes</span><span class="p">(</span><span class="mi">16</span><span class="p">);</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">optimized_plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">optimizer</span><span class="p">.</span><span class="n">optimize</span><span class="p">(</span><span class="n">initial_logical_plan</span><span class="p">.</span><span class="n">clone</span><span class="p">(),</span><span class="w"> </span><span class="o">&amp;</span><span class="n">config</span><span class="p">,</span><span class="w"> </span><span class="n">observer</span><span class="p">);</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">observer</span><span class="p">(</span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span><span class="w"> </span><span class="n">rule</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="fm">println!</span><span class="p">(</span>
 <span class="w">        </span><span class="s">&quot;After applying rule &#39;{}&#39;:</span><span class="se">\n</span><span class="s">{}&quot;</span><span class="p">,</span>
 <span class="w">        </span><span class="n">rule</span><span class="p">.</span><span class="n">name</span><span class="p">(),</span>
@@ -649,37 +654,42 @@ and applying it to a logical plan to produce an optimized logical plan.</p>
 </pre></div>
 </div>
 </section>
-<section id="providing-custom-rules">
-<h2>Providing Custom Rules<a class="headerlink" href="#providing-custom-rules" title="Link to this heading">¶</a></h2>
-<p>The optimizer can be created with a custom set of rules.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">optimizer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">::</span><span class="n">with_rules</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
-<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyRule</span><span class="w"> </span><span class="p">{})</span>
-<span class="p">]);</span>
-</pre></div>
-</div>
-</section>
 <section id="writing-optimization-rules">
 <h2>Writing Optimization Rules<a class="headerlink" href="#writing-optimization-rules" title="Link to this heading">¶</a></h2>
 <p>Please refer to the
 <a class="reference download internal" download="" href="../_downloads/6b1061daa902cf2423ed86f1373aefed/optimizer_rule.rs"><span class="xref download myst">optimizer_rule.rs</span></a>
 example to learn more about the general approach to writing optimizer rules and
 then move onto studying the existing rules.</p>
+<p><code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> transforms one [‘LogicalPlan’] into another which
+computes the same results, but in a potentially more efficient
+way. If there are no suitable transformations for the input plan,
+the optimizer can simply return it as is.</p>
 <p>All rules must implement the <code class="docutils literal notranslate"><span class="pre">OptimizerRule</span></code> trait.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="sd">/// `OptimizerRule` transforms one [&#39;LogicalPlan&#39;] into another which</span>
-<span class="sd">/// computes the same results, but in a potentially more efficient</span>
-<span class="sd">/// way. If there are no suitable transformations for the input plan,</span>
-<span class="sd">/// the optimizer can simply return it as is.</span>
-<span class="k">pub</span><span class="w"> </span><span class="k">trait</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="sd">/// Rewrite `plan` to an optimized form</span>
-<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">optimize</span><span class="p">(</span>
-<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
-<span class="w">        </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span>
-<span class="w">        </span><span class="n">config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span>
-<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;</span><span class="p">;</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="cp">#[derive(Default, Debug)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">MyOptimizerRule</span><span class="w"> </span><span class="p">{}</span>
 
-<span class="w">    </span><span class="sd">/// A human readable name for this optimizer rule</span>
-<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="p">;</span>
+<span class="k">impl</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyOptimizerRule</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="s">&quot;my_optimizer_rule&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">rewrite</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
+<span class="w">        </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="nc">LogicalPlan</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Transformed</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="fm">unimplemented!</span><span class="p">()</span>
+<span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="providing-custom-rules">
+<h2>Providing Custom Rules<a class="headerlink" href="#providing-custom-rules" title="Link to this heading">¶</a></h2>
+<p>The optimizer can be created with a custom set of rules.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">optimizer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">::</span><span class="n">with_rules</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">MyOptimizerRule</span><span class="w"> </span><span class="p">{})</span>
+<span class="p">]);</span>
 </pre></div>
 </div>
 <section id="general-guidelines">
@@ -751,12 +761,12 @@ and <a class="reference external" href="https://github.com/apache/datafusion/iss
 <span class="w">    </span><span class="sd">/// Returns the name of this expression as it should appear in a schema. This name</span>
 <span class="w">    </span><span class="sd">/// will not include any CAST expressions.</span>
 <span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">display_name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">String</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">create_name</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="s">&quot;display_name&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">())</span>
 <span class="w">    </span><span class="p">}</span>
 
 <span class="w">    </span><span class="sd">/// Returns a full and complete string representation of this expression.</span>
 <span class="w">    </span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">canonical_name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">String</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="bp">self</span><span class="p">)</span>
+<span class="w">        </span><span class="s">&quot;canonical_name&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">()</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
@@ -766,85 +776,75 @@ name to be used in a schema, <code class="docutils literal notranslate"><span cl
 </section>
 <section id="utilities">
 <h3>Utilities<a class="headerlink" href="#utilities" title="Link to this heading">¶</a></h3>
-<p>There are a number of utility methods provided that take care of some common tasks.</p>
+<p>There are a number of <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/expr/src/utils.rs">utility methods</a> provided that take care of some common tasks.</p>
 </section>
-<section id="exprvisitor">
-<h3>ExprVisitor<a class="headerlink" href="#exprvisitor" title="Link to this heading">¶</a></h3>
-<p>The <code class="docutils literal notranslate"><span class="pre">ExprVisitor</span></code> and <code class="docutils literal notranslate"><span class="pre">ExprVisitable</span></code> traits provide a mechanism for applying a visitor pattern to an expression tree.</p>
-<p>Here is an example that demonstrates this.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">extract_subquery_filters</span><span class="p">(</span><span class="n">expression</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">,</span><span class="w"> </span><span class="n">extracted</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">InSubqueryVisitor</span><span class="o">&lt;&#39;</span><span class="na">a</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">accum</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="o">&#39;</span><span class="na">a</span><span class="w"> </span><span class="nc">mut</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="p">,</span>
-<span class="w">    </span><span class="p">}</span>
-
-<span class="w">    </span><span class="k">impl</span><span class="w"> </span><span class="n">ExpressionVisitor</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">InSubqueryVisitor</span><span class="o">&lt;&#39;</span><span class="nb">_</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">fn</span><span class="w"> </span><span class="nf">pre_visit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Recursion</span><span class="o">&lt;</span><span class="bp">Self</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<section id="recursively-walk-an-expression-tree">
+<h3>Recursively walk an expression tree<a class="headerlink" href="#recursively-walk-an-expression-tree" title="Link to this heading">¶</a></h3>
+<p>The [TreeNode API] provides a convenient way to recursively walk an expression or plan tree.</p>
+<p>For example, to find all subquery references in a logical plan, the following code can be used:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Return all subquery references in an expression</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">extract_subquery_filters</span><span class="p">(</span><span class="n">expression</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;&amp;</span><span class="n">Expr</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">extracted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[];</span>
+<span class="w">    </span><span class="n">expression</span><span class="p">.</span><span class="n">apply</span><span class="p">(</span><span class="o">|</span><span class="n">expr</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
 <span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="n">Expr</span><span class="p">::</span><span class="n">InSubquery</span><span class="p">(</span><span class="n">_</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
-<span class="w">                </span><span class="bp">self</span><span class="p">.</span><span class="n">accum</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">to_owned</span><span class="p">());</span>
+<span class="w">                </span><span class="n">extracted</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">expr</span><span class="p">);</span>
 <span class="w">            </span><span class="p">}</span>
-<span class="w">            </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Recursion</span><span class="p">::</span><span class="n">Continue</span><span class="p">(</span><span class="bp">self</span><span class="p">))</span>
-<span class="w">        </span><span class="p">}</span>
-<span class="w">    </span><span class="p">}</span>
-
-<span class="w">    </span><span class="n">expression</span><span class="p">.</span><span class="n">accept</span><span class="p">(</span><span class="n">InSubqueryVisitor</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">accum</span><span class="p">:</span><span class="w"> </span><span class="nc">extracted</span><span class="w"> </span><span class="p">})</span><span class="o">?</span><span class="p">;</span>
-<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="w">            </span><span class="nb">Ok</span><span class="p">(</span><span class="n">TreeNodeRecursion</span><span class="p">::</span><span class="n">Continue</span><span class="p">)</span>
+<span class="w">    </span><span class="p">})</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">extracted</span><span class="p">)</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Likewise you can use the [TreeNode API] to rewrite a <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> or <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Return all joins in a logical plan</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">find_joins</span><span class="p">(</span><span class="n">overall_plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;&amp;</span><span class="n">Join</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">extracted</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[];</span>
+<span class="w">    </span><span class="n">overall_plan</span><span class="p">.</span><span class="n">apply</span><span class="p">(</span><span class="o">|</span><span class="n">plan</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="kd">let</span><span class="w"> </span><span class="n">LogicalPlan</span><span class="p">::</span><span class="n">Join</span><span class="p">(</span><span class="n">join</span><span class="p">)</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="n">extracted</span><span class="p">.</span><span class="n">push</span><span class="p">(</span><span class="n">join</span><span class="p">);</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">            </span><span class="nb">Ok</span><span class="p">(</span><span class="n">TreeNodeRecursion</span><span class="p">::</span><span class="n">Continue</span><span class="p">)</span>
+<span class="w">    </span><span class="p">})</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">extracted</span><span class="p">)</span>
 <span class="p">}</span>
 </pre></div>
 </div>
 </section>
 <section id="rewriting-expressions">
-<h3>Rewriting Expressions<a class="headerlink" href="#rewriting-expressions" title="Link to this heading">¶</a></h3>
-<p>The <code class="docutils literal notranslate"><span class="pre">MyExprRewriter</span></code> trait can be implemented to provide a way to rewrite expressions. This rule can then be applied
-to an expression by calling <code class="docutils literal notranslate"><span class="pre">Expr::rewrite</span></code> (from the <code class="docutils literal notranslate"><span class="pre">ExprRewritable</span></code> trait).</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">rewrite</span></code> method will perform a depth first walk of the expression and its children to rewrite an expression,
-consuming <code class="docutils literal notranslate"><span class="pre">self</span></code> producing a new expression.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">expr_rewriter</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MyExprRewriter</span><span class="w"> </span><span class="p">{};</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">expr</span><span class="p">.</span><span class="n">rewrite</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">expr_rewriter</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<h3>Rewriting expressions<a class="headerlink" href="#rewriting-expressions" title="Link to this heading">¶</a></h3>
+<p>The [TreeNode API] also provides a convenient way to rewrite expressions and
+plans as well. For example to rewrite all expressions like</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">col</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">y</span>
 </pre></div>
 </div>
-<p>Here is an example implementation which will rewrite <code class="docutils literal notranslate"><span class="pre">expr</span> <span class="pre">BETWEEN</span> <span class="pre">a</span> <span class="pre">AND</span> <span class="pre">b</span></code> as <code class="docutils literal notranslate"><span class="pre">expr</span> <span class="pre">&gt;=</span> <span class="pre">a</span> <span class="pre">AND</span> <span class="pre">expr</span> <span class="pre">&lt;=</span> <span class="pre">b</span></code>. Note that the
-implementation does not need to perform any recursion since this is handled by the <code class="docutils literal notranslate"><span class="pre">rewrite</span></code> method.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">MyExprRewriter</span><span class="w"> </span><span class="p">{}</span>
-
-<span class="k">impl</span><span class="w"> </span><span class="n">ExprRewriter</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">MyExprRewriter</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">mutate</span><span class="p">(</span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">match</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="n">Expr</span><span class="p">::</span><span class="n">Between</span><span class="w"> </span><span class="p">{</span>
+<p>into</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">col</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="n">col</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">y</span>
+</pre></div>
+</div>
+<p>you can use the following code:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Recursively rewrite all BETWEEN expressions</span>
+<span class="c1">// returns Transformed::yes if any changes were made</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">rewrite_between</span><span class="p">(</span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Transformed</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// transform_up does a bottom up rewrite</span>
+<span class="w">    </span><span class="n">expr</span><span class="p">.</span><span class="n">transform_up</span><span class="p">(</span><span class="o">|</span><span class="n">expr</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// only handle BETWEEN expressions</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">Expr</span><span class="p">::</span><span class="n">Between</span><span class="p">(</span><span class="n">Between</span><span class="w"> </span><span class="p">{</span>
 <span class="w">                </span><span class="n">negated</span><span class="p">,</span>
 <span class="w">                </span><span class="n">expr</span><span class="p">,</span>
 <span class="w">                </span><span class="n">low</span><span class="p">,</span>
 <span class="w">                </span><span class="n">high</span><span class="p">,</span>
-<span class="w">            </span><span class="p">}</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">expr</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">clone</span><span class="p">();</span>
-<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">low</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">low</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">clone</span><span class="p">();</span>
-<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">high</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">high</span><span class="p">.</span><span class="n">as_ref</span><span class="p">().</span><span class="n">clone</span><span class="p">();</span>
-<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="n">negated</span><span class="w"> </span><span class="p">{</span>
-<span class="w">                    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">lt</span><span class="p">(</span><span class="n">low</span><span class="p">).</span><span class="n">or</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">gt</span><span class="p">(</span><span class="n">high</span><span class="p">)))</span>
-<span class="w">                </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
-<span class="w">                    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">gt_eq</span><span class="p">(</span><span class="n">low</span><span class="p">).</span><span class="n">and</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">lt_eq</span><span class="p">(</span><span class="n">high</span><span class="p">)))</span>
-<span class="w">                </span><span class="p">}</span>
-<span class="w">            </span><span class="p">}</span>
-<span class="w">            </span><span class="n">_</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">()),</span>
-<span class="w">        </span><span class="p">}</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="p">}</span>
-</pre></div>
-</div>
-</section>
-<section id="optimize-children">
-<h3>optimize_children<a class="headerlink" href="#optimize-children" title="Link to this heading">¶</a></h3>
-<p>Typically a rule is applied recursively to all operators within a query plan. Rather than duplicate
-that logic in each rule, an <code class="docutils literal notranslate"><span class="pre">optimize_children</span></code> method is provided. This recursively invokes the <code class="docutils literal notranslate"><span class="pre">optimize</span></code> method on
-the plan’s children and then returns a node of the same type.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">optimize</span><span class="p">(</span>
-<span class="w">    </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
-<span class="w">    </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span>
-<span class="w">    </span><span class="n">_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">mut</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span>
-<span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// recurse down and optimize children first</span>
-<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">utils</span><span class="p">::</span><span class="n">optimize_children</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">,</span><span class="w"> </span><span class="n">_config</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
-
-<span class="w">    </span><span class="o">..</span><span class="p">.</span>
+<span class="w">        </span><span class="p">})</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Transformed</span><span class="p">::</span><span class="n">no</span><span class="p">(</span><span class="n">expr</span><span class="p">))</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">rewritten_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">negated</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// don&#39;t rewrite NOT BETWEEN</span>
+<span class="w">            </span><span class="n">Expr</span><span class="p">::</span><span class="n">Between</span><span class="p">(</span><span class="n">Between</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">expr</span><span class="p">,</span><span class="w"> </span><span class="n">negated</span><span class="p">,</span><span class="w"> </span><span class="n">low</span><span class="p">,</span><span class="w"> </span><span class="n">high</span><span class="p">))</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// rewrite to (expr &gt;= low) AND (expr &lt;= high)</span>
+<span class="w">            </span><span class="n">expr</span><span class="p">.</span><span class="n">clone</span><span class="p">().</span><span class="n">gt_eq</span><span class="p">(</span><span class="o">*</span><span class="n">low</span><span class="p">).</span><span class="n">and</span><span class="p">(</span><span class="n">expr</span><span class="p">.</span><span class="n">lt_eq</span><span class="p">(</span><span class="o">*</span><span class="n">high</span><span class="p">))</span>
+<span class="w">        </span><span class="p">};</span>
+<span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Transformed</span><span class="p">::</span><span class="n">yes</span><span class="p">(</span><span class="n">rewritten_expr</span><span class="p">))</span>
+<span class="w">    </span><span class="p">})</span>
 <span class="p">}</span>
 </pre></div>
 </div>

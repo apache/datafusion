@@ -648,12 +648,16 @@
 <h2>A Scalar UDF Example<a class="headerlink" href="#a-scalar-udf-example" title="Link to this heading">¶</a></h2>
 <p>We’ll use a <code class="docutils literal notranslate"><span class="pre">ScalarUDF</span></code> expression as our example. This necessitates implementing an actual UDF, and for ease we’ll use the same example from the <a class="reference internal" href="adding-udfs.html"><span class="std std-doc">adding UDFs</span></a> guide.</p>
 <p>So assuming you’ve written that function, you can use it to create an <code class="docutils literal notranslate"><span class="pre">Expr</span></code>:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">add_one_udf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_udf</span><span class="p">(</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">Volatility</span><span class="p">,</span><span class="w"> </span><span class="n">create_udf</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">arrow</span><span class="p">::</span><span class="n">datatypes</span><span class="p">::</span><span class="n">DataType</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="n">lit</span><span class="p">};</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="n">add_one_udf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_udf</span><span class="p">(</span>
 <span class="w">    </span><span class="s">&quot;add_one&quot;</span><span class="p">,</span>
 <span class="w">    </span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">],</span>
-<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">),</span>
+<span class="w">    </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">,</span>
 <span class="w">    </span><span class="n">Volatility</span><span class="p">::</span><span class="n">Immutable</span><span class="p">,</span>
-<span class="w">    </span><span class="n">make_scalar_function</span><span class="p">(</span><span class="n">add_one</span><span class="p">),</span><span class="w">  </span><span class="c1">// &lt;-- the function we wrote</span>
+<span class="w">    </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">add_one</span><span class="p">),</span>
 <span class="p">);</span>
 
 <span class="c1">// make the expr `add_one(5)`</span>
@@ -683,11 +687,16 @@
 <section id="rewriting-with-transform">
 <h3>Rewriting with <code class="docutils literal notranslate"><span class="pre">transform</span></code><a class="headerlink" href="#rewriting-with-transform" title="Link to this heading">¶</a></h3>
 <p>To implement the inlining, we’ll need to write a function that takes an <code class="docutils literal notranslate"><span class="pre">Expr</span></code> and returns a <code class="docutils literal notranslate"><span class="pre">Result&lt;Expr&gt;</span></code>. If the expression is <em>not</em> to be rewritten <code class="docutils literal notranslate"><span class="pre">Transformed::no</span></code> is used to wrap the original <code class="docutils literal notranslate"><span class="pre">Expr</span></code>. If the expression <em>is</em> to be rewritten, <code class="docutils literal notranslate"><span class="pre">Transformed::yes</span></code> is used to wrap the new <code class="docutils literal notranslate"><span class="pre">Expr</span></code>.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">rewrite_add_one</span><span class="p">(</span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">tree_node</span><span class="p">::{</span><span class="n">Transformed</span><span class="p">,</span><span class="w"> </span><span class="n">TreeNode</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="n">lit</span><span class="p">,</span><span class="w"> </span><span class="n">Expr</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">ScalarUDF</span><span class="p">};</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">rewrite_add_one</span><span class="p">(</span><span class="n">expr</span><span class="p">:</span><span class="w"> </span><span class="nc">Expr</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Transformed</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">expr</span><span class="p">.</span><span class="n">transform</span><span class="p">(</span><span class="o">&amp;|</span><span class="n">expr</span><span class="o">|</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="nb">Ok</span><span class="p">(</span><span class="k">match</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="n">Expr</span><span class="p">::</span><span class="n">ScalarUDF</span><span class="p">(</span><span class="n">scalar_fun</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">scalar_fun</span><span class="p">.</span><span class="n">fun</span><span class="p">.</span><span class="n">name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;add_one&quot;</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
-<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">input_arg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">scalar_fun</span><span class="p">.</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">clone</span><span class="p">();</span>
+<span class="w">            </span><span class="n">Expr</span><span class="p">::</span><span class="n">ScalarFunction</span><span class="p">(</span><span class="n">scalar_func</span><span class="p">)</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="n">scalar_func</span><span class="p">.</span><span class="n">func</span><span class="p">.</span><span class="n">inner</span><span class="p">().</span><span class="n">name</span><span class="p">()</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;add_one&quot;</span><span class="w"> </span><span class="o">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">input_arg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">scalar_func</span><span class="p">.</span><span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="n">clone</span><span class="p">();</span>
 <span class="w">                </span><span class="kd">let</span><span class="w"> </span><span class="n">new_expression</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_arg</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="k">i64</span><span class="p">);</span>
 
 <span class="w">                </span><span class="n">Transformed</span><span class="p">::</span><span class="n">yes</span><span class="p">(</span><span class="n">new_expression</span><span class="p">)</span>
@@ -707,30 +716,41 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">name</span></code> - returns the name of the rule</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">try_optimize</span></code> - takes a <code class="docutils literal notranslate"><span class="pre">LogicalPlan</span></code> and returns an <code class="docutils literal notranslate"><span class="pre">Option&lt;LogicalPlan&gt;</span></code>. If the rule is able to optimize the plan, it returns <code class="docutils literal notranslate"><span class="pre">Some(LogicalPlan)</span></code> with the optimized plan. If the rule is not able to optimize the plan, it returns <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
 </ul>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">AddOneInliner</span><span class="w"> </span><span class="p">{}</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">sync</span><span class="p">::</span><span class="n">Arc</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="nb">Result</span><span class="p">;</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">tree_node</span><span class="p">::{</span><span class="n">Transformed</span><span class="p">,</span><span class="w"> </span><span class="n">TreeNode</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="n">lit</span><span class="p">,</span><span class="w"> </span><span class="n">Expr</span><span class="p">,</span><span class="w"> </span><span class="n">LogicalPlan</span><span class="p">,</span><span class="w"> </span><span class="n">LogicalPlanBuilder</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">optimizer</span><span class="p">::{</span><span class="n">OptimizerRule</span><span class="p">,</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span><span class="w"> </span><span class="n">OptimizerContext</span><span class="p">,</span><span class="w"> </span><span class="n">Optimizer</span><span class="p">};</span>
+
+
+<span class="cp">#[derive(Default, Debug)]</span>
+<span class="k">struct</span><span class="w"> </span><span class="nc">AddOneInliner</span><span class="w"> </span><span class="p">{}</span>
 
 <span class="k">impl</span><span class="w"> </span><span class="n">OptimizerRule</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">AddOneInliner</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">name</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kp">&amp;</span><span class="kt">str</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="s">&quot;add_one_inliner&quot;</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">try_optimize</span><span class="p">(</span>
+<span class="w">    </span><span class="k">fn</span><span class="w"> </span><span class="nf">rewrite</span><span class="p">(</span>
 <span class="w">        </span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span>
-<span class="w">        </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">LogicalPlan</span><span class="p">,</span>
-<span class="w">        </span><span class="n">config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span>
-<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="nc">LogicalPlan</span><span class="p">,</span>
+<span class="w">        </span><span class="n">_config</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="nc">dyn</span><span class="w"> </span><span class="n">OptimizerConfig</span><span class="p">,</span>
+<span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">Transformed</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="c1">// Map over the expressions and rewrite them</span>
-<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">new_expressions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">new_expressions</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">Expr</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span>
 <span class="w">            </span><span class="p">.</span><span class="n">expressions</span><span class="p">()</span>
 <span class="w">            </span><span class="p">.</span><span class="n">into_iter</span><span class="p">()</span>
 <span class="w">            </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">expr</span><span class="o">|</span><span class="w"> </span><span class="n">rewrite_add_one</span><span class="p">(</span><span class="n">expr</span><span class="p">))</span>
-<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">::</span><span class="o">&lt;</span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">_</span><span class="o">&gt;&gt;&gt;</span><span class="p">()</span><span class="o">?</span><span class="p">;</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">::</span><span class="o">&lt;</span><span class="nb">Result</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">_</span><span class="o">&gt;&gt;&gt;</span><span class="p">()</span><span class="o">?</span><span class="w"> </span><span class="c1">// returns Vec&lt;Transformed&lt;Expr&gt;&gt;</span>
+<span class="w">            </span><span class="p">.</span><span class="n">into_iter</span><span class="p">()</span>
+<span class="w">            </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">transformed</span><span class="o">|</span><span class="w"> </span><span class="n">transformed</span><span class="p">.</span><span class="n">data</span><span class="p">)</span>
+<span class="w">            </span><span class="p">.</span><span class="n">collect</span><span class="p">();</span>
 
 <span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">inputs</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">inputs</span><span class="p">().</span><span class="n">into_iter</span><span class="p">().</span><span class="n">cloned</span><span class="p">().</span><span class="n">collect</span><span class="p">::</span><span class="o">&lt;</span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">_</span><span class="o">&gt;&gt;</span><span class="p">();</span>
 
-<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">with_new_exprs</span><span class="p">(</span><span class="o">&amp;</span><span class="n">new_expressions</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">inputs</span><span class="p">);</span>
+<span class="w">        </span><span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="p">:</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">LogicalPlan</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">plan</span><span class="p">.</span><span class="n">with_new_exprs</span><span class="p">(</span><span class="n">new_expressions</span><span class="p">,</span><span class="w"> </span><span class="n">inputs</span><span class="p">);</span>
 
-<span class="w">        </span><span class="n">plan</span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="nb">Some</span><span class="p">)</span>
+<span class="w">        </span><span class="n">plan</span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">p</span><span class="o">|</span><span class="w"> </span><span class="n">Transformed</span><span class="p">::</span><span class="n">yes</span><span class="p">(</span><span class="n">p</span><span class="p">))</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
@@ -742,23 +762,40 @@
 <section id="testing-the-rule">
 <h2>Testing the Rule<a class="headerlink" href="#testing-the-rule" title="Link to this heading">¶</a></h2>
 <p>Testing the rule is fairly simple, we can create a SessionState with our rule and then create a DataFrame and run a query. The logical plan will be optimized by our rule.</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">prelude</span><span class="p">::</span><span class="o">*</span><span class="p">;</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">execution</span><span class="p">::</span><span class="n">context</span><span class="p">::</span><span class="n">SessionContext</span><span class="p">;</span>
 
-<span class="kd">let</span><span class="w"> </span><span class="n">rules</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">AddOneInliner</span><span class="w"> </span><span class="p">{});</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">state</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">state</span><span class="p">().</span><span class="n">with_optimizer_rules</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">rules</span><span class="p">]);</span>
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
 
-<span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">with_state</span><span class="p">(</span><span class="n">state</span><span class="p">);</span>
-<span class="n">ctx</span><span class="p">.</span><span class="n">register_udf</span><span class="p">(</span><span class="n">add_one</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">ctx</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// ctx.add_optimizer_rule(Arc::new(AddOneInliner {}));</span>
 
-<span class="kd">let</span><span class="w"> </span><span class="n">sql</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;SELECT add_one(1) AS added_one&quot;</span><span class="p">;</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="n">sql</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">.</span><span class="n">logical_plan</span><span class="p">();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">add_one_udf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">create_udf</span><span class="p">(</span>
+<span class="w">        </span><span class="s">&quot;add_one&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="fm">vec!</span><span class="p">[</span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">],</span>
+<span class="w">        </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">,</span>
+<span class="w">        </span><span class="n">Volatility</span><span class="p">::</span><span class="n">Immutable</span><span class="p">,</span>
+<span class="w">        </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">add_one</span><span class="p">),</span>
+<span class="w">    </span><span class="p">);</span>
+<span class="w">    </span><span class="n">ctx</span><span class="p">.</span><span class="n">register_udf</span><span class="p">(</span><span class="n">add_one_udf</span><span class="p">);</span>
 
-<span class="fm">println!</span><span class="p">(</span><span class="s">&quot;{:?}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">plan</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">sql</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;SELECT add_one(5) AS added_one&quot;</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// let plan = ctx.sql(sql).await?.into_unoptimized_plan().clone();</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">sql</span><span class="p">(</span><span class="n">sql</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">.</span><span class="n">into_optimized_plan</span><span class="p">()</span><span class="o">?</span><span class="p">.</span><span class="n">clone</span><span class="p">();</span>
+
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">expected</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">r#&quot;Projection: Int64(6) AS added_one</span>
+<span class="s">  EmptyRelation&quot;#</span><span class="p">;</span>
+
+<span class="w">    </span><span class="fm">assert_eq!</span><span class="p">(</span><span class="n">plan</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="n">expected</span><span class="p">);</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
 </pre></div>
 </div>
-<p>This results in the following output:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Projection: Int64(1) + Int64(1) AS added_one
-  EmptyRelation
+<p>This plan is optimized as:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Projection: add_one(Int64(5)) AS added_one
+    -&gt; Projection: Int64(5) + Int64(1) AS added_one
+        -&gt; Projection: Int64(6) AS added_one
 </pre></div>
 </div>
 <p>I.e. the <code class="docutils literal notranslate"><span class="pre">add_one</span></code> UDF has been inlined into the projection.</p>
@@ -766,25 +803,23 @@
 <section id="getting-the-data-type-of-the-expression">
 <h2>Getting the data type of the expression<a class="headerlink" href="#getting-the-data-type-of-the-expression" title="Link to this heading">¶</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">arrow::datatypes::DataType</span></code> of the expression can be obtained by calling the <code class="docutils literal notranslate"><span class="pre">get_type</span></code> given something that implements <code class="docutils literal notranslate"><span class="pre">Expr::Schemable</span></code>, for example a <code class="docutils literal notranslate"><span class="pre">DFschema</span></code> object:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">arrow_schema</span><span class="p">::</span><span class="n">DataType</span><span class="p">;</span>
-<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::{</span><span class="n">DFField</span><span class="p">,</span><span class="w"> </span><span class="n">DFSchema</span><span class="p">};</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">arrow</span><span class="p">::</span><span class="n">datatypes</span><span class="p">::{</span><span class="n">DataType</span><span class="p">,</span><span class="w"> </span><span class="n">Field</span><span class="p">};</span>
+<span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">common</span><span class="p">::</span><span class="n">DFSchema</span><span class="p">;</span>
 <span class="k">use</span><span class="w"> </span><span class="n">datafusion</span><span class="p">::</span><span class="n">logical_expr</span><span class="p">::{</span><span class="n">col</span><span class="p">,</span><span class="w"> </span><span class="n">ExprSchemable</span><span class="p">};</span>
 <span class="k">use</span><span class="w"> </span><span class="n">std</span><span class="p">::</span><span class="n">collections</span><span class="p">::</span><span class="n">HashMap</span><span class="p">;</span>
 
+<span class="c1">// Get the type of an expression that adds 2 columns. Adding an Int32</span>
+<span class="c1">// and Float32 results in Float32 type</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;c1&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;c2&quot;</span><span class="p">);</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DFSchema</span><span class="p">::</span><span class="n">new_with_metadata</span><span class="p">(</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DFSchema</span><span class="p">::</span><span class="n">from_unqualified_fields</span><span class="p">(</span>
 <span class="w">    </span><span class="fm">vec!</span><span class="p">[</span>
-<span class="w">        </span><span class="n">DFField</span><span class="p">::</span><span class="n">new_unqualified</span><span class="p">(</span><span class="s">&quot;c1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
-<span class="w">        </span><span class="n">DFField</span><span class="p">::</span><span class="n">new_unqualified</span><span class="p">(</span><span class="s">&quot;c2&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Float32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
-<span class="w">    </span><span class="p">],</span>
+<span class="w">        </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;c1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="w">        </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;c2&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Float32</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+<span class="w">    </span><span class="p">]</span>
+<span class="w">    </span><span class="p">.</span><span class="n">into</span><span class="p">(),</span>
 <span class="w">    </span><span class="n">HashMap</span><span class="p">::</span><span class="n">new</span><span class="p">(),</span>
-<span class="p">)</span>
-<span class="p">.</span><span class="n">unwrap</span><span class="p">();</span>
-<span class="fm">print!</span><span class="p">(</span><span class="s">&quot;type = {}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">.</span><span class="n">get_type</span><span class="p">(</span><span class="o">&amp;</span><span class="n">schema</span><span class="p">).</span><span class="n">unwrap</span><span class="p">());</span>
-</pre></div>
-</div>
-<p>This results in the following output:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>type = Float32
+<span class="p">).</span><span class="n">unwrap</span><span class="p">();</span>
+<span class="fm">assert_eq!</span><span class="p">(</span><span class="s">&quot;Float32&quot;</span><span class="p">,</span><span class="w"> </span><span class="fm">format!</span><span class="p">(</span><span class="s">&quot;{}&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">expr</span><span class="p">.</span><span class="n">get_type</span><span class="p">(</span><span class="o">&amp;</span><span class="n">schema</span><span class="p">).</span><span class="n">unwrap</span><span class="p">()));</span>
 </pre></div>
 </div>
 </section>

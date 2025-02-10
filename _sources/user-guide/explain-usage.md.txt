@@ -49,7 +49,7 @@ LIMIT 5;
 
 The output will look like
 
-```
+```text
 +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type     | plan                                                                                                                                                                                                      |
 +---------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
@@ -70,7 +70,7 @@ Elapsed 0.060 seconds.
 
 There are two sections: logical plan and physical plan
 
-- **Logical Plan:** is a plan generated for a specific SQL query, DataFrame, or other language without the  
+- **Logical Plan:** is a plan generated for a specific SQL query, DataFrame, or other language without the
   knowledge of the underlying data organization.
 - **Physical Plan:** is a plan generated from a logical plan along with consideration of the hardware
   configuration (e.g number of CPUs) and the underlying data organization (e.g number of files).
@@ -87,7 +87,7 @@ query run faster depends on the reason it is slow and beyond the scope of this d
 A query plan is an upside down tree, and we always read from bottom up. The
 physical plan in Figure 1 in tree format will look like
 
-```
+```text
                          ▲
                          │
                          │
@@ -174,7 +174,7 @@ above but with `EXPLAIN ANALYZE` (note the output is edited for clarity)
 
 [`executionplan::metrics`]: https://docs.rs/datafusion/latest/datafusion/physical_plan/trait.ExecutionPlan.html#method.metrics
 
-```
+```sql
 > EXPLAIN ANALYZE SELECT "WatchID" AS wid, "hits.parquet"."ClientIP" AS ip
 FROM 'hits.parquet'
 WHERE starts_with("URL", 'http://domcheloveplanet.ru/')
@@ -267,7 +267,7 @@ LIMIT 10;
 
 We can again see the query plan by using `EXPLAIN`:
 
-```
+```sql
 > EXPLAIN SELECT "UserID", COUNT(*) FROM 'hits.parquet' GROUP BY "UserID" ORDER BY COUNT(*) DESC LIMIT 10;
 +---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 | plan_type     | plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |

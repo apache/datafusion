@@ -1395,7 +1395,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="array-agg">
 <h3><code class="docutils literal notranslate"><span class="pre">array_agg</span></code><a class="headerlink" href="#array-agg" title="Link to this heading">¶</a></h3>
 <p>Returns an array created from the expression elements. If ordering is required, elements are inserted in the specified order.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">array_agg</span><span class="p">(</span><span class="n">expression</span> <span class="p">[</span><span class="n">ORDER</span> <span class="n">BY</span> <span class="n">expression</span><span class="p">])</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">array_agg</span><span class="p">(</span><span class="n">expression</span><span class="w"> </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="arguments">
@@ -1419,7 +1419,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="avg">
 <h3><code class="docutils literal notranslate"><span class="pre">avg</span></code><a class="headerlink" href="#avg" title="Link to this heading">¶</a></h3>
 <p>Returns the average of numeric values in the specified column.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">avg</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">avg</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id1">
@@ -1449,7 +1449,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="bit-and">
 <h3><code class="docutils literal notranslate"><span class="pre">bit_and</span></code><a class="headerlink" href="#bit-and" title="Link to this heading">¶</a></h3>
 <p>Computes the bitwise AND of all non-null input values.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bit_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bit_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id3">
@@ -1462,7 +1462,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="bit-or">
 <h3><code class="docutils literal notranslate"><span class="pre">bit_or</span></code><a class="headerlink" href="#bit-or" title="Link to this heading">¶</a></h3>
 <p>Computes the bitwise OR of all non-null input values.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bit_or</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bit_or</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id4">
@@ -1475,7 +1475,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="bit-xor">
 <h3><code class="docutils literal notranslate"><span class="pre">bit_xor</span></code><a class="headerlink" href="#bit-xor" title="Link to this heading">¶</a></h3>
 <p>Computes the bitwise exclusive OR of all non-null input values.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bit_xor</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bit_xor</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id5">
@@ -1488,7 +1488,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="bool-and">
 <h3><code class="docutils literal notranslate"><span class="pre">bool_and</span></code><a class="headerlink" href="#bool-and" title="Link to this heading">¶</a></h3>
 <p>Returns true if all non-null input values are true, otherwise false.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bool_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bool_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id6">
@@ -1512,7 +1512,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="bool-or">
 <h3><code class="docutils literal notranslate"><span class="pre">bool_or</span></code><a class="headerlink" href="#bool-or" title="Link to this heading">¶</a></h3>
 <p>Returns true if all non-null input values are true, otherwise false.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">bool_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">bool_and</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id8">
@@ -1536,7 +1536,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="count">
 <h3><code class="docutils literal notranslate"><span class="pre">count</span></code><a class="headerlink" href="#count" title="Link to this heading">¶</a></h3>
 <p>Returns the number of non-null values in the specified column. To include null values in the total count, use <code class="docutils literal notranslate"><span class="pre">count(*)</span></code>.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">count</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">count</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id10">
@@ -1567,7 +1567,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="first-value">
 <h3><code class="docutils literal notranslate"><span class="pre">first_value</span></code><a class="headerlink" href="#first-value" title="Link to this heading">¶</a></h3>
 <p>Returns the first element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span> <span class="p">[</span><span class="n">ORDER</span> <span class="n">BY</span> <span class="n">expression</span><span class="p">])</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">first_value</span><span class="p">(</span><span class="n">expression</span><span class="w"> </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id12">
@@ -1591,7 +1591,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="grouping">
 <h3><code class="docutils literal notranslate"><span class="pre">grouping</span></code><a class="headerlink" href="#grouping" title="Link to this heading">¶</a></h3>
 <p>Returns 1 if the data is aggregated across the specified column, or 0 if it is not aggregated in the result set.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">grouping</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">grouping</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id14">
@@ -1619,7 +1619,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="last-value">
 <h3><code class="docutils literal notranslate"><span class="pre">last_value</span></code><a class="headerlink" href="#last-value" title="Link to this heading">¶</a></h3>
 <p>Returns the last element in an aggregation group according to the requested ordering. If no ordering is given, returns an arbitrary element from the group.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span> <span class="p">[</span><span class="n">ORDER</span> <span class="n">BY</span> <span class="n">expression</span><span class="p">])</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">last_value</span><span class="p">(</span><span class="n">expression</span><span class="w"> </span><span class="p">[</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">])</span>
 </pre></div>
 </div>
 <section id="id16">
@@ -1643,7 +1643,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="max">
 <h3><code class="docutils literal notranslate"><span class="pre">max</span></code><a class="headerlink" href="#max" title="Link to this heading">¶</a></h3>
 <p>Returns the maximum value in the specified column.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">max</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">max</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id18">
@@ -1671,7 +1671,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="median">
 <h3><code class="docutils literal notranslate"><span class="pre">median</span></code><a class="headerlink" href="#median" title="Link to this heading">¶</a></h3>
 <p>Returns the median value in the specified column.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">median</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">median</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id20">
@@ -1695,7 +1695,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="min">
 <h3><code class="docutils literal notranslate"><span class="pre">min</span></code><a class="headerlink" href="#min" title="Link to this heading">¶</a></h3>
 <p>Returns the minimum value in the specified column.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">min</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">min</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id22">
@@ -1719,7 +1719,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="string-agg">
 <h3><code class="docutils literal notranslate"><span class="pre">string_agg</span></code><a class="headerlink" href="#string-agg" title="Link to this heading">¶</a></h3>
 <p>Concatenates the values of string expressions and places separator values between them.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">string_agg</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">delimiter</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">string_agg</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="k">delimiter</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id24">
@@ -1745,7 +1745,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="sum">
 <h3><code class="docutils literal notranslate"><span class="pre">sum</span></code><a class="headerlink" href="#sum" title="Link to this heading">¶</a></h3>
 <p>Returns the sum of all values in the specified column.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="nb">sum</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">sum</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id26">
@@ -1769,7 +1769,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="var">
 <h3><code class="docutils literal notranslate"><span class="pre">var</span></code><a class="headerlink" href="#var" title="Link to this heading">¶</a></h3>
 <p>Returns the statistical sample variance of a set of numbers.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">var</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">var</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id28">
@@ -1789,7 +1789,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="var-pop">
 <h3><code class="docutils literal notranslate"><span class="pre">var_pop</span></code><a class="headerlink" href="#var-pop" title="Link to this heading">¶</a></h3>
 <p>Returns the statistical population variance of a set of numbers.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">var_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">var_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id30">
@@ -1842,7 +1842,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="corr">
 <h3><code class="docutils literal notranslate"><span class="pre">corr</span></code><a class="headerlink" href="#corr" title="Link to this heading">¶</a></h3>
 <p>Returns the coefficient of correlation between two numeric values.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">corr</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span> <span class="n">expression2</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">corr</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id32">
@@ -1871,7 +1871,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="covar-pop">
 <h3><code class="docutils literal notranslate"><span class="pre">covar_pop</span></code><a class="headerlink" href="#covar-pop" title="Link to this heading">¶</a></h3>
 <p>Returns the sample covariance of a set of number pairs.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">covar_samp</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span> <span class="n">expression2</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">covar_samp</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id34">
@@ -1896,7 +1896,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="covar-samp">
 <h3><code class="docutils literal notranslate"><span class="pre">covar_samp</span></code><a class="headerlink" href="#covar-samp" title="Link to this heading">¶</a></h3>
 <p>Returns the sample covariance of a set of number pairs.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">covar_samp</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span> <span class="n">expression2</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">covar_samp</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id36">
@@ -1927,7 +1927,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="nth-value">
 <h3><code class="docutils literal notranslate"><span class="pre">nth_value</span></code><a class="headerlink" href="#nth-value" title="Link to this heading">¶</a></h3>
 <p>Returns the nth value in a group of values.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">nth_value</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">n</span> <span class="n">ORDER</span> <span class="n">BY</span> <span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">nth_value</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id39">
@@ -1957,7 +1957,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="regr-avgx">
 <h3><code class="docutils literal notranslate"><span class="pre">regr_avgx</span></code><a class="headerlink" href="#regr-avgx" title="Link to this heading">¶</a></h3>
 <p>Computes the average of the independent variable (input) expression_x for the non-null paired data points.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_avgx</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_avgx</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id41">
@@ -1971,7 +1971,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="regr-avgy">
 <h3><code class="docutils literal notranslate"><span class="pre">regr_avgy</span></code><a class="headerlink" href="#regr-avgy" title="Link to this heading">¶</a></h3>
 <p>Computes the average of the dependent variable (output) expression_y for the non-null paired data points.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_avgy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_avgy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id42">
@@ -1985,7 +1985,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="regr-count">
 <h3><code class="docutils literal notranslate"><span class="pre">regr_count</span></code><a class="headerlink" href="#regr-count" title="Link to this heading">¶</a></h3>
 <p>Counts the number of non-null paired data points.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_count</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_count</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id43">
@@ -1999,7 +1999,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="regr-intercept">
 <h3><code class="docutils literal notranslate"><span class="pre">regr_intercept</span></code><a class="headerlink" href="#regr-intercept" title="Link to this heading">¶</a></h3>
 <p>Computes the y-intercept of the linear regression line. For the equation (y = kx + b), this function returns b.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_intercept</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_intercept</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id44">
@@ -2013,7 +2013,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="regr-r2">
 <h3><code class="docutils literal notranslate"><span class="pre">regr_r2</span></code><a class="headerlink" href="#regr-r2" title="Link to this heading">¶</a></h3>
 <p>Computes the square of the correlation coefficient between the independent and dependent variables.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_r2</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_r2</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id45">
@@ -2027,7 +2027,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="regr-slope">
 <h3><code class="docutils literal notranslate"><span class="pre">regr_slope</span></code><a class="headerlink" href="#regr-slope" title="Link to this heading">¶</a></h3>
 <p>Returns the slope of the linear regression line for non-null pairs in aggregate columns. Given input column Y and X: regr_slope(Y, X) returns the slope (k in Y = k*X + b) using minimal RSS fitting.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_slope</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_slope</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id46">
@@ -2041,7 +2041,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="regr-sxx">
 <h3><code class="docutils literal notranslate"><span class="pre">regr_sxx</span></code><a class="headerlink" href="#regr-sxx" title="Link to this heading">¶</a></h3>
 <p>Computes the sum of squares of the independent variable.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_sxx</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_sxx</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id47">
@@ -2055,7 +2055,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="regr-sxy">
 <h3><code class="docutils literal notranslate"><span class="pre">regr_sxy</span></code><a class="headerlink" href="#regr-sxy" title="Link to this heading">¶</a></h3>
 <p>Computes the sum of products of paired data points.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_sxy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_sxy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id48">
@@ -2069,7 +2069,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="regr-syy">
 <h3><code class="docutils literal notranslate"><span class="pre">regr_syy</span></code><a class="headerlink" href="#regr-syy" title="Link to this heading">¶</a></h3>
 <p>Computes the sum of squares of the dependent variable.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">regr_syy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span> <span class="n">expression_x</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">regr_syy</span><span class="p">(</span><span class="n">expression_y</span><span class="p">,</span><span class="w"> </span><span class="n">expression_x</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id49">
@@ -2083,7 +2083,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="stddev">
 <h3><code class="docutils literal notranslate"><span class="pre">stddev</span></code><a class="headerlink" href="#stddev" title="Link to this heading">¶</a></h3>
 <p>Returns the standard deviation of a set of numbers.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">stddev</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">stddev</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id50">
@@ -2113,7 +2113,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="stddev-pop">
 <h3><code class="docutils literal notranslate"><span class="pre">stddev_pop</span></code><a class="headerlink" href="#stddev-pop" title="Link to this heading">¶</a></h3>
 <p>Returns the population standard deviation of a set of numbers.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">stddev_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">stddev_pop</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id53">
@@ -2150,7 +2150,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="approx-distinct">
 <h3><code class="docutils literal notranslate"><span class="pre">approx_distinct</span></code><a class="headerlink" href="#approx-distinct" title="Link to this heading">¶</a></h3>
 <p>Returns the approximate number of distinct input values calculated using the HyperLogLog algorithm.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_distinct</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_distinct</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id55">
@@ -2174,7 +2174,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="approx-median">
 <h3><code class="docutils literal notranslate"><span class="pre">approx_median</span></code><a class="headerlink" href="#approx-median" title="Link to this heading">¶</a></h3>
 <p>Returns the approximate median (50th percentile) of input values. It is an alias of <code class="docutils literal notranslate"><span class="pre">approx_percentile_cont(x,</span> <span class="pre">0.5)</span></code>.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_median</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_median</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id57">
@@ -2198,7 +2198,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="approx-percentile-cont">
 <h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont</span></code><a class="headerlink" href="#approx-percentile-cont" title="Link to this heading">¶</a></h3>
 <p>Returns the approximate percentile of input values using the t-digest algorithm.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">percentile</span><span class="p">,</span> <span class="n">centroids</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">percentile</span><span class="p">,</span><span class="w"> </span><span class="n">centroids</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id59">
@@ -2224,7 +2224,7 @@ dev/update_function_docs.sh file for updating surrounding text.
 <section id="approx-percentile-cont-with-weight">
 <h3><code class="docutils literal notranslate"><span class="pre">approx_percentile_cont_with_weight</span></code><a class="headerlink" href="#approx-percentile-cont-with-weight" title="Link to this heading">¶</a></h3>
 <p>Returns the weighted approximate percentile of input values using the t-digest algorithm.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="n">weight</span><span class="p">,</span> <span class="n">percentile</span><span class="p">)</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">approx_percentile_cont_with_weight</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">weight</span><span class="p">,</span><span class="w"> </span><span class="n">percentile</span><span class="p">)</span>
 </pre></div>
 </div>
 <section id="id61">

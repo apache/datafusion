@@ -582,7 +582,7 @@ and modifying data in tables.</p>
 <p>Copies the contents of a table or query to file(s). Supported file
 formats are <code class="docutils literal notranslate"><span class="pre">parquet</span></code>, <code class="docutils literal notranslate"><span class="pre">csv</span></code>, <code class="docutils literal notranslate"><span class="pre">json</span></code>, and <code class="docutils literal notranslate"><span class="pre">arrow</span></code>.</p>
 <pre>
-COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } 
+COPY { <i><b>table_name</i></b> | <i><b>query</i></b> }
 TO '<i><b>file_name</i></b>'
 [ STORED AS <i><b>format</i></b> ]
 [ PARTITIONED BY <i><b>column_name</i></b> [, ...] ]
@@ -634,17 +634,17 @@ of hive-style partitioned parquet files:</p>
 </div>
 <p>If the the data contains values of <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> in column1 and only <code class="docutils literal notranslate"><span class="pre">a</span></code> in
 column2, output files will appear in the following directory structure:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">dir_name</span><span class="o">/</span>
-  <span class="n">column1</span><span class="o">=</span><span class="n">x</span><span class="o">/</span>
-    <span class="n">column2</span><span class="o">=</span><span class="n">a</span><span class="o">/</span>
-      <span class="o">&lt;</span><span class="n">file</span><span class="o">&gt;.</span><span class="n">parquet</span>
-      <span class="o">&lt;</span><span class="n">file</span><span class="o">&gt;.</span><span class="n">parquet</span>
-      <span class="o">...</span>
-  <span class="n">column1</span><span class="o">=</span><span class="n">y</span><span class="o">/</span>
-    <span class="n">column2</span><span class="o">=</span><span class="n">a</span><span class="o">/</span>
-      <span class="o">&lt;</span><span class="n">file</span><span class="o">&gt;.</span><span class="n">parquet</span>
-      <span class="o">&lt;</span><span class="n">file</span><span class="o">&gt;.</span><span class="n">parquet</span>
-      <span class="o">...</span>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>dir_name/
+  column1=x/
+    column2=a/
+      &lt;file&gt;.parquet
+      &lt;file&gt;.parquet
+      ...
+  column1=y/
+    column2=a/
+      &lt;file&gt;.parquet
+      &lt;file&gt;.parquet
+      ...
 </pre></div>
 </div>
 <p>Run the query <code class="docutils literal notranslate"><span class="pre">SELECT</span> <span class="pre">*</span> <span class="pre">from</span> <span class="pre">source</span> <span class="pre">ORDER</span> <span class="pre">BY</span> <span class="pre">time</span></code> and write the
