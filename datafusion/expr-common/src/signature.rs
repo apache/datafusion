@@ -263,12 +263,12 @@ pub struct ArrayFunctionArguments {
 
 impl ArrayFunctionArguments {
     /// Returns an error if there are no [`ArrayFunctionArgument::Array`] arguments.
-    pub fn new(arguments: Vec<ArrayFunctionArgument>) -> Result<Self, ()> {
+    pub fn new(arguments: Vec<ArrayFunctionArgument>) -> Result<Self, &'static str> {
         if !arguments
             .iter()
             .any(|arg| *arg == ArrayFunctionArgument::Array)
         {
-            Err(())
+            Err("missing array argument")
         } else {
             Ok(Self { arguments })
         }
