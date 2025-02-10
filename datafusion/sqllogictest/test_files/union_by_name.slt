@@ -109,16 +109,40 @@ query II
 NULL 2
 NULL 4
 
+query II
+(SELECT y FROM t1 UNION ALL SELECT x FROM t1) UNION ALL BY NAME (SELECT z FROM t2 UNION ALL SELECT y FROM t2) ORDER BY y, z;
+----
+1 NULL
+1 NULL
+3 NULL
+3 NULL
+3 NULL
+3 NULL
+NULL 2
+NULL 2
+NULL 4
+NULL 4
+
 # Limit
 
-query III rowsort
-SELECT 1 UNION BY NAME SELECT * FROM unnest(range(2, 100)) UNION BY NAME SELECT 999 ORDER BY "Int64(999)", "Int64(1)" LIMIT 5;
+query III
+SELECT 1 UNION BY NAME SELECT * FROM unnest(range(2, 100)) UNION BY NAME SELECT 999 ORDER BY 3, 1 LIMIT 5;
 ----
-1 NULL NULL
-NULL 999 NULL
-NULL NULL 13
-NULL NULL 20
+NULL NULL 2
+NULL NULL 3
 NULL NULL 4
+NULL NULL 5
+NULL NULL 6
+
+# TODO: This should pass, but the sanity checker isn't allowing it.
+# Commenting out the ordering check in the sanity checker produces the correct result.
+query error
+SELECT 1 UNION ALL BY NAME SELECT * FROM unnest(range(2, 100)) UNION ALL BY NAME SELECT 999 ORDER BY 3, 1 LIMIT 5;
+----
+DataFusion error: SanityCheckPlan
+caused by
+Error during planning: Plan: ["SortPreservingMergeExec: [UNNEST(range(Int64(2),Int64(100)))@2 ASC NULLS LAST, Int64(1)@0 ASC NULLS LAST], fetch=5", "  UnionExec", "    SortExec: TopK(fetch=5), expr=[UNNEST(range(Int64(2),Int64(100)))@2 ASC NULLS LAST], preserve_partitioning=[true]", "      ProjectionExec: expr=[Int64(1)@0 as Int64(1), NULL as Int64(999), UNNEST(range(Int64(2),Int64(100)))@1 as UNNEST(range(Int64(2),Int64(100)))]", "        UnionExec", "          ProjectionExec: expr=[1 as Int64(1), NULL as UNNEST(range(Int64(2),Int64(100)))]", "            PlaceholderRowExec", "          ProjectionExec: expr=[NULL as Int64(1), __unnest_placeholder(range(Int64(2),Int64(100)),depth=1)@0 as UNNEST(range(Int64(2),Int64(100)))]", "            UnnestExec", "              ProjectionExec: expr=[[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99] as __unnest_placeholder(range(Int64(2),Int64(100)))]", "                PlaceholderRowExec", "    ProjectionExec: expr=[NULL as Int64(1), 999 as Int64(999), NULL as UNNEST(range(Int64(2),Int64(100)))]", "      PlaceholderRowExec"] does not satisfy order requirements: [UNNEST(range(Int64(2),Int64(100)))@2 ASC NULLS LAST, Int64(1)@0 ASC NULLS LAST]. Child-0 order: []
+
 
 # Order by
 
@@ -131,6 +155,15 @@ NULL 2 2
 NULL 4 4
 
 query III
+SELECT x, y FROM t1 UNION ALL BY NAME SELECT y, z FROM t2 ORDER BY y;
+----
+1 1 NULL
+NULL 2 2
+3 3 NULL
+3 3 NULL
+NULL 4 4
+
+query III
 SELECT x, y FROM t1 UNION BY NAME SELECT y, z FROM t2 ORDER BY 3, 1;
 ----
 NULL 2 2
@@ -138,8 +171,23 @@ NULL 4 4
 1 1 NULL
 3 3 NULL
 
+query III
+SELECT x, y FROM t1 UNION ALL BY NAME SELECT y, z FROM t2 ORDER BY 3, 1;
+----
+NULL 2 2
+NULL 4 4
+1 1 NULL
+3 3 NULL
+3 3 NULL
+
 statement error
 SELECT x, y FROM t1 UNION BY NAME SELECT y, z FROM t2 ORDER BY 4;
+----
+DataFusion error: Error during planning: Order by column out of bounds, specified: 4, max: 3
+
+
+statement error
+SELECT x, y FROM t1 UNION ALL BY NAME SELECT y, z FROM t2 ORDER BY 4;
 ----
 DataFusion error: Error during planning: Order by column out of bounds, specified: 4, max: 3
 
@@ -155,6 +203,16 @@ NULL 3 3 NULL
 NULL NULL 2 2
 NULL NULL 4 4
 
+query IIII rowsort
+(SELECT 1 UNION ALL BY NAME SELECT x, y FROM t1) UNION ALL BY NAME SELECT y, z FROM t2;
+----
+1 NULL NULL NULL
+NULL 1 1 NULL
+NULL 3 3 NULL
+NULL 3 3 NULL
+NULL NULL 2 2
+NULL NULL 4 4
+
 query III
 SELECT x, y FROM t1 UNION BY NAME (SELECT y, z FROM t2 INTERSECT SELECT 2, 2 as two FROM t1 ORDER BY 1) ORDER BY 1;
 ----
@@ -162,6 +220,13 @@ SELECT x, y FROM t1 UNION BY NAME (SELECT y, z FROM t2 INTERSECT SELECT 2, 2 as 
 3 3 NULL
 NULL 2 2
 
+query III
+SELECT x, y FROM t1 UNION ALL BY NAME (SELECT y, z FROM t2 INTERSECT SELECT 2, 2 as two FROM t1 ORDER BY 1) ORDER BY 1;
+----
+1 1 NULL
+3 3 NULL
+3 3 NULL
+NULL 2 2
 
 query III
 (SELECT x, y FROM t1 UNION BY NAME SELECT y, z FROM t2 ORDER BY 1) EXCEPT SELECT NULL, 2, 2 as two FROM t1 ORDER BY 1;
@@ -169,7 +234,6 @@ query III
 1 1 NULL
 3 3 NULL
 NULL 4 4
-
 
 # Alias in select list
 
@@ -181,10 +245,20 @@ SELECT x as a FROM t1 UNION BY NAME SELECT x FROM t1 ORDER BY 1, 2;
 NULL 1
 NULL 3
 
+query II
+SELECT x as a FROM t1 UNION ALL BY NAME SELECT x FROM t1 ORDER BY 1, 2;
+----
+1 NULL
+3 NULL
+3 NULL
+NULL 1
+NULL 3
+NULL 3
+
 # Different types
 
 query T rowsort
-select '0' as c union all by name select 0 as c;
+SELECT '0' as c UNION ALL BY NAME SELECT 0 as c;
 ----
 0
 0
