@@ -18,6 +18,7 @@
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
+pub mod file_compression_type;
 pub mod file_groups;
 pub mod helpers;
 pub mod url;
