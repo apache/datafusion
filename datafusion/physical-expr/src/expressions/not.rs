@@ -116,22 +116,22 @@ impl PhysicalExpr for NotExpr {
         Ok(Arc::new(NotExpr::new(Arc::clone(&children[0]))))
     }
 
-    fn evaluate_ranges(&self, children: &[&Interval]) -> Result<Interval> {
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         children[0].not()
     }
 
     fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
         debug_assert_eq!(stats.len(), 1);
         match stats[0] {
-            Bernoulli { p } => {
-                if p.eq(get_zero()) {
+            Bernoulli(b) => {
+                if b.p_value().eq(get_zero()) {
                     StatisticsV2::new_bernoulli(get_one().clone())
-                } else if p.eq(get_one()) {
+                } else if b.p_value().eq(get_one()) {
                     StatisticsV2::new_bernoulli(get_zero().clone())
-                } else if p.is_null() {
+                } else if b.p_value().is_null() {
                     Ok(stats[0].clone())
                 } else {
-                    StatisticsV2::new_bernoulli(get_one().sub_checked(p)?)
+                    StatisticsV2::new_bernoulli(get_one().sub_checked(b.p_value())?)
                 }
             }
             // https://github.com/apache/datafusion/blob/85fbde2661bdb462fc498dc18f055c44f229604c/datafusion/expr/src/expr.rs#L241
@@ -153,9 +153,6 @@ mod tests {
     use crate::expressions::{col, Column};
 
     use arrow::{array::BooleanArray, datatypes::*};
-    use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-        Exponential, Gaussian, Uniform, Unknown,
-    };
 
     #[test]
     fn neg_op() -> Result<()> {
@@ -210,7 +207,7 @@ mod tests {
         expected_interval: Interval,
     ) -> Result<()> {
         let not_expr = not(col("a", &schema())?)?;
-        assert_eq!(not_expr.evaluate_ranges(&[&interval])?, expected_interval);
+        assert_eq!(not_expr.evaluate_bounds(&[&interval])?, expected_interval);
         Ok(())
     }
 
@@ -222,67 +219,67 @@ mod tests {
 
         // Uniform with non-boolean bounds
         assert!(expr
-            .evaluate_statistics(&[&Uniform {
-                interval: Interval::make_unbounded(&DataType::Float64)?
-            }])
+            .evaluate_statistics(&[&StatisticsV2::new_uniform(
+                Interval::make_unbounded(&DataType::Float64)?
+            )?])
             .is_err());
 
         // Exponential
         assert!(expr
-            .evaluate_statistics(&[&Exponential {
-                rate: ScalarValue::new_one(&DataType::Float64)?,
-                offset: ScalarValue::new_one(&DataType::Float64)?,
-                positive_tail: true
-            }])
+            .evaluate_statistics(&[&StatisticsV2::new_exponential(
+                ScalarValue::new_one(&DataType::Float64)?,
+                ScalarValue::new_one(&DataType::Float64)?,
+                true
+            )?])
             .is_err());
 
         // Gaussian
         assert!(expr
-            .evaluate_statistics(&[&Gaussian {
-                mean: ScalarValue::new_one(&DataType::Float64)?,
-                variance: ScalarValue::new_one(&DataType::Float64)?
-            }])
+            .evaluate_statistics(&[&StatisticsV2::new_gaussian(
+                ScalarValue::new_one(&DataType::Float64)?,
+                ScalarValue::new_one(&DataType::Float64)?
+            )?])
             .is_err());
 
         // Bernoulli
         assert_eq!(
-            expr.evaluate_statistics(&[&Bernoulli {
-                p: ScalarValue::Float64(Some(0.))
-            }])?,
+            expr.evaluate_statistics(&[&StatisticsV2::new_bernoulli(
+                ScalarValue::Float64(Some(0.))
+            )?])?,
             StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(1.)))?
         );
 
         assert_eq!(
-            expr.evaluate_statistics(&[&Bernoulli {
-                p: ScalarValue::Float64(Some(1.))
-            }])?,
+            expr.evaluate_statistics(&[&StatisticsV2::new_bernoulli(
+                ScalarValue::Float64(Some(1.))
+            )?])?,
             StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.)))?
         );
 
         assert_eq!(
-            expr.evaluate_statistics(&[&Bernoulli {
-                p: ScalarValue::Float64(Some(0.25))
-            }])?,
+            expr.evaluate_statistics(&[&StatisticsV2::new_bernoulli(
+                ScalarValue::Float64(Some(0.25))
+            )?])?,
             StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.75)))?
         );
 
         assert!(expr
-            .evaluate_statistics(&[&Unknown {
-                mean: ScalarValue::Boolean(Some(true)),
-                median: ScalarValue::Boolean(Some(true)),
-                variance: ScalarValue::Boolean(Some(true)),
-                range: Interval::CERTAINLY_TRUE
-            }])
+            .evaluate_statistics(&[&StatisticsV2::new_unknown(
+                ScalarValue::Boolean(Some(true)),
+                ScalarValue::Boolean(Some(true)),
+                ScalarValue::Boolean(Some(true)),
+                Interval::CERTAINLY_TRUE
+            )?])
             .is_err());
 
         // Unknown with non-boolean interval as range
         assert!(expr
-            .evaluate_statistics(&[&Unknown {
-                mean: ScalarValue::Null,
-                median: ScalarValue::Float64(None),
-                variance: ScalarValue::UInt32(None),
-                range: Interval::make_unbounded(&DataType::Float64)?
-            }])
+            .evaluate_statistics(&[&StatisticsV2::new_unknown(
+                ScalarValue::Null,
+                ScalarValue::Float64(None),
+                ScalarValue::UInt32(None),
+                Interval::make_unbounded(&DataType::Float64)?
+            )?])
             .is_err());
 
         Ok(())

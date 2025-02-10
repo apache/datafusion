@@ -108,7 +108,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     /// If the expression is `a + b`, and the input intervals are `a: [1, 2]`
     /// and `b: [3, 4]`, then the output interval would be `[4, 6]`.
-    fn evaluate_ranges(&self, _children: &[&Interval]) -> Result<Interval> {
+    fn evaluate_bounds(&self, _children: &[&Interval]) -> Result<Interval> {
         not_impl_err!("Not implemented for {self}")
     }
 
@@ -137,7 +137,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// inputs `a` and `b` are respectively given as `[0, 2]` and `[-∞, 4]`, then
     /// propagation would return `[0, 2]` and `[2, 4]` as `b` must be at least
     /// `2` to make the output at least `4`.
-    fn propagate_ranges(
+    fn propagate_constraints(
         &self,
         _interval: &Interval,
         _children: &[&Interval],

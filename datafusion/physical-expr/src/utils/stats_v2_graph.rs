@@ -187,7 +187,7 @@ impl ExprStatisticGraph {
             // if interval == Interval::UNCERTAIN => do nothing to the root
             else if interval != Interval::UNCERTAIN {
                 self.graph[self.root].statistics =
-                    StatisticsV2::new_unknown_from_interval(&interval)?;
+                    StatisticsV2::new_from_interval(&interval)?;
             }
         } else {
             return Ok(PropagationResult::Infeasible);
@@ -227,7 +227,7 @@ impl ExprStatisticGraph {
 
 /// Creates a new [`Unknown`] distribution, and tries to compute
 /// mean/median/variance if it is calculable.
-pub fn new_unknown_from_binary_expr(
+pub fn new_custom_from_binary_expr(
     op: &Operator,
     left: &StatisticsV2,
     right: &StatisticsV2,
@@ -324,7 +324,7 @@ pub fn compute_median(
     let target_type = StatisticsV2::target_type(&[&left_median, &right_median])?;
 
     match (left_stat, right_stat) {
-        (Uniform { .. }, Uniform { .. }) => {
+        (Uniform(_), Uniform(_)) => {
             if left_median.is_null() || right_median.is_null() {
                 Ok(ScalarValue::try_from(target_type)?)
             } else {
@@ -335,9 +335,9 @@ pub fn compute_median(
                 }
             }
         }
-        (Gaussian { mean: l_mean, .. }, Gaussian { mean: r_mean, .. }) => match op {
-            Operator::Plus => l_mean.add_checked(r_mean),
-            Operator::Minus => l_mean.sub_checked(r_mean),
+        (Gaussian(lg), Gaussian(rg)) => match op {
+            Operator::Plus => lg.mean().add_checked(rg.mean()),
+            Operator::Minus => lg.mean().sub_checked(rg.mean()),
             _ => Ok(ScalarValue::try_from(target_type)?),
         },
         // Any
@@ -374,8 +374,7 @@ pub fn compute_variance(
                 }
             }
         }
-        (Uniform { interval }, Exponential { rate, .. })
-        | (Exponential { rate, .. }, Uniform { interval }) => {
+        (Uniform(u), Exponential(e)) | (Exponential(e), Uniform(u)) => {
             let (left_variance, right_variance) = (left_stat.mean()?, right_stat.mean()?);
             let target_type =
                 StatisticsV2::target_type(&[&left_variance, &right_variance])?;
@@ -388,21 +387,24 @@ pub fn compute_variance(
                     // (5 * lower^2 + 2 * lower * upper + 5 * upper^2) / 12 * λ^2
                     let five = &ScalarValue::Float64(Some(5.));
                     // 5 * lower^2
-                    let interval_lower_sq = interval
+                    let interval_lower_sq = u
+                        .range()
                         .lower()
-                        .mul_checked(interval.lower())?
+                        .mul_checked(u.range().lower())?
                         .cast_to(&DataType::Float64)?
                         .mul_checked(five)?;
                     // 5 * upper^2
-                    let interval_upper_sq = interval
+                    let interval_upper_sq = u
+                        .range()
                         .upper()
-                        .mul_checked(interval.upper())?
+                        .mul_checked(u.range().upper())?
                         .cast_to(&DataType::Float64)?
                         .mul_checked(five)?;
                     // 2 * lower * upper
-                    let middle = interval
+                    let middle = u
+                        .range()
                         .upper()
-                        .mul_checked(interval.lower())?
+                        .mul_checked(u.range().lower())?
                         .cast_to(&DataType::Float64)?
                         .mul_checked(ScalarValue::Float64(Some(2.)))?;
 
@@ -411,7 +413,7 @@ pub fn compute_variance(
                         .add_checked(middle)?
                         .cast_to(&DataType::Float64)?;
 
-                    let f_rate = &rate.cast_to(&DataType::Float64)?;
+                    let f_rate = &e.rate().cast_to(&DataType::Float64)?;
                     let denominator = ScalarValue::Float64(Some(12.))
                         .mul_checked(f_rate.mul(f_rate)?)?;
 
@@ -435,20 +437,21 @@ pub fn compute_range(
     left_stat: &StatisticsV2,
     right_stat: &StatisticsV2,
 ) -> Result<Interval> {
+    let (left_range, right_range) = (left_stat.range()?, right_stat.range()?);
     match (left_stat, right_stat) {
-        (Uniform { interval: l }, Uniform { interval: r })
-        | (Uniform { interval: l }, Unknown { range: r, .. })
-        | (Unknown { range: l, .. }, Uniform { interval: r })
-        | (Unknown { range: l, .. }, Unknown { range: r, .. }) => match op {
+        (Uniform(_), Uniform(_))
+        | (Uniform(_), Unknown(_))
+        | (Unknown(_), Uniform(_))
+        | (Unknown(_), Unknown(_)) => match op {
             Operator::Plus
             | Operator::Minus
             | Operator::Multiply
             | Operator::Gt
             | Operator::GtEq
             | Operator::Lt
-            | Operator::LtEq => apply_operator(op, l, r),
+            | Operator::LtEq => apply_operator(op, &left_range, &right_range),
             Operator::Eq => {
-                if let Some(intersection) = l.intersect(r)? {
+                if let Some(intersection) = left_range.intersect(right_range)? {
                     Ok(intersection)
                 } else {
                     Interval::make_zero(&left_stat.data_type())
@@ -482,9 +485,6 @@ mod tests {
     use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::stats_v2::StatisticsV2;
-    use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-        Bernoulli, Uniform, Unknown,
-    };
 
     type Actual = ScalarValue;
     type Expected = ScalarValue;
@@ -585,48 +585,40 @@ mod tests {
         let mean = Float64(Some(6.0));
         for (stat_a, stat_b) in [
             (
-                Uniform {
-                    interval: a.clone(),
-                },
-                Uniform {
-                    interval: b.clone(),
-                },
+                StatisticsV2::new_uniform(a.clone())?,
+                StatisticsV2::new_uniform(b.clone())?,
             ),
             (
-                Unknown {
-                    mean: mean.clone(),
-                    median: mean.clone(),
-                    variance: ScalarValue::Null,
-                    range: a.clone(),
-                },
-                Uniform {
-                    interval: b.clone(),
-                },
+                StatisticsV2::new_unknown(
+                    mean.clone(),
+                    mean.clone(),
+                    ScalarValue::Null,
+                    a.clone(),
+                )?,
+                StatisticsV2::new_uniform(b.clone())?,
             ),
             (
-                Uniform {
-                    interval: a.clone(),
-                },
-                Unknown {
-                    mean: mean.clone(),
-                    median: mean.clone(),
-                    variance: ScalarValue::Null,
-                    range: b.clone(),
-                },
+                StatisticsV2::new_uniform(a.clone())?,
+                StatisticsV2::new_unknown(
+                    mean.clone(),
+                    mean.clone(),
+                    ScalarValue::Null,
+                    b.clone(),
+                )?,
             ),
             (
-                Unknown {
-                    mean: mean.clone(),
-                    median: mean.clone(),
-                    variance: ScalarValue::Null,
-                    range: a.clone(),
-                },
-                Unknown {
-                    mean: mean.clone(),
-                    median: mean.clone(),
-                    variance: ScalarValue::Null,
-                    range: b.clone(),
-                },
+                StatisticsV2::new_unknown(
+                    mean.clone(),
+                    mean.clone(),
+                    ScalarValue::Null,
+                    a.clone(),
+                )?,
+                StatisticsV2::new_unknown(
+                    mean.clone(),
+                    mean.clone(),
+                    ScalarValue::Null,
+                    b.clone(),
+                )?,
             ),
         ] {
             // range
@@ -695,7 +687,7 @@ mod tests {
             ),
         ]);
         let ev_stats = graph.evaluate_statistics()?;
-        assert_eq!(ev_stats, &Bernoulli { p: Float64(None) });
+        assert_eq!(ev_stats, &StatisticsV2::new_bernoulli(Float64(None))?);
 
         assert_eq!(
             graph

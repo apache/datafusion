@@ -33,11 +33,12 @@ use datafusion_common::tree_node::{
 use datafusion_common::{HashMap, HashSet, Result};
 use datafusion_expr::Operator;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-pub use guarantee::{Guarantee, LiteralGuarantee};
 
 use itertools::Itertools;
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
+
+pub use guarantee::{Guarantee, LiteralGuarantee};
 
 /// Assume the predicate is in the form of CNF, split the predicate to a Vec of PhysicalExprs.
 ///

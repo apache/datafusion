@@ -39,79 +39,24 @@ pub fn get_one() -> &'static ScalarValue {
 }
 
 /// Returns a ln(2) as a [`ScalarValue`]
-fn get_ln_two() -> &'static ScalarValue {
+pub fn get_ln_two() -> &'static ScalarValue {
     LN_TWO_LOCK.get_or_init(|| ScalarValue::Float64(Some(2_f64.ln())))
 }
 
 /// New, enhanced `Statistics` definition, represents five core statistical distributions. New variants will be added over time.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StatisticsV2 {
-    /// Uniform distribution, represented by its range. If the given range extends towards infinity,
-    /// the distribution will be improper -- which is OK. For a more in-depth discussion, see:
-    ///
-    /// <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>
-    /// <https://en.wikipedia.org/wiki/Prior_probability#Improper_priors>    
-    Uniform { interval: Interval },
-    /// Exponential distribution with an optional shift. The probability density function (PDF)
-    /// is defined as follows:
-    ///
-    /// For a positive tail (when `positive_tail` is `true`):
-    ///
-    /// `f(x; λ, offset) = λ exp(-λ (x - offset))    for x ≥ offset`
-    ///
-    /// For a negative tail (when `positive_tail` is `false`):
-    ///
-    /// `f(x; λ, offset) = λ exp(-λ (offset - x))    for x ≤ offset`
-    ///
-    ///
-    /// In both cases, the PDF is 0 outside the specified domain.
-    ///
-    /// For more information, see: <https://en.wikipedia.org/wiki/Exponential_distribution>
-    Exponential {
-        rate: ScalarValue,
-        offset: ScalarValue,
-        /// Indicates whether the exponential distribution has a positive tail; i.e. it extends
-        /// towards positive infinity.
-        positive_tail: bool,
-    },
-    /// Gaussian (normal) distribution, represented by its mean and variance.
-    /// For a more in-depth discussion, see:
-    ///
-    /// <https://en.wikipedia.org/wiki/Normal_distribution>
-    Gaussian {
-        mean: ScalarValue,
-        variance: ScalarValue,
-    },
-    /// Bernoulli distribution with success probability `p`, which always has the
-    /// data type [`DataType::Float64`]. If `p` is a null value, the success
-    /// probability is unknown.
-    ///
-    /// For a more in-depth discussion, see:
-    ///
-    /// <https://en.wikipedia.org/wiki/Bernoulli_distribution>
-    Bernoulli { p: ScalarValue },
-    /// An unknown distribution, only containing some summary statistics.
-    /// For a more in-depth discussion, see:
-    ///
-    /// <https://en.wikipedia.org/wiki/Summary_statistics>
-    Unknown {
-        mean: ScalarValue,
-        median: ScalarValue,
-        variance: ScalarValue,
-        range: Interval,
-    },
+    Uniform(UniformDistribution),
+    Exponential(ExponentialDistribution),
+    Gaussian(GaussianDistribution),
+    Bernoulli(BernoulliDistribution),
+    Unknown(UnknownDistribution),
 }
 
 impl StatisticsV2 {
     /// Constructs a new [`StatisticsV2`] with [`Uniform`] distribution from the given [`Interval`].
     pub fn new_uniform(interval: Interval) -> Result<Self> {
-        if interval.data_type().eq(&DataType::Boolean) {
-            return internal_err!(
-                "Construction of a boolean `Uniform` statistic is prohibited, create a `Bernoulli` statistic instead."
-            );
-        }
-
-        Ok(Uniform { interval })
+        UniformDistribution::new(interval).map(Uniform)
     }
 
     /// Constructs a new [`StatisticsV2`] with [`Exponential`] distribution from the given
@@ -121,43 +66,19 @@ impl StatisticsV2 {
         offset: ScalarValue,
         positive_tail: bool,
     ) -> Result<Self> {
-        if offset.is_null() {
-            internal_err!(
-                "Offset argument of the Exponential distribution must be non-null"
-            )
-        } else if !is_valid_exponential(&rate)? {
-            internal_err!("Tried to construct an invalid Exponential statistic")
-        } else {
-            Ok(Exponential {
-                rate,
-                offset,
-                positive_tail,
-            })
-        }
+        ExponentialDistribution::new(rate, offset, positive_tail).map(Exponential)
     }
 
     /// Constructs a new [`StatisticsV2`] with [`Gaussian`] distribution from the given
     /// mean/variance pair, and checks the newly created statistic for validity.
     pub fn new_gaussian(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
-        is_valid_gaussian(&variance).and_then(|valid| {
-            if valid {
-                Ok(Gaussian { mean, variance })
-            } else {
-                internal_err!("Tried to construct an invalid Gaussian statistic")
-            }
-        })
+        GaussianDistribution::new(mean, variance).map(Gaussian)
     }
 
     /// Constructs a new [`StatisticsV2`] with [`Bernoulli`] distribution from the given probability,
     /// and checks the newly created statistic for validity.
     pub fn new_bernoulli(p: ScalarValue) -> Result<Self> {
-        is_valid_bernoulli(&p).and_then(|valid| {
-            if valid {
-                Ok(Bernoulli { p })
-            } else {
-                internal_err!("Tried to construct an invalid Bernoulli statistic")
-            }
-        })
+        BernoulliDistribution::new(p).map(Bernoulli)
     }
 
     /// Constructs a new [`StatisticsV2`] with [`Unknown`] distribution from the given
@@ -169,49 +90,14 @@ impl StatisticsV2 {
         variance: ScalarValue,
         range: Interval,
     ) -> Result<Self> {
-        if range.data_type().eq(&DataType::Boolean) {
-            internal_err!(
-                "Construction of a boolean `Unknown` statistic is prohibited, create a `Bernoulli` statistic instead."
-            )
-        } else if !is_valid_unknown(&mean, &median, &variance, &range)? {
-            internal_err!("Tried to construct an invalid Unknown statistic")
-        } else {
-            Ok(Unknown {
-                mean,
-                median,
-                variance,
-                range,
-            })
-        }
+        UnknownDistribution::new(mean, median, variance, range).map(Unknown)
     }
 
     /// Constructs a new [`Unknown`] statistics instance from the given range.
     /// Other parameters; mean, median and variance are initialized with null values.
-    pub fn new_unknown_from_interval(range: &Interval) -> Result<StatisticsV2> {
+    pub fn new_from_interval(range: &Interval) -> Result<Self> {
         let null = ScalarValue::try_from(range.data_type())?;
         StatisticsV2::new_unknown(null.clone(), null.clone(), null, range.clone())
-    }
-
-    /// Validates accumulated statistic for selected distribution methods:
-    /// - For [`Exponential`], `rate` must be positive;
-    /// - For [`Gaussian`], `variant` must be non-negative
-    /// - For [`Bernoulli`], `p` must be in `[0, 1]`
-    /// - For [`Unknown`],
-    ///   - if `mean` and/or `median` are defined, the `range` must contain their values
-    ///   - if `std_dev` is defined, it must be non-negative
-    pub fn is_valid(&self) -> Result<bool> {
-        match &self {
-            Exponential { rate, .. } => is_valid_exponential(rate),
-            Gaussian { variance, .. } => is_valid_gaussian(variance),
-            Bernoulli { p } => is_valid_bernoulli(p),
-            Unknown {
-                mean,
-                median,
-                variance,
-                range,
-            } => is_valid_unknown(mean, median, variance, range),
-            Uniform { .. } => Ok(true),
-        }
     }
 
     /// Extracts the mean value of the given statistic, depending on its distribution:
@@ -225,30 +111,11 @@ impl StatisticsV2 {
     ///   be absent.
     pub fn mean(&self) -> Result<ScalarValue> {
         match &self {
-            Uniform { interval } => {
-                let dt = interval.lower().data_type();
-                interval
-                    .lower()
-                    .add_checked(interval.upper())?
-                    .div(ScalarValue::from(2).cast_to(&dt)?)
-            }
-            Exponential {
-                rate,
-                offset,
-                positive_tail,
-            } => {
-                let one = ScalarValue::new_one(&offset.data_type())?;
-                one.div(rate)?.add_checked(offset).map(|abs_mean| {
-                    if *positive_tail {
-                        Ok(abs_mean)
-                    } else {
-                        abs_mean.arithmetic_negate()
-                    }
-                })?
-            }
-            Gaussian { mean, .. } => Ok(mean.clone()),
-            Bernoulli { p } => Ok(p.clone()),
-            Unknown { mean, .. } => Ok(mean.clone()),
+            Uniform(uni) => uni.mean(),
+            Exponential(e) => e.mean(),
+            Gaussian(g) => Ok(g.mean().clone()),
+            Bernoulli(b) => Ok(b.mean().clone()),
+            Unknown(unk) => Ok(unk.mean().clone()),
         }
     }
 
@@ -263,34 +130,11 @@ impl StatisticsV2 {
     ///   be absent.
     pub fn median(&self) -> Result<ScalarValue> {
         match &self {
-            Uniform { interval, .. } => {
-                let agg = interval
-                    .lower()
-                    .add_checked(interval.upper())?
-                    .cast_to(&DataType::Float64)?;
-                agg.div(ScalarValue::Float64(Some(2.)))
-            }
-            Exponential {
-                rate,
-                offset,
-                positive_tail,
-            } => {
-                let abs_median = get_ln_two().div(rate)?.add_checked(offset)?;
-                if *positive_tail {
-                    Ok(abs_median)
-                } else {
-                    abs_median.arithmetic_negate()
-                }
-            }
-            Gaussian { mean, .. } => Ok(mean.clone()),
-            Bernoulli { p } => {
-                if p.gt(&ScalarValue::Float64(Some(0.5))) {
-                    ScalarValue::new_one(&DataType::Float64)
-                } else {
-                    ScalarValue::new_zero(&DataType::Float64)
-                }
-            }
-            Unknown { median, .. } => Ok(median.clone()),
+            Uniform(uni) => uni.median(),
+            Exponential(e) => e.median(),
+            Gaussian(g) => Ok(g.median().clone()),
+            Bernoulli(b) => Ok(b.median()),
+            Unknown(unk) => Ok(unk.median().clone()),
         }
     }
 
@@ -306,27 +150,11 @@ impl StatisticsV2 {
     ///   be absent.
     pub fn variance(&self) -> Result<ScalarValue> {
         match &self {
-            Uniform { interval, .. } => {
-                let base_value_ref = interval
-                    .upper()
-                    .sub_checked(interval.lower())?
-                    .cast_to(&DataType::Float64)?;
-                let base_pow = base_value_ref
-                    .mul_checked(&base_value_ref)?
-                    .cast_to(&DataType::Float64)?;
-                base_pow.div(ScalarValue::Float64(Some(12.)))
-            }
-            Exponential { rate, .. } => {
-                let one = ScalarValue::new_one(&rate.data_type())?;
-                let rate_squared = rate.mul(rate)?;
-                one.div(rate_squared)
-            }
-            Gaussian { variance, .. } => Ok(variance.clone()),
-            Bernoulli { p } => {
-                let one = ScalarValue::new_one(&DataType::Float64)?;
-                one.sub_checked(p)?.mul_checked(p)
-            }
-            Unknown { variance, .. } => Ok(variance.clone()),
+            Uniform(uni) => uni.variance(),
+            Exponential(e) => e.variance(),
+            Gaussian(g) => Ok(g.variance.clone()),
+            Bernoulli(b) => b.variance(),
+            Unknown(unk) => Ok(unk.variance.clone()),
         }
     }
 
@@ -339,37 +167,37 @@ impl StatisticsV2 {
     /// - An [`Unknown`] distribution is unbounded by default, but more information may be present.
     pub fn range(&self) -> Result<Interval> {
         match &self {
-            Uniform { interval, .. } => Ok(interval.clone()),
-            Exponential { offset, .. } => {
-                let offset_data_type = offset.data_type();
+            Uniform(u) => Ok(u.interval.clone()),
+            Exponential(e) => {
+                let offset_data_type = e.offset.data_type();
                 let interval = Interval::try_new(
-                    offset.clone(),
+                    e.offset.clone(),
                     ScalarValue::try_from(offset_data_type)?,
                 )?;
                 Ok(interval)
             }
-            Gaussian { .. } => Ok(Interval::make_unbounded(&DataType::Float64)?),
-            Bernoulli { p } => {
-                if p.eq(get_zero()) {
+            Gaussian(_) => Ok(Interval::make_unbounded(&DataType::Float64)?),
+            Bernoulli(b) => {
+                if b.p.eq(get_zero()) {
                     Ok(Interval::CERTAINLY_FALSE)
-                } else if p.eq(get_one()) {
+                } else if b.p.eq(get_one()) {
                     Ok(Interval::CERTAINLY_TRUE)
                 } else {
                     Ok(Interval::UNCERTAIN)
                 }
             }
-            Unknown { range, .. } => Ok(range.clone()),
+            Unknown(c) => Ok(c.range.clone()),
         }
     }
 
     /// Returns the data type of the statistics.
     pub fn data_type(&self) -> DataType {
         match &self {
-            Uniform { interval, .. } => interval.data_type(),
-            Exponential { offset, .. } => offset.data_type(),
-            Gaussian { mean, .. } => mean.data_type(),
-            Bernoulli { .. } => DataType::Boolean,
-            Unknown { range, .. } => range.data_type(),
+            Uniform(u) => u.interval.data_type(),
+            Exponential(e) => e.offset.data_type(),
+            Gaussian(g) => g.mean.data_type(),
+            Bernoulli(_) => DataType::Boolean,
+            Unknown(c) => c.range.data_type(),
         }
     }
 
@@ -394,65 +222,295 @@ impl StatisticsV2 {
     }
 }
 
-fn is_valid_exponential(rate: &ScalarValue) -> Result<bool> {
-    if rate.is_null() {
-        return internal_err!(
-            "Rate argument of Exponential Distribution cannot be a null ScalarValue"
-        );
-    }
-    let zero = ScalarValue::new_zero(&rate.data_type())?;
-    Ok(rate.gt(&zero))
+/// Uniform distribution, represented by its range. If the given range extends towards infinity,
+/// the distribution will be improper -- which is OK. For a more in-depth discussion, see:
+///
+/// <https://en.wikipedia.org/wiki/Continuous_uniform_distribution>
+/// <https://en.wikipedia.org/wiki/Prior_probability#Improper_priors>
+#[derive(Clone, Debug, PartialEq)]
+pub struct UniformDistribution {
+    interval: Interval,
 }
 
-fn is_valid_gaussian(variance: &ScalarValue) -> Result<bool> {
-    if variance.is_null() {
-        return internal_err!(
-            "Variance argument of Gaussian Distribution cannot be null ScalarValue"
-        );
-    }
-    let zero = ScalarValue::new_zero(&variance.data_type())?;
-    Ok(variance.ge(&zero))
+/// Exponential distribution with an optional shift. The probability density function (PDF)
+/// is defined as follows:
+///
+/// For a positive tail (when `positive_tail` is `true`):
+///
+/// `f(x; λ, offset) = λ exp(-λ (x - offset))    for x ≥ offset`
+///
+/// For a negative tail (when `positive_tail` is `false`):
+///
+/// `f(x; λ, offset) = λ exp(-λ (offset - x))    for x ≤ offset`
+///
+///
+/// In both cases, the PDF is 0 outside the specified domain.
+///
+/// For more information, see: <https://en.wikipedia.org/wiki/Exponential_distribution>
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExponentialDistribution {
+    rate: ScalarValue,
+    offset: ScalarValue,
+    /// Indicates whether the exponential distribution has a positive tail; i.e. it extends
+    /// towards positive infinity.
+    positive_tail: bool,
 }
 
-fn is_valid_bernoulli(p: &ScalarValue) -> Result<bool> {
-    if p.is_null() {
-        Ok(true)
-    } else if p.data_type().eq(&DataType::Float64) {
-        let zero = ScalarValue::new_zero(&DataType::Float64)?;
-        let one = ScalarValue::new_one(&DataType::Float64)?;
-        Ok(p.ge(&zero) && p.le(&one))
-    } else {
-        internal_err!("Bernoulli distribution can hold only float64 probability")
-    }
+/// Gaussian (normal) distribution, represented by its mean and variance.
+/// For a more in-depth discussion, see:
+///
+/// <https://en.wikipedia.org/wiki/Normal_distribution>
+#[derive(Clone, Debug, PartialEq)]
+pub struct GaussianDistribution {
+    mean: ScalarValue,
+    variance: ScalarValue,
 }
 
-fn is_valid_unknown(
-    mean: &ScalarValue,
-    median: &ScalarValue,
-    variance: &ScalarValue,
-    range: &Interval,
-) -> Result<bool> {
-    let is_valid_mean_median = |m: &ScalarValue| -> Result<bool> {
-        if m.is_null() {
-            Ok(true)
-        } else {
-            range.contains_value(m)
+/// Bernoulli distribution with success probability `p`, which always has the
+/// data type [`DataType::Float64`]. If `p` is a null value, the success
+/// probability is unknown.
+///
+/// For a more in-depth discussion, see:
+///
+/// <https://en.wikipedia.org/wiki/Bernoulli_distribution>
+#[derive(Clone, Debug, PartialEq)]
+pub struct BernoulliDistribution {
+    p: ScalarValue,
+}
+
+/// An unknown distribution, only containing some summary statistics.
+/// For a more in-depth discussion, see:
+///
+/// <https://en.wikipedia.org/wiki/Summary_statistics>
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnknownDistribution {
+    mean: ScalarValue,
+    median: ScalarValue,
+    variance: ScalarValue,
+    range: Interval,
+}
+
+impl UniformDistribution {
+    fn new(interval: Interval) -> Result<Self> {
+        if interval.data_type().eq(&DataType::Boolean) {
+            return internal_err!(
+                "Construction of a boolean `Uniform` statistic is prohibited, create a `Bernoulli` statistic instead."
+            );
         }
-    };
 
-    if !is_valid_mean_median(mean)? || !is_valid_mean_median(median)? {
-        Ok(false)
-    } else if !variance.is_null() {
-        let zero = ScalarValue::new_zero(&variance.data_type())?;
-        Ok(variance.ge(&zero))
-    } else {
-        Ok(true)
+        Ok(Self { interval })
+    }
+
+    pub fn range(&self) -> &Interval {
+        &self.interval
+    }
+
+    pub fn mean(&self) -> Result<ScalarValue> {
+        let dt = self.interval.lower().data_type();
+        self.interval
+            .lower()
+            .add_checked(self.interval.upper())?
+            .div(ScalarValue::from(2).cast_to(&dt)?)
+    }
+
+    pub fn median(&self) -> Result<ScalarValue> {
+        self.mean()
+    }
+
+    pub fn variance(&self) -> Result<ScalarValue> {
+        let base_value_ref = self
+            .interval
+            .upper()
+            .sub_checked(self.interval.lower())?
+            .cast_to(&DataType::Float64)?;
+        let base_pow = base_value_ref
+            .mul_checked(&base_value_ref)?
+            .cast_to(&DataType::Float64)?;
+        base_pow.div(ScalarValue::Float64(Some(12.)))
+    }
+}
+
+impl ExponentialDistribution {
+    fn new(rate: ScalarValue, offset: ScalarValue, positive_tail: bool) -> Result<Self> {
+        if offset.is_null() {
+            internal_err!(
+                "Offset argument of the Exponential distribution must be non-null"
+            )
+        } else if rate.is_null() {
+            internal_err!(
+                "Rate argument of Exponential Distribution cannot be a null ScalarValue"
+            )
+        } else if rate.le(&ScalarValue::new_zero(&rate.data_type())?) {
+            internal_err!("Tried to construct an invalid Exponential statistic")
+        } else {
+            Ok(Self {
+                rate,
+                offset,
+                positive_tail,
+            })
+        }
+    }
+
+    pub fn rate(&self) -> &ScalarValue {
+        &self.rate
+    }
+
+    pub fn offset(&self) -> &ScalarValue {
+        &self.offset
+    }
+
+    pub fn positive_tail(&self) -> bool {
+        self.positive_tail
+    }
+
+    pub fn mean(&self) -> Result<ScalarValue> {
+        let one = ScalarValue::new_one(&self.offset.data_type())?;
+        one.div(&self.rate)?
+            .add_checked(&self.offset)
+            .map(|abs_mean| {
+                if self.positive_tail {
+                    Ok(abs_mean)
+                } else {
+                    abs_mean.arithmetic_negate()
+                }
+            })?
+    }
+
+    pub fn median(&self) -> Result<ScalarValue> {
+        let abs_median = get_ln_two().div(&self.rate)?.add_checked(&self.offset)?;
+        if self.positive_tail {
+            Ok(abs_median)
+        } else {
+            abs_median.arithmetic_negate()
+        }
+    }
+
+    pub fn variance(&self) -> Result<ScalarValue> {
+        let one = ScalarValue::new_one(&self.rate.data_type())?;
+        let rate_squared = self.rate.mul(&self.rate)?;
+        one.div(rate_squared)
+    }
+}
+
+impl GaussianDistribution {
+    fn new(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
+        if variance.is_null() {
+            internal_err!(
+                "Variance argument of Gaussian Distribution cannot be null ScalarValue"
+            )
+        } else if variance.lt(&ScalarValue::new_zero(&variance.data_type())?) {
+            internal_err!("Tried to construct an invalid Gaussian statistic")
+        } else {
+            Ok(Self { mean, variance })
+        }
+    }
+
+    pub fn mean(&self) -> &ScalarValue {
+        &self.mean
+    }
+
+    pub fn variance(&self) -> &ScalarValue {
+        &self.variance
+    }
+
+    pub fn median(&self) -> &ScalarValue {
+        self.mean()
+    }
+}
+
+impl BernoulliDistribution {
+    fn new(p: ScalarValue) -> Result<Self> {
+        if p.is_null() {
+            Ok(Self { p: p.clone() })
+        } else if p.data_type().eq(&DataType::Float64) {
+            let zero = ScalarValue::new_zero(&DataType::Float64)?;
+            let one = ScalarValue::new_one(&DataType::Float64)?;
+            if p.ge(&zero) && p.le(&one) {
+                Ok(Self { p: p.clone() })
+            } else {
+                internal_err!("Tried to construct an invalid Bernoulli statistic")
+            }
+        } else {
+            internal_err!("Bernoulli distribution can hold only float64 probability")
+        }
+    }
+
+    pub fn p_value(&self) -> &ScalarValue {
+        &self.p
+    }
+
+    pub fn mean(&self) -> &ScalarValue {
+        &self.p
+    }
+
+    pub fn median(&self) -> ScalarValue {
+        if self.p.gt(&ScalarValue::Float64(Some(0.5))) {
+            get_one().clone()
+        } else {
+            get_zero().clone()
+        }
+    }
+
+    pub fn variance(&self) -> Result<ScalarValue> {
+        let one = ScalarValue::new_one(&DataType::Float64)?;
+        one.sub_checked(&self.p)?.mul_checked(&self.p)
+    }
+}
+
+impl UnknownDistribution {
+    fn new(
+        mean: ScalarValue,
+        median: ScalarValue,
+        variance: ScalarValue,
+        range: Interval,
+    ) -> Result<Self> {
+        let is_valid_mean_median = |m: &ScalarValue| -> Result<bool> {
+            if m.is_null() {
+                Ok(true)
+            } else {
+                range.contains_value(m)
+            }
+        };
+
+        if range.data_type().eq(&DataType::Boolean) {
+            internal_err!(
+                "Construction of a boolean `Unknown` statistic is prohibited, create a `Bernoulli` statistic instead."
+            )
+        } else if (!is_valid_mean_median(&mean)? || !is_valid_mean_median(&median)?)
+            || (!variance.is_null()
+                && variance.lt(&ScalarValue::new_zero(&variance.data_type())?))
+        {
+            internal_err!("Tried to construct an invalid Unknown statistic")
+        } else {
+            Ok(Self {
+                mean,
+                median,
+                variance,
+                range,
+            })
+        }
+    }
+
+    pub fn mean(&self) -> &ScalarValue {
+        &self.mean
+    }
+
+    pub fn median(&self) -> &ScalarValue {
+        &self.median
+    }
+
+    pub fn variance(&self) -> &ScalarValue {
+        &self.variance
+    }
+
+    pub fn range(&self) -> &Interval {
+        &self.range
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::stats_v2::StatisticsV2;
+    use crate::stats_v2::{StatisticsV2, UniformDistribution};
 
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
@@ -464,9 +522,9 @@ mod tests {
         assert_eq!(
             StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int8).unwrap())
                 .unwrap(),
-            StatisticsV2::Uniform {
+            StatisticsV2::Uniform(UniformDistribution {
                 interval: Interval::make_zero(&DataType::Int8).unwrap()
-            }
+            })
         );
 
         assert!(StatisticsV2::new_uniform(Interval::UNCERTAIN).is_err());

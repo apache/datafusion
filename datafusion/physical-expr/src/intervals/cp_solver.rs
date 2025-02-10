@@ -565,7 +565,7 @@ impl ExprIntervalGraph {
                 // Reverse to align with `PhysicalExpr`'s children:
                 children_intervals.reverse();
                 self.graph[node].interval =
-                    self.graph[node].expr.evaluate_ranges(&children_intervals)?;
+                    self.graph[node].expr.evaluate_bounds(&children_intervals)?;
             }
         }
         Ok(&self.graph[self.root].interval)
@@ -600,7 +600,7 @@ impl ExprIntervalGraph {
             let node_interval = self.graph[node].interval();
             let propagated_intervals = self.graph[node]
                 .expr
-                .propagate_ranges(node_interval, &children_intervals)?;
+                .propagate_constraints(node_interval, &children_intervals)?;
             if let Some(propagated_intervals) = propagated_intervals {
                 for (child, interval) in children.into_iter().zip(propagated_intervals) {
                     self.graph[child].interval = interval;
@@ -1407,7 +1407,9 @@ mod tests {
             })),
         )?;
         let children = vec![&left_child, &right_child];
-        let result = expression.propagate_ranges(&parent, &children)?.unwrap();
+        let result = expression
+            .propagate_constraints(&parent, &children)?
+            .unwrap();
 
         assert_eq!(
             vec![
@@ -1476,7 +1478,9 @@ mod tests {
             })),
         )?;
         let children = vec![&left_child, &right_child];
-        let result = expression.propagate_ranges(&parent, &children)?.unwrap();
+        let result = expression
+            .propagate_constraints(&parent, &children)?
+            .unwrap();
 
         assert_eq!(
             vec![
@@ -1605,7 +1609,7 @@ mod tests {
         ];
         for children in children_set {
             assert_eq!(
-                expr.propagate_ranges(&parent, &children)?.unwrap(),
+                expr.propagate_constraints(&parent, &children)?.unwrap(),
                 vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_FALSE],
             );
         }
@@ -1616,20 +1620,20 @@ mod tests {
             vec![&Interval::UNCERTAIN, &Interval::CERTAINLY_TRUE],
         ];
         for children in children_set {
-            assert_eq!(expr.propagate_ranges(&parent, &children)?, None,);
+            assert_eq!(expr.propagate_constraints(&parent, &children)?, None,);
         }
 
         let parent = Interval::CERTAINLY_TRUE;
         let children = vec![&Interval::CERTAINLY_FALSE, &Interval::UNCERTAIN];
         assert_eq!(
-            expr.propagate_ranges(&parent, &children)?.unwrap(),
+            expr.propagate_constraints(&parent, &children)?.unwrap(),
             vec![Interval::CERTAINLY_FALSE, Interval::CERTAINLY_TRUE]
         );
 
         let parent = Interval::CERTAINLY_TRUE;
         let children = vec![&Interval::UNCERTAIN, &Interval::UNCERTAIN];
         assert_eq!(
-            expr.propagate_ranges(&parent, &children)?.unwrap(),
+            expr.propagate_constraints(&parent, &children)?.unwrap(),
             // Empty means unchanged intervals.
             vec![]
         );
@@ -1665,7 +1669,10 @@ mod tests {
             ),
         ];
         for (children, result) in children_and_results_set {
-            assert_eq!(expr.propagate_ranges(&parent, &children)?.unwrap(), result);
+            assert_eq!(
+                expr.propagate_constraints(&parent, &children)?.unwrap(),
+                result
+            );
         }
 
         Ok(())

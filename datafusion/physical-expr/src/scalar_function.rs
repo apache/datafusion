@@ -244,11 +244,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
         ))
     }
 
-    fn evaluate_ranges(&self, children: &[&Interval]) -> Result<Interval> {
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         self.fun.evaluate_ranges(children)
     }
 
-    fn propagate_ranges(
+    fn propagate_constraints(
         &self,
         interval: &Interval,
         children: &[&Interval],

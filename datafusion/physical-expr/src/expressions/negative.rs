@@ -119,7 +119,7 @@ impl PhysicalExpr for NegativeExpr {
     /// Given the child interval of a NegativeExpr, it calculates the NegativeExpr's interval.
     /// It replaces the upper and lower bounds after multiplying them with -1.
     /// Ex: `(a, b]` => `[-b, -a)`
-    fn evaluate_ranges(&self, children: &[&Interval]) -> Result<Interval> {
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         Interval::try_new(
             children[0].upper().arithmetic_negate()?,
             children[0].lower().arithmetic_negate()?,
@@ -128,7 +128,7 @@ impl PhysicalExpr for NegativeExpr {
 
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
     /// given the input interval is known to be `children`.
-    fn propagate_ranges(
+    fn propagate_constraints(
         &self,
         interval: &Interval,
         children: &[&Interval],
@@ -147,36 +147,27 @@ impl PhysicalExpr for NegativeExpr {
     fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
         debug_assert_eq!(stats.len(), 1);
         match stats[0] {
-            Uniform { interval } => {
-                StatisticsV2::new_uniform(self.evaluate_ranges(&[interval])?)
+            Uniform(uni) => {
+                StatisticsV2::new_uniform(self.evaluate_bounds(&[uni.range()])?)
             }
-            Unknown {
-                mean,
-                median,
-                variance,
-                range,
-            } => StatisticsV2::new_unknown(
-                mean.arithmetic_negate()?,
-                median.arithmetic_negate()?,
-                variance.clone(),
-                self.evaluate_ranges(&[range])?,
-            ),
-            Bernoulli { .. } => {
+            Exponential(e) => Ok(StatisticsV2::new_exponential(
+                e.rate().clone(),
+                e.offset().arithmetic_negate()?,
+                !e.positive_tail(),
+            )?),
+            Gaussian(g) => Ok(StatisticsV2::new_gaussian(
+                g.mean().arithmetic_negate()?,
+                g.variance().clone(),
+            )?),
+            Bernoulli(_) => {
                 internal_err!("NegativeExpr cannot operate on Boolean datatype")
             }
-            Exponential {
-                offset,
-                rate,
-                positive_tail,
-            } => Ok(StatisticsV2::new_exponential(
-                rate.clone(),
-                offset.clone(),
-                !positive_tail,
-            )?),
-            Gaussian { mean, variance } => Ok(StatisticsV2::new_gaussian(
-                mean.arithmetic_negate()?,
-                variance.clone(),
-            )?),
+            Unknown(unk) => StatisticsV2::new_unknown(
+                unk.mean().arithmetic_negate()?,
+                unk.median().arithmetic_negate()?,
+                unk.variance().clone(),
+                self.evaluate_bounds(&[unk.range()])?,
+            ),
         }
     }
 
@@ -190,28 +181,15 @@ impl PhysicalExpr for NegativeExpr {
             1,
             "NegativeExpr should have only one child"
         );
+        let parent_range = parent_stat.range()?;
+        let child_range = children_stat[0].range()?;
         match parent_stat {
-            Uniform {
-                interval: parent_interval,
-            }
-            | Unknown {
-                range: parent_interval,
-                ..
-            } => match children_stat[0] {
-                Uniform {
-                    interval: child_interval,
-                }
-                | Unknown {
-                    range: child_interval,
-                    ..
-                } => {
+            Uniform(_) | Unknown(_) => match children_stat[0] {
+                Uniform(_) | Unknown(_) => {
                     let propagated =
-                        self.propagate_ranges(parent_interval, &[child_interval])?;
-
+                        self.propagate_constraints(&parent_range, &[&child_range])?;
                     if let Some(propagated) = propagated {
-                        Ok(Some(vec![StatisticsV2::new_unknown_from_interval(
-                            &propagated[0],
-                        )?]))
+                        Ok(Some(vec![StatisticsV2::new_from_interval(&propagated[0])?]))
                     } else {
                         Ok(None)
                     }
@@ -309,7 +287,7 @@ mod tests {
         let child_interval = Interval::make(Some(-2), Some(1))?;
         let negative_expr_interval = Interval::make(Some(-1), Some(2))?;
         assert_eq!(
-            negative_expr.evaluate_ranges(&[&child_interval])?,
+            negative_expr.evaluate_bounds(&[&child_interval])?,
             negative_expr_interval
         );
         Ok(())
@@ -321,39 +299,39 @@ mod tests {
 
         // Uniform
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Uniform {
-                interval: Interval::make(Some(-2.), Some(3.))?,
-            }])?,
+            negative_expr.evaluate_statistics(&[&StatisticsV2::new_uniform(
+                Interval::make(Some(-2.), Some(3.))?
+            )?])?,
             StatisticsV2::new_uniform(Interval::make(Some(-3.), Some(2.))?)?
         );
 
         // Bernoulli
         assert!(negative_expr
-            .evaluate_statistics(&[&Bernoulli {
-                p: ScalarValue::Float64(Some(0.75))
-            }])
+            .evaluate_statistics(&[&StatisticsV2::new_bernoulli(ScalarValue::Float64(
+                Some(0.75)
+            ))?])
             .is_err());
 
         // Exponential
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Exponential {
-                rate: ScalarValue::Float64(Some(1.)),
-                offset: ScalarValue::Float64(Some(1.)),
-                positive_tail: true
-            }])?,
-            Exponential {
-                rate: ScalarValue::Float64(Some(1.)),
-                offset: ScalarValue::Float64(Some(1.)),
-                positive_tail: false
-            }
+            negative_expr.evaluate_statistics(&[&StatisticsV2::new_exponential(
+                ScalarValue::Float64(Some(1.)),
+                ScalarValue::Float64(Some(1.)),
+                true
+            )?])?,
+            StatisticsV2::new_exponential(
+                ScalarValue::Float64(Some(1.)),
+                ScalarValue::Float64(Some(1.)),
+                false
+            )?
         );
 
         // Gaussian
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&Gaussian {
-                mean: ScalarValue::Int32(Some(15)),
-                variance: ScalarValue::Int32(Some(225)),
-            }])?,
+            negative_expr.evaluate_statistics(&[&StatisticsV2::new_gaussian(
+                ScalarValue::Int32(Some(15)),
+                ScalarValue::Int32(Some(225)),
+            )?])?,
             StatisticsV2::new_gaussian(
                 ScalarValue::Int32(Some(-15)),
                 ScalarValue::Int32(Some(225))
@@ -386,8 +364,10 @@ mod tests {
         let negative_expr_interval = Interval::make(Some(0), Some(4))?;
         let after_propagation = Some(vec![Interval::make(Some(-2), Some(0))?]);
         assert_eq!(
-            negative_expr
-                .propagate_ranges(&negative_expr_interval, &[&original_child_interval])?,
+            negative_expr.propagate_constraints(
+                &negative_expr_interval,
+                &[&original_child_interval]
+            )?,
             after_propagation
         );
         Ok(())
@@ -401,24 +381,21 @@ mod tests {
 
         let parent = StatisticsV2::new_uniform(Interval::make(Some(0), Some(4))?)?;
         let children: Vec<Vec<StatisticsV2>> = vec![
-            vec![Uniform {
-                interval: original_child_interval.clone(),
-            }],
-            vec![Unknown {
-                mean: ScalarValue::Float64(Some(0.5)),
-                median: ScalarValue::Float64(Some(0.5)),
-                variance: ScalarValue::Null,
-                range: original_child_interval.clone(),
-            }],
+            vec![StatisticsV2::new_uniform(original_child_interval.clone())?],
+            vec![StatisticsV2::new_unknown(
+                ScalarValue::Float64(Some(0.5)),
+                ScalarValue::Float64(Some(0.5)),
+                ScalarValue::Null,
+                original_child_interval.clone(),
+            )?],
         ];
 
         for child_view in children {
             let ref_view: Vec<&StatisticsV2> = child_view.iter().collect();
 
             let actual = negative_expr.propagate_statistics(&parent, &ref_view)?;
-            let expected = Some(vec![StatisticsV2::new_unknown_from_interval(
-                &after_propagation,
-            )?]);
+            let expected =
+                Some(vec![StatisticsV2::new_from_interval(&after_propagation)?]);
             assert_eq!(actual, expected);
         }
 

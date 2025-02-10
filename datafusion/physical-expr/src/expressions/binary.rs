@@ -23,7 +23,7 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::utils::stats_v2_graph::{
-    new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
+    new_bernoulli_from_binary_expr, new_custom_from_binary_expr,
 };
 use crate::PhysicalExpr;
 
@@ -382,7 +382,7 @@ impl PhysicalExpr for BinaryExpr {
         ))
     }
 
-    fn evaluate_ranges(&self, children: &[&Interval]) -> Result<Interval> {
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         // Get children intervals:
         let left_interval = children[0];
         let right_interval = children[1];
@@ -390,7 +390,7 @@ impl PhysicalExpr for BinaryExpr {
         apply_operator(&self.op, left_interval, right_interval)
     }
 
-    fn propagate_ranges(
+    fn propagate_constraints(
         &self,
         interval: &Interval,
         children: &[&Interval],
@@ -511,7 +511,7 @@ impl PhysicalExpr for BinaryExpr {
             return evaluate_statistics_logical(&self.op, left_stat, right_stat);
         }
 
-        new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+        new_custom_from_binary_expr(&self.op, left_stat, right_stat)
     }
 
     fn propagate_statistics(
@@ -525,7 +525,8 @@ impl PhysicalExpr for BinaryExpr {
             right_stat.range()?,
             parent_stat.range()?,
         );
-        let Some(propagated_children) = self.propagate_ranges(&pi, &[&li, &ri])? else {
+        let Some(propagated_children) = self.propagate_constraints(&pi, &[&li, &ri])?
+        else {
             return Ok(None);
         };
         Some(
@@ -541,7 +542,7 @@ impl PhysicalExpr for BinaryExpr {
                             StatisticsV2::new_bernoulli(ScalarValue::Boolean(None))
                         }
                     } else {
-                        StatisticsV2::new_unknown_from_interval(&child_interval)
+                        StatisticsV2::new_from_interval(&child_interval)
                     }
                 })
                 .collect::<Result<Vec<_>>>(),
@@ -797,28 +798,28 @@ fn evaluate_statistics_logical(
     right_stat: &StatisticsV2,
 ) -> Result<StatisticsV2> {
     match (left_stat, right_stat) {
-        (Bernoulli { p:p_left }, Bernoulli { p:p_right }) => {
+        (Bernoulli(lb), Bernoulli(rb)) => {
             if *op == Operator::And {
-                match (p_left.is_null(), p_right.is_null()) {
+                match (lb.p_value().is_null(), rb.p_value().is_null()) {
                     (false, false) => {
-                        StatisticsV2::new_bernoulli(p_left.mul_checked(p_right)?)
+                        StatisticsV2::new_bernoulli(lb.p_value().mul_checked(rb.p_value())?)
                     }
-                    (false, true) if p_left.eq(get_zero()) => {
+                    (false, true) if lb.p_value().eq(get_zero()) => {
                         Ok(left_stat.clone())
                     }
-                    (true, false) if p_right.eq(get_zero()) => {
+                    (true, false) if rb.p_value().eq(get_zero()) => {
                         Ok(right_stat.clone())
                     }
                     _ => StatisticsV2::new_bernoulli(ScalarValue::Float64(None)),
                 }
             } else if *op == Operator::Or {
-                match (p_left.is_null(), p_right.is_null()) {
+                match (lb.p_value().is_null(), rb.p_value().is_null()) {
                     (false, false) => StatisticsV2::new_bernoulli(
                         ScalarValue::Float64(Some(1.))
-                            .sub(p_left.mul_checked(p_right)?)?,
+                            .sub(lb.p_value().mul_checked(rb.p_value())?)?,
                     ),
-                    (false, true)  if p_left.eq(get_one()) => Ok(left_stat.clone()),
-                    (true, false)  if p_right.eq(get_one()) => {
+                    (false, true)  if lb.p_value().eq(get_one()) => Ok(left_stat.clone()),
+                    (true, false)  if rb.p_value().eq(get_one()) => {
                         Ok(right_stat.clone())
                     }
                     _ => StatisticsV2::new_bernoulli(ScalarValue::Float64(None)),
@@ -840,23 +841,19 @@ fn add_sub_on_gaussians(
     left_stat: &StatisticsV2,
     right_stat: &StatisticsV2,
 ) -> Result<Option<StatisticsV2>> {
-    if let (
-        Gaussian {
-            mean: l_mean,
-            variance: l_var,
-        },
-        Gaussian {
-            mean: r_mean,
-            variance: r_var,
-        },
-    ) = (left_stat, right_stat)
-    {
+    if let (Gaussian(lg), Gaussian(rg)) = (left_stat, right_stat) {
         if op.eq(&Operator::Plus) {
-            return StatisticsV2::new_gaussian(l_mean.add(r_mean)?, l_var.add(r_var)?)
-                .map(Some);
+            return StatisticsV2::new_gaussian(
+                lg.mean().add(rg.mean())?,
+                lg.variance().add(rg.variance())?,
+            )
+            .map(Some);
         } else if op.eq(&Operator::Minus) {
-            return StatisticsV2::new_gaussian(l_mean.sub(r_mean)?, l_var.add(r_var)?)
-                .map(Some);
+            return StatisticsV2::new_gaussian(
+                lg.mean().sub(rg.mean())?,
+                lg.variance().add(rg.variance())?,
+            )
+            .map(Some);
         }
     }
     Ok(None)
@@ -868,7 +865,6 @@ mod tests {
     use crate::expressions::{col, lit, try_cast, Column, Literal};
 
     use datafusion_common::plan_datafusion_err;
-    use datafusion_physical_expr_common::stats_v2::StatisticsV2::{Uniform, Unknown};
 
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
@@ -4549,68 +4545,57 @@ mod tests {
             ScalarValue::Float64(Some(24.0)),
         );
 
-        for children in [
+        for child in [
             vec![
-                Uniform {
-                    interval: left_interval.clone(),
-                },
-                Uniform {
-                    interval: right_interval.clone(),
-                },
+                &StatisticsV2::new_uniform(left_interval.clone())?,
+                &StatisticsV2::new_uniform(right_interval.clone())?,
             ],
             vec![
-                Unknown {
-                    mean: left_mean.clone(),
-                    median: left_med.clone(),
-                    variance: ScalarValue::Null,
-                    range: left_interval.clone(),
-                },
-                Uniform {
-                    interval: right_interval.clone(),
-                },
+                &StatisticsV2::new_unknown(
+                    left_mean.clone(),
+                    left_med.clone(),
+                    ScalarValue::Null,
+                    left_interval.clone(),
+                )?,
+                &StatisticsV2::new_uniform(right_interval.clone())?,
             ],
             vec![
-                Uniform {
-                    interval: right_interval.clone(),
-                },
-                Unknown {
-                    mean: right_mean.clone(),
-                    median: right_med.clone(),
-                    variance: ScalarValue::Float64(None),
-                    range: right_interval.clone(),
-                },
+                &StatisticsV2::new_uniform(right_interval.clone())?,
+                &StatisticsV2::new_unknown(
+                    right_mean.clone(),
+                    right_med.clone(),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
             ],
             vec![
-                Unknown {
-                    mean: left_mean.clone(),
-                    median: left_med.clone(),
-                    variance: ScalarValue::Float64(None),
-                    range: left_interval.clone(),
-                },
-                Unknown {
-                    mean: right_mean.clone(),
-                    median: right_med.clone(),
-                    variance: ScalarValue::Float64(None),
-                    range: right_interval.clone(),
-                },
+                &StatisticsV2::new_unknown(
+                    left_mean.clone(),
+                    left_med.clone(),
+                    ScalarValue::Float64(None),
+                    left_interval.clone(),
+                )?,
+                &StatisticsV2::new_unknown(
+                    right_mean.clone(),
+                    right_med.clone(),
+                    ScalarValue::Float64(None),
+                    right_interval.clone(),
+                )?,
             ],
         ] {
-            let ref_view: Vec<&StatisticsV2> = children.iter().collect();
-
             let ops = vec![
                 Operator::Plus,
                 Operator::Minus,
                 Operator::Multiply,
                 Operator::Divide,
             ];
-            // Eq, NotEq, Gt, GtEq, Lt, LtEq];
 
             for op in ops {
                 let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
                 // TODO: to think, if maybe we want to handcraft the expected value...
                 assert_eq!(
-                    expr.evaluate_statistics(&ref_view)?,
-                    new_unknown_from_binary_expr(&op, ref_view[0], ref_view[1])?
+                    expr.evaluate_statistics(&child)?,
+                    new_custom_from_binary_expr(&op, child[0], child[1])?
                 );
             }
         }
@@ -4638,30 +4623,24 @@ mod tests {
             schema,
         )?);
 
-        let left_stat = &Uniform {
-            interval: Interval::make(Some(0.0), Some(6.0))?,
-        };
-        let right_stat = &Uniform {
-            interval: Interval::make(Some(4.0), Some(10.0))?,
-        };
+        let left_stat =
+            &StatisticsV2::new_uniform(Interval::make(Some(0.0), Some(6.0))?)?;
+        let right_stat =
+            &StatisticsV2::new_uniform(Interval::make(Some(4.0), Some(10.0))?)?;
 
         // Intervals: (0, 6], (6, 10].
         // The intersection is [4,6], so the probability of value being selected from
         // the intersection segment is 20%, or 0.2 as Bernoulli.
         assert_eq!(
             eq.evaluate_statistics(&[left_stat, right_stat])?,
-            Bernoulli {
-                p: ScalarValue::Float64(Some(0.2))
-            }
+            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.2)))?
         );
 
         // The intersection is [4,6], so the probability of value NOT being selected from
         // the intersection segment is 80%, or 0.8 as Bernoulli.
         assert_eq!(
             neq.evaluate_statistics(&[left_stat, right_stat])?,
-            Bernoulli {
-                p: ScalarValue::Float64(Some(0.8))
-            }
+            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.8)))?
         );
 
         Ok(())
@@ -4676,53 +4655,43 @@ mod tests {
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(12.0), Some(36.0))?;
 
-        let parent = Uniform {
-            interval: Interval::make(Some(-432.), Some(432.))?,
-        };
-        let children: Vec<Vec<StatisticsV2>> = vec![
+        let parent = StatisticsV2::new_uniform(Interval::make(Some(-432.), Some(432.))?);
+        let children = vec![
             vec![
-                Uniform {
-                    interval: left_interval.clone(),
-                },
-                Uniform {
-                    interval: right_interval.clone(),
-                },
+                StatisticsV2::new_uniform(left_interval.clone())?,
+                StatisticsV2::new_uniform(right_interval.clone())?,
             ],
             vec![
-                Unknown {
-                    mean: ScalarValue::Float64(Some(6.)),
-                    median: ScalarValue::Float64(Some(6.)),
-                    variance: ScalarValue::Null,
-                    range: left_interval.clone(),
-                },
-                Uniform {
-                    interval: right_interval.clone(),
-                },
+                StatisticsV2::new_unknown(
+                    ScalarValue::Float64(Some(6.)),
+                    ScalarValue::Float64(Some(6.)),
+                    ScalarValue::Null,
+                    left_interval.clone(),
+                )?,
+                StatisticsV2::new_uniform(right_interval.clone())?,
             ],
             vec![
-                Uniform {
-                    interval: left_interval.clone(),
-                },
-                Unknown {
-                    mean: ScalarValue::Float64(Some(12.)),
-                    median: ScalarValue::Float32(Some(12.)),
-                    variance: ScalarValue::Int64(None),
-                    range: right_interval.clone(),
-                },
+                StatisticsV2::new_uniform(left_interval.clone())?,
+                StatisticsV2::new_unknown(
+                    ScalarValue::Float64(Some(12.)),
+                    ScalarValue::Float32(Some(12.)),
+                    ScalarValue::Int64(None),
+                    right_interval.clone(),
+                )?,
             ],
             vec![
-                Unknown {
-                    mean: ScalarValue::Float32(Some(6.)),
-                    median: ScalarValue::Float64(Some(6.)),
-                    variance: ScalarValue::Null,
-                    range: left_interval.clone(),
-                },
-                Unknown {
-                    mean: ScalarValue::Float64(Some(12.)),
-                    median: ScalarValue::Float64(Some(12.)),
-                    variance: ScalarValue::Int16(None),
-                    range: right_interval.clone(),
-                },
+                StatisticsV2::new_unknown(
+                    ScalarValue::Float32(Some(6.)),
+                    ScalarValue::Float64(Some(6.)),
+                    ScalarValue::Null,
+                    left_interval.clone(),
+                )?,
+                StatisticsV2::new_unknown(
+                    ScalarValue::Float64(Some(12.)),
+                    ScalarValue::Float64(Some(12.)),
+                    ScalarValue::Int16(None),
+                    right_interval.clone(),
+                )?,
             ],
         ];
 
@@ -4734,14 +4703,17 @@ mod tests {
         ];
 
         for child_view in children {
-            let ref_view: Vec<&StatisticsV2> = child_view.iter().collect();
+            let child_veiw = child_view.iter().collect::<Vec<_>>();
             for op in &ops {
                 let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
                 assert_eq!(
-                    expr.propagate_statistics(&parent, &ref_view)?,
+                    expr.propagate_statistics(
+                        parent.as_ref().unwrap(),
+                        child_veiw.as_slice()
+                    )?,
                     Some(vec![
-                        StatisticsV2::new_unknown_from_interval(&left_interval)?,
-                        StatisticsV2::new_unknown_from_interval(&right_interval)?
+                        StatisticsV2::new_from_interval(&left_interval)?,
+                        StatisticsV2::new_from_interval(&right_interval)?
                     ])
                 );
             }
@@ -4761,53 +4733,43 @@ mod tests {
         for parent_interval in [
             Interval::CERTAINLY_TRUE, /*, Interval::CERTAINLY_FALSE*/
         ] {
-            let parent = Uniform {
-                interval: parent_interval,
-            };
-            let children: Vec<Vec<StatisticsV2>> = vec![
+            let parent = StatisticsV2::new_uniform(parent_interval);
+            let children = vec![
                 vec![
-                    Uniform {
-                        interval: left_interval.clone(),
-                    },
-                    Uniform {
-                        interval: right_interval.clone(),
-                    },
+                    StatisticsV2::new_uniform(left_interval.clone())?,
+                    StatisticsV2::new_uniform(right_interval.clone())?,
                 ],
                 vec![
-                    Unknown {
-                        mean: ScalarValue::Float64(Some(6.)),
-                        median: ScalarValue::Float64(Some(6.)),
-                        variance: ScalarValue::Null,
-                        range: left_interval.clone(),
-                    },
-                    Uniform {
-                        interval: right_interval.clone(),
-                    },
+                    StatisticsV2::new_unknown(
+                        ScalarValue::Float64(Some(6.)),
+                        ScalarValue::Float64(Some(6.)),
+                        ScalarValue::Null,
+                        left_interval.clone(),
+                    )?,
+                    StatisticsV2::new_uniform(right_interval.clone())?,
                 ],
                 vec![
-                    Uniform {
-                        interval: left_interval.clone(),
-                    },
-                    Unknown {
-                        mean: ScalarValue::Float64(Some(12.)),
-                        median: ScalarValue::Float64(Some(12.)),
-                        variance: ScalarValue::Null,
-                        range: right_interval.clone(),
-                    },
+                    StatisticsV2::new_uniform(left_interval.clone())?,
+                    StatisticsV2::new_unknown(
+                        ScalarValue::Float64(Some(12.)),
+                        ScalarValue::Float64(Some(12.)),
+                        ScalarValue::Null,
+                        right_interval.clone(),
+                    )?,
                 ],
                 vec![
-                    Unknown {
-                        mean: ScalarValue::Float64(Some(6.)),
-                        median: ScalarValue::Float64(Some(6.)),
-                        variance: ScalarValue::UInt64(None),
-                        range: left_interval.clone(),
-                    },
-                    Unknown {
-                        mean: ScalarValue::Float64(Some(12.)),
-                        median: ScalarValue::Float64(Some(12.)),
-                        variance: ScalarValue::Null,
-                        range: right_interval.clone(),
-                    },
+                    StatisticsV2::new_unknown(
+                        ScalarValue::Float64(Some(6.)),
+                        ScalarValue::Float64(Some(6.)),
+                        ScalarValue::UInt64(None),
+                        left_interval.clone(),
+                    )?,
+                    StatisticsV2::new_unknown(
+                        ScalarValue::Float64(Some(12.)),
+                        ScalarValue::Float64(Some(12.)),
+                        ScalarValue::Null,
+                        right_interval.clone(),
+                    )?,
                 ],
             ];
 
@@ -4820,10 +4782,15 @@ mod tests {
             ];
 
             for child_view in children {
-                let ref_view: Vec<&StatisticsV2> = child_view.iter().collect();
+                let child_view = child_view.iter().collect::<Vec<_>>();
                 for op in &ops {
                     let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
-                    assert!(expr.propagate_statistics(&parent, &ref_view)?.is_some());
+                    assert!(expr
+                        .propagate_statistics(
+                            parent.as_ref().unwrap(),
+                            child_view.as_slice()
+                        )?
+                        .is_some());
                 }
             }
         }
