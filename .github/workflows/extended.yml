@@ -48,7 +48,9 @@ jobs:
         with:
           rust-version: stable
       - name: Prepare cargo build
-        run: cargo check --profile ci --all-targets
+        run: |
+          cargo check --profile ci --all-targets
+          cargo clean
 
   # Run extended tests (with feature 'extended_tests')
   linux-test-extended:
@@ -70,6 +72,8 @@ jobs:
         run: cargo test --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,extended_tests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
+      - name: Cleanup
+        run: cargo clean
 
   # Check answers are correct when hash values collide
   hash-collisions:
@@ -90,6 +94,7 @@ jobs:
         run: |
           cd datafusion
           cargo test  --profile ci --exclude datafusion-examples --exclude datafusion-benchmarks --exclude datafusion-sqllogictest --workspace --lib --tests --features=force_hash_collisions,avro,extended_tests
+          cargo clean
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
@@ -106,4 +111,8 @@ jobs:
         with:
           rust-version: stable
       - name: Run sqllogictest
-        run: cargo test --profile release-nonlto --test sqllogictests -- --include-sqlite
+        run: |
+          cargo test --profile release-nonlto --test sqllogictests -- --include-sqlite
+          cargo clean
+
+
