@@ -27,7 +27,7 @@ use crate::physical_plan::union::UnionExec;
 use crate::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use datafusion_physical_expr::{LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_expr::{LexRequirement, PhysicalSortExpr, PhysicalSortRequirement};
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::tree_node::PlanContext;
 
@@ -50,6 +50,15 @@ pub fn add_sort_above<T: Clone + Default>(
         new_sort = new_sort.with_preserve_partitioning(true);
     }
     PlanContext::new(Arc::new(new_sort), T::default(), vec![node])
+}
+
+pub fn sort_preserving_merge_exec_with_fetch(
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    input: Arc<dyn ExecutionPlan>,
+    fetch: usize,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+    Arc::new(SortPreservingMergeExec::new(sort_exprs, input).with_fetch(Some(fetch)))
 }
 
 /// This utility function adds a `SortExec` above an operator according to the
