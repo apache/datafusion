@@ -115,7 +115,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Updates bounds for child expressions, given a known interval for this
     /// expression.
     ///
-    /// This is used to propagate ranges down through an expression tree.
+    /// This is used to propagate constraints down through an expression tree.
     ///
     /// # Arguments
     ///
@@ -126,7 +126,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     /// A `Vec` of new intervals for the children, in order.
     ///
-    /// If range propagation reveals an infeasibility for any child, returns
+    /// If constraint propagation reveals an infeasibility for any child, returns
     /// [`None`]. If none of the children intervals change as a result of propagation,
     /// may return an empty vector instead of cloning `children`. This is the default
     /// (and conservative) return value.

@@ -43,7 +43,8 @@ pub fn get_ln_two() -> &'static ScalarValue {
     LN_TWO_LOCK.get_or_init(|| ScalarValue::Float64(Some(2_f64.ln())))
 }
 
-/// New, enhanced `Statistics` definition, represents five core statistical distributions. New variants will be added over time.
+/// New, enhanced `Statistics` definition, represents five core statistical distributions.
+/// New variants will be added over time.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StatisticsV2 {
     Uniform(UniformDistribution),
@@ -81,9 +82,8 @@ impl StatisticsV2 {
         BernoulliDistribution::new(p).map(Bernoulli)
     }
 
-    /// Constructs a new [`StatisticsV2`] with [`Unknown`] distribution from the given
-    /// mean (optional), median (optional), variance (optional), and range values.
-    /// Then, checks the newly created statistic for validity.
+    /// Constructs a new [`StatisticsV2`] with [`Unknown`] distribution from the given mean,
+    /// median, variance, and range values. Then, checks the newly created statistic for validity.
     pub fn new_unknown(
         mean: ScalarValue,
         median: ScalarValue,
@@ -167,26 +167,11 @@ impl StatisticsV2 {
     /// - An [`Unknown`] distribution is unbounded by default, but more information may be present.
     pub fn range(&self) -> Result<Interval> {
         match &self {
-            Uniform(u) => Ok(u.interval.clone()),
-            Exponential(e) => {
-                let offset_data_type = e.offset.data_type();
-                let interval = Interval::try_new(
-                    e.offset.clone(),
-                    ScalarValue::try_from(offset_data_type)?,
-                )?;
-                Ok(interval)
-            }
-            Gaussian(_) => Ok(Interval::make_unbounded(&DataType::Float64)?),
-            Bernoulli(b) => {
-                if b.p.eq(get_zero()) {
-                    Ok(Interval::CERTAINLY_FALSE)
-                } else if b.p.eq(get_one()) {
-                    Ok(Interval::CERTAINLY_TRUE)
-                } else {
-                    Ok(Interval::UNCERTAIN)
-                }
-            }
-            Unknown(c) => Ok(c.range.clone()),
+            Uniform(uni) => Ok(uni.range().clone()),
+            Exponential(e) => e.range(),
+            Gaussian(g) => g.range(),
+            Bernoulli(b) => Ok(b.range()),
+            Unknown(unk) => Ok(unk.range().clone()),
         }
     }
 
@@ -390,6 +375,21 @@ impl ExponentialDistribution {
         let rate_squared = self.rate.mul(&self.rate)?;
         one.div(rate_squared)
     }
+
+    pub fn range(&self) -> Result<Interval> {
+        let offset_data_type = self.offset.data_type();
+        if self.positive_tail {
+            Interval::try_new(
+                self.offset.clone(),
+                ScalarValue::try_from(offset_data_type)?,
+            )
+        } else {
+            Interval::try_new(
+                ScalarValue::try_from(offset_data_type)?,
+                self.offset.clone(),
+            )
+        }
+    }
 }
 
 impl GaussianDistribution {
@@ -415,6 +415,10 @@ impl GaussianDistribution {
 
     pub fn median(&self) -> &ScalarValue {
         self.mean()
+    }
+
+    pub fn range(&self) -> Result<Interval> {
+        Interval::make_unbounded(&self.mean.data_type())
     }
 }
 
@@ -454,6 +458,16 @@ impl BernoulliDistribution {
     pub fn variance(&self) -> Result<ScalarValue> {
         let one = ScalarValue::new_one(&DataType::Float64)?;
         one.sub_checked(&self.p)?.mul_checked(&self.p)
+    }
+
+    pub fn range(&self) -> Interval {
+        if self.p.eq(get_zero()) {
+            Interval::CERTAINLY_FALSE
+        } else if self.p.eq(get_one()) {
+            Interval::CERTAINLY_TRUE
+        } else {
+            Interval::UNCERTAIN
+        }
     }
 }
 
