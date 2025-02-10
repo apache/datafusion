@@ -32,8 +32,9 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_err,
     utils::{list_ndims, take_function_args},
 };
+use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_expr::{
-    ArrayFunctionMutability, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature,
     Volatility,
 };
 use datafusion_macros::user_doc;

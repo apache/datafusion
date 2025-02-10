@@ -21,14 +21,16 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::coerced_fixed_size_list_to_list;
+use datafusion_common::utils::{
+    coerced_fixed_size_list_to_list, ArrayFunctionMutability,
+};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     types::{LogicalType, NativeType},
     utils::list_ndims,
     Result,
 };
-use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionMutability};
+use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::{
     signature::{
         ArrayFunctionSignature, TypeSignatureClass, FIXED_SIZE_LIST_WILDCARD,
@@ -394,14 +396,10 @@ fn get_valid_types(
                 ArrayFunctionArgument::Index => {}
             }
         }
-        let mutable = match mutability {
-            ArrayFunctionMutability::Immutable => false,
-            ArrayFunctionMutability::Mutable => true,
-        };
         let new_array_type = datafusion_common::utils::coerced_type_with_base_type_only(
             &array_type,
             &new_base_type,
-            mutable,
+            mutability,
         );
 
         let new_elem_type = match new_array_type {
@@ -424,7 +422,7 @@ fn get_valid_types(
                         datafusion_common::utils::coerced_type_with_base_type_only(
                             &current_type,
                             &new_base_type,
-                            mutable,
+                            mutability,
                         );
                     // All array arguments must be coercible to the same type
                     if new_type != new_array_type {

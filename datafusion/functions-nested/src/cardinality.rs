@@ -30,12 +30,13 @@ use datafusion_common::utils::take_function_args;
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionMutability, ArrayFunctionSignature,
+    ArrayFunctionArgument, ArrayFunctionSignature,
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
+use datafusion_common::utils::ArrayFunctionMutability;
 
 make_udf_expr_and_func!(
     Cardinality,

@@ -35,7 +35,7 @@ use datafusion_common::{
     DataFusionError, Result,
 };
 use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionMutability, ArrayFunctionSignature, Expr,
+    ArrayFunctionArgument,  ArrayFunctionSignature, Expr,
     TypeSignature,
 };
 use datafusion_expr::{
@@ -44,7 +44,7 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
-
+use datafusion_common::utils::ArrayFunctionMutability;
 use crate::utils::make_scalar_function;
 
 // Create static instances of ScalarUDFs for each function

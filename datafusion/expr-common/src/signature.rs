@@ -23,6 +23,7 @@ use std::fmt::Display;
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::types::{LogicalTypeRef, NativeType};
+use datafusion_common::utils::ArrayFunctionMutability;
 use itertools::Itertools;
 
 /// Constant that is used as a placeholder for any valid timezone.
@@ -289,14 +290,6 @@ impl Display for ArrayFunctionArgument {
             }
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub enum ArrayFunctionMutability {
-    /// The array function does not modify the array.
-    Immutable,
-    /// The array function does modify the array.
-    Mutable,
 }
 
 impl TypeSignature {
