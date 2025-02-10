@@ -1768,7 +1768,6 @@ dependencies = [
  "regex",
  "rstest",
  "serde_json",
- "snmalloc-rs",
  "sqlparser",
  "sysinfo",
  "tempfile",

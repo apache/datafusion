@@ -95,6 +95,7 @@ datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
+datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
@@ -102,14 +103,13 @@ datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true, optional = true }
 datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
+datafusion-macros = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
-datafusion-macros = { workspace = true }
-datafusion-doc = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
 itertools = { workspace = true }
@@ -132,6 +132,7 @@ zstd = { version = "0.13", optional = true, default-features = false }
 async-trait = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
 ctor = { workspace = true }
+dashmap = "6.1.0"
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
@@ -145,8 +146,6 @@ serde_json = { workspace = true }
 sysinfo = "0.33.1"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
-dashmap = "6.1.0"
-snmalloc-rs = "0.3"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
