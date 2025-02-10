@@ -35,7 +35,7 @@ use datafusion_macros::user_doc;
 use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
 
-use datafusion_common::utils::ArrayFunctionMutability;
+use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -102,7 +102,6 @@ impl ArrayReplace {
                             ArrayFunctionArgument::Element,
                         ])
                         .expect("contains array"),
-                        mutability: ArrayFunctionMutability::Mutable,
                     },
                 ),
                 volatility: Volatility::Immutable,
@@ -126,7 +125,7 @@ impl ScalarUDFImpl for ArrayReplace {
     }
 
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        Ok(args[0].clone())
+        Ok(coerced_fixed_size_list_to_list(&args[0]))
     }
 
     fn invoke_batch(
@@ -185,7 +184,6 @@ impl ArrayReplaceN {
                             ArrayFunctionArgument::Index,
                         ])
                         .expect("contains array"),
-                        mutability: ArrayFunctionMutability::Mutable,
                     },
                 ),
                 volatility: Volatility::Immutable,
@@ -209,7 +207,7 @@ impl ScalarUDFImpl for ArrayReplaceN {
     }
 
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        Ok(args[0].clone())
+        Ok(coerced_fixed_size_list_to_list(&args[0]))
     }
 
     fn invoke_batch(
@@ -266,7 +264,6 @@ impl ArrayReplaceAll {
                             ArrayFunctionArgument::Element,
                         ])
                         .expect("contains array"),
-                        mutability: ArrayFunctionMutability::Mutable,
                     },
                 ),
                 volatility: Volatility::Immutable,
@@ -290,7 +287,7 @@ impl ScalarUDFImpl for ArrayReplaceAll {
     }
 
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        Ok(args[0].clone())
+        Ok(coerced_fixed_size_list_to_list(&args[0]))
     }
 
     fn invoke_batch(

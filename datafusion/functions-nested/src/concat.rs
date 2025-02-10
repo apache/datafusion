@@ -26,7 +26,7 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::utils::ArrayFunctionMutability;
+use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array,
@@ -81,10 +81,7 @@ impl Default for ArrayAppend {
 impl ArrayAppend {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(
-                Volatility::Immutable,
-                ArrayFunctionMutability::Mutable,
-            ),
+            signature: Signature::array_and_element(Volatility::Immutable),
             aliases: vec![
                 String::from("list_append"),
                 String::from("array_push_back"),
@@ -108,7 +105,7 @@ impl ScalarUDFImpl for ArrayAppend {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        Ok(coerced_fixed_size_list_to_list(&arg_types[0]))
     }
 
     fn invoke_batch(
@@ -169,10 +166,7 @@ impl Default for ArrayPrepend {
 impl ArrayPrepend {
     pub fn new() -> Self {
         Self {
-            signature: Signature::element_and_array(
-                Volatility::Immutable,
-                ArrayFunctionMutability::Mutable,
-            ),
+            signature: Signature::element_and_array(Volatility::Immutable),
             aliases: vec![
                 String::from("list_prepend"),
                 String::from("array_push_front"),
@@ -196,7 +190,7 @@ impl ScalarUDFImpl for ArrayPrepend {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[1].clone())
+        Ok(coerced_fixed_size_list_to_list(&arg_types[1]))
     }
 
     fn invoke_batch(

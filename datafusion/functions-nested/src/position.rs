@@ -37,7 +37,6 @@ use arrow::array::{
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
 use itertools::Itertools;
 use crate::utils::{compare_element_to_list, make_scalar_function};
@@ -94,7 +93,6 @@ impl ArrayPosition {
         Self {
             signature: Signature::array_and_element_and_optional_index(
                 Volatility::Immutable,
-                ArrayFunctionMutability::Immutable,
             ),
             aliases: vec![
                 String::from("list_position"),
@@ -253,10 +251,7 @@ pub(super) struct ArrayPositions {
 impl ArrayPositions {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(
-                Volatility::Immutable,
-                ArrayFunctionMutability::Immutable,
-            ),
+            signature: Signature::array_and_element(Volatility::Immutable),
             aliases: vec![String::from("list_positions")],
         }
     }

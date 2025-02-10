@@ -35,7 +35,6 @@ use itertools::Itertools;
 
 use crate::utils::make_scalar_function;
 
-use datafusion_common::utils::ArrayFunctionMutability;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -95,10 +94,7 @@ impl Default for ArrayHas {
 impl ArrayHas {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(
-                Volatility::Immutable,
-                ArrayFunctionMutability::Immutable,
-            ),
+            signature: Signature::array_and_element(Volatility::Immutable),
             aliases: vec![
                 String::from("list_has"),
                 String::from("array_contains"),

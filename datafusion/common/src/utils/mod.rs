@@ -590,38 +590,26 @@ pub fn base_type(data_type: &DataType) -> DataType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub enum ArrayFunctionMutability {
-    /// The array function does not modify the array.
-    Immutable,
-    /// The array function does modify the array.
-    Mutable,
-}
-
 /// A helper function to coerce base type in List.
 ///
 /// Example
 /// ```
 /// use arrow::datatypes::{DataType, Field};
-/// use datafusion_common::utils::{coerced_type_with_base_type_only, ArrayFunctionMutability};
+/// use datafusion_common::utils::{coerced_type_with_base_type_only};
 /// use std::sync::Arc;
 ///
 /// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// let base_type = DataType::Float64;
-/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type, &ArrayFunctionMutability::Mutable);
+/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type);
 /// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))));
 pub fn coerced_type_with_base_type_only(
     data_type: &DataType,
     base_type: &DataType,
-    mutability: &ArrayFunctionMutability,
 ) -> DataType {
-    match (data_type, mutability) {
-        (DataType::List(field), _) => {
-            let field_type = coerced_type_with_base_type_only(
-                field.data_type(),
-                base_type,
-                mutability,
-            );
+    match data_type {
+        DataType::List(field) => {
+            let field_type =
+                coerced_type_with_base_type_only(field.data_type(), base_type);
 
             DataType::List(Arc::new(Field::new(
                 field.name(),
@@ -629,37 +617,18 @@ pub fn coerced_type_with_base_type_only(
                 field.is_nullable(),
             )))
         }
-        (DataType::FixedSizeList(field, _), ArrayFunctionMutability::Mutable) => {
-            let field_type = coerced_type_with_base_type_only(
-                field.data_type(),
-                base_type,
-                mutability,
-            );
-
-            DataType::List(Arc::new(Field::new(
-                field.name(),
-                field_type,
-                field.is_nullable(),
-            )))
-        }
-        (DataType::FixedSizeList(field, len), ArrayFunctionMutability::Immutable) => {
-            let field_type = coerced_type_with_base_type_only(
-                field.data_type(),
-                base_type,
-                mutability,
-            );
+        DataType::FixedSizeList(field, len) => {
+            let field_type =
+                coerced_type_with_base_type_only(field.data_type(), base_type);
 
             DataType::FixedSizeList(
                 Arc::new(Field::new(field.name(), field_type, field.is_nullable())),
                 *len,
             )
         }
-        (DataType::LargeList(field), _) => {
-            let field_type = coerced_type_with_base_type_only(
-                field.data_type(),
-                base_type,
-                mutability,
-            );
+        DataType::LargeList(field) => {
+            let field_type =
+                coerced_type_with_base_type_only(field.data_type(), base_type);
 
             DataType::LargeList(Arc::new(Field::new(
                 field.name(),

@@ -21,9 +21,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::{
-    coerced_fixed_size_list_to_list, ArrayFunctionMutability,
-};
+use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     types::{LogicalType, NativeType},
@@ -364,7 +362,6 @@ fn get_valid_types(
         function_name: &str,
         current_types: &[DataType],
         arguments: &[ArrayFunctionArgument],
-        mutability: &ArrayFunctionMutability,
     ) -> Result<Vec<Vec<DataType>>> {
         if current_types.len() != arguments.len() {
             return Ok(vec![vec![]]);
@@ -399,7 +396,6 @@ fn get_valid_types(
         let new_array_type = datafusion_common::utils::coerced_type_with_base_type_only(
             &array_type,
             &new_base_type,
-            mutability,
         );
 
         let new_elem_type = match new_array_type {
@@ -422,7 +418,6 @@ fn get_valid_types(
                         datafusion_common::utils::coerced_type_with_base_type_only(
                             &current_type,
                             &new_base_type,
-                            mutability,
                         );
                     // All array arguments must be coercible to the same type
                     if new_type != new_array_type {
@@ -705,8 +700,8 @@ fn get_valid_types(
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
         TypeSignature::ArraySignature(ref function_signature) => {
             match function_signature {
-                ArrayFunctionSignature::Array { arguments, mutability } => {
-                    array_valid_types(function_name, current_types, arguments.inner(), mutability)?
+                ArrayFunctionSignature::Array { arguments } => {
+                    array_valid_types(function_name, current_types, arguments.inner())?
                 }
                 ArrayFunctionSignature::RecursiveArray => {
                     if current_types.len() != 1 {

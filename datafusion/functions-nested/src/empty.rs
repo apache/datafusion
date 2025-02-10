@@ -24,7 +24,6 @@ use arrow::datatypes::{
     DataType::{Boolean, FixedSizeList, LargeList, List},
 };
 use datafusion_common::cast::as_generic_list_array;
-use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -72,10 +71,7 @@ impl Default for ArrayEmpty {
 impl ArrayEmpty {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(
-                Volatility::Immutable,
-                ArrayFunctionMutability::Immutable,
-            ),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec!["array_empty".to_string(), "list_empty".to_string()],
         }
     }

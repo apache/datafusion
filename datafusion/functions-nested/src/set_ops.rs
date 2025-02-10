@@ -26,7 +26,6 @@ use arrow::datatypes::DataType::{FixedSizeList, LargeList, List, Null};
 use arrow::datatypes::{DataType, Field, FieldRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -255,10 +254,7 @@ pub(super) struct ArrayDistinct {
 impl ArrayDistinct {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(
-                Volatility::Immutable,
-                ArrayFunctionMutability::Mutable,
-            ),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec!["list_distinct".to_string()],
         }
     }

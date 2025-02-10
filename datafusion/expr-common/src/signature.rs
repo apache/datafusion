@@ -23,7 +23,6 @@ use std::fmt::Display;
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::types::{LogicalTypeRef, NativeType};
-use datafusion_common::utils::ArrayFunctionMutability;
 use itertools::Itertools;
 
 /// Constant that is used as a placeholder for any valid timezone.
@@ -231,8 +230,6 @@ pub enum ArrayFunctionSignature {
     Array {
         /// A full list of the arguments accepted by this function.
         arguments: ArrayFunctionArguments,
-        /// Whether any of the input arrays are modified.
-        mutability: ArrayFunctionMutability,
     },
     /// A function takes a single argument that must be a List/LargeList/FixedSizeList
     /// which gets coerced to List, with element type recursively coerced to List too if it is list-like.
@@ -613,10 +610,7 @@ impl Signature {
         }
     }
     /// Specialized Signature for ArrayAppend and similar functions
-    pub fn array_and_element(
-        volatility: Volatility,
-        mutability: ArrayFunctionMutability,
-    ) -> Self {
+    pub fn array_and_element(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
@@ -625,17 +619,13 @@ impl Signature {
                         ArrayFunctionArgument::Element,
                     ])
                     .expect("contains array"),
-                    mutability,
                 },
             ),
             volatility,
         }
     }
     /// Specialized Signature for Array functions with an optional index
-    pub fn array_and_element_and_optional_index(
-        volatility: Volatility,
-        mutability: ArrayFunctionMutability,
-    ) -> Self {
+    pub fn array_and_element_and_optional_index(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::OneOf(vec![
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
@@ -644,7 +634,6 @@ impl Signature {
                         ArrayFunctionArgument::Element,
                     ])
                     .expect("contains array"),
-                    mutability: mutability.clone(),
                 }),
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                     arguments: ArrayFunctionArguments::new(vec![
@@ -653,17 +642,13 @@ impl Signature {
                         ArrayFunctionArgument::Index,
                     ])
                     .expect("contains array"),
-                    mutability,
                 }),
             ]),
             volatility,
         }
     }
     /// Specialized Signature for ArrayPrepend and similar functions
-    pub fn element_and_array(
-        volatility: Volatility,
-        mutability: ArrayFunctionMutability,
-    ) -> Self {
+    pub fn element_and_array(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
@@ -672,17 +657,13 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                     ])
                     .expect("contains array"),
-                    mutability,
                 },
             ),
             volatility,
         }
     }
     /// Specialized Signature for ArrayElement and similar functions
-    pub fn array_and_index(
-        volatility: Volatility,
-        mutability: ArrayFunctionMutability,
-    ) -> Self {
+    pub fn array_and_index(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
@@ -691,14 +672,13 @@ impl Signature {
                         ArrayFunctionArgument::Index,
                     ])
                     .expect("contains array"),
-                    mutability,
                 },
             ),
             volatility,
         }
     }
     /// Specialized Signature for ArrayEmpty and similar functions
-    pub fn array(volatility: Volatility, mutability: ArrayFunctionMutability) -> Self {
+    pub fn array(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
@@ -706,7 +686,6 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                     ])
                     .expect("contains array"),
-                    mutability,
                 },
             ),
             volatility,

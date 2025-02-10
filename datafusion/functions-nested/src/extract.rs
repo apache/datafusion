@@ -31,12 +31,15 @@ use arrow::datatypes::{
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::ArrayFunctionMutability;
+use datafusion_common::utils::coerced_fixed_size_list_to_list;
 use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
     DataFusionError, Result,
 };
-use datafusion_expr::{ArrayFunctionArgument, ArrayFunctionArguments, ArrayFunctionSignature, Expr, TypeSignature};
+use datafusion_expr::{
+    ArrayFunctionArgument, ArrayFunctionArguments, ArrayFunctionSignature, Expr,
+    TypeSignature,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -115,10 +118,7 @@ impl Default for ArrayElement {
 impl ArrayElement {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_index(
-                Volatility::Immutable,
-                ArrayFunctionMutability::Immutable,
-            ),
+            signature: Signature::array_and_index(Volatility::Immutable),
             aliases: vec![
                 String::from("array_extract"),
                 String::from("list_element"),
@@ -339,7 +339,6 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                         ])
                         .expect("contains array"),
-                        mutability: ArrayFunctionMutability::Immutable,
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                         arguments: ArrayFunctionArguments::new(vec![
@@ -349,7 +348,6 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                         ])
                         .expect("contains array"),
-                        mutability: ArrayFunctionMutability::Immutable,
                     }),
                 ],
                 Volatility::Immutable,
@@ -676,10 +674,7 @@ pub(super) struct ArrayPopFront {
 impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(
-                Volatility::Immutable,
-                ArrayFunctionMutability::Mutable,
-            ),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_pop_front")],
         }
     }
@@ -698,7 +693,7 @@ impl ScalarUDFImpl for ArrayPopFront {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        Ok(coerced_fixed_size_list_to_list(&arg_types[0]))
     }
 
     fn invoke_batch(
@@ -779,10 +774,7 @@ pub(super) struct ArrayPopBack {
 impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(
-                Volatility::Immutable,
-                ArrayFunctionMutability::Mutable,
-            ),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_pop_back")],
         }
     }
@@ -801,7 +793,7 @@ impl ScalarUDFImpl for ArrayPopBack {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+        Ok(coerced_fixed_size_list_to_list(&arg_types[0]))
     }
 
     fn invoke_batch(
@@ -883,10 +875,7 @@ pub(super) struct ArrayAnyValue {
 impl ArrayAnyValue {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(
-                Volatility::Immutable,
-                ArrayFunctionMutability::Immutable,
-            ),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_any_value")],
         }
     }

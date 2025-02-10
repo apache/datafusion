@@ -26,7 +26,7 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, Map, UInt64},
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
-use datafusion_common::utils::{ArrayFunctionMutability, take_function_args};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::{
@@ -55,7 +55,6 @@ impl Cardinality {
                             ArrayFunctionArgument::Array,
                         ])
                         .expect("contains array"),
-                        mutability: ArrayFunctionMutability::Immutable,
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray),
                 ],
