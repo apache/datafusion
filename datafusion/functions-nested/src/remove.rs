@@ -26,15 +26,14 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
+use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-     ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
-use datafusion_common::utils::ArrayFunctionMutability;
 
 make_udf_expr_and_func!(
     ArrayRemove,

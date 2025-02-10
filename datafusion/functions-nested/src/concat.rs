@@ -26,16 +26,15 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array,
     exec_err, not_impl_err, plan_err,
     utils::{list_ndims, take_function_args},
 };
-use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 

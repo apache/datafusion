@@ -23,8 +23,7 @@ use arrow::datatypes::{
     Field,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -38,9 +37,9 @@ use arrow::array::{
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
+use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
 use itertools::Itertools;
-use datafusion_common::utils::ArrayFunctionMutability;
 use crate::utils::{compare_element_to_list, make_scalar_function};
 
 make_udf_expr_and_func!(

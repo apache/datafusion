@@ -27,17 +27,17 @@ use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ArrayFunctionArgument,  ArrayFunctionSignature,
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
 use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
 
+use datafusion_common::utils::ArrayFunctionMutability;
 use std::any::Any;
 use std::sync::Arc;
-use datafusion_common::utils::ArrayFunctionMutability;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(ArrayReplace,

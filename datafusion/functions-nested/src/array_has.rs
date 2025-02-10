@@ -27,8 +27,7 @@ use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::utils::string_utils::string_array_to_vec;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use datafusion_physical_expr_common::datum::compare_with_eq;
@@ -36,9 +35,9 @@ use itertools::Itertools;
 
 use crate::utils::make_scalar_function;
 
+use datafusion_common::utils::ArrayFunctionMutability;
 use std::any::Any;
 use std::sync::Arc;
-use datafusion_common::utils::ArrayFunctionMutability;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(ArrayHas,

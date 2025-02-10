@@ -24,15 +24,14 @@ use arrow::datatypes::{
     DataType::{Boolean, FixedSizeList, LargeList, List},
 };
 use datafusion_common::cast::as_generic_list_array;
+use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
-use datafusion_common::utils::ArrayFunctionMutability;
 
 make_udf_expr_and_func!(
     ArrayEmpty,

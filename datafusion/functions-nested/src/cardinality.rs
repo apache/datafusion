@@ -26,17 +26,16 @@ use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List, Map, UInt64},
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
-use datafusion_common::utils::take_function_args;
+use datafusion_common::utils::{ArrayFunctionMutability, take_function_args};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
 use datafusion_expr::{
-    ArrayFunctionArgument, ArrayFunctionSignature,
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
-use datafusion_common::utils::ArrayFunctionMutability;
 
 make_udf_expr_and_func!(
     Cardinality,

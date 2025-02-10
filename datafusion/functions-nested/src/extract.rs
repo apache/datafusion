@@ -17,6 +17,7 @@
 
 //! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
+use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, ArrowNativeTypeOp, Capacities, GenericListArray, Int64Array,
     MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
@@ -30,13 +31,13 @@ use arrow::datatypes::{
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
+use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
     DataFusionError, Result,
 };
 use datafusion_expr::{
-    ArrayFunctionArgument,  ArrayFunctionSignature, Expr,
-    TypeSignature,
+    ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -44,8 +45,6 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
-use datafusion_common::utils::ArrayFunctionMutability;
-use crate::utils::make_scalar_function;
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(

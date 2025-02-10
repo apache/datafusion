@@ -31,13 +31,12 @@ use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
+use datafusion_common::utils::ArrayFunctionMutability;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
-use datafusion_common::utils::ArrayFunctionMutability;
 
 make_udf_expr_and_func!(
     ArrayDims,
