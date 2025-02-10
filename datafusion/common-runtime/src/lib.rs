@@ -25,5 +25,7 @@
 #![deny(clippy::clone_on_ref_ptr)]
 
 pub mod common;
+mod join_set;
 
 pub use common::SpawnedTask;
+pub use join_set::JoinSet;
