@@ -195,12 +195,10 @@ impl StatisticsV2 {
             }
         });
 
-        let Some(dt) = arg_types
-            .next()
-            .map_or(Some(DataType::Null), |first| {
-                arg_types
-                    .try_fold(first, |target, arg| binary_numeric_coercion(&target, &arg))
-            }) else {
+        let Some(dt) = arg_types.next().map_or(Some(DataType::Null), |first| {
+            arg_types
+                .try_fold(first, |target, arg| binary_numeric_coercion(&target, &arg))
+        }) else {
             return internal_err!("Statistics can only be evaluated for numeric types");
         };
         Ok(dt)
