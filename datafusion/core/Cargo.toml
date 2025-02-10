@@ -95,6 +95,7 @@ datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
+datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
@@ -102,6 +103,7 @@ datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true, optional = true }
 datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
+datafusion-macros = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
@@ -130,6 +132,7 @@ zstd = { version = "0.13", optional = true, default-features = false }
 async-trait = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
 ctor = { workspace = true }
+dashmap = "6.1.0"
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
