@@ -838,7 +838,7 @@ fn evaluate_statistics_logical(
     }
 }
 
-/// https://en.wikipedia.org/wiki/Sum_of_normally_distributed_random_variables
+/// <https://en.wikipedia.org/wiki/Sum_of_normally_distributed_random_variables>
 fn add_sub_on_gaussians(
     op: &Operator,
     left_stat: &StatisticsV2,

@@ -249,8 +249,8 @@ pub fn new_bernoulli_from_binary_expr(
 ) -> Result<StatisticsV2> {
     let (li, ri) = (left.range()?, right.range()?);
     if matches!(op, Operator::Eq | Operator::NotEq)
-        && matches!(left, Uniform { .. })
-        && matches!(right, Uniform { .. })
+        && matches!(left, Uniform(_))
+        && matches!(right, Uniform(_))
     {
         if let Some(intersection) = li.intersect(&ri)? {
             let overall_spread = max_of_bounds(li.upper(), ri.upper())
