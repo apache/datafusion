@@ -20,7 +20,7 @@ use std::sync::OnceLock;
 use crate::stats_v2::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::type_coercion::binary::binary_numeric_coercion;
 

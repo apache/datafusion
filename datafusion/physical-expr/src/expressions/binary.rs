@@ -503,12 +503,12 @@ impl PhysicalExpr for BinaryExpr {
             if let Some(stats) = add_sub_on_gaussians(&self.op, left_stat, right_stat)? {
                 return Ok(stats);
             }
-        } else if self.op.supports_propagation() {
-            // We are handling comparison operators here, so both of the inputs
-            // are either Bernoulli (boolean), or other distributions (numeric)
-            return new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat);
         } else if self.op.is_logic_operator() {
             return evaluate_statistics_logical(&self.op, left_stat, right_stat);
+        } else if self.op.supports_propagation() {
+            // We are handling comparison operators here, so both of the inputs
+            // are numeric distributions (not Bernoulli)
+            return new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat);
         }
 
         new_custom_from_binary_expr(&self.op, left_stat, right_stat)
@@ -814,10 +814,12 @@ fn evaluate_statistics_logical(
                 }
             } else if *op == Operator::Or {
                 match (lb.p_value().is_null(), rb.p_value().is_null()) {
-                    (false, false) => StatisticsV2::new_bernoulli(
-                        ScalarValue::Float64(Some(1.))
-                            .sub(lb.p_value().mul_checked(rb.p_value())?)?,
-                    ),
+                    (false, false) => {
+                        let p_mul_q = lb.p_value().mul_checked(rb.p_value())?;
+                        let p_plus_q = lb.p_value().add_checked(rb.p_value())?;
+                        let or_value = p_plus_q.sub_checked(p_mul_q)?;
+                        StatisticsV2::new_bernoulli(or_value)
+                    },
                     (false, true)  if lb.p_value().eq(get_one()) => Ok(left_stat.clone()),
                     (true, false)  if rb.p_value().eq(get_one()) => {
                         Ok(right_stat.clone())
