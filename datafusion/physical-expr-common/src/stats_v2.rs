@@ -76,14 +76,14 @@ impl StatisticsV2 {
     /// distribution from the given mean/variance pair, and checks the newly
     /// created statistic for validity.
     pub fn new_gaussian(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
-        GaussianDistribution::new(mean, variance).map(Gaussian)
+        GaussianDistribution::try_new(mean, variance).map(Gaussian)
     }
 
     /// Constructs a new [`StatisticsV2`] instance with [`Bernoulli`]
     /// distribution from the given probability, and checks the newly created
     /// statistic for validity.
     pub fn new_bernoulli(p: ScalarValue) -> Result<Self> {
-        BernoulliDistribution::new(p).map(Bernoulli)
+        BernoulliDistribution::try_new(p).map(Bernoulli)
     }
 
     /// Constructs a new [`StatisticsV2`] instance with [`Unknown`]
@@ -95,7 +95,7 @@ impl StatisticsV2 {
         variance: ScalarValue,
         range: Interval,
     ) -> Result<Self> {
-        UnknownDistribution::new(mean, median, variance, range).map(Unknown)
+        UnknownDistribution::try_new(mean, median, variance, range).map(Unknown)
     }
 
     /// Constructs a new [`Unknown`] statistics instance from the given range.
@@ -140,7 +140,7 @@ impl StatisticsV2 {
             Uniform(uni) => uni.median(),
             Exponential(e) => e.median(),
             Gaussian(g) => Ok(g.median().clone()),
-            Bernoulli(b) => Ok(b.median().clone()),
+            Bernoulli(b) => b.median(),
             Unknown(unk) => Ok(unk.median().clone()),
         }
     }
@@ -328,13 +328,11 @@ impl ExponentialDistribution {
         positive_tail: bool,
     ) -> Result<Self> {
         if offset.is_null() {
-            internal_err!(
-                "Offset argument of the Exponential distribution cannot be null"
-            )
+            internal_err!("Offset of an Exponential distribution cannot be null")
         } else if rate.is_null() {
-            internal_err!("Rate argument of Exponential Distribution cannot be null")
+            internal_err!("Rate of an Exponential Distribution cannot be null")
         } else if rate.le(&ScalarValue::new_zero(&rate.data_type())?) {
-            internal_err!("Rate argument of Exponential Distribution must be positive")
+            internal_err!("Rate of an Exponential Distribution must be positive")
         } else {
             Ok(Self {
                 rate,
@@ -391,13 +389,11 @@ impl ExponentialDistribution {
 }
 
 impl GaussianDistribution {
-    fn new(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
+    fn try_new(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
         if variance.is_null() {
-            internal_err!(
-                "Variance argument of Gaussian Distribution cannot be null ScalarValue"
-            )
+            internal_err!("Variance of a Gaussian Distribution cannot be null")
         } else if variance.lt(&ScalarValue::new_zero(&variance.data_type())?) {
-            internal_err!("Tried to construct an invalid Gaussian statistic")
+            internal_err!("Variance of a Gaussian Distribution must be positive")
         } else {
             Ok(Self { mean, variance })
         }
@@ -421,19 +417,20 @@ impl GaussianDistribution {
 }
 
 impl BernoulliDistribution {
-    fn new(p: ScalarValue) -> Result<Self> {
+    fn try_new(p: ScalarValue) -> Result<Self> {
         if p.is_null() {
             Ok(Self { p })
-        } else if p.data_type().eq(&DataType::Float64) {
-            let zero = ScalarValue::new_zero(&DataType::Float64)?;
-            let one = ScalarValue::new_one(&DataType::Float64)?;
-            if p.ge(&zero) && p.le(&one) {
-                Ok(Self { p: p.clone() })
-            } else {
-                internal_err!("Tried to construct an invalid Bernoulli statistic")
-            }
         } else {
-            internal_err!("Bernoulli distribution can hold only float64 probability")
+            let dt = p.data_type();
+            let zero = ScalarValue::new_zero(&dt)?;
+            let one = ScalarValue::new_one(&dt)?;
+            if p.ge(&zero) && p.le(&one) {
+                Ok(Self { p })
+            } else {
+                internal_err!(
+                    "Success probability of a Bernoulli Distribution must be in [0, 1]"
+                )
+            }
         }
     }
 
@@ -445,11 +442,12 @@ impl BernoulliDistribution {
         &self.p
     }
 
-    pub fn median(&self) -> &ScalarValue {
+    pub fn median(&self) -> Result<ScalarValue> {
+        let dt = self.p.data_type();
         if self.p.gt(&ScalarValue::Float64(Some(0.5))) {
-            get_one()
+            ScalarValue::new_one(&dt)
         } else {
-            get_zero()
+            ScalarValue::new_zero(&dt)
         }
     }
 
@@ -470,7 +468,7 @@ impl BernoulliDistribution {
 }
 
 impl UnknownDistribution {
-    fn new(
+    fn try_new(
         mean: ScalarValue,
         median: ScalarValue,
         variance: ScalarValue,
