@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
-    check_integrity, stream_exec_ordered_with_projection,
+    check_integrity, sort_preserving_merge_exec, stream_exec_ordered_with_projection,
 };
 
 use datafusion::prelude::SessionContext;
@@ -35,7 +35,6 @@ use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
-use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::{
     displayable, get_plan_string, ExecutionPlan, Partitioning,
 };
@@ -1156,14 +1155,6 @@ fn sort_exec(
         SortExec::new(sort_exprs, input)
             .with_preserve_partitioning(preserve_partitioning),
     )
-}
-
-fn sort_preserving_merge_exec(
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    input: Arc<dyn ExecutionPlan>,
-) -> Arc<dyn ExecutionPlan> {
-    let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
 }
 
 fn repartition_exec_round_robin(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
