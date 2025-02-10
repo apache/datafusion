@@ -31,7 +31,6 @@ def remove_hashtag_lines_in_rust_blocks(markdown_content):
     def _process_code_block(match):
         # Extract the code block content
         code_block_content = match.group(1).strip()
-        print(code_block_content)
 
         # Remove lines starting with '#'
         modified_code_block = "\n".join(
@@ -60,11 +59,15 @@ def process_markdown_file(file_path):
     with open(file_path, "w", encoding="utf-8") as file:
         file.write(updated_markdown_content)
 
-    print("Lines starting with '# ' removed from Rust code blocks")
+    print(f"Done processing file: {file_path}")
 
 
 root_directory = Path("./temp/library-user-guide")
+for file_path in root_directory.rglob("*.md"):
+    print(f"Processing file: {file_path}")
+    process_markdown_file(file_path)
 
+root_directory = Path("./temp/user-guide")
 for file_path in root_directory.rglob("*.md"):
     print(f"Processing file: {file_path}")
     process_markdown_file(file_path)
