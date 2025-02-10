@@ -60,7 +60,7 @@
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
 //! # use datafusion::functions_aggregate::expr_fn::min;
-//! # use datafusion::arrow::record_batch::RecordBatch;
+//! # use datafusion::arrow::array::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -101,7 +101,7 @@
 //! ```
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use datafusion::arrow::record_batch::RecordBatch;
+//! # use datafusion::arrow::array::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -249,11 +249,11 @@
 //!             AnalyzerRules and      PhysicalPlanner          PhysicalOptimizerRules
 //!             OptimizerRules         creates ExecutionPlan    improve performance
 //!             rewrite plan
-//! ┌─────────────┐        ┌─────────────┐      ┌───────────────┐        ┌───────────────┐
-//! │Project      │        │Project(x, y)│      │ProjectExec    │        │ProjectExec    │
-//! │  TableScan  │──...──▶│  TableScan  │─────▶│  ...          │──...──▶│  ...          │
-//! │    ...      │        │    ...      │      │    ParquetExec│        │    ParquetExec│
-//! └─────────────┘        └─────────────┘      └───────────────┘        └───────────────┘
+//! ┌─────────────┐        ┌─────────────┐      ┌─────────────────┐        ┌─────────────────┐
+//! │Project      │        │Project(x, y)│      │ProjectExec      │        │ProjectExec      │
+//! │  TableScan  │──...──▶│  TableScan  │─────▶│  ...            │──...──▶│  ...            │
+//! │    ...      │        │    ...      │      │   DataSourceExec│        │   DataSourceExec│
+//! └─────────────┘        └─────────────┘      └─────────────────┘        └─────────────────┘
 //!
 //!  LogicalPlan            LogicalPlan         ExecutionPlan             ExecutionPlan
 //! ```
@@ -284,11 +284,11 @@
 //! such as schema │            ExecutionPlan
 //!                │
 //!                ▼
-//!   ┌─────────────────────────┐         ┌──────────────┐
-//!   │                         │         │              │
-//!   │impl TableProvider       │────────▶│ParquetExec   │
-//!   │                         │         │              │
-//!   └─────────────────────────┘         └──────────────┘
+//!   ┌─────────────────────────┐         ┌───────────────┐
+//!   │                         │         │               │
+//!   │impl TableProvider       │────────▶│DataSourceExec │
+//!   │                         │         │               │
+//!   └─────────────────────────┘         └───────────────┘
 //!         TableProvider
 //!         (built in or user provided)    ExecutionPlan
 //! ```
@@ -358,20 +358,20 @@
 //!            ExecutionPlan::execute             Calling next() on the
 //!            produces a stream                  stream produces the data
 //!
-//! ┌───────────────┐      ┌─────────────────────────┐         ┌────────────┐
-//! │ProjectExec    │      │impl                     │    ┌───▶│RecordBatch │
-//! │  ...          │─────▶│SendableRecordBatchStream│────┤    └────────────┘
-//! │    ParquetExec│      │                         │    │    ┌────────────┐
-//! └───────────────┘      └─────────────────────────┘    ├───▶│RecordBatch │
-//!               ▲                                       │    └────────────┘
-//! ExecutionPlan │                                       │         ...
-//!               │                                       │
-//!               │                                       │    ┌────────────┐
-//!             PhysicalOptimizerRules                    ├───▶│RecordBatch │
-//!             request information                       │    └────────────┘
-//!             such as partitioning                      │    ┌ ─ ─ ─ ─ ─ ─
-//!                                                       └───▶ None        │
-//!                                                            └ ─ ─ ─ ─ ─ ─
+//! ┌────────────────┐      ┌─────────────────────────┐         ┌────────────┐
+//! │ProjectExec     │      │impl                     │    ┌───▶│RecordBatch │
+//! │  ...           │─────▶│SendableRecordBatchStream│────┤    └────────────┘
+//! │  DataSourceExec│      │                         │    │    ┌────────────┐
+//! └────────────────┘      └─────────────────────────┘    ├───▶│RecordBatch │
+//!               ▲                                        │    └────────────┘
+//! ExecutionPlan │                                        │         ...
+//!               │                                        │
+//!               │                                        │    ┌────────────┐
+//!             PhysicalOptimizerRules                     ├───▶│RecordBatch │
+//!             request information                        │    └────────────┘
+//!             such as partitioning                       │    ┌ ─ ─ ─ ─ ─ ─
+//!                                                        └───▶ None        │
+//!                                                             └ ─ ─ ─ ─ ─ ─
 //! ```
 //!
 //! [`ExecutionPlan`]s process data using the [Apache Arrow] memory
@@ -442,14 +442,14 @@
 //!         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─      ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐
 //!                            │                                               Step 1: Consumer
 //!         ▼                        ▼                           │               calls next()
-//! ┏━━━━━━━━━━━━━━┓     ┏━━━━━┻━━━━━━━━━━━━━┓      ┏━━━━━━━━━━━━━━━━━━━━━━━━┓
-//! ┃              ┃     ┃                   ┃      ┃                        ◀ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-//! ┃  DataSource  ┃     ┃                   ┃      ┃                        ┃
-//! ┃    (e.g.     ┃     ┃    FilterExec     ┃      ┃     ProjectionExec     ┃
-//! ┃ ParquetExec) ┃     ┃id IN (10, 20, 30) ┃      ┃date_bin('month', time) ┃
-//! ┃              ┃     ┃                   ┃      ┃                        ┣ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ▶
-//! ┃              ┃     ┃                   ┃      ┃                        ┃
-//! ┗━━━━━━━━━━━━━━┛     ┗━━━━━━━━━━━┳━━━━━━━┛      ┗━━━━━━━━━━━━━━━━━━━━━━━━┛
+//! ┏━━━━━━━━━━━━━━━━┓     ┏━━━━━┻━━━━━━━━━━━━━┓      ┏━━━━━━━━━━━━━━━━━━━━━━━━┓
+//! ┃                ┃     ┃                   ┃      ┃                        ◀ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+//! ┃  DataSource    ┃     ┃                   ┃      ┃                        ┃
+//! ┃    (e.g.       ┃     ┃    FilterExec     ┃      ┃     ProjectionExec     ┃
+//! ┃ ParquetSource) ┃     ┃id IN (10, 20, 30) ┃      ┃date_bin('month', time) ┃
+//! ┃                ┃     ┃                   ┃      ┃                        ┣ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ▶
+//! ┃                ┃     ┃                   ┃      ┃                        ┃
+//! ┗━━━━━━━━━━━━━━━━┛     ┗━━━━━━━━━━━┳━━━━━━━┛      ┗━━━━━━━━━━━━━━━━━━━━━━━━┛
 //!         │                  ▲                                 ▲          Step 6: ProjectionExec
 //!                            │     │                           │        computes date_trunc into a
 //!         └ ─ ─ ─ ─ ─ ─ ─ ─ ─       ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─          new RecordBatch returned
@@ -684,7 +684,7 @@
 //! [`PhysicalOptimizerRule`]: datafusion_physical_optimizer::PhysicalOptimizerRule
 //! [`Schema`]: arrow::datatypes::Schema
 //! [`PhysicalExpr`]: physical_plan::PhysicalExpr
-//! [`RecordBatch`]: arrow::record_batch::RecordBatch
+//! [`RecordBatch`]: arrow::array::RecordBatch
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
 
@@ -809,8 +809,10 @@ pub mod variable {
     pub use datafusion_expr::var_provider::{VarProvider, VarType};
 }
 
-#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod test;
+
+mod schema_equivalence;
 pub mod test_util;
 
 #[cfg(doctest)]
@@ -842,17 +844,11 @@ doc_comment::doctest!("../../../README.md", readme_example_test);
 //
 // For example, if `user_guide_expressions(line 123)` fails,
 // go to `docs/source/user-guide/expressions.md` to find the relevant problem.
-
+//
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/user-guide/example-usage.md",
-    user_guide_example_usage
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
-    "../../../docs/source/user-guide/crate-configuration.md",
-    user_guide_crate_configuration
+    "../../../docs/source/user-guide/concepts-readings-events.md",
+    user_guide_concepts_readings_events
 );
 
 #[cfg(doctest)]
@@ -863,14 +859,215 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/crate-configuration.md",
+    user_guide_crate_configuration
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/dataframe.md",
     user_guide_dataframe
 );
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/example-usage.md",
+    user_guide_example_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/explain-usage.md",
+    user_guide_explain_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/expressions.md",
     user_guide_expressions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!("../../../docs/source/user-guide/faq.md", user_guide_faq);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/introduction.md",
+    user_guide_introduction
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/datasources.md",
+    user_guide_cli_datasource
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/installation.md",
+    user_guide_cli_installation
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/overview.md",
+    user_guide_cli_overview
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/cli/usage.md",
+    user_guide_cli_usage
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/aggregate_functions.md",
+    user_guide_sql_aggregate_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/data_types.md",
+    user_guide_sql_data_types
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/ddl.md",
+    user_guide_sql_ddl
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/dml.md",
+    user_guide_sql_dml
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/explain.md",
+    user_guide_sql_exmplain
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/information_schema.md",
+    user_guide_sql_information_schema
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/operators.md",
+    user_guide_sql_operators
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/scalar_functions.md",
+    user_guide_sql_scalar_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/select.md",
+    user_guide_sql_select
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/special_functions.md",
+    user_guide_sql_special_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/sql_status.md",
+    user_guide_sql_status
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/subqueries.md",
+    user_guide_sql_subqueries
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/window_functions.md",
+    user_guide_sql_window_functions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/write_options.md",
+    user_guide_sql_write_options
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/adding-udfs.md",
+    library_user_guide_adding_udfs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/api-health.md",
+    library_user_guide_api_health
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/building-logical-plans.md",
+    library_user_guide_building_logical_plans
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/catalogs.md",
+    library_user_guide_catalogs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/custom-table-providers.md",
+    library_user_guide_custom_table_providers
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/extending-operators.md",
+    library_user_guide_extending_operators
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/extensions.md",
+    library_user_guide_extensions
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/index.md",
+    library_user_guide_index
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/profiling.md",
+    library_user_guide_profiling
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/query-optimizer.md",
+    library_user_guide_query_optimizer
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
+    library_user_guide_dataframe_api
 );
 
 #[cfg(doctest)]
@@ -881,12 +1078,6 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/building-logical-plans.md",
-    library_user_guide_logical_plans
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/using-the-dataframe-api.md",
-    library_user_guide_dataframe_api
+    "../../../docs/source/library-user-guide/working-with-exprs.md",
+    library_user_guide_working_with_exprs
 );

@@ -229,7 +229,7 @@ impl ExecutionPlan for WorkTableExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{ArrayRef, Int32Array};
+    use arrow::array::{ArrayRef, Int32Array};
     use datafusion_execution::memory_pool::{MemoryConsumer, UnboundedMemoryPool};
 
     #[test]

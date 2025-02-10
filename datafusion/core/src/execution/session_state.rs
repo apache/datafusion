@@ -582,6 +582,7 @@ impl SessionState {
             enable_options_value_normalization: sql_parser_options
                 .enable_options_value_normalization,
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
+            collect_spans: sql_parser_options.collect_spans,
         }
     }
 
@@ -1989,7 +1990,7 @@ mod tests {
     use super::{SessionContextProvider, SessionStateBuilder};
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
-    use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+    use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;

@@ -24,14 +24,13 @@ pub mod string_utils;
 
 use crate::error::{_internal_datafusion_err, _internal_err};
 use crate::{DataFusionError, Result, ScalarValue};
-use arrow::array::ArrayRef;
+use arrow::array::{
+    cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
+    OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{Field, SchemaRef};
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
-};
 use arrow_schema::DataType;
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
@@ -329,8 +328,8 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_array::{Array, ListArray};
-/// # use arrow_array::types::Int64Type;
+/// # use arrow::array::{Array, ListArray};
+/// # use arrow::array::types::Int64Type;
 /// # use datafusion_common::utils::SingleRowListArrayBuilder;
 /// // Array is [1, 2, 3]
 /// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
@@ -736,6 +735,27 @@ pub mod datafusion_strsim {
     pub fn levenshtein(a: &str, b: &str) -> usize {
         generic_levenshtein(&StringWrapper(a), &StringWrapper(b))
     }
+
+    /// Calculates the normalized Levenshtein distance between two strings.
+    /// The normalized distance is a value between 0.0 and 1.0, where 1.0 indicates
+    /// that the strings are identical and 0.0 indicates no similarity.
+    ///
+    /// ```
+    /// use datafusion_common::utils::datafusion_strsim::normalized_levenshtein;
+    ///
+    /// assert!((normalized_levenshtein("kitten", "sitting") - 0.57142).abs() < 0.00001);
+    ///
+    /// assert!(normalized_levenshtein("", "second").abs() < 0.00001);
+    ///
+    /// assert!((normalized_levenshtein("kitten", "sitten") - 0.833).abs() < 0.001);
+    /// ```
+    pub fn normalized_levenshtein(a: &str, b: &str) -> f64 {
+        if a.is_empty() && b.is_empty() {
+            return 1.0;
+        }
+        1.0 - (levenshtein(a, b) as f64)
+            / (a.chars().count().max(b.chars().count()) as f64)
+    }
 }
 
 /// Merges collections `first` and `second`, removes duplicates and sorts the
@@ -767,6 +787,21 @@ pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
         .map(|e| *e.borrow())
         .filter(|e| !set.contains(e))
         .collect()
+}
+
+/// Checks whether the given index sequence is monotonically non-decreasing.
+#[deprecated(since = "45.0.0", note = "Use std::Iterator::is_sorted instead")]
+pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
+    // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
+    let mut previous = 0;
+    for item in sequence.into_iter() {
+        let current = *item.borrow();
+        if current < previous {
+            return false;
+        }
+        previous = current;
+    }
+    true
 }
 
 /// Find indices of each element in `targets` inside `items`. If one of the
@@ -1155,6 +1190,19 @@ mod tests {
         assert_eq!(set_difference([3, 4, 0], [1, 2, 4]), vec![3, 0]);
         assert_eq!(set_difference([0, 3, 4], [4, 1, 2]), vec![0, 3]);
         assert_eq!(set_difference([3, 4, 0], [4, 1, 2]), vec![3, 0]);
+    }
+
+    #[test]
+    #[expect(deprecated)]
+    fn test_is_sorted() {
+        assert!(is_sorted::<usize>([]));
+        assert!(is_sorted([0]));
+        assert!(is_sorted([0, 3, 4]));
+        assert!(is_sorted([0, 1, 2]));
+        assert!(is_sorted([0, 1, 4]));
+        assert!(is_sorted([0usize; 0]));
+        assert!(is_sorted([1, 2]));
+        assert!(!is_sorted([3, 2]));
     }
 
     #[test]

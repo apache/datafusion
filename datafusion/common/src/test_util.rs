@@ -34,7 +34,7 @@ use std::{error::Error, path::PathBuf};
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::record_batch::RecordBatch;
-/// # use arrow_array::{ArrayRef, Int32Array};
+/// # use arrow::array::{ArrayRef, Int32Array};
 /// # use datafusion_common::assert_batches_eq;
 /// let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
 ///  let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
@@ -344,7 +344,7 @@ macro_rules! record_batch {
                 )*
             ]));
 
-            let batch = arrow_array::RecordBatch::try_new(
+            let batch = arrow::array::RecordBatch::try_new(
                 schema,
                 vec![$(
                     $crate::create_array!($type, $values),
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_create_record_batch() -> Result<()> {
-        use arrow_array::Array;
+        use arrow::array::Array;
 
         let batch = record_batch!(
             ("a", Int32, vec![1, 2, 3, 4]),

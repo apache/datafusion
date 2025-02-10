@@ -1,0 +1,75 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "datafusion-catalog-listing"
+description = "datafusion-catalog-listing"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[features]
+compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
+default = ["compression"]
+
+[dependencies]
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+async-compression = { version = "0.4.0", features = [
+    "bzip2",
+    "gzip",
+    "xz",
+    "zstd",
+    "tokio",
+], optional = true }
+bytes = { workspace = true }
+bzip2 = { version = "0.5.0", optional = true }
+chrono = { workspace = true }
+datafusion-catalog = { workspace = true }
+datafusion-common = { workspace = true, features = ["object_store"] }
+datafusion-execution = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
+datafusion-physical-plan = { workspace = true }
+flate2 = { version = "1.0.24", optional = true }
+futures = { workspace = true }
+glob = "0.3.0"
+itertools = { workspace = true }
+log = { workspace = true }
+object_store = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { version = "0.7.4", features = ["io"], optional = true }
+url = { workspace = true }
+xz2 = { version = "0.1", optional = true, features = ["static"] }
+zstd = { version = "0.13", optional = true, default-features = false }
+
+[dev-dependencies]
+async-trait = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
+
+[lib]
+name = "datafusion_catalog_listing"
+path = "src/mod.rs"

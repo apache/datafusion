@@ -32,21 +32,23 @@ use super::{
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::datasource::file_format::write::BatchSerializer;
-use crate::datasource::physical_plan::{FileGroupDisplay, FileSink};
-use crate::datasource::physical_plan::{FileSinkConfig, NdJsonExec};
+use crate::datasource::physical_plan::{
+    FileGroupDisplay, FileSink, FileSinkConfig, JsonSource,
+};
 use crate::error::Result;
-use crate::execution::context::SessionState;
+use crate::execution::SessionState;
 use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::{
     DisplayAs, DisplayFormatType, SendableRecordBatchStream, Statistics,
 };
 
+use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use arrow::json;
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
-use arrow_array::RecordBatch;
 use arrow_schema::ArrowError;
+use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{not_impl_err, GetExt, DEFAULT_JSON_EXTENSION};
@@ -56,6 +58,7 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 
+use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
@@ -85,9 +88,10 @@ impl JsonFormatFactory {
 impl FileFormatFactory for JsonFormatFactory {
     fn create(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         format_options: &HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let json_options = match &self.options {
             None => {
                 let mut table_options = state.default_table_options();
@@ -187,7 +191,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -235,7 +239,7 @@ impl FileFormat for JsonFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -245,19 +249,21 @@ impl FileFormat for JsonFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
-        conf: FileScanConfig,
+        _state: &dyn Session,
+        mut conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec =
-            NdJsonExec::new(conf, FileCompressionType::from(self.options.compression));
-        Ok(Arc::new(exec))
+        let source = Arc::new(JsonSource::new());
+        conf.file_compression_type = FileCompressionType::from(self.options.compression);
+        conf = conf.with_source(source);
+
+        Ok(conf.new_exec())
     }
 
     async fn create_writer_physical_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &SessionState,
+        _state: &dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -270,6 +276,10 @@ impl FileFormat for JsonFormat {
         let sink = Arc::new(JsonSink::new(conf, writer_options));
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
+    }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        Arc::new(JsonSource::default())
     }
 }
 
@@ -530,7 +540,7 @@ mod tests {
     }
 
     async fn get_exec(
-        state: &SessionState,
+        state: &dyn Session,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

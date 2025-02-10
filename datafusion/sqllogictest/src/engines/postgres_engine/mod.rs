@@ -17,6 +17,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::common::runtime::SpawnedTask;
 use futures::{SinkExt, StreamExt};
 use log::{debug, info};
 use sqllogictest::DBOutput;
@@ -24,7 +25,6 @@ use sqllogictest::DBOutput;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
-use tokio::task::JoinHandle;
 
 use super::conversion::*;
 use crate::engines::output::{DFColumnType, DFOutput};
@@ -54,7 +54,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct Postgres {
     client: tokio_postgres::Client,
-    join_handle: JoinHandle<()>,
+    _spawned_task: SpawnedTask<()>,
     /// Relative test file path
     relative_path: PathBuf,
     pb: ProgressBar,
@@ -90,7 +90,7 @@ impl Postgres {
 
         let (client, connection) = res?;
 
-        let join_handle = tokio::spawn(async move {
+        let _spawned_task = SpawnedTask::spawn(async move {
             if let Err(e) = connection.await {
                 log::error!("Postgres connection error: {:?}", e);
             }
@@ -114,7 +114,7 @@ impl Postgres {
 
         Ok(Self {
             client,
-            join_handle,
+            _spawned_task,
             relative_path,
             pb,
         })
@@ -220,12 +220,6 @@ fn schema_name(relative_path: &Path) -> String {
         .collect::<String>()
         .trim_start_matches("pg_")
         .to_string()
-}
-
-impl Drop for Postgres {
-    fn drop(&mut self) {
-        self.join_handle.abort()
-    }
 }
 
 #[async_trait]

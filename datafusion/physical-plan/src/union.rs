@@ -237,7 +237,11 @@ impl ExecutionPlan for UnionExec {
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, context)?;
                 debug!("Found a Union partition to execute");
-                return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
+                return Ok(Box::pin(ObservedStream::new(
+                    stream,
+                    baseline_metrics,
+                    None,
+                )));
             } else {
                 partition -= input.output_partitioning().partition_count();
             }
@@ -448,7 +452,11 @@ impl ExecutionPlan for InterleaveExec {
                 self.schema(),
                 input_stream_vec,
             ));
-            return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
+            return Ok(Box::pin(ObservedStream::new(
+                stream,
+                baseline_metrics,
+                None,
+            )));
         }
 
         warn!("Error in InterleaveExec: Partition {} not found", partition);
@@ -632,9 +640,10 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 mod tests {
     use super::*;
     use crate::collect;
-    use crate::memory::MemoryExec;
+    use crate::memory::MemorySourceConfig;
     use crate::test;
 
+    use crate::source::DataSourceExec;
     use arrow_schema::{DataType, SortOptions};
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;
@@ -855,14 +864,14 @@ mod tests {
                 .iter()
                 .map(|ordering| convert_to_sort_exprs(ordering))
                 .collect::<Vec<_>>();
-            let child1 = Arc::new(
-                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
+            let child1 = Arc::new(DataSourceExec::new(Arc::new(
+                MemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(first_orderings)?,
-            );
-            let child2 = Arc::new(
-                MemoryExec::try_new(&[], Arc::clone(&schema), None)?
+            )));
+            let child2 = Arc::new(DataSourceExec::new(Arc::new(
+                MemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(second_orderings)?,
-            );
+            )));
 
             let mut union_expected_eq = EquivalenceProperties::new(Arc::clone(&schema));
             union_expected_eq.add_new_orderings(union_expected_orderings);

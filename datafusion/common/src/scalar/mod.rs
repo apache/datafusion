@@ -40,21 +40,24 @@ use crate::cast::{
 use crate::error::{DataFusionError, Result, _exec_err, _internal_err, _not_impl_err};
 use crate::hash_utils::create_hashes;
 use crate::utils::SingleRowListArrayBuilder;
-use arrow::compute::kernels::numeric::*;
-use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
-use arrow::{
-    array::*,
-    compute::kernels::cast::{cast_with_options, CastOptions},
-    datatypes::{
-        i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
-        Date32Type, Date64Type, Field, Float32Type, Int16Type, Int32Type, Int64Type,
-        Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-        IntervalYearMonthType, TimeUnit, TimestampMicrosecondType,
-        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
-        UInt16Type, UInt32Type, UInt64Type, UInt8Type, DECIMAL128_MAX_PRECISION,
-    },
+use arrow::array::{
+    types::{IntervalDayTime, IntervalMonthDayNano},
+    *,
 };
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
+use arrow::buffer::ScalarBuffer;
+use arrow::compute::kernels::{
+    cast::{cast_with_options, CastOptions},
+    numeric::*,
+};
+use arrow::datatypes::{
+    i256, ArrowDictionaryKeyType, ArrowNativeType, ArrowTimestampType, DataType,
+    Date32Type, Date64Type, Field, Float32Type, Int16Type, Int32Type, Int64Type,
+    Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
+    UInt8Type, DECIMAL128_MAX_PRECISION,
+};
+use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
 use arrow_schema::{UnionFields, UnionMode};
 
 use crate::format::DEFAULT_CAST_OPTIONS;
@@ -164,7 +167,7 @@ pub use struct_builder::ScalarStructBuilder;
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{DataType, Field, Fields};
-/// # use arrow_array::{ArrayRef, Int32Array, StructArray, StringArray};
+/// # use arrow::array::{ArrayRef, Int32Array, StructArray, StringArray};
 /// # use datafusion_common::ScalarValue;
 /// // Build a struct like: {a: 1, b: "foo"}
 /// // Field description
@@ -1673,7 +1676,7 @@ impl ScalarValue {
     ///
     /// assert_eq!(&result, &expected);
     /// ```
-    /// [`Datum`]: arrow_array::Datum
+    /// [`Datum`]: arrow::array::Datum
     pub fn to_scalar(&self) -> Result<Scalar<ArrayRef>> {
         Ok(Scalar::new(self.to_array_of_size(1)?))
     }
@@ -3958,12 +3961,11 @@ mod tests {
     };
 
     use crate::assert_batches_eq;
-    use arrow::buffer::OffsetBuffer;
+    use arrow::array::{types::Float64Type, NullBufferBuilder};
+    use arrow::buffer::{Buffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
-    use arrow_array::types::Float64Type;
-    use arrow_buffer::{Buffer, NullBufferBuilder};
     use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;

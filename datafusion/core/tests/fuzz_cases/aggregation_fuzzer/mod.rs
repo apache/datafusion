@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_array::RecordBatch;
 use datafusion::prelude::SessionContext;
 use datafusion_common::error::Result;
 

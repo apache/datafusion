@@ -27,20 +27,20 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
+use datafusion::catalog::{
+    CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
+};
+use datafusion::common::DataFusionError;
 use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volatility};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionConfig;
+use datafusion::prelude::*;
 use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
-use datafusion_catalog::CatalogProvider;
-use datafusion_catalog::{memory::MemoryCatalogProvider, memory::MemorySchemaProvider};
-use datafusion_common::cast::as_float64_array;
-use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
-use datafusion::catalog::Session;
+use datafusion::common::cast::as_float64_array;
 use log::info;
 use tempfile::TempDir;
 

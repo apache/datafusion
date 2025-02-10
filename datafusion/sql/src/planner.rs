@@ -21,8 +21,10 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow_schema::*;
+use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{
-    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, SchemaError,
+    field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
+    SchemaError,
 };
 use sqlparser::ast::TimezoneInfo;
 use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo};
@@ -30,10 +32,7 @@ use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 use datafusion_common::TableReference;
-use datafusion_common::{
-    not_impl_err, plan_err, unqualified_field_not_found, DFSchema, DataFusionError,
-    Result,
-};
+use datafusion_common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use datafusion_expr::utils::find_column_exprs;
 use datafusion_expr::{col, Expr};
@@ -42,12 +41,13 @@ use crate::utils::make_decimal_type;
 pub use datafusion_expr::planner::ContextProvider;
 
 /// SQL parser options
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParserOptions {
     pub parse_float_as_decimal: bool,
     pub enable_ident_normalization: bool,
     pub support_varchar_with_length: bool,
     pub enable_options_value_normalization: bool,
+    pub collect_spans: bool,
 }
 
 impl Default for ParserOptions {
@@ -57,6 +57,7 @@ impl Default for ParserOptions {
             enable_ident_normalization: true,
             support_varchar_with_length: true,
             enable_options_value_normalization: false,
+            collect_spans: false,
         }
     }
 }
@@ -353,20 +354,49 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .try_for_each(|col| match col {
                 Expr::Column(col) => match &col.relation {
-                    Some(r) => {
-                        schema.field_with_qualified_name(r, &col.name)?;
-                        Ok(())
-                    }
+                    Some(r) => schema.field_with_qualified_name(r, &col.name).map(|_| ()),
                     None => {
                         if !schema.fields_with_unqualified_name(&col.name).is_empty() {
                             Ok(())
                         } else {
-                            Err(unqualified_field_not_found(col.name.as_str(), schema))
+                            Err(field_not_found(
+                                col.relation.clone(),
+                                col.name.as_str(),
+                                schema,
+                            ))
                         }
                     }
                 }
-                .map_err(|_: DataFusionError| {
-                    field_not_found(col.relation.clone(), col.name.as_str(), schema)
+                .map_err(|err: DataFusionError| match &err {
+                    DataFusionError::SchemaError(
+                        SchemaError::FieldNotFound {
+                            field,
+                            valid_fields,
+                        },
+                        _,
+                    ) => {
+                        let mut diagnostic = if let Some(relation) = &col.relation {
+                            Diagnostic::new_error(
+                                format!(
+                                    "column '{}' not found in '{}'",
+                                    &col.name, relation
+                                ),
+                                col.spans().first(),
+                            )
+                        } else {
+                            Diagnostic::new_error(
+                                format!("column '{}' not found", &col.name),
+                                col.spans().first(),
+                            )
+                        };
+                        add_possible_columns_to_diag(
+                            &mut diagnostic,
+                            field,
+                            valid_fields,
+                        );
+                        err.with_diagnostic(diagnostic)
+                    }
+                    _ => err,
                 }),
                 _ => internal_err!("Not a column"),
             })
@@ -430,7 +460,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::UnsignedBigInt(_) | SQLDataType::UnsignedInt8(_) => Ok(DataType::UInt64),
             SQLDataType::Float(_) => Ok(DataType::Float32),
             SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
-            SQLDataType::Double | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
+            SQLDataType::Double(ExactNumberInfo::None) | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
+            SQLDataType::Double(ExactNumberInfo::Precision(_)|ExactNumberInfo::PrecisionAndScale(_, _)) => {
+                not_impl_err!("Unsupported SQL type (precision/scale not supported) {sql_type}")
+            }
             SQLDataType::Char(_)
             | SQLDataType::Text
             | SQLDataType::String(_) => Ok(DataType::Utf8),
@@ -566,7 +599,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::MediumText
             | SQLDataType::LongText
             | SQLDataType::Bit(_)
-            |SQLDataType::BitVarying(_)
+            | SQLDataType::BitVarying(_)
+            // BigQuery UDFs
+            | SQLDataType::AnyType
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),
