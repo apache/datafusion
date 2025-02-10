@@ -28,17 +28,17 @@ static SCALAR_VALUE_ZERO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
 static SCALAR_VALUE_ONE_LOCK: OnceLock<ScalarValue> = OnceLock::new();
 static LN_TWO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
 
-/// Returns a `0` as a [`ScalarValue`]
+/// Returns a `0` as a [`ScalarValue`].
 pub fn get_zero() -> &'static ScalarValue {
     SCALAR_VALUE_ZERO_LOCK.get_or_init(|| ScalarValue::Float64(Some(0.)))
 }
 
-/// Returns a `1` as a [`ScalarValue`]
+/// Returns a `1` as a [`ScalarValue`].
 pub fn get_one() -> &'static ScalarValue {
     SCALAR_VALUE_ONE_LOCK.get_or_init(|| ScalarValue::Float64(Some(1.)))
 }
 
-/// Returns a ln(2) as a [`ScalarValue`]
+/// Returns the number `ln(2)` as a [`ScalarValue`].
 pub fn get_ln_two() -> &'static ScalarValue {
     LN_TWO_LOCK.get_or_init(|| ScalarValue::Float64(Some(2_f64.ln())))
 }
