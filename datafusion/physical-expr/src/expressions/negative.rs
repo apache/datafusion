@@ -321,7 +321,7 @@ mod tests {
             )?])?,
             StatisticsV2::new_exponential(
                 ScalarValue::Float64(Some(1.)),
-                ScalarValue::Float64(Some(1.)),
+                ScalarValue::Float64(Some(-1.)),
                 false
             )?
         );

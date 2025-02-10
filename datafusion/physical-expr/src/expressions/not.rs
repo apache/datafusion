@@ -265,10 +265,10 @@ mod tests {
 
         assert!(expr
             .evaluate_statistics(&[&StatisticsV2::new_unknown(
-                ScalarValue::Boolean(Some(true)),
-                ScalarValue::Boolean(Some(true)),
-                ScalarValue::Boolean(Some(true)),
-                Interval::CERTAINLY_TRUE
+                ScalarValue::Null,
+                ScalarValue::Null,
+                ScalarValue::Null,
+                Interval::make_unbounded(&DataType::UInt8)?
             )?])
             .is_err());
 

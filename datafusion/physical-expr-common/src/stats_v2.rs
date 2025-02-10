@@ -765,10 +765,10 @@ mod tests {
     #[test]
     fn mean_extraction_test() {
         // The test data is placed as follows : (stat -> expected answer)
-        let mut stats = vec![
+        let stats = vec![
             (
                 StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64).unwrap()),
-                ScalarValue::Float64(Some(0.)),
+                ScalarValue::Int64(Some(0)),
             ),
             (
                 StatisticsV2::new_uniform(
@@ -778,64 +778,60 @@ mod tests {
             ),
             (
                 StatisticsV2::new_uniform(Interval::make(Some(1), Some(100)).unwrap()),
-                ScalarValue::Float64(Some(50.5)),
+                ScalarValue::Int32(Some(50)),
             ),
             (
                 StatisticsV2::new_uniform(Interval::make(Some(-100), Some(-1)).unwrap()),
-                ScalarValue::Float64(Some(-50.5)),
+                ScalarValue::Int32(Some(-50)),
             ),
             (
                 StatisticsV2::new_uniform(Interval::make(Some(-100), Some(100)).unwrap()),
-                ScalarValue::Float64(Some(0.)),
+                ScalarValue::Int32(Some(0)),
             ),
-        ];
-
-        stats.push((
-            StatisticsV2::new_exponential(
-                ScalarValue::Float64(Some(2.)),
-                ScalarValue::Float64(Some(0.)),
-                true,
-            ),
-            ScalarValue::Float64(Some(0.5)),
-        ));
-        stats.push((
-            StatisticsV2::new_exponential(
-                ScalarValue::Float64(Some(2.)),
-                ScalarValue::Float64(Some(1.)),
-                true,
-            ),
-            ScalarValue::Float64(Some(1.5)),
-        ));
-
-        stats.push((
-            StatisticsV2::new_gaussian(
-                ScalarValue::Float64(Some(0.)),
-                ScalarValue::Float64(Some(1.)),
-            ),
-            ScalarValue::Float64(Some(0.)),
-        ));
-        stats.push((
-            StatisticsV2::new_gaussian(
-                ScalarValue::Float64(Some(-2.)),
+            (
+                StatisticsV2::new_exponential(
+                    ScalarValue::Float64(Some(2.)),
+                    ScalarValue::Float64(Some(0.)),
+                    true,
+                ),
                 ScalarValue::Float64(Some(0.5)),
             ),
-            ScalarValue::Float64(Some(-2.)),
-        ));
-
-        stats.push((
-            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.5))),
-            ScalarValue::Float64(Some(0.5)),
-        ));
-
-        stats.push((
-            StatisticsV2::new_unknown(
-                ScalarValue::Float64(Some(42.)),
-                ScalarValue::Float64(Some(42.)),
-                ScalarValue::Null,
-                Interval::make(Some(25.), Some(50.)).unwrap(),
+            (
+                StatisticsV2::new_exponential(
+                    ScalarValue::Float64(Some(2.)),
+                    ScalarValue::Float64(Some(1.)),
+                    true,
+                ),
+                ScalarValue::Float64(Some(1.5)),
             ),
-            ScalarValue::Float64(Some(42.)),
-        ));
+            (
+                StatisticsV2::new_gaussian(
+                    ScalarValue::Float64(Some(0.)),
+                    ScalarValue::Float64(Some(1.)),
+                ),
+                ScalarValue::Float64(Some(0.)),
+            ),
+            (
+                StatisticsV2::new_gaussian(
+                    ScalarValue::Float64(Some(-2.)),
+                    ScalarValue::Float64(Some(0.5)),
+                ),
+                ScalarValue::Float64(Some(-2.)),
+            ),
+            (
+                StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.5))),
+                ScalarValue::Float64(Some(0.5)),
+            ),
+            (
+                StatisticsV2::new_unknown(
+                    ScalarValue::Float64(Some(42.)),
+                    ScalarValue::Float64(Some(42.)),
+                    ScalarValue::Null,
+                    Interval::make(Some(25.), Some(50.)).unwrap(),
+                ),
+                ScalarValue::Float64(Some(42.)),
+            ),
+        ];
 
         for case in stats {
             assert_eq!(case.0.unwrap().mean().unwrap(), case.1);
@@ -848,7 +844,7 @@ mod tests {
         let stats = vec![
             (
                 StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64).unwrap()),
-                ScalarValue::Float64(Some(0.)),
+                ScalarValue::Int64(Some(0)),
             ),
             (
                 StatisticsV2::new_uniform(Interval::make(Some(25.), Some(75.)).unwrap()),
