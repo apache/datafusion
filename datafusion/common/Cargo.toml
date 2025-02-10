@@ -56,7 +56,6 @@ arrow-schema = { workspace = true }
 base64 = "0.22.1"
 half = { workspace = true }
 hashbrown = { workspace = true }
-indexmap = { workspace = true }
 libc = "0.2.140"
 log = { workspace = true }
 object_store = { workspace = true, optional = true }

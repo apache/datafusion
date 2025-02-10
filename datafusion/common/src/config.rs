@@ -23,10 +23,12 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
 
+use crate::alias::AliasGenerator;
 use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
 use crate::utils::get_available_parallelism;
 use crate::{DataFusionError, Result};
+use std::sync::Arc;
 
 /// A macro that wraps a configuration struct and automatically derives
 /// [`Default`] and [`ConfigField`] for it, allowing it to be used
@@ -736,6 +738,8 @@ pub struct ConfigOptions {
     pub explain: ExplainOptions,
     /// Optional extensions registered using [`Extensions::insert`]
     pub extensions: Extensions,
+    /// Return alias generator used to generate unique aliases
+    pub alias_generator: Arc<AliasGenerator>,
 }
 
 impl ConfigField for ConfigOptions {
