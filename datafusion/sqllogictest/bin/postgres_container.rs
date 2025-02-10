@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::Options;
-use datafusion_common::Result;
+use datafusion::common::Result;
 use log::info;
 use std::env::set_var;
 use std::future::Future;
