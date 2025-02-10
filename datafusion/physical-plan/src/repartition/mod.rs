@@ -43,7 +43,6 @@ use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Stat
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;
 use arrow::datatypes::{SchemaRef, UInt32Type};
-use async_channel::Receiver;
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
 use datafusion_common::{not_impl_err, DataFusionError, Result};
@@ -56,7 +55,6 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::Stream;
 use futures::{ready, FutureExt, StreamExt, TryStreamExt};
 use log::trace;
-use on_demand_repartition::{OnDemandRepartitionExec, OnDemandRepartitionMetrics};
 use parking_lot::Mutex;
 
 mod distributor_channels;
@@ -65,68 +63,6 @@ pub mod on_demand_repartition;
 type MaybeBatch = Option<Result<RecordBatch>>;
 type InputPartitionsToCurrentPartitionSender = Vec<DistributionSender<MaybeBatch>>;
 type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeBatch>>;
-
-struct RepartitionExecStateBuilder {
-    /// Whether to enable pull based execution.
-    enable_pull_based: bool,
-    partition_receivers: Option<Vec<Receiver<usize>>>,
-}
-
-impl RepartitionExecStateBuilder {
-    fn new() -> Self {
-        Self {
-            enable_pull_based: false,
-            partition_receivers: None,
-        }
-    }
-    fn enable_pull_based(mut self, enable_pull_based: bool) -> Self {
-        self.enable_pull_based = enable_pull_based;
-        self
-    }
-    fn partition_receivers(mut self, partition_receivers: Vec<Receiver<usize>>) -> Self {
-        self.partition_receivers = Some(partition_receivers);
-        self
-    }
-
-    fn build(
-        &self,
-        input: Arc<dyn ExecutionPlan>,
-        partitioning: Partitioning,
-        metrics: ExecutionPlanMetricsSet,
-        preserve_order: bool,
-        name: String,
-        context: Arc<TaskContext>,
-    ) -> RepartitionExecState {
-        RepartitionExecState::new(
-            input,
-            partitioning,
-            metrics,
-            preserve_order,
-            name,
-            context,
-            self.enable_pull_based,
-            self.partition_receivers.clone(),
-        )
-    }
-}
-
-/// Inner state of [`RepartitionExec`].
-#[derive(Debug)]
-struct RepartitionExecState {
-    /// Channels for sending batches from input partitions to output partitions.
-    /// Key is the partition number.
-    channels: HashMap<
-        usize,
-        (
-            InputPartitionsToCurrentPartitionSender,
-            InputPartitionsToCurrentPartitionReceiver,
-            SharedMemoryReservation,
-        ),
-    >,
-
-    /// Helper that ensures that that background job is killed once it is no longer needed.
-    abort_helper: Arc<Vec<SpawnedTask<()>>>,
-}
 
 /// create channels for sending batches from input partitions to output partitions.
 fn create_repartition_channels(
@@ -185,8 +121,26 @@ fn create_partition_channels_hashmap(
 
     channels
 }
+
+/// Inner state of [`RepartitionExec`].
+#[derive(Debug)]
+struct RepartitionExecState {
+    /// Channels for sending batches from input partitions to output partitions.
+    /// Key is the partition number.
+    channels: HashMap<
+        usize,
+        (
+            InputPartitionsToCurrentPartitionSender,
+            InputPartitionsToCurrentPartitionReceiver,
+            SharedMemoryReservation,
+        ),
+    >,
+
+    /// Helper that ensures that that background job is killed once it is no longer needed.
+    abort_helper: Arc<Vec<SpawnedTask<()>>>,
+}
+
 impl RepartitionExecState {
-    #[allow(clippy::too_many_arguments)]
     fn new(
         input: Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
@@ -194,8 +148,6 @@ impl RepartitionExecState {
         preserve_order: bool,
         name: String,
         context: Arc<TaskContext>,
-        enable_pull_based: bool,
-        partition_receivers: Option<Vec<Receiver<usize>>>,
     ) -> Self {
         let num_input_partitions = input.output_partitioning().partition_count();
         let num_output_partitions = partitioning.partition_count();
@@ -219,42 +171,16 @@ impl RepartitionExecState {
                 })
                 .collect();
 
-            let input_task = if enable_pull_based {
-                let partition_rx = if preserve_order {
-                    partition_receivers.clone().expect(
-                        "partition_receivers must be provided when preserve_order is enabled",
-                    )[i]
-                        .clone()
-                } else {
-                    partition_receivers.clone().expect(
-                        "partition_receivers must be provided when preserve_order is disabled",
-                    )[0].clone()
-                };
-                let r_metrics =
-                    OnDemandRepartitionMetrics::new(i, num_output_partitions, &metrics);
+            let r_metrics = RepartitionMetrics::new(i, num_output_partitions, &metrics);
 
-                SpawnedTask::spawn(OnDemandRepartitionExec::pull_from_input(
-                    Arc::clone(&input),
-                    i,
-                    txs.clone(),
-                    partitioning.clone(),
-                    partition_rx,
-                    r_metrics,
-                    Arc::clone(&context),
-                ))
-            } else {
-                let r_metrics =
-                    RepartitionMetrics::new(i, num_output_partitions, &metrics);
-
-                SpawnedTask::spawn(RepartitionExec::pull_from_input(
-                    Arc::clone(&input),
-                    i,
-                    txs.clone(),
-                    partitioning.clone(),
-                    r_metrics,
-                    Arc::clone(&context),
-                ))
-            };
+            let input_task = SpawnedTask::spawn(RepartitionExec::pull_from_input(
+                Arc::clone(&input),
+                i,
+                txs.clone(),
+                partitioning.clone(),
+                r_metrics,
+                Arc::clone(&context),
+            ));
 
             // In a separate task, wait for each input to be done
             // (and pass along any errors, including panic!s)
@@ -268,7 +194,6 @@ impl RepartitionExecState {
 
             spawned_tasks.push(wait_for_task);
         }
-
         Self {
             channels,
             abort_helper: Arc::new(spawned_tasks),
@@ -467,8 +392,6 @@ pub struct RepartitionExecBase {
     preserve_order: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
-    /// Inner state that is initialized when the first output stream is created.
-    state: LazyState,
 }
 
 impl RepartitionExecBase {
@@ -611,6 +534,8 @@ impl RepartitionExecBase {
 pub struct RepartitionExec {
     /// Common fields for all repartitioning executors
     base: RepartitionExecBase,
+    /// Inner state that is initialized when the first output stream is created.
+    state: LazyState,
 }
 
 #[derive(Debug, Clone)]
@@ -776,7 +701,7 @@ impl ExecutionPlan for RepartitionExec {
             partition
         );
 
-        let lazy_state = Arc::clone(&self.base.state);
+        let lazy_state = Arc::clone(&self.state);
         let input = Arc::clone(&self.base.input);
         let partitioning = self.partitioning().clone();
         let metrics = self.base.metrics.clone();
@@ -797,7 +722,7 @@ impl ExecutionPlan for RepartitionExec {
             let context_captured = Arc::clone(&context);
             let state = lazy_state
                 .get_or_init(|| async move {
-                    Mutex::new(RepartitionExecStateBuilder::new().build(
+                    Mutex::new(RepartitionExecState::new(
                         input_captured,
                         partitioning.clone(),
                         metrics_captured,
@@ -945,11 +870,11 @@ impl RepartitionExec {
         Ok(RepartitionExec {
             base: RepartitionExecBase {
                 input,
-                state: Default::default(),
                 metrics: ExecutionPlanMetricsSet::new(),
                 preserve_order,
                 cache,
             },
+            state: Default::default(),
         })
     }
 
