@@ -731,8 +731,9 @@ impl PlanProperties {
     /// Overwrite node id with its new value.
     pub fn with_node_id(mut self, node_id: usize) -> Self {
         self.node_id = Some(node_id);
+        self
     }
-    
+
     /// Overwrite boundedness with its new value.
     pub fn with_boundedness(mut self, boundedness: Boundedness) -> Self {
         self.boundedness = boundedness;

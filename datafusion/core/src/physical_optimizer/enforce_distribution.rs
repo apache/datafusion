@@ -943,7 +943,11 @@ fn add_spm_on_top(
         let new_plan = if should_preserve_ordering {
             Arc::new(
                 SortPreservingMergeExec::new(
-                    LexOrdering::from_ref(input.plan.output_ordering().unwrap_or(&[])),
+                    input
+                        .plan
+                        .output_ordering()
+                        .unwrap_or(&LexOrdering::default())
+                        .clone(),
                     input.plan.clone(),
                 )
                 .with_fetch(fetch.take()),
@@ -1376,7 +1380,9 @@ fn ensure_distribution(
     if fetch.is_some() {
         plan = Arc::new(
             SortPreservingMergeExec::new(
-                LexOrdering::from_ref(plan.output_ordering().unwrap_or(&[])),
+                plan.output_ordering()
+                    .unwrap_or(&LexOrdering::default())
+                    .clone(),
                 plan.clone(),
             )
             .with_fetch(fetch.take()),

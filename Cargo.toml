@@ -77,22 +77,22 @@ version = "44.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { git = "https://github.com/influxdata/arrow-rs", rev = "aa8c048", features = [
+arrow = { git = "https://github.com/influxdata/arrow-rs", rev = "eae176c", features = [
     "prettyprint",
 ] }
-arrow-array = { git = "https://github.com/influxdata/arrow-rs", rev = "aa8c048", default-features = false, features = [
+arrow-array = { git = "https://github.com/influxdata/arrow-rs", rev = "eae176c", default-features = false, features = [
     "chrono-tz",
 ] }
-arrow-buffer = { git = "https://github.com/influxdata/arrow-rs", rev = "aa8c048", default-features = false }
-arrow-flight = { git = "https://github.com/influxdata/arrow-rs", rev = "aa8c048", features = [
+arrow-buffer = { git = "https://github.com/influxdata/arrow-rs", rev = "eae176c", default-features = false }
+arrow-flight = { git = "https://github.com/influxdata/arrow-rs", rev = "eae176c", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { git = "https://github.com/influxdata/arrow-rs", rev = "aa8c048", default-features = false, features = [
+arrow-ipc = { git = "https://github.com/influxdata/arrow-rs", rev = "eae176c", default-features = false, features = [
     "lz4",
 ] }
-arrow-ord = { git = "https://github.com/influxdata/arrow-rs", rev = "aa8c048", default-features = false }
-arrow-schema = { git = "https://github.com/influxdata/arrow-rs", rev = "aa8c048", default-features = false }
-arrow-string = { git = "https://github.com/influxdata/arrow-rs", rev = "aa8c048", default-features = false }
+arrow-ord = { git = "https://github.com/influxdata/arrow-rs", rev = "eae176c", default-features = false }
+arrow-schema = { git = "https://github.com/influxdata/arrow-rs", rev = "eae176c", default-features = false }
+arrow-string = { git = "https://github.com/influxdata/arrow-rs", rev = "eae176c", default-features = false }
 async-trait = "0.1.73"
 bigdecimal = "0.4.7"
 bytes = "1.4"
@@ -134,7 +134,7 @@ itertools = "0.13"
 log = "^0.4"
 object_store = { version = "0.11.0", default-features = false }
 parking_lot = "0.12"
-parquet = { git = "https://github.com/influxdata/arrow-rs", rev = "aa8c048", default-features = false, features = [
+parquet = { git = "https://github.com/influxdata/arrow-rs", rev = "eae176c", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
