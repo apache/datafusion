@@ -69,7 +69,7 @@ async fn oom_sort() {
         .with_expected_errors(vec![
             "Resources exhausted: Memory Exhausted while Sorting (DiskManager is disabled)",
         ])
-        .with_memory_limit(200_000)
+        .with_memory_limit(400_000)
         .run()
         .await
 }
@@ -271,7 +271,8 @@ async fn sort_spill_reservation() {
 
     // Merge operation needs extra memory to do row conversion, so make the
     // memory limit larger.
-    let mem_limit = partition_size * 2;
+    let mem_limit =
+        ((partition_size * 2 + 1024) as f64 / MEMORY_FRACTION).ceil() as usize;
     let test = TestCase::new()
     // This query uses a different order than the input table to
     // force a sort. It also needs to have multiple columns to
@@ -308,7 +309,8 @@ async fn sort_spill_reservation() {
 
     test.clone()
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: ExternalSorterMerge",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:",
+            "bytes for ExternalSorterMerge",
         ])
         .with_config(config)
         .run()

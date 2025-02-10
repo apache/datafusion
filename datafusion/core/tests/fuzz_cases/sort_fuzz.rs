@@ -54,7 +54,9 @@ async fn test_sort_10k_mem() {
 #[tokio::test]
 #[cfg_attr(tarpaulin, ignore)]
 async fn test_sort_100k_mem() {
-    for (batch_size, should_spill) in [(5, false), (20000, false), (1000000, true)] {
+    for (batch_size, should_spill) in
+        [(5, false), (10000, false), (20000, true), (1000000, true)]
+    {
         SortTest::new()
             .with_int32_batches(batch_size)
             .with_pool_size(100 * KB)
