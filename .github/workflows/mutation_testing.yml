@@ -1,0 +1,32 @@
+name: Run Cargo Mutants
+
+on:
+  workflow_dispatch: # Allows manual execution via GitHub UI
+
+jobs:
+  mutation-testing:
+    name: Mutation Testing with cargo-mutants
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants
+
+      - name: Run Mutation Tests
+        run: cargo mutants --no-check --exact
