@@ -1912,6 +1912,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-datasource-avro"
+version = "45.0.0"
+dependencies = [
+ "apache-avro",
+ "arrow",
+ "arrow-schema",
+ "datafusion-common",
+ "num-traits",
+ "serde_json",
+]
+
+[[package]]
 name = "datafusion-doc"
 version = "45.0.0"
 
