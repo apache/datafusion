@@ -187,7 +187,7 @@ impl StatisticsV2 {
     }
 
     pub fn target_type(args: &[&ScalarValue]) -> Result<DataType> {
-        let mut typed_args = args.iter().filter_map(|&arg| {
+        let mut arg_types = args.iter().filter_map(|&arg| {
             if arg == &ScalarValue::Null {
                 None
             } else {
@@ -195,15 +195,15 @@ impl StatisticsV2 {
             }
         });
 
-        typed_args
+        let Some(dt) = arg_types
             .next()
             .map_or(Some(DataType::Null), |first| {
-                typed_args
+                arg_types
                     .try_fold(first, |target, arg| binary_numeric_coercion(&target, &arg))
-            })
-            .ok_or(DataFusionError::Internal(
-                "Statistics can only be evaluated for numeric types".to_string(),
-            ))
+            }) else {
+            return internal_err!("Statistics can only be evaluated for numeric types");
+        };
+        Ok(dt)
     }
 }
 
