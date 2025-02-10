@@ -1,11 +1,7 @@
 name: Run Cargo Mutants
 
 on:
-<<<<<<< Updated upstream
-  workflow_dispatch: # Allows manual execution via GitHub UI
-=======
   workflow_dispatch:
->>>>>>> Stashed changes
 
 jobs:
   mutation-testing:
@@ -33,8 +29,4 @@ jobs:
         run: cargo install cargo-mutants
 
       - name: Run Mutation Tests
-<<<<<<< Updated upstream
-        run: cargo mutants --no-check --exact
-=======
         run: cargo mutants --baseline skip
->>>>>>> Stashed changes
