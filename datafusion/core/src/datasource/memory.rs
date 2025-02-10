@@ -39,6 +39,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_catalog::Session;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, SchemaExt};
+use datafusion_common_runtime::JoinSet;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::SortExpr;
@@ -48,7 +49,6 @@ use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
 use tokio::sync::RwLock;
-use tokio::task::JoinSet;
 
 /// Type alias for partition data
 pub type PartitionData = Arc<RwLock<Vec<RecordBatch>>>;
