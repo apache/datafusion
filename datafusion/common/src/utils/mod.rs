@@ -595,7 +595,7 @@ pub fn base_type(data_type: &DataType) -> DataType {
 /// Example
 /// ```
 /// use arrow::datatypes::{DataType, Field};
-/// use datafusion_common::utils::{coerced_type_with_base_type_only};
+/// use datafusion_common::utils::coerced_type_with_base_type_only;
 /// use std::sync::Arc;
 ///
 /// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
