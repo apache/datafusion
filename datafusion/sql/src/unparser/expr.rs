@@ -21,20 +21,22 @@ use sqlparser::ast::{
     self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
     Subscript, TimezoneInfo, UnaryOperator,
 };
+use std::str::FromStr;
 use std::sync::Arc;
 use std::vec;
 
 use super::dialect::IntervalStyle;
 use super::Unparser;
-use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
 use arrow::util::display::array_value_to_string;
+use arrow_array::temporal_conversions::{as_datetime, as_datetime_with_timezone, date32_to_datetime, date64_to_datetime};
+use arrow_array::timezone::Tz;
 use arrow_array::types::{
-    ArrowTemporalType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use arrow_array::{ArrayRef, Date32Array, Date64Array, PrimitiveArray};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, TimeUnit};
+use bigdecimal::ToPrimitive;
+use datafusion_common::scalar::{LogicalInterval, LogicalScalar, LogicalTime};
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
     ScalarValue,
@@ -184,7 +186,9 @@ impl Unparser<'_> {
             Expr::Cast(Cast { expr, data_type }) => {
                 Ok(self.cast_to_sql(expr, data_type)?)
             }
-            Expr::Literal(value) => Ok(self.scalar_to_sql(value)?),
+            Expr::Literal(value) => {
+                Ok(self.scalar_to_sql(&value.clone().into())?)
+            }
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -528,11 +532,10 @@ impl Unparser<'_> {
         }))
     }
 
-    fn scalar_value_list_to_sql(&self, array: &ArrayRef) -> Result<ast::Expr> {
+    fn scalar_value_list_to_sql(&self, values: &[LogicalScalar]) -> Result<ast::Expr> {
         let mut elem = Vec::new();
-        for i in 0..array.len() {
-            let value = ScalarValue::try_from_array(&array, i)?;
-            elem.push(self.scalar_to_sql(&value)?);
+        for v in values {
+            elem.push(self.scalar_to_sql(v)?);
         }
 
         Ok(ast::Expr::Array(Array { elem, named: false }))
@@ -656,8 +659,8 @@ impl Unparser<'_> {
         })
     }
 
-    fn ast_type_for_date64_in_cast(&self) -> ast::DataType {
-        if self.dialect.use_timestamp_for_date64() {
+    fn ast_type_for_date64_in_cast(&self, value: i64) -> ast::DataType {
+        if self.dialect.use_timestamp_for_date64() && value.to_i32().is_none() {
             ast::DataType::Timestamp(None, TimezoneInfo::None)
         } else {
             ast::DataType::Datetime(None)
@@ -690,7 +693,7 @@ impl Unparser<'_> {
         match bound {
             datafusion_expr::window_frame::WindowFrameBound::Preceding(val) => {
                 Ok(ast::WindowFrameBound::Preceding({
-                    let val = self.scalar_to_sql(val)?;
+                    let val = self.scalar_to_sql(&val.clone().into())?;
                     if let ast::Expr::Value(ast::Value::Null) = &val {
                         None
                     } else {
@@ -700,7 +703,7 @@ impl Unparser<'_> {
             }
             datafusion_expr::window_frame::WindowFrameBound::Following(val) => {
                 Ok(ast::WindowFrameBound::Following({
-                    let val = self.scalar_to_sql(val)?;
+                    let val = self.scalar_to_sql(&val.clone().into())?;
                     if let ast::Expr::Value(ast::Value::Null) = &val {
                         None
                     } else {
@@ -942,48 +945,43 @@ impl Unparser<'_> {
         }
     }
 
-    fn handle_timestamp<T: ArrowTemporalType>(
+    fn handle_timestamp(
         &self,
-        v: &ScalarValue,
-        tz: &Option<Arc<str>>,
-    ) -> Result<ast::Expr>
-    where
-        i64: From<T::Native>,
-    {
-        let ts = if let Some(tz) = tz {
-            v.to_array()?
-                .as_any()
-                .downcast_ref::<PrimitiveArray<T>>()
-                .ok_or(internal_datafusion_err!(
-                    "Failed to downcast type {v:?} to arrow array"
-                ))?
-                .value_as_datetime_with_tz(0, tz.parse()?)
-                .ok_or(internal_datafusion_err!(
-                    "Unable to convert {v:?} to DateTime"
-                ))?
-                .to_string()
-        } else {
-            v.to_array()?
-                .as_any()
-                .downcast_ref::<PrimitiveArray<T>>()
-                .ok_or(internal_datafusion_err!(
-                    "Failed to downcast type {v:?} to arrow array"
-                ))?
-                .value_as_datetime(0)
-                .ok_or(internal_datafusion_err!(
-                    "Unable to convert {v:?} to DateTime"
-                ))?
-                .to_string()
-        };
-
-        let time_unit = match T::DATA_TYPE {
-            DataType::Timestamp(unit, _) => unit,
-            _ => {
-                return Err(internal_datafusion_err!(
-                    "Expected Timestamp, got {:?}",
-                    T::DATA_TYPE
-                ))
+        time_unit: TimeUnit,
+        time_zone: &Option<Arc<str>>,
+        v: i64,
+    ) -> Result<ast::Expr> {
+        let ts = if let Some(tz) = time_zone {
+            let tz = Tz::from_str(tz)?;
+            match time_unit {
+                TimeUnit::Second => {
+                    as_datetime_with_timezone::<TimestampSecondType>(v, tz)
+                }
+                TimeUnit::Millisecond => {
+                    as_datetime_with_timezone::<TimestampMillisecondType>(v, tz)
+                }
+                TimeUnit::Microsecond => {
+                    as_datetime_with_timezone::<TimestampMicrosecondType>(v, tz)
+                }
+                TimeUnit::Nanosecond => {
+                    as_datetime_with_timezone::<TimestampNanosecondType>(v, tz)
+                }
             }
+            .ok_or(internal_datafusion_err!(
+                "Unable to convert {v:?} to DateTime"
+            ))?
+            .to_string()
+        } else {
+            match time_unit {
+                TimeUnit::Second => as_datetime::<TimestampSecondType>(v),
+                TimeUnit::Millisecond => as_datetime::<TimestampMillisecondType>(v),
+                TimeUnit::Microsecond => as_datetime::<TimestampMicrosecondType>(v),
+                TimeUnit::Nanosecond => as_datetime::<TimestampNanosecondType>(v),
+            }
+            .ok_or(internal_datafusion_err!(
+                "Unable to convert {v:?} to DateTime"
+            ))?
+            .to_string()
         };
 
         Ok(ast::Expr::Cast {
@@ -994,18 +992,9 @@ impl Unparser<'_> {
         })
     }
 
-    fn handle_time<T: ArrowTemporalType>(&self, v: &ScalarValue) -> Result<ast::Expr>
-    where
-        i64: From<T::Native>,
-    {
+    fn handle_time(&self, v: &LogicalTime) -> Result<ast::Expr> {
         let time = v
-            .to_array()?
-            .as_any()
-            .downcast_ref::<PrimitiveArray<T>>()
-            .ok_or(internal_datafusion_err!(
-                "Failed to downcast type {v:?} to arrow array"
-            ))?
-            .value_as_time(0)
+            .value_as_time()
             .ok_or(internal_datafusion_err!("Unable to convert {v:?} to Time"))?
             .to_string();
         Ok(ast::Expr::Cast {
@@ -1043,120 +1032,68 @@ impl Unparser<'_> {
 
     /// DataFusion ScalarValues sometimes require a ast::Expr to construct.
     /// For example ScalarValue::Date32(d) corresponds to the ast::Expr CAST('datestr' as DATE)
-    fn scalar_to_sql(&self, v: &ScalarValue) -> Result<ast::Expr> {
+    fn scalar_to_sql(&self, v: &LogicalScalar) -> Result<ast::Expr> {
         match v {
-            ScalarValue::Null => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Boolean(Some(b)) => {
-                Ok(ast::Expr::Value(ast::Value::Boolean(b.to_owned())))
-            }
-            ScalarValue::Boolean(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Float16(Some(f)) => {
+            LogicalScalar::Null => Ok(ast::Expr::Value(ast::Value::Null)),
+            LogicalScalar::Boolean(b) => Ok(ast::Expr::Value(ast::Value::Boolean(*b))),
+            LogicalScalar::Float16(f) => {
                 Ok(ast::Expr::Value(ast::Value::Number(f.to_string(), false)))
             }
-            ScalarValue::Float16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Float32(Some(f)) => {
+            LogicalScalar::Float32(f) => {
                 let f_val = match f.fract() {
                     0.0 => format!("{:.1}", f),
                     _ => format!("{}", f),
                 };
                 Ok(ast::Expr::Value(ast::Value::Number(f_val, false)))
             }
-            ScalarValue::Float32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Float64(Some(f)) => {
+            LogicalScalar::Float64(f) => {
                 let f_val = match f.fract() {
                     0.0 => format!("{:.1}", f),
                     _ => format!("{}", f),
                 };
                 Ok(ast::Expr::Value(ast::Value::Number(f_val, false)))
             }
-            ScalarValue::Float64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Decimal128(Some(value), precision, scale) => {
-                Ok(ast::Expr::Value(ast::Value::Number(
-                    Decimal128Type::format_decimal(*value, *precision, *scale),
-                    false,
-                )))
-            }
-            ScalarValue::Decimal128(None, ..) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Decimal256(Some(value), precision, scale) => {
-                Ok(ast::Expr::Value(ast::Value::Number(
-                    Decimal256Type::format_decimal(*value, *precision, *scale),
-                    false,
-                )))
-            }
-            ScalarValue::Decimal256(None, ..) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Int8(Some(i)) => {
+            LogicalScalar::Decimal(value) => Ok(ast::Expr::Value(ast::Value::Number(
+                value.value().to_string(),
+                false,
+            ))),
+            LogicalScalar::Int8(i) => {
                 Ok(ast::Expr::Value(ast::Value::Number(i.to_string(), false)))
             }
-            ScalarValue::Int8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Int16(Some(i)) => {
+            LogicalScalar::Int16(i) => {
                 Ok(ast::Expr::Value(ast::Value::Number(i.to_string(), false)))
             }
-            ScalarValue::Int16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Int32(Some(i)) => {
+            LogicalScalar::Int32(i) => {
                 Ok(ast::Expr::Value(ast::Value::Number(i.to_string(), false)))
             }
-            ScalarValue::Int32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Int64(Some(i)) => {
+            LogicalScalar::Int64(i) => {
                 Ok(ast::Expr::Value(ast::Value::Number(i.to_string(), false)))
             }
-            ScalarValue::Int64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::UInt8(Some(ui)) => {
+            LogicalScalar::UInt8(ui) => {
                 Ok(ast::Expr::Value(ast::Value::Number(ui.to_string(), false)))
             }
-            ScalarValue::UInt8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::UInt16(Some(ui)) => {
+            LogicalScalar::UInt16(ui) => {
                 Ok(ast::Expr::Value(ast::Value::Number(ui.to_string(), false)))
             }
-            ScalarValue::UInt16(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::UInt32(Some(ui)) => {
+            LogicalScalar::UInt32(ui) => {
                 Ok(ast::Expr::Value(ast::Value::Number(ui.to_string(), false)))
             }
-            ScalarValue::UInt32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::UInt64(Some(ui)) => {
+            LogicalScalar::UInt64(ui) => {
                 Ok(ast::Expr::Value(ast::Value::Number(ui.to_string(), false)))
             }
-            ScalarValue::UInt64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Utf8(Some(str)) => {
+            LogicalScalar::String(str) => {
                 Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
             }
-            ScalarValue::Utf8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Utf8View(Some(str)) => {
-                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
-            }
-            ScalarValue::Utf8View(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::LargeUtf8(Some(str)) => {
-                Ok(ast::Expr::Value(SingleQuotedString(str.to_string())))
-            }
-            ScalarValue::LargeUtf8(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Binary(Some(_)) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Binary(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::BinaryView(Some(_)) => {
+            LogicalScalar::Binary(_) => not_impl_err!("Unsupported scalar: {v:?}"),
+            LogicalScalar::FixedSizeBinary(..) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
-            ScalarValue::BinaryView(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::FixedSizeBinary(..) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::LargeBinary(Some(_)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::LargeBinary(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
-            ScalarValue::List(a) => self.scalar_value_list_to_sql(a.values()),
-            ScalarValue::LargeList(a) => self.scalar_value_list_to_sql(a.values()),
-            ScalarValue::Date32(Some(_)) => {
-                let date = v
-                    .to_array()?
-                    .as_any()
-                    .downcast_ref::<Date32Array>()
-                    .ok_or(internal_datafusion_err!(
-                        "Unable to downcast to Date32 from Date32 scalar"
-                    ))?
-                    .value_as_date(0)
-                    .ok_or(internal_datafusion_err!(
-                        "Unable to convert Date32 to NaiveDate"
-                    ))?;
-
+            LogicalScalar::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
+            LogicalScalar::List(a) => self.scalar_value_list_to_sql(a.values()),
+            LogicalScalar::Date(v) => {
+                let date = date32_to_datetime(*v).ok_or(internal_datafusion_err!(
+                    "Unable to convert Date to NaiveDate"
+                ))?.date();
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
                     expr: Box::new(ast::Expr::Value(SingleQuotedString(
@@ -1166,112 +1103,15 @@ impl Unparser<'_> {
                     format: None,
                 })
             }
-            ScalarValue::Date32(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Date64(Some(_)) => {
-                let datetime = v
-                    .to_array()?
-                    .as_any()
-                    .downcast_ref::<Date64Array>()
-                    .ok_or(internal_datafusion_err!(
-                        "Unable to downcast to Date64 from Date64 scalar"
-                    ))?
-                    .value_as_datetime(0)
-                    .ok_or(internal_datafusion_err!(
-                        "Unable to convert Date64 to NaiveDateTime"
-                    ))?;
-
-                Ok(ast::Expr::Cast {
-                    kind: ast::CastKind::Cast,
-                    expr: Box::new(ast::Expr::Value(SingleQuotedString(
-                        datetime.to_string(),
-                    ))),
-                    data_type: self.ast_type_for_date64_in_cast(),
-                    format: None,
-                })
-            }
-            ScalarValue::Date64(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Time32Second(Some(_t)) => {
-                self.handle_time::<Time32SecondType>(v)
-            }
-            ScalarValue::Time32Second(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::Time32Millisecond(Some(_t)) => {
-                self.handle_time::<Time32MillisecondType>(v)
-            }
-            ScalarValue::Time32Millisecond(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::Time64Microsecond(Some(_t)) => {
-                self.handle_time::<Time64MicrosecondType>(v)
-            }
-            ScalarValue::Time64Microsecond(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::Time64Nanosecond(Some(_t)) => {
-                self.handle_time::<Time64NanosecondType>(v)
-            }
-            ScalarValue::Time64Nanosecond(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::TimestampSecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampSecondType>(v, tz)
-            }
-            ScalarValue::TimestampSecond(None, _) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::TimestampMillisecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampMillisecondType>(v, tz)
-            }
-            ScalarValue::TimestampMillisecond(None, _) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::TimestampMicrosecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampMicrosecondType>(v, tz)
-            }
-            ScalarValue::TimestampMicrosecond(None, _) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::TimestampNanosecond(Some(_ts), tz) => {
-                self.handle_timestamp::<TimestampNanosecondType>(v, tz)
-            }
-            ScalarValue::TimestampNanosecond(None, _) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::IntervalYearMonth(Some(_))
-            | ScalarValue::IntervalDayTime(Some(_))
-            | ScalarValue::IntervalMonthDayNano(Some(_)) => {
-                self.interval_scalar_to_sql(v)
-            }
-            ScalarValue::IntervalYearMonth(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::IntervalDayTime(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::IntervalMonthDayNano(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::DurationSecond(Some(_d)) => {
+            LogicalScalar::Time(t) => self.handle_time(t),
+            LogicalScalar::Timestamp(tu, tz, v) => self.handle_timestamp(*tu, tz, *v),
+            LogicalScalar::Interval(v) => self.interval_scalar_to_sql(v),
+            LogicalScalar::Duration(_, _) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
-            ScalarValue::DurationSecond(None) => Ok(ast::Expr::Value(ast::Value::Null)),
-            ScalarValue::DurationMillisecond(Some(_d)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::DurationMillisecond(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::DurationMicrosecond(Some(_d)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::DurationMicrosecond(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::DurationNanosecond(Some(_d)) => {
-                not_impl_err!("Unsupported scalar: {v:?}")
-            }
-            ScalarValue::DurationNanosecond(None) => {
-                Ok(ast::Expr::Value(ast::Value::Null))
-            }
-            ScalarValue::Struct(_) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
-            ScalarValue::Dictionary(_k, v) => self.scalar_to_sql(v),
+            LogicalScalar::Struct(_) => not_impl_err!("Unsupported scalar: {v:?}"),
+            LogicalScalar::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
+            LogicalScalar::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
         }
     }
 
@@ -1400,9 +1240,20 @@ impl Unparser<'_> {
         Ok(ast::Expr::Interval(interval))
     }
 
-    fn interval_scalar_to_sql(&self, v: &ScalarValue) -> Result<ast::Expr> {
+    fn interval_scalar_to_sql(&self, v: &LogicalInterval) -> Result<ast::Expr> {
         match self.dialect.interval_style() {
             IntervalStyle::PostgresVerbose => {
+                let v = match v {
+                    LogicalInterval::YearMonth(ym) => {
+                        ScalarValue::IntervalYearMonth(Some(*ym))
+                    }
+                    LogicalInterval::DayTime(dt) => {
+                        ScalarValue::IntervalDayTime(Some(*dt))
+                    }
+                    LogicalInterval::MonthDayNano(mdn) => {
+                        ScalarValue::IntervalMonthDayNano(Some(*mdn))
+                    }
+                };
                 let wrap_array = v.to_array()?;
                 let Some(result) = array_value_to_string(&wrap_array, 0).ok() else {
                     return internal_err!(
@@ -1422,7 +1273,7 @@ impl Unparser<'_> {
             }
             // If the interval standard is SQLStandard, implement a simple unparse logic
             IntervalStyle::SQLStandard => match v {
-                ScalarValue::IntervalYearMonth(Some(v)) => {
+                LogicalInterval::YearMonth(v) => {
                     let interval = Interval {
                         value: Box::new(ast::Expr::Value(SingleQuotedString(
                             v.to_string(),
@@ -1434,7 +1285,7 @@ impl Unparser<'_> {
                     };
                     Ok(ast::Expr::Interval(interval))
                 }
-                ScalarValue::IntervalDayTime(Some(v)) => {
+                LogicalInterval::DayTime(v) => {
                     let days = v.days;
                     let secs = v.milliseconds / 1_000;
                     let mins = secs / 60;
@@ -1455,7 +1306,7 @@ impl Unparser<'_> {
                     };
                     Ok(ast::Expr::Interval(interval))
                 }
-                ScalarValue::IntervalMonthDayNano(Some(v)) => {
+                LogicalInterval::MonthDayNano(v) => {
                     if v.months >= 0 && v.days == 0 && v.nanoseconds == 0 {
                         let interval = Interval {
                             value: Box::new(ast::Expr::Value(SingleQuotedString(
@@ -1492,18 +1343,13 @@ impl Unparser<'_> {
                         not_impl_err!("Unsupported IntervalMonthDayNano scalar with both Month and DayTime for IntervalStyle::SQLStandard")
                     }
                 }
-                _ => not_impl_err!(
-                    "Unsupported ScalarValue for Interval conversion: {v:?}"
-                ),
             },
             IntervalStyle::MySQL => match v {
-                ScalarValue::IntervalYearMonth(Some(v)) => {
-                    self.interval_to_mysql_expr(*v, 0, 0)
-                }
-                ScalarValue::IntervalDayTime(Some(v)) => {
+                LogicalInterval::YearMonth(v) => self.interval_to_mysql_expr(*v, 0, 0),
+                LogicalInterval::DayTime(v) => {
                     self.interval_to_mysql_expr(0, v.days, v.milliseconds as i64 * 1_000)
                 }
-                ScalarValue::IntervalMonthDayNano(Some(v)) => {
+                LogicalInterval::MonthDayNano(v) => {
                     if v.nanoseconds % 1_000 != 0 {
                         return not_impl_err!(
                             "Unsupported IntervalMonthDayNano scalar with nanoseconds precision for IntervalStyle::MySQL"
@@ -1511,9 +1357,6 @@ impl Unparser<'_> {
                     }
                     self.interval_to_mysql_expr(v.months, v.days, v.nanoseconds / 1_000)
                 }
-                _ => not_impl_err!(
-                    "Unsupported ScalarValue for Interval conversion: {v:?}"
-                ),
             },
         }
     }
@@ -1566,7 +1409,7 @@ impl Unparser<'_> {
                 Ok(self.dialect.timestamp_cast_dtype(time_unit, tz))
             }
             DataType::Date32 => Ok(self.dialect.date32_cast_dtype()),
-            DataType::Date64 => Ok(self.ast_type_for_date64_in_cast()),
+            DataType::Date64 => Ok(self.ast_type_for_date64_in_cast(i64::MAX)),
             DataType::Time32(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
