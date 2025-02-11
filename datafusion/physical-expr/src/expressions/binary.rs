@@ -494,24 +494,26 @@ impl PhysicalExpr for BinaryExpr {
 
     fn evaluate_statistics(
         &self,
-        children_stat: &[&StatisticsV2],
+        children_stats: &[&StatisticsV2],
     ) -> Result<StatisticsV2> {
-        let (left_stat, right_stat) = (children_stat[0], children_stat[1]);
+        let (left, right) = (children_stats[0], children_stats[1]);
 
         if self.op.is_numerical_operators() {
-            // This case is for addition and subtraction on both gaussian inputs
-            if let Some(stats) = add_sub_on_gaussians(&self.op, left_stat, right_stat)? {
+            // If we are dealing with Gaussian distributions and numerical
+            // operations, we might be able to construct the output statistics
+            // without falling back to an unknown distribution:
+            if let Some(stats) = operate_on_gaussians(&self.op, left, right)? {
                 return Ok(stats);
             }
         } else if self.op.is_logic_operator() {
-            return evaluate_statistics_logical(&self.op, left_stat, right_stat);
+            return evaluate_statistics_logical(&self.op, left, right);
         } else if self.op.supports_propagation() {
             // We are handling comparison operators here, so both of the inputs
             // are numeric distributions (not Bernoulli)
-            return new_bernoulli_from_binary_expr(&self.op, left_stat, right_stat);
+            return new_bernoulli_from_binary_expr(&self.op, left, right);
         }
 
-        new_unknown_from_binary_expr(&self.op, left_stat, right_stat)
+        new_unknown_from_binary_expr(&self.op, left, right)
     }
 
     fn propagate_statistics(
@@ -800,12 +802,10 @@ fn evaluate_statistics_logical(
         (Bernoulli(lb), Bernoulli(rb)) => {
             if *op == Operator::And {
                 match (lb.p_value().is_null(), rb.p_value().is_null()) {
-                    (false, false) => {
-                        StatisticsV2::new_bernoulli(lb.p_value().mul_checked(rb.p_value())?)
-                    }
-                    (false, true) if lb.p_value().eq(get_zero()) => {
-                        Ok(left_stat.clone())
-                    }
+                    (false, false) => StatisticsV2::new_bernoulli(
+                        lb.p_value().mul_checked(rb.p_value())?,
+                    ),
+                    (false, true) if lb.p_value().eq(get_zero()) => Ok(left_stat.clone()),
                     (true, false) if rb.p_value().eq(get_zero()) => {
                         Ok(right_stat.clone())
                     }
@@ -818,17 +818,13 @@ fn evaluate_statistics_logical(
                         let p_plus_q = lb.p_value().add_checked(rb.p_value())?;
                         let or_value = p_plus_q.sub_checked(p_mul_q)?;
                         StatisticsV2::new_bernoulli(or_value)
-                    },
-                    (false, true)  if lb.p_value().eq(get_one()) => Ok(left_stat.clone()),
-                    (true, false)  if rb.p_value().eq(get_one()) => {
-                        Ok(right_stat.clone())
                     }
+                    (false, true) if lb.p_value().eq(get_one()) => Ok(left_stat.clone()),
+                    (true, false) if rb.p_value().eq(get_one()) => Ok(right_stat.clone()),
                     _ => StatisticsV2::new_bernoulli(ScalarValue::Float64(None)),
                 }
             } else {
-                not_impl_err!(
-                    "Statistical evaluation only supports AND and OR operators"
-                )
+                not_impl_err!("Statistical evaluation only supports AND and OR operators")
             }
         }
         (_, _) => internal_err!(
@@ -837,27 +833,33 @@ fn evaluate_statistics_logical(
     }
 }
 
-/// Adds/subtracts two Gaussian distributions. For details, see:
+/// Applies the given operation using the given two Gaussian distributions.
+/// Currently, thie function handles only addition and subtraction operations.
+/// For details, see:
 ///
 /// <https://en.wikipedia.org/wiki/Sum_of_normally_distributed_random_variables>
-fn add_sub_on_gaussians(
+fn operate_on_gaussians(
     op: &Operator,
-    left_stat: &StatisticsV2,
-    right_stat: &StatisticsV2,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
 ) -> Result<Option<StatisticsV2>> {
-    if let (Gaussian(lg), Gaussian(rg)) = (left_stat, right_stat) {
-        if op.eq(&Operator::Plus) {
-            return StatisticsV2::new_gaussian(
-                lg.mean().add(rg.mean())?,
-                lg.variance().add(rg.variance())?,
-            )
-            .map(Some);
-        } else if op.eq(&Operator::Minus) {
-            return StatisticsV2::new_gaussian(
-                lg.mean().sub(rg.mean())?,
-                lg.variance().add(rg.variance())?,
-            )
-            .map(Some);
+    if let (Gaussian(lg), Gaussian(rg)) = (left, right) {
+        match op {
+            Operator::Plus => {
+                return StatisticsV2::new_gaussian(
+                    lg.mean().add_checked(rg.mean())?,
+                    lg.variance().add_checked(rg.variance())?,
+                )
+                .map(Some)
+            }
+            Operator::Minus => {
+                return StatisticsV2::new_gaussian(
+                    lg.mean().sub_checked(rg.mean())?,
+                    lg.variance().add_checked(rg.variance())?,
+                )
+                .map(Some)
+            }
+            _ => {}
         }
     }
     Ok(None)
