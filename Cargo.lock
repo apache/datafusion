@@ -5767,9 +5767,9 @@ dependencies = [
 
 [[package]]
 name = "substrait"
-version = "0.53.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef201e3234acdb66865840012c0b9c3d04269b74416fb6285cd480b01718c2f9"
+checksum = "9a71f43d785f205cd4a685f6cb245a0f0a5be20fbaee956a172e80574f5e8eda"
 dependencies = [
  "heck 0.5.0",
  "pbjson",
