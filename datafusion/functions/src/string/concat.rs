@@ -17,6 +17,7 @@
 
 use arrow::array::{as_largestring_array, Array};
 use arrow::datatypes::DataType;
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_expr::sort_properties::ExprProperties;
 use std::any::Any;
 use std::sync::Arc;
@@ -306,21 +307,12 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
 
     for arg in args.clone() {
         match arg {
-            Expr::Literal(ScalarValue::Utf8(None)) => {}
-            Expr::Literal(ScalarValue::LargeUtf8(None)) => {
-            }
-            Expr::Literal(ScalarValue::Utf8View(None)) => { }
+            Expr::Literal(LogicalScalar::Utf8(None)) => {}
 
             // filter out `null` args
             // All literals have been converted to Utf8 or LargeUtf8 in type_coercion.
             // Concatenate it with the `contiguous_scalar`.
-            Expr::Literal(ScalarValue::Utf8(Some(v))) => {
-                contiguous_scalar += &v;
-            }
-            Expr::Literal(ScalarValue::LargeUtf8(Some(v))) => {
-                contiguous_scalar += &v;
-            }
-            Expr::Literal(ScalarValue::Utf8View(Some(v))) => {
+            Expr::Literal(LogicalScalar::Utf8(Some(v))) => {
                 contiguous_scalar += &v;
             }
 
@@ -336,8 +328,6 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
                 if !contiguous_scalar.is_empty() {
                     match return_type {
                         DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
-                        DataType::LargeUtf8 => new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar)))),
-                        DataType::Utf8View => new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar)))),
                         _ => unreachable!(),
                     }
                     contiguous_scalar = "".to_string();
@@ -350,12 +340,6 @@ pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {
     if !contiguous_scalar.is_empty() {
         match return_type {
             DataType::Utf8 => new_args.push(lit(contiguous_scalar)),
-            DataType::LargeUtf8 => {
-                new_args.push(lit(ScalarValue::LargeUtf8(Some(contiguous_scalar))))
-            }
-            DataType::Utf8View => {
-                new_args.push(lit(ScalarValue::Utf8View(Some(contiguous_scalar))))
-            }
             _ => unreachable!(),
         }
     }

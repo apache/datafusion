@@ -580,6 +580,7 @@ mod tests {
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::plan_err;
+    use datafusion_common::scalar::LogicalScalar;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
@@ -653,7 +654,7 @@ mod tests {
 
         // CASE a when 0 THEN float64(null) ELSE 25.0 / cast(a, float64)  END
         let when1 = lit(0i32);
-        let then1 = lit(ScalarValue::Float64(None));
+        let then1 = lit(LogicalScalar::Float64(None));
         let else_value = binary(
             lit(25.0f64),
             Operator::Divide,

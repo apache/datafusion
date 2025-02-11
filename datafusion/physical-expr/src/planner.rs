@@ -24,6 +24,7 @@ use crate::{
 };
 
 use arrow::datatypes::Schema;
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::{
     exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
 };
@@ -168,7 +169,7 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsNotDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::Literal(LogicalScalar::Boolean(None)),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }
@@ -176,7 +177,7 @@ pub fn create_physical_expr(
             let binary_op = binary_expr(
                 expr.as_ref().clone(),
                 Operator::IsDistinctFrom,
-                Expr::Literal(ScalarValue::Boolean(None)),
+                Expr::Literal(LogicalScalar::Boolean(None)),
             );
             create_physical_expr(&binary_op, input_dfschema, execution_props)
         }

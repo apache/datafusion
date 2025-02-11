@@ -24,6 +24,7 @@ use crate::{
     ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -371,7 +372,7 @@ pub struct ReturnTypeArgs<'a> {
     ///
     /// For example, if a function is called like `my_function(column_a, 5)`
     /// this field will be `[None, Some(ScalarValue::Int32(Some(5)))]`
-    pub scalar_arguments: &'a [Option<&'a ScalarValue>],
+    pub scalar_arguments: &'a [Option<&'a LogicalScalar>],
     /// Can argument `i` (ever) null?
     pub nullables: &'a [bool],
 }

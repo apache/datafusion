@@ -18,7 +18,7 @@
 //! Literal module contains foundational types that are used to represent literals in DataFusion.
 
 use crate::Expr;
-use datafusion_common::ScalarValue;
+use datafusion_common::scalar::LogicalScalar;
 
 /// Create a literal expression
 pub fn lit<T: Literal>(n: T) -> Expr {
@@ -43,35 +43,35 @@ pub trait TimestampLiteral {
 
 impl Literal for &str {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::from(*self))
+        Expr::Literal(LogicalScalar::from(*self))
     }
 }
 
 impl Literal for String {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::from(self.as_ref()))
+        Expr::Literal(LogicalScalar::from(self.as_ref()))
     }
 }
 
 impl Literal for &String {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::from(self.as_ref()))
+        Expr::Literal(LogicalScalar::from(self.as_ref()))
     }
 }
 
 impl Literal for Vec<u8> {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
+        Expr::Literal(LogicalScalar::Binary(Some((*self).to_owned())))
     }
 }
 
 impl Literal for &[u8] {
     fn lit(&self) -> Expr {
-        Expr::Literal(ScalarValue::Binary(Some((*self).to_owned())))
+        Expr::Literal(LogicalScalar::Binary(Some((*self).to_owned())))
     }
 }
 
-impl Literal for ScalarValue {
+impl Literal for LogicalScalar {
     fn lit(&self) -> Expr {
         Expr::Literal(self.clone())
     }
@@ -82,7 +82,7 @@ macro_rules! make_literal {
         #[doc = $DOC]
         impl Literal for $TYPE {
             fn lit(&self) -> Expr {
-                Expr::Literal(ScalarValue::$SCALAR(Some(self.clone())))
+                Expr::Literal(LogicalScalar::$SCALAR(Some(self.clone())))
             }
         }
     };
@@ -93,7 +93,7 @@ macro_rules! make_nonzero_literal {
         #[doc = $DOC]
         impl Literal for $TYPE {
             fn lit(&self) -> Expr {
-                Expr::Literal(ScalarValue::$SCALAR(Some(self.get())))
+                Expr::Literal(LogicalScalar::$SCALAR(Some(self.get())))
             }
         }
     };
@@ -104,7 +104,7 @@ macro_rules! make_timestamp_literal {
         #[doc = $DOC]
         impl TimestampLiteral for $TYPE {
             fn lit_timestamp_nano(&self) -> Expr {
-                Expr::Literal(ScalarValue::TimestampNanosecond(
+                Expr::Literal(LogicalScalar::TimestampNanosecond(
                     Some((self.clone()).into()),
                     None,
                 ))
@@ -184,7 +184,7 @@ mod test {
     #[test]
     fn test_lit_nonzero() {
         let expr = col("id").eq(lit(NonZeroU32::new(1).unwrap()));
-        let expected = col("id").eq(lit(ScalarValue::UInt32(Some(1))));
+        let expected = col("id").eq(lit(LogicalScalar::UInt32(Some(1))));
         assert_eq!(expr, expected);
     }
 
@@ -192,7 +192,7 @@ mod test {
     fn test_lit_timestamp_nano() {
         let expr = col("time").eq(lit_timestamp_nano(10)); // 10 is an implicit i32
         let expected =
-            col("time").eq(lit(ScalarValue::TimestampNanosecond(Some(10), None)));
+            col("time").eq(lit(LogicalScalar::TimestampNanosecond(Some(10), None)));
         assert_eq!(expr, expected);
 
         let i: i64 = 10;

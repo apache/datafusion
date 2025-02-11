@@ -50,13 +50,14 @@ use crate::{
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, TableReference,
+    FunctionalDependencies, ParamValues, Result, TableReference,
     UnnestOptions,
 };
 use indexmap::IndexSet;
@@ -2920,7 +2921,7 @@ impl Limit {
     pub fn get_skip_type(&self) -> Result<SkipType> {
         match self.skip.as_deref() {
             Some(expr) => match *expr {
-                Expr::Literal(ScalarValue::Int64(s)) => {
+                Expr::Literal(LogicalScalar::Int64(s)) => {
                     // `skip = NULL` is equivalent to `skip = 0`
                     let s = s.unwrap_or(0);
                     if s >= 0 {
@@ -2940,14 +2941,14 @@ impl Limit {
     pub fn get_fetch_type(&self) -> Result<FetchType> {
         match self.fetch.as_deref() {
             Some(expr) => match *expr {
-                Expr::Literal(ScalarValue::Int64(Some(s))) => {
+                Expr::Literal(LogicalScalar::Int64(Some(s))) => {
                     if s >= 0 {
                         Ok(FetchType::Literal(Some(s as usize)))
                     } else {
                         plan_err!("LIMIT must be >= 0, '{}' was provided", s)
                     }
                 }
-                Expr::Literal(ScalarValue::Int64(None)) => Ok(FetchType::Literal(None)),
+                Expr::Literal(LogicalScalar::Int64(None)) => Ok(FetchType::Literal(None)),
                 _ => Ok(FetchType::UnsupportedExpr),
             },
             None => Ok(FetchType::Literal(None)),
@@ -3649,10 +3650,11 @@ mod tests {
         col, exists, in_subquery, lit, placeholder, scalar_subquery, GroupingSet,
     };
 
+    use datafusion_common::scalar::LogicalScalar;
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
-    use datafusion_common::{not_impl_err, Constraint, ScalarValue};
+    use datafusion_common::{not_impl_err, Constraint};
 
     use crate::test::function_stub::count;
 
@@ -4094,7 +4096,7 @@ digraph {
             .build()
             .unwrap();
 
-        let param_values = vec![ScalarValue::Int32(Some(42))];
+        let param_values = vec![LogicalScalar::Int32(Some(42))];
         plan.replace_params_with_values(&param_values.clone().into())
             .expect_err("unexpectedly succeeded to replace an invalid placeholder");
 
@@ -4182,7 +4184,7 @@ digraph {
         let col = schema.field_names()[0].clone();
 
         let filter = Filter::try_new(
-            Expr::Column(col.into()).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            Expr::Column(col.into()).eq(Expr::Literal(LogicalScalar::Int32(Some(1)))),
             scan,
         )
         .unwrap();
@@ -4307,23 +4309,23 @@ digraph {
             LogicalPlan::Limit(Limit {
                 skip: None,
                 fetch: Some(Box::new(Expr::Literal(
-                    ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+                    LogicalScalar::new_ten(&DataType::UInt32).unwrap(),
                 ))),
                 input: Arc::clone(&input),
             }),
             LogicalPlan::Limit(Limit {
                 skip: Some(Box::new(Expr::Literal(
-                    ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+                    LogicalScalar::new_ten(&DataType::UInt32).unwrap(),
                 ))),
                 fetch: None,
                 input: Arc::clone(&input),
             }),
             LogicalPlan::Limit(Limit {
                 skip: Some(Box::new(Expr::Literal(
-                    ScalarValue::new_one(&DataType::UInt32).unwrap(),
+                    LogicalScalar::new_one(&DataType::UInt32).unwrap(),
                 ))),
                 fetch: Some(Box::new(Expr::Literal(
-                    ScalarValue::new_ten(&DataType::UInt32).unwrap(),
+                    LogicalScalar::new_ten(&DataType::UInt32).unwrap(),
                 ))),
                 input,
             }),

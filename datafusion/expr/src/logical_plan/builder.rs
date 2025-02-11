@@ -51,6 +51,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, DataFusionError,
@@ -309,8 +310,8 @@ impl LogicalPlanBuilder {
         // wrap cast if data type is not same as common type.
         for row in &mut values {
             for (j, field_type) in fields.iter().map(|f| f.data_type()).enumerate() {
-                if let Expr::Literal(ScalarValue::Null) = row[j] {
-                    row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
+                if let Expr::Literal(LogicalScalar::Null) = row[j] {
+                    row[j] = Expr::Literal(LogicalScalar::try_from(field_type)?);
                 } else {
                     row[j] = std::mem::take(&mut row[j]).cast_to(field_type, schema)?;
                 }

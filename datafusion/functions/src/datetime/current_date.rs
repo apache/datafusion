@@ -21,6 +21,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Date32;
 use chrono::{Datelike, NaiveDate};
 
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
@@ -108,7 +109,7 @@ impl ScalarUDFImpl for CurrentDateFunc {
                     .num_days_from_ce(),
         );
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::Date32(days),
+            LogicalScalar::Date32(days),
         )))
     }
 

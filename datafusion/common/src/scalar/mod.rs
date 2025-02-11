@@ -63,6 +63,1009 @@ use crate::format::DEFAULT_CAST_OPTIONS;
 use half::f16;
 pub use struct_builder::ScalarStructBuilder;
 
+macro_rules! format_option {
+    ($F:expr, $EXPR:expr) => {{
+        match $EXPR {
+            Some(e) => write!($F, "{e}"),
+            None => write!($F, "NULL"),
+        }
+    }};
+}
+
+#[derive(Clone, Debug)]
+pub enum LogicalScalar {
+    /// represents `DataType::Null` (castable to/from any other type)
+    Null,
+    /// true or false value
+    Boolean(Option<bool>),
+    /// 16bit float
+    Float16(Option<f16>),
+    /// 32bit float
+    Float32(Option<f32>),
+    /// 64bit float
+    Float64(Option<f64>),
+    /// 128bit decimal, using the i128 to represent the decimal, precision scale
+    Decimal128(Option<i128>, u8, i8),
+    /// 256bit decimal, using the i256 to represent the decimal, precision scale
+    Decimal256(Option<i256>, u8, i8),
+    /// signed 8bit int
+    Int8(Option<i8>),
+    /// signed 16bit int
+    Int16(Option<i16>),
+    /// signed 32bit int
+    Int32(Option<i32>),
+    /// signed 64bit int
+    Int64(Option<i64>),
+    /// unsigned 8bit int
+    UInt8(Option<u8>),
+    /// unsigned 16bit int
+    UInt16(Option<u16>),
+    /// unsigned 32bit int
+    UInt32(Option<u32>),
+    /// unsigned 64bit int
+    UInt64(Option<u64>),
+    /// utf-8 encoded string.
+    Utf8(Option<String>),
+    /// utf-8 encoded string but from view types.
+    Utf8View(Option<String>),
+    /// utf-8 encoded string representing a LargeString's arrow type.
+    LargeUtf8(Option<String>),
+    /// binary
+    Binary(Option<Vec<u8>>),
+    /// binary but from view types.
+    BinaryView(Option<Vec<u8>>),
+    /// fixed size binary
+    FixedSizeBinary(i32, Option<Vec<u8>>),
+    /// large binary
+    LargeBinary(Option<Vec<u8>>),
+    /// Fixed size list scalar.
+    ///
+    /// The array must be a FixedSizeListArray with length 1.
+    FixedSizeList(Arc<FixedSizeListArray>),
+    /// Represents a single element of a [`ListArray`] as an [`ArrayRef`]
+    ///
+    /// The array must be a ListArray with length 1.
+    List(Arc<ListArray>),
+    /// The array must be a LargeListArray with length 1.
+    LargeList(Arc<LargeListArray>),
+    /// Represents a single element [`StructArray`] as an [`ArrayRef`]. See
+    /// [`ScalarValue`] for examples of how to create instances of this type.
+    Struct(Arc<StructArray>),
+    /// Represents a single element [`MapArray`] as an [`ArrayRef`].
+    Map(Arc<MapArray>),
+    /// Date stored as a signed 32bit int days since UNIX epoch 1970-01-01
+    Date32(Option<i32>),
+    /// Date stored as a signed 64bit int milliseconds since UNIX epoch 1970-01-01
+    Date64(Option<i64>),
+    /// Time stored as a signed 32bit int as seconds since midnight
+    Time32Second(Option<i32>),
+    /// Time stored as a signed 32bit int as milliseconds since midnight
+    Time32Millisecond(Option<i32>),
+    /// Time stored as a signed 64bit int as microseconds since midnight
+    Time64Microsecond(Option<i64>),
+    /// Time stored as a signed 64bit int as nanoseconds since midnight
+    Time64Nanosecond(Option<i64>),
+    /// Timestamp Second
+    TimestampSecond(Option<i64>, Option<Arc<str>>),
+    /// Timestamp Milliseconds
+    TimestampMillisecond(Option<i64>, Option<Arc<str>>),
+    /// Timestamp Microseconds
+    TimestampMicrosecond(Option<i64>, Option<Arc<str>>),
+    /// Timestamp Nanoseconds
+    TimestampNanosecond(Option<i64>, Option<Arc<str>>),
+    /// Number of elapsed whole months
+    IntervalYearMonth(Option<i32>),
+    /// Number of elapsed days and milliseconds (no leap seconds)
+    /// stored as 2 contiguous 32-bit signed integers
+    IntervalDayTime(Option<IntervalDayTime>),
+    /// A triple of the number of elapsed months, days, and nanoseconds.
+    /// Months and days are encoded as 32-bit signed integers.
+    /// Nanoseconds is encoded as a 64-bit signed integer (no leap seconds).
+    IntervalMonthDayNano(Option<IntervalMonthDayNano>),
+    /// Duration in seconds
+    DurationSecond(Option<i64>),
+    /// Duration in milliseconds
+    DurationMillisecond(Option<i64>),
+    /// Duration in microseconds
+    DurationMicrosecond(Option<i64>),
+    /// Duration in nanoseconds
+    DurationNanosecond(Option<i64>),
+    /// A nested datatype that can represent slots of differing types. Components:
+    /// `.0`: a tuple of union `type_id` and the single value held by this Scalar
+    /// `.1`: the list of fields, zero-to-one of which will by set in `.0`
+    /// `.2`: the physical storage of the source/destination UnionArray from which this Scalar came
+    Union(Option<(i8, Box<ScalarValue>)>, UnionFields, UnionMode),
+    /// Dictionary type: index type and value
+    Dictionary(Box<DataType>, Box<ScalarValue>),
+}
+
+impl Eq for LogicalScalar {}
+
+// manual implementation of `PartialEq`
+impl PartialEq for LogicalScalar {
+    fn eq(&self, other: &Self) -> bool {
+        use LogicalScalar::*;
+        // This purposely doesn't have a catch-all "(_, _)" so that
+        // any newly added enum variant will require editing this list
+        // or else face a compile error
+        match (self, other) {
+            (Decimal128(v1, p1, s1), Decimal128(v2, p2, s2)) => {
+                v1.eq(v2) && p1.eq(p2) && s1.eq(s2)
+            }
+            (Decimal128(_, _, _), _) => false,
+            (Decimal256(v1, p1, s1), Decimal256(v2, p2, s2)) => {
+                v1.eq(v2) && p1.eq(p2) && s1.eq(s2)
+            }
+            (Decimal256(_, _, _), _) => false,
+            (Boolean(v1), Boolean(v2)) => v1.eq(v2),
+            (Boolean(_), _) => false,
+            (Float32(v1), Float32(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
+                _ => v1.eq(v2),
+            },
+            (Float16(v1), Float16(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
+                _ => v1.eq(v2),
+            },
+            (Float32(_), _) => false,
+            (Float16(_), _) => false,
+            (Float64(v1), Float64(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => f1.to_bits() == f2.to_bits(),
+                _ => v1.eq(v2),
+            },
+            (Float64(_), _) => false,
+            (Int8(v1), Int8(v2)) => v1.eq(v2),
+            (Int8(_), _) => false,
+            (Int16(v1), Int16(v2)) => v1.eq(v2),
+            (Int16(_), _) => false,
+            (Int32(v1), Int32(v2)) => v1.eq(v2),
+            (Int32(_), _) => false,
+            (Int64(v1), Int64(v2)) => v1.eq(v2),
+            (Int64(_), _) => false,
+            (UInt8(v1), UInt8(v2)) => v1.eq(v2),
+            (UInt8(_), _) => false,
+            (UInt16(v1), UInt16(v2)) => v1.eq(v2),
+            (UInt16(_), _) => false,
+            (UInt32(v1), UInt32(v2)) => v1.eq(v2),
+            (UInt32(_), _) => false,
+            (UInt64(v1), UInt64(v2)) => v1.eq(v2),
+            (UInt64(_), _) => false,
+            (Utf8(v1), Utf8(v2)) => v1.eq(v2),
+            (Utf8(_), _) => false,
+            (Utf8View(v1), Utf8View(v2)) => v1.eq(v2),
+            (Utf8View(_), _) => false,
+            (LargeUtf8(v1), LargeUtf8(v2)) => v1.eq(v2),
+            (LargeUtf8(_), _) => false,
+            (Binary(v1), Binary(v2)) => v1.eq(v2),
+            (Binary(_), _) => false,
+            (BinaryView(v1), BinaryView(v2)) => v1.eq(v2),
+            (BinaryView(_), _) => false,
+            (FixedSizeBinary(_, v1), FixedSizeBinary(_, v2)) => v1.eq(v2),
+            (FixedSizeBinary(_, _), _) => false,
+            (LargeBinary(v1), LargeBinary(v2)) => v1.eq(v2),
+            (LargeBinary(_), _) => false,
+            (FixedSizeList(v1), FixedSizeList(v2)) => v1.eq(v2),
+            (FixedSizeList(_), _) => false,
+            (List(v1), List(v2)) => v1.eq(v2),
+            (List(_), _) => false,
+            (LargeList(v1), LargeList(v2)) => v1.eq(v2),
+            (LargeList(_), _) => false,
+            (Struct(v1), Struct(v2)) => v1.eq(v2),
+            (Struct(_), _) => false,
+            (Map(v1), Map(v2)) => v1.eq(v2),
+            (Map(_), _) => false,
+            (Date32(v1), Date32(v2)) => v1.eq(v2),
+            (Date32(_), _) => false,
+            (Date64(v1), Date64(v2)) => v1.eq(v2),
+            (Date64(_), _) => false,
+            (Time32Second(v1), Time32Second(v2)) => v1.eq(v2),
+            (Time32Second(_), _) => false,
+            (Time32Millisecond(v1), Time32Millisecond(v2)) => v1.eq(v2),
+            (Time32Millisecond(_), _) => false,
+            (Time64Microsecond(v1), Time64Microsecond(v2)) => v1.eq(v2),
+            (Time64Microsecond(_), _) => false,
+            (Time64Nanosecond(v1), Time64Nanosecond(v2)) => v1.eq(v2),
+            (Time64Nanosecond(_), _) => false,
+            (TimestampSecond(v1, _), TimestampSecond(v2, _)) => v1.eq(v2),
+            (TimestampSecond(_, _), _) => false,
+            (TimestampMillisecond(v1, _), TimestampMillisecond(v2, _)) => v1.eq(v2),
+            (TimestampMillisecond(_, _), _) => false,
+            (TimestampMicrosecond(v1, _), TimestampMicrosecond(v2, _)) => v1.eq(v2),
+            (TimestampMicrosecond(_, _), _) => false,
+            (TimestampNanosecond(v1, _), TimestampNanosecond(v2, _)) => v1.eq(v2),
+            (TimestampNanosecond(_, _), _) => false,
+            (DurationSecond(v1), DurationSecond(v2)) => v1.eq(v2),
+            (DurationSecond(_), _) => false,
+            (DurationMillisecond(v1), DurationMillisecond(v2)) => v1.eq(v2),
+            (DurationMillisecond(_), _) => false,
+            (DurationMicrosecond(v1), DurationMicrosecond(v2)) => v1.eq(v2),
+            (DurationMicrosecond(_), _) => false,
+            (DurationNanosecond(v1), DurationNanosecond(v2)) => v1.eq(v2),
+            (DurationNanosecond(_), _) => false,
+            (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.eq(v2),
+            (IntervalYearMonth(_), _) => false,
+            (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.eq(v2),
+            (IntervalDayTime(_), _) => false,
+            (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.eq(v2),
+            (IntervalMonthDayNano(_), _) => false,
+            (Union(val1, fields1, mode1), Union(val2, fields2, mode2)) => {
+                val1.eq(val2) && fields1.eq(fields2) && mode1.eq(mode2)
+            }
+            (Union(_, _, _), _) => false,
+            (Dictionary(k1, v1), Dictionary(k2, v2)) => k1.eq(k2) && v1.eq(v2),
+            (Dictionary(_, _), _) => false,
+            (Null, Null) => true,
+            (Null, _) => false,
+        }
+    }
+}
+
+// manual implementation of `PartialOrd`
+impl PartialOrd for LogicalScalar {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        use LogicalScalar::*;
+        // This purposely doesn't have a catch-all "(_, _)" so that
+        // any newly added enum variant will require editing this list
+        // or else face a compile error
+        match (self, other) {
+            (Decimal128(v1, p1, s1), Decimal128(v2, p2, s2)) => {
+                if p1.eq(p2) && s1.eq(s2) {
+                    v1.partial_cmp(v2)
+                } else {
+                    // Two decimal values can be compared if they have the same precision and scale.
+                    None
+                }
+            }
+            (Decimal128(_, _, _), _) => None,
+            (Decimal256(v1, p1, s1), Decimal256(v2, p2, s2)) => {
+                if p1.eq(p2) && s1.eq(s2) {
+                    v1.partial_cmp(v2)
+                } else {
+                    // Two decimal values can be compared if they have the same precision and scale.
+                    None
+                }
+            }
+            (Decimal256(_, _, _), _) => None,
+            (Boolean(v1), Boolean(v2)) => v1.partial_cmp(v2),
+            (Boolean(_), _) => None,
+            (Float32(v1), Float32(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
+                _ => v1.partial_cmp(v2),
+            },
+            (Float16(v1), Float16(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
+                _ => v1.partial_cmp(v2),
+            },
+            (Float32(_), _) => None,
+            (Float16(_), _) => None,
+            (Float64(v1), Float64(v2)) => match (v1, v2) {
+                (Some(f1), Some(f2)) => Some(f1.total_cmp(f2)),
+                _ => v1.partial_cmp(v2),
+            },
+            (Float64(_), _) => None,
+            (Int8(v1), Int8(v2)) => v1.partial_cmp(v2),
+            (Int8(_), _) => None,
+            (Int16(v1), Int16(v2)) => v1.partial_cmp(v2),
+            (Int16(_), _) => None,
+            (Int32(v1), Int32(v2)) => v1.partial_cmp(v2),
+            (Int32(_), _) => None,
+            (Int64(v1), Int64(v2)) => v1.partial_cmp(v2),
+            (Int64(_), _) => None,
+            (UInt8(v1), UInt8(v2)) => v1.partial_cmp(v2),
+            (UInt8(_), _) => None,
+            (UInt16(v1), UInt16(v2)) => v1.partial_cmp(v2),
+            (UInt16(_), _) => None,
+            (UInt32(v1), UInt32(v2)) => v1.partial_cmp(v2),
+            (UInt32(_), _) => None,
+            (UInt64(v1), UInt64(v2)) => v1.partial_cmp(v2),
+            (UInt64(_), _) => None,
+            (Utf8(v1), Utf8(v2)) => v1.partial_cmp(v2),
+            (Utf8(_), _) => None,
+            (LargeUtf8(v1), LargeUtf8(v2)) => v1.partial_cmp(v2),
+            (LargeUtf8(_), _) => None,
+            (Utf8View(v1), Utf8View(v2)) => v1.partial_cmp(v2),
+            (Utf8View(_), _) => None,
+            (Binary(v1), Binary(v2)) => v1.partial_cmp(v2),
+            (Binary(_), _) => None,
+            (BinaryView(v1), BinaryView(v2)) => v1.partial_cmp(v2),
+            (BinaryView(_), _) => None,
+            (FixedSizeBinary(_, v1), FixedSizeBinary(_, v2)) => v1.partial_cmp(v2),
+            (FixedSizeBinary(_, _), _) => None,
+            (LargeBinary(v1), LargeBinary(v2)) => v1.partial_cmp(v2),
+            (LargeBinary(_), _) => None,
+            // ScalarValue::List / ScalarValue::FixedSizeList / ScalarValue::LargeList are ensure to have length 1
+            (List(arr1), List(arr2)) => partial_cmp_list(arr1.as_ref(), arr2.as_ref()),
+            (FixedSizeList(arr1), FixedSizeList(arr2)) => {
+                partial_cmp_list(arr1.as_ref(), arr2.as_ref())
+            }
+            (LargeList(arr1), LargeList(arr2)) => {
+                partial_cmp_list(arr1.as_ref(), arr2.as_ref())
+            }
+            (List(_), _) | (LargeList(_), _) | (FixedSizeList(_), _) => None,
+            (Struct(struct_arr1), Struct(struct_arr2)) => {
+                partial_cmp_struct(struct_arr1, struct_arr2)
+            }
+            (Struct(_), _) => None,
+            (Map(map_arr1), Map(map_arr2)) => partial_cmp_map(map_arr1, map_arr2),
+            (Map(_), _) => None,
+            (Date32(v1), Date32(v2)) => v1.partial_cmp(v2),
+            (Date32(_), _) => None,
+            (Date64(v1), Date64(v2)) => v1.partial_cmp(v2),
+            (Date64(_), _) => None,
+            (Time32Second(v1), Time32Second(v2)) => v1.partial_cmp(v2),
+            (Time32Second(_), _) => None,
+            (Time32Millisecond(v1), Time32Millisecond(v2)) => v1.partial_cmp(v2),
+            (Time32Millisecond(_), _) => None,
+            (Time64Microsecond(v1), Time64Microsecond(v2)) => v1.partial_cmp(v2),
+            (Time64Microsecond(_), _) => None,
+            (Time64Nanosecond(v1), Time64Nanosecond(v2)) => v1.partial_cmp(v2),
+            (Time64Nanosecond(_), _) => None,
+            (TimestampSecond(v1, _), TimestampSecond(v2, _)) => v1.partial_cmp(v2),
+            (TimestampSecond(_, _), _) => None,
+            (TimestampMillisecond(v1, _), TimestampMillisecond(v2, _)) => {
+                v1.partial_cmp(v2)
+            }
+            (TimestampMillisecond(_, _), _) => None,
+            (TimestampMicrosecond(v1, _), TimestampMicrosecond(v2, _)) => {
+                v1.partial_cmp(v2)
+            }
+            (TimestampMicrosecond(_, _), _) => None,
+            (TimestampNanosecond(v1, _), TimestampNanosecond(v2, _)) => {
+                v1.partial_cmp(v2)
+            }
+            (TimestampNanosecond(_, _), _) => None,
+            (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.partial_cmp(v2),
+            (IntervalYearMonth(_), _) => None,
+            (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.partial_cmp(v2),
+            (IntervalDayTime(_), _) => None,
+            (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.partial_cmp(v2),
+            (IntervalMonthDayNano(_), _) => None,
+            (DurationSecond(v1), DurationSecond(v2)) => v1.partial_cmp(v2),
+            (DurationSecond(_), _) => None,
+            (DurationMillisecond(v1), DurationMillisecond(v2)) => v1.partial_cmp(v2),
+            (DurationMillisecond(_), _) => None,
+            (DurationMicrosecond(v1), DurationMicrosecond(v2)) => v1.partial_cmp(v2),
+            (DurationMicrosecond(_), _) => None,
+            (DurationNanosecond(v1), DurationNanosecond(v2)) => v1.partial_cmp(v2),
+            (DurationNanosecond(_), _) => None,
+            (Union(v1, t1, m1), Union(v2, t2, m2)) => {
+                if t1.eq(t2) && m1.eq(m2) {
+                    v1.partial_cmp(v2)
+                } else {
+                    None
+                }
+            }
+            (Union(_, _, _), _) => None,
+            (Dictionary(k1, v1), Dictionary(k2, v2)) => {
+                // Don't compare if the key types don't match (it is effectively a different datatype)
+                if k1 == k2 {
+                    v1.partial_cmp(v2)
+                } else {
+                    None
+                }
+            }
+            (Dictionary(_, _), _) => None,
+            (Null, Null) => Some(Ordering::Equal),
+            (Null, _) => None,
+        }
+    }
+}
+
+impl Hash for LogicalScalar {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        use LogicalScalar::*;
+        match self {
+            Decimal128(v, p, s) => {
+                v.hash(state);
+                p.hash(state);
+                s.hash(state)
+            }
+            Decimal256(v, p, s) => {
+                v.hash(state);
+                p.hash(state);
+                s.hash(state)
+            }
+            Boolean(v) => v.hash(state),
+            Float16(v) => v.map(Fl).hash(state),
+            Float32(v) => v.map(Fl).hash(state),
+            Float64(v) => v.map(Fl).hash(state),
+            Int8(v) => v.hash(state),
+            Int16(v) => v.hash(state),
+            Int32(v) => v.hash(state),
+            Int64(v) => v.hash(state),
+            UInt8(v) => v.hash(state),
+            UInt16(v) => v.hash(state),
+            UInt32(v) => v.hash(state),
+            UInt64(v) => v.hash(state),
+            Utf8(v) | LargeUtf8(v) | Utf8View(v) => v.hash(state),
+            Binary(v) | FixedSizeBinary(_, v) | LargeBinary(v) | BinaryView(v) => {
+                v.hash(state)
+            }
+            List(arr) => {
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
+            }
+            LargeList(arr) => {
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
+            }
+            FixedSizeList(arr) => {
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
+            }
+            Struct(arr) => {
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
+            }
+            Map(arr) => {
+                hash_nested_array(arr.to_owned() as ArrayRef, state);
+            }
+            Date32(v) => v.hash(state),
+            Date64(v) => v.hash(state),
+            Time32Second(v) => v.hash(state),
+            Time32Millisecond(v) => v.hash(state),
+            Time64Microsecond(v) => v.hash(state),
+            Time64Nanosecond(v) => v.hash(state),
+            TimestampSecond(v, _) => v.hash(state),
+            TimestampMillisecond(v, _) => v.hash(state),
+            TimestampMicrosecond(v, _) => v.hash(state),
+            TimestampNanosecond(v, _) => v.hash(state),
+            DurationSecond(v) => v.hash(state),
+            DurationMillisecond(v) => v.hash(state),
+            DurationMicrosecond(v) => v.hash(state),
+            DurationNanosecond(v) => v.hash(state),
+            IntervalYearMonth(v) => v.hash(state),
+            IntervalDayTime(v) => v.hash(state),
+            IntervalMonthDayNano(v) => v.hash(state),
+            Union(v, t, m) => {
+                v.hash(state);
+                t.hash(state);
+                m.hash(state);
+            }
+            Dictionary(k, v) => {
+                k.hash(state);
+                v.hash(state);
+            }
+            // stable hash for Null value
+            Null => 1.hash(state),
+        }
+    }
+}
+
+impl fmt::Display for LogicalScalar {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            LogicalScalar::Decimal128(v, p, s) => {
+                write!(f, "{v:?},{p:?},{s:?}")?;
+            }
+            LogicalScalar::Decimal256(v, p, s) => {
+                write!(f, "{v:?},{p:?},{s:?}")?;
+            }
+            LogicalScalar::Boolean(e) => format_option!(f, e)?,
+            LogicalScalar::Float16(e) => format_option!(f, e)?,
+            LogicalScalar::Float32(e) => format_option!(f, e)?,
+            LogicalScalar::Float64(e) => format_option!(f, e)?,
+            LogicalScalar::Int8(e) => format_option!(f, e)?,
+            LogicalScalar::Int16(e) => format_option!(f, e)?,
+            LogicalScalar::Int32(e) => format_option!(f, e)?,
+            LogicalScalar::Int64(e) => format_option!(f, e)?,
+            LogicalScalar::UInt8(e) => format_option!(f, e)?,
+            LogicalScalar::UInt16(e) => format_option!(f, e)?,
+            LogicalScalar::UInt32(e) => format_option!(f, e)?,
+            LogicalScalar::UInt64(e) => format_option!(f, e)?,
+            LogicalScalar::TimestampSecond(e, _) => format_option!(f, e)?,
+            LogicalScalar::TimestampMillisecond(e, _) => format_option!(f, e)?,
+            LogicalScalar::TimestampMicrosecond(e, _) => format_option!(f, e)?,
+            LogicalScalar::TimestampNanosecond(e, _) => format_option!(f, e)?,
+            LogicalScalar::Utf8(e)
+            | LogicalScalar::LargeUtf8(e)
+            | LogicalScalar::Utf8View(e) => format_option!(f, e)?,
+            LogicalScalar::Binary(e)
+            | LogicalScalar::FixedSizeBinary(_, e)
+            | LogicalScalar::LargeBinary(e)
+            | LogicalScalar::BinaryView(e) => match e {
+                Some(bytes) => {
+                    // print up to first 10 bytes, with trailing ... if needed
+                    for b in bytes.iter().take(10) {
+                        write!(f, "{b:02X}")?;
+                    }
+                    if bytes.len() > 10 {
+                        write!(f, "...")?;
+                    }
+                }
+                None => write!(f, "NULL")?,
+            },
+            LogicalScalar::List(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            LogicalScalar::LargeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            LogicalScalar::FixedSizeList(arr) => fmt_list(arr.to_owned() as ArrayRef, f)?,
+            LogicalScalar::Date32(e) => {
+                format_option!(f, e.map(|v| Date32Type::to_naive_date(v).to_string()))?
+            }
+            LogicalScalar::Date64(e) => {
+                format_option!(f, e.map(|v| Date64Type::to_naive_date(v).to_string()))?
+            }
+            LogicalScalar::Time32Second(e) => format_option!(f, e)?,
+            LogicalScalar::Time32Millisecond(e) => format_option!(f, e)?,
+            LogicalScalar::Time64Microsecond(e) => format_option!(f, e)?,
+            LogicalScalar::Time64Nanosecond(e) => format_option!(f, e)?,
+            LogicalScalar::IntervalYearMonth(e) => format_option!(f, e)?,
+            LogicalScalar::IntervalMonthDayNano(e) => {
+                format_option!(f, e.map(|v| format!("{v:?}")))?
+            }
+            LogicalScalar::IntervalDayTime(e) => {
+                format_option!(f, e.map(|v| format!("{v:?}")))?;
+            }
+            LogicalScalar::DurationSecond(e) => format_option!(f, e)?,
+            LogicalScalar::DurationMillisecond(e) => format_option!(f, e)?,
+            LogicalScalar::DurationMicrosecond(e) => format_option!(f, e)?,
+            LogicalScalar::DurationNanosecond(e) => format_option!(f, e)?,
+            LogicalScalar::Struct(struct_arr) => {
+                // LogicalScalar Struct should always have a single element
+                assert_eq!(struct_arr.len(), 1);
+
+                if struct_arr.null_count() == struct_arr.len() {
+                    write!(f, "NULL")?;
+                    return Ok(());
+                }
+
+                let columns = struct_arr.columns();
+                let fields = struct_arr.fields();
+                let nulls = struct_arr.nulls();
+
+                write!(
+                    f,
+                    "{{{}}}",
+                    columns
+                        .iter()
+                        .zip(fields.iter())
+                        .map(|(column, field)| {
+                            if nulls.is_some_and(|b| b.is_null(0)) {
+                                format!("{}:NULL", field.name())
+                            } else if let DataType::Struct(_) = field.data_type() {
+                                let sv = LogicalScalar::Struct(Arc::new(
+                                    column.as_struct().to_owned(),
+                                ));
+                                format!("{}:{sv}", field.name())
+                            } else {
+                                let sv = array_value_to_string(column, 0).unwrap();
+                                format!("{}:{sv}", field.name())
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )?
+            }
+            LogicalScalar::Map(map_arr) => {
+                if map_arr.null_count() == map_arr.len() {
+                    write!(f, "NULL")?;
+                    return Ok(());
+                }
+
+                write!(
+                    f,
+                    "[{}]",
+                    map_arr
+                        .iter()
+                        .map(|struct_array| {
+                            if let Some(arr) = struct_array {
+                                let mut buffer = VecDeque::new();
+                                for i in 0..arr.len() {
+                                    let key =
+                                        array_value_to_string(arr.column(0), i).unwrap();
+                                    let value =
+                                        array_value_to_string(arr.column(1), i).unwrap();
+                                    buffer.push_back(format!("{}:{}", key, value));
+                                }
+                                format!(
+                                    "{{{}}}",
+                                    buffer
+                                        .into_iter()
+                                        .collect::<Vec<_>>()
+                                        .join(",")
+                                        .as_str()
+                                )
+                            } else {
+                                "NULL".to_string()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )?
+            }
+            LogicalScalar::Union(val, _fields, _mode) => match val {
+                Some((id, val)) => write!(f, "{}:{}", id, val)?,
+                None => write!(f, "NULL")?,
+            },
+            LogicalScalar::Dictionary(_k, v) => write!(f, "{v}")?,
+            LogicalScalar::Null => write!(f, "NULL")?,
+        };
+        Ok(())
+    }
+}
+
+impl LogicalScalar {
+    /// return the [`DataType`] of this `ScalarValue`
+    pub fn data_type(&self) -> DataType {
+        match self {
+            LogicalScalar::Boolean(_) => DataType::Boolean,
+            LogicalScalar::UInt8(_) => DataType::UInt8,
+            LogicalScalar::UInt16(_) => DataType::UInt16,
+            LogicalScalar::UInt32(_) => DataType::UInt32,
+            LogicalScalar::UInt64(_) => DataType::UInt64,
+            LogicalScalar::Int8(_) => DataType::Int8,
+            LogicalScalar::Int16(_) => DataType::Int16,
+            LogicalScalar::Int32(_) => DataType::Int32,
+            LogicalScalar::Int64(_) => DataType::Int64,
+            LogicalScalar::Decimal128(_, precision, scale) => {
+                DataType::Decimal128(*precision, *scale)
+            }
+            LogicalScalar::Decimal256(_, precision, scale) => {
+                DataType::Decimal256(*precision, *scale)
+            }
+            LogicalScalar::TimestampSecond(_, tz_opt) => {
+                DataType::Timestamp(TimeUnit::Second, tz_opt.clone())
+            }
+            LogicalScalar::TimestampMillisecond(_, tz_opt) => {
+                DataType::Timestamp(TimeUnit::Millisecond, tz_opt.clone())
+            }
+            LogicalScalar::TimestampMicrosecond(_, tz_opt) => {
+                DataType::Timestamp(TimeUnit::Microsecond, tz_opt.clone())
+            }
+            LogicalScalar::TimestampNanosecond(_, tz_opt) => {
+                DataType::Timestamp(TimeUnit::Nanosecond, tz_opt.clone())
+            }
+            LogicalScalar::Float16(_) => DataType::Float16,
+            LogicalScalar::Float32(_) => DataType::Float32,
+            LogicalScalar::Float64(_) => DataType::Float64,
+            LogicalScalar::Utf8(_) => DataType::Utf8,
+            LogicalScalar::LargeUtf8(_) => DataType::LargeUtf8,
+            LogicalScalar::Utf8View(_) => DataType::Utf8View,
+            LogicalScalar::Binary(_) => DataType::Binary,
+            LogicalScalar::BinaryView(_) => DataType::BinaryView,
+            LogicalScalar::FixedSizeBinary(sz, _) => DataType::FixedSizeBinary(*sz),
+            LogicalScalar::LargeBinary(_) => DataType::LargeBinary,
+            LogicalScalar::List(arr) => arr.data_type().to_owned(),
+            LogicalScalar::LargeList(arr) => arr.data_type().to_owned(),
+            LogicalScalar::FixedSizeList(arr) => arr.data_type().to_owned(),
+            LogicalScalar::Struct(arr) => arr.data_type().to_owned(),
+            LogicalScalar::Map(arr) => arr.data_type().to_owned(),
+            LogicalScalar::Date32(_) => DataType::Date32,
+            LogicalScalar::Date64(_) => DataType::Date64,
+            LogicalScalar::Time32Second(_) => DataType::Time32(TimeUnit::Second),
+            LogicalScalar::Time32Millisecond(_) => DataType::Time32(TimeUnit::Millisecond),
+            LogicalScalar::Time64Microsecond(_) => DataType::Time64(TimeUnit::Microsecond),
+            LogicalScalar::Time64Nanosecond(_) => DataType::Time64(TimeUnit::Nanosecond),
+            LogicalScalar::IntervalYearMonth(_) => {
+                DataType::Interval(IntervalUnit::YearMonth)
+            }
+            LogicalScalar::IntervalDayTime(_) => DataType::Interval(IntervalUnit::DayTime),
+            LogicalScalar::IntervalMonthDayNano(_) => {
+                DataType::Interval(IntervalUnit::MonthDayNano)
+            }
+            LogicalScalar::DurationSecond(_) => DataType::Duration(TimeUnit::Second),
+            LogicalScalar::DurationMillisecond(_) => {
+                DataType::Duration(TimeUnit::Millisecond)
+            }
+            LogicalScalar::DurationMicrosecond(_) => {
+                DataType::Duration(TimeUnit::Microsecond)
+            }
+            LogicalScalar::DurationNanosecond(_) => {
+                DataType::Duration(TimeUnit::Nanosecond)
+            }
+            LogicalScalar::Union(_, fields, mode) => DataType::Union(fields.clone(), *mode),
+            LogicalScalar::Dictionary(k, v) => {
+                DataType::Dictionary(k.clone(), Box::new(v.data_type()))
+            }
+            LogicalScalar::Null => DataType::Null,
+        }
+    }
+
+    /// whether this value is null or not.
+    pub fn is_null(&self) -> bool {
+        match self {
+            LogicalScalar::Boolean(v) => v.is_none(),
+            LogicalScalar::Null => true,
+            LogicalScalar::Float16(v) => v.is_none(),
+            LogicalScalar::Float32(v) => v.is_none(),
+            LogicalScalar::Float64(v) => v.is_none(),
+            LogicalScalar::Decimal128(v, _, _) => v.is_none(),
+            LogicalScalar::Decimal256(v, _, _) => v.is_none(),
+            LogicalScalar::Int8(v) => v.is_none(),
+            LogicalScalar::Int16(v) => v.is_none(),
+            LogicalScalar::Int32(v) => v.is_none(),
+            LogicalScalar::Int64(v) => v.is_none(),
+            LogicalScalar::UInt8(v) => v.is_none(),
+            LogicalScalar::UInt16(v) => v.is_none(),
+            LogicalScalar::UInt32(v) => v.is_none(),
+            LogicalScalar::UInt64(v) => v.is_none(),
+            LogicalScalar::Utf8(v)
+            | LogicalScalar::Utf8View(v)
+            | LogicalScalar::LargeUtf8(v) => v.is_none(),
+            LogicalScalar::Binary(v)
+            | LogicalScalar::BinaryView(v)
+            | LogicalScalar::FixedSizeBinary(_, v)
+            | LogicalScalar::LargeBinary(v) => v.is_none(),
+            // arr.len() should be 1 for a list scalar, but we don't seem to
+            // enforce that anywhere, so we still check against array length.
+            LogicalScalar::List(arr) => arr.len() == arr.null_count(),
+            LogicalScalar::LargeList(arr) => arr.len() == arr.null_count(),
+            LogicalScalar::FixedSizeList(arr) => arr.len() == arr.null_count(),
+            LogicalScalar::Struct(arr) => arr.len() == arr.null_count(),
+            LogicalScalar::Map(arr) => arr.len() == arr.null_count(),
+            LogicalScalar::Date32(v) => v.is_none(),
+            LogicalScalar::Date64(v) => v.is_none(),
+            LogicalScalar::Time32Second(v) => v.is_none(),
+            LogicalScalar::Time32Millisecond(v) => v.is_none(),
+            LogicalScalar::Time64Microsecond(v) => v.is_none(),
+            LogicalScalar::Time64Nanosecond(v) => v.is_none(),
+            LogicalScalar::TimestampSecond(v, _) => v.is_none(),
+            LogicalScalar::TimestampMillisecond(v, _) => v.is_none(),
+            LogicalScalar::TimestampMicrosecond(v, _) => v.is_none(),
+            LogicalScalar::TimestampNanosecond(v, _) => v.is_none(),
+            LogicalScalar::IntervalYearMonth(v) => v.is_none(),
+            LogicalScalar::IntervalDayTime(v) => v.is_none(),
+            LogicalScalar::IntervalMonthDayNano(v) => v.is_none(),
+            LogicalScalar::DurationSecond(v) => v.is_none(),
+            LogicalScalar::DurationMillisecond(v) => v.is_none(),
+            LogicalScalar::DurationMicrosecond(v) => v.is_none(),
+            LogicalScalar::DurationNanosecond(v) => v.is_none(),
+            LogicalScalar::Union(v, _, _) => match v {
+                Some((_, s)) => s.is_null(),
+                None => true,
+            },
+            LogicalScalar::Dictionary(_, v) => v.is_null(),
+        }
+    }
+
+    pub fn new_zero(datatype: &DataType) -> Result<LogicalScalar> {
+        Ok(match datatype {
+            DataType::Boolean => LogicalScalar::Boolean(Some(false)),
+            DataType::Int8 => LogicalScalar::Int8(Some(0)),
+            DataType::Int16 => LogicalScalar::Int16(Some(0)),
+            DataType::Int32 => LogicalScalar::Int32(Some(0)),
+            DataType::Int64 => LogicalScalar::Int64(Some(0)),
+            DataType::UInt8 => LogicalScalar::UInt8(Some(0)),
+            DataType::UInt16 => LogicalScalar::UInt16(Some(0)),
+            DataType::UInt32 => LogicalScalar::UInt32(Some(0)),
+            DataType::UInt64 => LogicalScalar::UInt64(Some(0)),
+            DataType::Float16 => LogicalScalar::Float16(Some(f16::from_f32(0.0))),
+            DataType::Float32 => LogicalScalar::Float32(Some(0.0)),
+            DataType::Float64 => LogicalScalar::Float64(Some(0.0)),
+            DataType::Decimal128(precision, scale) => {
+                LogicalScalar::Decimal128(Some(0), *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                LogicalScalar::Decimal256(Some(i256::ZERO), *precision, *scale)
+            }
+            DataType::Timestamp(TimeUnit::Second, tz) => {
+                LogicalScalar::TimestampSecond(Some(0), tz.clone())
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+                LogicalScalar::TimestampMillisecond(Some(0), tz.clone())
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+                LogicalScalar::TimestampMicrosecond(Some(0), tz.clone())
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                LogicalScalar::TimestampNanosecond(Some(0), tz.clone())
+            }
+            DataType::Time32(TimeUnit::Second) => LogicalScalar::Time32Second(Some(0)),
+            DataType::Time32(TimeUnit::Millisecond) => {
+                LogicalScalar::Time32Millisecond(Some(0))
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                LogicalScalar::Time64Microsecond(Some(0))
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                LogicalScalar::Time64Nanosecond(Some(0))
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                LogicalScalar::IntervalYearMonth(Some(0))
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                LogicalScalar::IntervalDayTime(Some(IntervalDayTime::ZERO))
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                LogicalScalar::IntervalMonthDayNano(Some(IntervalMonthDayNano::ZERO))
+            }
+            DataType::Duration(TimeUnit::Second) => LogicalScalar::DurationSecond(Some(0)),
+            DataType::Duration(TimeUnit::Millisecond) => {
+                LogicalScalar::DurationMillisecond(Some(0))
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                LogicalScalar::DurationMicrosecond(Some(0))
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                LogicalScalar::DurationNanosecond(Some(0))
+            }
+            DataType::Date32 => LogicalScalar::Date32(Some(0)),
+            DataType::Date64 => LogicalScalar::Date64(Some(0)),
+            _ => {
+                return _not_impl_err!(
+                    "Can't create a zero scalar from data_type \"{datatype:?}\""
+                );
+            }
+        })
+    }
+
+    /// Create an one value in the given type.
+    pub fn new_one(datatype: &DataType) -> Result<LogicalScalar> {
+        Ok(match datatype {
+            DataType::Int8 => LogicalScalar::Int8(Some(1)),
+            DataType::Int16 => LogicalScalar::Int16(Some(1)),
+            DataType::Int32 => LogicalScalar::Int32(Some(1)),
+            DataType::Int64 => LogicalScalar::Int64(Some(1)),
+            DataType::UInt8 => LogicalScalar::UInt8(Some(1)),
+            DataType::UInt16 => LogicalScalar::UInt16(Some(1)),
+            DataType::UInt32 => LogicalScalar::UInt32(Some(1)),
+            DataType::UInt64 => LogicalScalar::UInt64(Some(1)),
+            DataType::Float16 => LogicalScalar::Float16(Some(f16::from_f32(1.0))),
+            DataType::Float32 => LogicalScalar::Float32(Some(1.0)),
+            DataType::Float64 => LogicalScalar::Float64(Some(1.0)),
+            _ => {
+                return _not_impl_err!(
+                    "Can't create an one scalar from data_type \"{datatype:?}\""
+                );
+            }
+        })
+    }
+
+    /// Create a negative one value in the given type.
+    pub fn new_negative_one(datatype: &DataType) -> Result<LogicalScalar> {
+        Ok(match datatype {
+            DataType::Int8 | DataType::UInt8 => LogicalScalar::Int8(Some(-1)),
+            DataType::Int16 | DataType::UInt16 => LogicalScalar::Int16(Some(-1)),
+            DataType::Int32 | DataType::UInt32 => LogicalScalar::Int32(Some(-1)),
+            DataType::Int64 | DataType::UInt64 => LogicalScalar::Int64(Some(-1)),
+            DataType::Float16 => LogicalScalar::Float16(Some(f16::from_f32(-1.0))),
+            DataType::Float32 => LogicalScalar::Float32(Some(-1.0)),
+            DataType::Float64 => LogicalScalar::Float64(Some(-1.0)),
+            _ => {
+                return _not_impl_err!(
+                    "Can't create a negative one scalar from data_type \"{datatype:?}\""
+                );
+            }
+        })
+    }
+
+    pub fn new_ten(datatype: &DataType) -> Result<LogicalScalar> {
+        Ok(match datatype {
+            DataType::Int8 => LogicalScalar::Int8(Some(10)),
+            DataType::Int16 => LogicalScalar::Int16(Some(10)),
+            DataType::Int32 => LogicalScalar::Int32(Some(10)),
+            DataType::Int64 => LogicalScalar::Int64(Some(10)),
+            DataType::UInt8 => LogicalScalar::UInt8(Some(10)),
+            DataType::UInt16 => LogicalScalar::UInt16(Some(10)),
+            DataType::UInt32 => LogicalScalar::UInt32(Some(10)),
+            DataType::UInt64 => LogicalScalar::UInt64(Some(10)),
+            DataType::Float16 => LogicalScalar::Float16(Some(f16::from_f32(10.0))),
+            DataType::Float32 => LogicalScalar::Float32(Some(10.0)),
+            DataType::Float64 => LogicalScalar::Float64(Some(10.0)),
+            _ => {
+                return _not_impl_err!(
+                    "Can't create a ten scalar from data_type \"{datatype:?}\""
+                );
+            }
+        })
+    }
+
+    pub fn try_new_null(data_type: &DataType) -> Result<Self> {
+        Ok(match data_type {
+            DataType::Boolean => LogicalScalar::Boolean(None),
+            DataType::Float16 => LogicalScalar::Float16(None),
+            DataType::Float64 => LogicalScalar::Float64(None),
+            DataType::Float32 => LogicalScalar::Float32(None),
+            DataType::Int8 => LogicalScalar::Int8(None),
+            DataType::Int16 => LogicalScalar::Int16(None),
+            DataType::Int32 => LogicalScalar::Int32(None),
+            DataType::Int64 => LogicalScalar::Int64(None),
+            DataType::UInt8 => LogicalScalar::UInt8(None),
+            DataType::UInt16 => LogicalScalar::UInt16(None),
+            DataType::UInt32 => LogicalScalar::UInt32(None),
+            DataType::UInt64 => LogicalScalar::UInt64(None),
+            DataType::Decimal128(precision, scale) => {
+                LogicalScalar::Decimal128(None, *precision, *scale)
+            }
+            DataType::Decimal256(precision, scale) => {
+                LogicalScalar::Decimal256(None, *precision, *scale)
+            }
+            DataType::Utf8 => LogicalScalar::Utf8(None),
+            DataType::LargeUtf8 => LogicalScalar::LargeUtf8(None),
+            DataType::Utf8View => LogicalScalar::Utf8View(None),
+            DataType::Binary => LogicalScalar::Binary(None),
+            DataType::BinaryView => LogicalScalar::BinaryView(None),
+            DataType::FixedSizeBinary(len) => LogicalScalar::FixedSizeBinary(*len, None),
+            DataType::LargeBinary => LogicalScalar::LargeBinary(None),
+            DataType::Date32 => LogicalScalar::Date32(None),
+            DataType::Date64 => LogicalScalar::Date64(None),
+            DataType::Time32(TimeUnit::Second) => LogicalScalar::Time32Second(None),
+            DataType::Time32(TimeUnit::Millisecond) => {
+                LogicalScalar::Time32Millisecond(None)
+            }
+            DataType::Time64(TimeUnit::Microsecond) => {
+                LogicalScalar::Time64Microsecond(None)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => LogicalScalar::Time64Nanosecond(None),
+            DataType::Timestamp(TimeUnit::Second, tz_opt) => {
+                LogicalScalar::TimestampSecond(None, tz_opt.clone())
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => {
+                LogicalScalar::TimestampMillisecond(None, tz_opt.clone())
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => {
+                LogicalScalar::TimestampMicrosecond(None, tz_opt.clone())
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
+                LogicalScalar::TimestampNanosecond(None, tz_opt.clone())
+            }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                LogicalScalar::IntervalYearMonth(None)
+            }
+            DataType::Interval(IntervalUnit::DayTime) => {
+                LogicalScalar::IntervalDayTime(None)
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                LogicalScalar::IntervalMonthDayNano(None)
+            }
+            DataType::Duration(TimeUnit::Second) => LogicalScalar::DurationSecond(None),
+            DataType::Duration(TimeUnit::Millisecond) => {
+                LogicalScalar::DurationMillisecond(None)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                LogicalScalar::DurationMicrosecond(None)
+            }
+            DataType::Duration(TimeUnit::Nanosecond) => {
+                LogicalScalar::DurationNanosecond(None)
+            }
+            DataType::Dictionary(index_type, value_type) => LogicalScalar::Dictionary(
+                index_type.clone(),
+                Box::new(value_type.as_ref().try_into()?),
+            ),
+            // `ScalaValue::List` contains single element `ListArray`.
+            DataType::List(field_ref) => LogicalScalar::List(Arc::new(
+                GenericListArray::new_null(Arc::clone(field_ref), 1),
+            )),
+            // `LogicalScalar::LargeList` contains single element `LargeListArray`.
+            DataType::LargeList(field_ref) => LogicalScalar::LargeList(Arc::new(
+                GenericListArray::new_null(Arc::clone(field_ref), 1),
+            )),
+            // `ScalaValue::FixedSizeList` contains single element `FixedSizeList`.
+            DataType::FixedSizeList(field_ref, fixed_length) => {
+                LogicalScalar::FixedSizeList(Arc::new(FixedSizeListArray::new_null(
+                    Arc::clone(field_ref),
+                    *fixed_length,
+                    1,
+                )))
+            }
+            DataType::Struct(fields) => LogicalScalar::Struct(
+                new_null_array(&DataType::Struct(fields.to_owned()), 1)
+                    .as_struct()
+                    .to_owned()
+                    .into(),
+            ),
+            DataType::Map(fields, sorted) => LogicalScalar::Map(
+                new_null_array(&DataType::Map(fields.to_owned(), sorted.to_owned()), 1)
+                    .as_map()
+                    .to_owned()
+                    .into(),
+            ),
+            DataType::Union(fields, mode) => {
+                LogicalScalar::Union(None, fields.clone(), *mode)
+            }
+            DataType::Null => LogicalScalar::Null,
+            _ => {
+                return _not_impl_err!(
+                    "Can't create a null scalar from data_type \"{data_type:?}\""
+                );
+            }
+        })
+    }
+
+    pub fn try_as_str(&self) -> Option<Option<&str>> {
+        let v = match self {
+            LogicalScalar::Utf8(v) => v,
+            _ => return None,
+        };
+        Some(v.as_ref().map(|v| v.as_str()))
+    }
+}
+
 /// A dynamically typed, nullable single value.
 ///
 /// While an arrow  [`Array`]) stores one or more values of the same type, in a
@@ -3406,6 +4409,18 @@ macro_rules! impl_scalar {
                 ScalarValue::$scalar(value)
             }
         }
+
+        impl From<$ty> for LogicalScalar {
+            fn from(value: $ty) -> Self {
+                LogicalScalar::$scalar(Some(value))
+            }
+        }
+
+        impl From<Option<$ty>> for LogicalScalar {
+            fn from(value: Option<$ty>) -> Self {
+                LogicalScalar::$scalar(value)
+            }
+        }
     };
 }
 
@@ -3427,10 +4442,23 @@ impl From<&str> for ScalarValue {
     }
 }
 
+impl From<&str> for LogicalScalar {
+    fn from(value: &str) -> Self {
+        Some(value).into()
+    }
+}
+
 impl From<Option<&str>> for ScalarValue {
     fn from(value: Option<&str>) -> Self {
         let value = value.map(|s| s.to_string());
         ScalarValue::Utf8(value)
+    }
+}
+
+impl From<Option<&str>> for LogicalScalar {
+    fn from(value: Option<&str>) -> Self {
+        let value = value.map(|s| s.to_string());
+        LogicalScalar::Utf8(value)
     }
 }
 
@@ -3455,9 +4483,23 @@ impl FromStr for ScalarValue {
     }
 }
 
+impl FromStr for LogicalScalar {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(s.into())
+    }
+}
+
 impl From<String> for ScalarValue {
     fn from(value: String) -> Self {
         ScalarValue::Utf8(Some(value))
+    }
+}
+
+impl From<String> for LogicalScalar {
+    fn from(value: String) -> Self {
+        LogicalScalar::Utf8(Some(value))
     }
 }
 
@@ -3469,6 +4511,21 @@ macro_rules! impl_try_from {
             fn try_from(value: ScalarValue) -> Result<Self> {
                 match value {
                     ScalarValue::$SCALAR(Some(inner_value)) => Ok(inner_value),
+                    _ => _internal_err!(
+                        "Cannot convert {:?} to {}",
+                        value,
+                        std::any::type_name::<Self>()
+                    ),
+                }
+            }
+        }
+
+        impl TryFrom<LogicalScalar> for $NATIVE {
+            type Error = DataFusionError;
+
+            fn try_from(value: LogicalScalar) -> Result<Self> {
+                match value {
+                    LogicalScalar::$SCALAR(Some(inner_value)) => Ok(inner_value),
                     _ => _internal_err!(
                         "Cannot convert {:?} to {}",
                         value,
@@ -3502,6 +4559,24 @@ impl TryFrom<ScalarValue> for i32 {
     }
 }
 
+impl TryFrom<LogicalScalar> for i32 {
+    type Error = DataFusionError;
+
+    fn try_from(value: LogicalScalar) -> Result<Self> {
+        match value {
+            LogicalScalar::Int32(Some(inner_value))
+            | LogicalScalar::Date32(Some(inner_value))
+            | LogicalScalar::Time32Second(Some(inner_value))
+            | LogicalScalar::Time32Millisecond(Some(inner_value)) => Ok(inner_value),
+            _ => _internal_err!(
+                "Cannot convert {:?} to {}",
+                value,
+                std::any::type_name::<Self>()
+            ),
+        }
+    }
+}
+
 // special implementation for i64 because of Date64, Time64 and Timestamp
 impl TryFrom<ScalarValue> for i64 {
     type Error = DataFusionError;
@@ -3516,6 +4591,28 @@ impl TryFrom<ScalarValue> for i64 {
             | ScalarValue::TimestampMicrosecond(Some(inner_value), _)
             | ScalarValue::TimestampMillisecond(Some(inner_value), _)
             | ScalarValue::TimestampSecond(Some(inner_value), _) => Ok(inner_value),
+            _ => _internal_err!(
+                "Cannot convert {:?} to {}",
+                value,
+                std::any::type_name::<Self>()
+            ),
+        }
+    }
+}
+
+impl TryFrom<LogicalScalar> for i64 {
+    type Error = DataFusionError;
+
+    fn try_from(value: LogicalScalar) -> Result<Self> {
+        match value {
+            LogicalScalar::Int64(Some(inner_value))
+            | LogicalScalar::Date64(Some(inner_value))
+            | LogicalScalar::Time64Microsecond(Some(inner_value))
+            | LogicalScalar::Time64Nanosecond(Some(inner_value))
+            | LogicalScalar::TimestampNanosecond(Some(inner_value), _)
+            | LogicalScalar::TimestampMicrosecond(Some(inner_value), _)
+            | LogicalScalar::TimestampMillisecond(Some(inner_value), _)
+            | LogicalScalar::TimestampSecond(Some(inner_value), _) => Ok(inner_value),
             _ => _internal_err!(
                 "Cannot convert {:?} to {}",
                 value,
@@ -3541,6 +4638,21 @@ impl TryFrom<ScalarValue> for i128 {
     }
 }
 
+impl TryFrom<LogicalScalar> for i128 {
+    type Error = DataFusionError;
+
+    fn try_from(value: LogicalScalar) -> Result<Self> {
+        match value {
+            LogicalScalar::Decimal128(Some(inner_value), _, _) => Ok(inner_value),
+            _ => _internal_err!(
+                "Cannot convert {:?} to {}",
+                value,
+                std::any::type_name::<Self>()
+            ),
+        }
+    }
+}
+
 // special implementation for i256 because of Decimal128
 impl TryFrom<ScalarValue> for i256 {
     type Error = DataFusionError;
@@ -3548,6 +4660,21 @@ impl TryFrom<ScalarValue> for i256 {
     fn try_from(value: ScalarValue) -> Result<Self> {
         match value {
             ScalarValue::Decimal256(Some(inner_value), _, _) => Ok(inner_value),
+            _ => _internal_err!(
+                "Cannot convert {:?} to {}",
+                value,
+                std::any::type_name::<Self>()
+            ),
+        }
+    }
+}
+
+impl TryFrom<LogicalScalar> for i256 {
+    type Error = DataFusionError;
+
+    fn try_from(value: LogicalScalar) -> Result<Self> {
+        match value {
+            LogicalScalar::Decimal256(Some(inner_value), _, _) => Ok(inner_value),
             _ => _internal_err!(
                 "Cannot convert {:?} to {}",
                 value,
@@ -3574,6 +4701,15 @@ impl TryFrom<DataType> for ScalarValue {
     }
 }
 
+impl TryFrom<DataType> for LogicalScalar {
+    type Error = DataFusionError;
+
+    /// Create a Null instance of ScalarValue for this datatype
+    fn try_from(datatype: DataType) -> Result<Self> {
+        (&datatype).try_into()
+    }
+}
+
 impl TryFrom<&DataType> for ScalarValue {
     type Error = DataFusionError;
 
@@ -3583,14 +4719,16 @@ impl TryFrom<&DataType> for ScalarValue {
     }
 }
 
-macro_rules! format_option {
-    ($F:expr, $EXPR:expr) => {{
-        match $EXPR {
-            Some(e) => write!($F, "{e}"),
-            None => write!($F, "NULL"),
-        }
-    }};
+impl TryFrom<&DataType> for LogicalScalar {
+    type Error = DataFusionError;
+
+    /// Create a Null instance of ScalarValue for this datatype
+    fn try_from(data_type: &DataType) -> Result<Self> {
+        Self::try_new_null(data_type)
+    }
 }
+
+
 
 // Implement Display trait for ScalarValue
 //

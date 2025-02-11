@@ -23,6 +23,8 @@ use arrow::array::{ArrayRef, StructArray};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use std::sync::Arc;
 
+use super::LogicalScalar;
+
 /// Builder for [`ScalarValue::Struct`].
 ///
 /// See examples on [`ScalarValue`]

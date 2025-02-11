@@ -18,6 +18,7 @@
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::Nanosecond;
+use datafusion_common::scalar::LogicalScalar;
 use std::any::Any;
 
 use datafusion_common::{internal_err, Result, ScalarValue};
@@ -106,7 +107,7 @@ impl ScalarUDFImpl for NowFunc {
             .query_execution_start_time
             .timestamp_nanos_opt();
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::TimestampNanosecond(now_ts, Some("+00:00".into())),
+            LogicalScalar::TimestampNanosecond(now_ts, Some("+00:00".into())),
         )))
     }
 

@@ -24,6 +24,7 @@ use super::power::PowerFunc;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
@@ -209,12 +210,12 @@ impl ScalarUDFImpl for LogFunc {
         let base = if let Some(base) = args.pop() {
             base
         } else {
-            lit(ScalarValue::new_ten(&number_datatype)?)
+            lit(LogicalScalar::new_ten(&number_datatype)?)
         };
 
         match number {
-            Expr::Literal(value) if value == ScalarValue::new_one(&number_datatype)? => {
-                Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_zero(
+            Expr::Literal(value) if value == LogicalScalar::new_one(&number_datatype)? => {
+                Ok(ExprSimplifyResult::Simplified(lit(LogicalScalar::new_zero(
                     &info.get_data_type(&base)?,
                 )?)))
             }
@@ -226,7 +227,7 @@ impl ScalarUDFImpl for LogFunc {
             }
             number => {
                 if number == base {
-                    Ok(ExprSimplifyResult::Simplified(lit(ScalarValue::new_one(
+                    Ok(ExprSimplifyResult::Simplified(lit(LogicalScalar::new_one(
                         &number_datatype,
                     )?)))
                 } else {
