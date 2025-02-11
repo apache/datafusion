@@ -25,7 +25,7 @@ use crate::{
     DataFusionError, Result, _internal_datafusion_err,
 };
 
-use arrow_schema::Schema;
+use arrow::datatypes::Schema;
 // TODO: handle once deprecated
 #[allow(deprecated)]
 use parquet::{

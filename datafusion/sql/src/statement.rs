@@ -29,7 +29,7 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 
-use arrow_schema::{DataType, Fields};
+use arrow::datatypes::{DataType, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{

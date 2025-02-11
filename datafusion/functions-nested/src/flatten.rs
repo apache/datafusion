@@ -20,8 +20,10 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow::buffer::OffsetBuffer;
-use arrow_schema::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List, Null};
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, LargeList, List, Null},
+};
 use datafusion_common::cast::{
     as_generic_list_array, as_large_list_array, as_list_array,
 };

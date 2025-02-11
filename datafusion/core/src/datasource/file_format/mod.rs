@@ -38,12 +38,12 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use crate::arrow::array::RecordBatch;
-use crate::arrow::datatypes::SchemaRef;
+use crate::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use crate::arrow::error::ArrowError;
 use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
 use crate::error::Result;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema};
 use datafusion_catalog::Session;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{internal_err, not_impl_err, GetExt};

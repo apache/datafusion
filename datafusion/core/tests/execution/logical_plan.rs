@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::Int64Array;
-use arrow_schema::{DataType, Field};
+use arrow::datatypes::{DataType, Field};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion_common::{Column, DFSchema, Result, ScalarValue, Spans};
 use datafusion_execution::TaskContext;

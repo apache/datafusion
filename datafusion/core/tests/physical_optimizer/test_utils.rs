@@ -22,8 +22,9 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow::array::Int32Array;
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion_common::config::ConfigOptions;

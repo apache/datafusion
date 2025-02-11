@@ -43,7 +43,7 @@ use crate::physical_plan::{
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
-use arrow_schema::ArrowError;
+use arrow::error::ArrowError;
 use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;

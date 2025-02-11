@@ -18,7 +18,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig};
 use datafusion_common::config::ConfigOptions;
