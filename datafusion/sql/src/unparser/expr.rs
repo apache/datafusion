@@ -1625,15 +1625,15 @@ mod tests {
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(0))),
-                r#"CAST('1970-01-01 00:00:00' AS DATETIME)"#,
+                r#"CAST('1970-01-01 00:00:00' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(10000))),
-                r#"CAST('1970-01-01 00:00:10' AS DATETIME)"#,
+                r#"CAST('1970-01-01 00:00:10' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date64(Some(-10000))),
-                r#"CAST('1969-12-31 23:59:50' AS DATETIME)"#,
+                r#"CAST('1969-12-31 23:59:50' AS TIMESTAMP)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Date32(Some(0))),
