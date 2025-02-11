@@ -538,8 +538,11 @@ fn type_union_resolution_coercion(
         (DataType::Dictionary(index_type, value_type), other_type)
         | (other_type, DataType::Dictionary(index_type, value_type)) => {
             match type_union_resolution_coercion(value_type, other_type) {
-                // Dict(k, Utf8View) is redundant, Utf8View is good enough
+                // Dict with View type is redundant, use value type instead
                 Some(DataType::Utf8View) => Some(DataType::Utf8View),
+                Some(DataType::BinaryView) => Some(DataType::BinaryView),
+                Some(DataType::ListView(field)) => Some(DataType::ListView(field)),
+                Some(DataType::LargeListView(field)) => Some(DataType::LargeListView(field)),
                 Some(new_value_type) => Some(DataType::Dictionary(
                     index_type.clone(),
                     Box::new(new_value_type),
