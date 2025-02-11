@@ -2691,7 +2691,7 @@ mod tests {
             (
                 Interval::make(Some(-1000.0_f64), Some(1500.0_f64))?,
                 Interval::make(Some(-1500.0_f64), Some(2000.0_f64))?,
-                Interval::make(Some(-1000.0_f64), Some(2000.0_f64))?,
+                Interval::make(Some(-1500.0_f64), Some(2000.0_f64))?,
             ),
             (
                 Interval::make(Some(16.0_f64), Some(32.0_f64))?,
