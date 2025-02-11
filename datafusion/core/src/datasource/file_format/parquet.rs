@@ -1313,7 +1313,7 @@ mod tests {
         types::Int32Type, Array, ArrayRef, DictionaryArray, Int32Array, Int64Array,
         StringArray,
     };
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_common::cast::{
         as_binary_array, as_binary_view_array, as_boolean_array, as_float32_array,

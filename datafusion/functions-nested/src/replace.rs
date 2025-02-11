@@ -21,10 +21,9 @@ use arrow::array::{
     Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
     NullBufferBuilder, OffsetSizeTrait,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
 use arrow::buffer::OffsetBuffer;
-use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{

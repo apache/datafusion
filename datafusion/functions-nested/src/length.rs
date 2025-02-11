@@ -21,8 +21,10 @@ use crate::utils::make_scalar_function;
 use arrow::array::{
     Array, ArrayRef, Int64Array, LargeListArray, ListArray, OffsetSizeTrait, UInt64Array,
 };
-use arrow_schema::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List, UInt64};
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, LargeList, List, UInt64},
+};
 use datafusion_common::cast::{as_generic_list_array, as_int64_array};
 use datafusion_common::{exec_err, internal_datafusion_err, plan_err, Result};
 use datafusion_expr::{

@@ -22,8 +22,8 @@ use arrow::array::{
     Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow_schema::DataType::{LargeList, List, Null};
-use arrow_schema::{DataType, FieldRef};
+use arrow::datatypes::DataType::{LargeList, List, Null};
+use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{

@@ -20,8 +20,7 @@
 use crate::error::_internal_err;
 use crate::{Result, ScalarValue};
 use arrow::array::{ArrayRef, StructArray};
-use arrow::datatypes::{DataType, FieldRef, Fields};
-use arrow_schema::Field;
+use arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use std::sync::Arc;
 
 /// Builder for [`ScalarValue::Struct`].

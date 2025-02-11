@@ -36,8 +36,7 @@ use arrow::array::{
     ArrayData, ArrayRef, BufferBuilder, DictionaryArray, RecordBatch, RecordBatchOptions,
 };
 use arrow::buffer::Buffer;
-use arrow::datatypes::{ArrowNativeType, UInt16Type};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     exec_err, ColumnStatistics, Constraints, DataFusionError, Statistics,
@@ -84,8 +83,8 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::Schema;
-/// use datafusion::datasource::listing::PartitionedFile;
+/// # use arrow::datatypes::Schema;
+/// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion::datasource::physical_plan::ArrowSource;

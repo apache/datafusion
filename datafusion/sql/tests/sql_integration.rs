@@ -21,8 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
-use arrow_schema::TimeUnit::Nanosecond;
-use arrow_schema::*;
+use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,

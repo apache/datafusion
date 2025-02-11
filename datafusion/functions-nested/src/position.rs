@@ -17,8 +17,11 @@
 
 //! [`ScalarUDFImpl`] definitions for array_position and array_positions functions.
 
-use arrow_schema::DataType::{LargeList, List, UInt64};
-use arrow_schema::{DataType, Field};
+use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    DataType::{LargeList, List, UInt64},
+    Field,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };

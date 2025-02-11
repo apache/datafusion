@@ -46,9 +46,8 @@ use crate::{
 
 use arrow::array::{Array, RecordBatch, RecordBatchOptions, UInt32Array};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, SortField};
-use arrow_schema::DataType;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};

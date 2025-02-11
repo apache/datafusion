@@ -1202,7 +1202,8 @@ mod tests {
         builder::{Int64Builder, UInt64Builder},
         RecordBatch,
     };
-    use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{
         assert_batches_eq, exec_datafusion_err, Result, ScalarValue,
     };

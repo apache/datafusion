@@ -526,7 +526,7 @@ mod tests {
     use crate::test::{make_partition, object_store::register_test_store};
 
     use crate::datasource::physical_plan::CsvSource;
-    use arrow_schema::Schema;
+    use arrow::datatypes::Schema;
     use datafusion_common::internal_err;
 
     /// Test `FileOpener` which will simulate errors during file opening or scanning

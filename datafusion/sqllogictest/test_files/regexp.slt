@@ -477,8 +477,8 @@ SELECT 'foo\nbar\nbaz' ~ 'bar';
 true
 
 statement error
-Error during planning: Cannot infer common argument type for regex operation List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata
-: {} }) ~ List(Field { name: "item", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
+Error during planning: Cannot infer common argument type for regex operation List(Field { name: "item", data_type: Int64, nullable: true, dict_is_ordered: false, metadata
+: {} }) ~ List(Field { name: "item", data_type: Int64, nullable: true, dict_is_ordered: false, metadata: {} })
 select [1,2] ~ [3];
 
 query B

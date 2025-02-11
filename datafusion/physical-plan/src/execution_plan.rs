@@ -283,7 +283,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// ```
     /// # use std::sync::Arc;
     /// # use arrow::array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     /// # use datafusion_physical_plan::memory::MemoryStream;
@@ -313,7 +313,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// ```
     /// # use std::sync::Arc;
     /// # use arrow::array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
     /// # use datafusion_physical_plan::memory::MemoryStream;
@@ -348,7 +348,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// ```
     /// # use std::sync::Arc;
     /// # use arrow::array::RecordBatch;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use futures::TryStreamExt;
     /// # use datafusion_common::Result;
     /// # use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -1055,7 +1055,7 @@ pub enum CardinalityEffect {
 mod tests {
     use super::*;
     use arrow::array::{DictionaryArray, Int32Array, NullArray, RunArray};
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use std::any::Any;
     use std::sync::Arc;
 

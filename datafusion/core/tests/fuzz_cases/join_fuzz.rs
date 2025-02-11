@@ -22,9 +22,9 @@ use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::SortOptions;
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::Schema;
 use datafusion::common::JoinSide;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::BinaryExpr;

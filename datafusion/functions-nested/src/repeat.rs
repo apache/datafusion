@@ -25,8 +25,11 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::compute::cast;
-use arrow_schema::DataType::{LargeList, List};
-use arrow_schema::{DataType, Field};
+use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    DataType::{LargeList, List},
+    Field,
+};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{

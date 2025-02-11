@@ -74,7 +74,7 @@ recursive_protection = [
     "datafusion-physical-optimizer/recursive_protection",
     "datafusion-sql/recursive_protection",
 ]
-serde = ["arrow-schema/serde"]
+serde = ["dep:serde"]
 string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [
     "datafusion-sql/unicode_expressions",
@@ -120,6 +120,7 @@ parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 rand = { workspace = true }
 regex = { workspace = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
@@ -215,3 +216,7 @@ name = "topk_aggregate"
 harness = false
 name = "map_query_sql"
 required-features = ["nested_expressions"]
+
+[[bench]]
+harness = false
+name = "dataframe"

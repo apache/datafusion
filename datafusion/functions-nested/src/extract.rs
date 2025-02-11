@@ -23,8 +23,10 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List};
-use arrow_schema::Field;
+use arrow::datatypes::{
+    DataType::{FixedSizeList, LargeList, List},
+    Field,
+};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
@@ -982,7 +984,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::array_element_udf;
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Column, DFSchema, ScalarValue};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{cast, Expr, ExprSchemable};

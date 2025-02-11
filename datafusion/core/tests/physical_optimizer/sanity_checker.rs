@@ -22,7 +22,8 @@ use crate::physical_optimizer::test_utils::{
     repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec,
 };
 
-use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;

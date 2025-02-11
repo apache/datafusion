@@ -18,9 +18,8 @@
 use crate::{PhysicalExpr, PhysicalSortExpr};
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::Field;
+use arrow::datatypes::{Field, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::PartitionEvaluator;
 
