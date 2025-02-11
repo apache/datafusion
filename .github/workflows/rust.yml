@@ -352,17 +352,16 @@ jobs:
         uses: ./.github/actions/setup-windows-builder
       - name: Configure Fast Compilation Flags
         run: |
-          echo "RUSTFLAGS=-C target-cpu=native -C opt-level=3 -C codegen-units=1 -C debuginfo=line-tables-only -C incremental=false" >> $env:GITHUB_ENV
+          echo "RUSTFLAGS=-C target-cpu=native -C opt-level=1 -C codegen-units=32 -C debuginfo=line-tables-only -C incremental=false" >> $env:GITHUB_ENV
           echo "CARGO_PROFILE_RELEASE_LTO=thin" >> $env:GITHUB_ENV
           echo "CARGO_PROFILE_RELEASE_PANIC=abort" >> $env:GITHUB_ENV
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
-          cargo build --release
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,json,backtrace --no-fail-fast --release
+          cargo test --lib --tests --bins --features avro,json,backtrace --release
           cd datafusion-cli
-          cargo test --lib --tests --bins --all-features --no-fail-fast --release
+          cargo test --lib --tests --bins --all-features --release
 
   # Commenting out intel mac build as so few users would ever use it
   # Details: https://github.com/apache/datafusion/issues/13846
