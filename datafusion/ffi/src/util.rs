@@ -70,8 +70,8 @@ mod tests {
 
     #[test]
     fn test_conversion() {
-        const VALID_VALUE: &'static str = "valid_value";
-        const ERROR_VALUE: &'static str = "error_value";
+        const VALID_VALUE: &str = "valid_value";
+        const ERROR_VALUE: &str = "error_value";
 
         let ok_r_result: RResult<RString, RString> =
             RResult::ROk(VALID_VALUE.to_string().into());
