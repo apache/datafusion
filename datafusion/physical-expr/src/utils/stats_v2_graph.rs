@@ -210,8 +210,8 @@ impl ExprStatisticGraph {
     }
 }
 
-/// Creates a new [`Unknown`] distribution, and tries to compute
-/// mean/median/variance if it is calculable.
+/// Creates a new statistic with [`Unknown`] distribution, and tries to compute
+/// mean, median and variance if possible.
 pub fn new_unknown_from_binary_expr(
     op: &Operator,
     left: &StatisticsV2,
@@ -225,18 +225,20 @@ pub fn new_unknown_from_binary_expr(
     )
 }
 
-/// Tries to create a new `Bernoulli` distribution, by computing the result probability.
-/// It expects comparison operators coming up with numeric distributions.
-pub fn new_bernoulli_from_binary_expr(
+/// Creates a new statistic with `Bernoulli` distribution by computing the
+/// resulting probability. Expects `op` to be a comparison operator, with `left`
+/// and `right` having numeric, continuous distributions.
+pub fn create_bernoulli_from_comparison(
     op: &Operator,
     left: &StatisticsV2,
     right: &StatisticsV2,
 ) -> Result<StatisticsV2> {
     let (li, ri) = (left.range()?, right.range()?);
-    if matches!(op, Operator::Eq | Operator::NotEq)
-        && matches!(left, Uniform(_))
+    if matches!(left, Uniform(_))
         && matches!(right, Uniform(_))
+        && matches!(op, Operator::Eq | Operator::NotEq)
     {
+        // TODO: Can we handle inequality operators for Uniform-Uniform comparisons?
         if let Some(intersection) = li.intersect(&ri)? {
             let overall_spread = max_of_bounds(li.upper(), ri.upper())
                 .sub_checked(min_of_bounds(li.lower(), ri.lower()))?;
@@ -248,22 +250,22 @@ pub fn new_bernoulli_from_binary_expr(
             if op == &Operator::Eq {
                 StatisticsV2::new_bernoulli(p)
             } else {
-                StatisticsV2::new_bernoulli(get_one().sub(p)?)
+                let one = ScalarValue::new_one(&li.data_type())?;
+                StatisticsV2::new_bernoulli(one.sub(p)?)
             }
         } else if op == &Operator::Eq {
-            StatisticsV2::new_bernoulli(get_zero().clone())
+            StatisticsV2::new_bernoulli(ScalarValue::new_zero(&li.data_type())?)
         } else {
-            // op = Operator::NotEq
-            StatisticsV2::new_bernoulli(get_one().clone())
+            StatisticsV2::new_bernoulli(ScalarValue::new_one(&li.data_type())?)
         }
     } else {
         let range_evaluation = apply_operator(op, &li, &ri)?;
         if range_evaluation.eq(&Interval::CERTAINLY_FALSE) {
-            StatisticsV2::new_bernoulli(get_zero().clone())
+            StatisticsV2::new_bernoulli(ScalarValue::new_zero(&li.data_type())?)
         } else if range_evaluation.eq(&Interval::CERTAINLY_TRUE) {
-            StatisticsV2::new_bernoulli(get_one().clone())
+            StatisticsV2::new_bernoulli(ScalarValue::new_one(&li.data_type())?)
         } else if range_evaluation.eq(&Interval::UNCERTAIN) {
-            StatisticsV2::new_bernoulli(ScalarValue::Float64(None))
+            StatisticsV2::new_bernoulli(ScalarValue::try_from(&li.data_type())?)
         } else {
             internal_err!("new_bernoulli_from_binary_expr() must be called with predicate operators")
         }

@@ -23,7 +23,7 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use crate::utils::stats_v2_graph::{
-    new_bernoulli_from_binary_expr, new_unknown_from_binary_expr,
+    create_bernoulli_from_comparison, new_unknown_from_binary_expr,
 };
 use crate::PhysicalExpr;
 
@@ -499,20 +499,22 @@ impl PhysicalExpr for BinaryExpr {
         let (left, right) = (children_stats[0], children_stats[1]);
 
         if self.op.is_numerical_operators() {
-            // If we are dealing with Gaussian distributions and numerical
-            // operations, we might be able to construct the output statistics
-            // without falling back to an unknown distribution:
+            // We might be able to construct the output statistics more accurately,
+            // without falling back to an unknown distribution, if we are dealing
+            // with Gaussian distributions and numerical operations.
             if let Some(stats) = operate_on_gaussians(&self.op, left, right)? {
                 return Ok(stats);
             }
         } else if self.op.is_logic_operator() {
-            return evaluate_statistics_logical(&self.op, left, right);
+            // If we are dealing with logical operators, we expect (and can only
+            // operate on) Bernoulli distributions.
+            return operate_on_bernoullis(&self.op, left, right);
         } else if self.op.supports_propagation() {
-            // We are handling comparison operators here, so both of the inputs
-            // are numeric distributions (not Bernoulli)
-            return new_bernoulli_from_binary_expr(&self.op, left, right);
+            // If we are handling comparison operators, we expect (and can only
+            // operate on) numeric, continuous distributions.
+            return create_bernoulli_from_comparison(&self.op, left, right);
         }
-
+        // Fall back to an unknown distribution with only summary statistics:
         new_unknown_from_binary_expr(&self.op, left, right)
     }
 
@@ -793,7 +795,7 @@ pub fn similar_to(
     Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
 }
 
-fn evaluate_statistics_logical(
+fn operate_on_bernoullis(
     op: &Operator,
     left: &StatisticsV2,
     right: &StatisticsV2,
