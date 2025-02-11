@@ -30,7 +30,7 @@ runs:
       run: |
         RETRY=("ci/scripts/retry" timeout 120)
         "${RETRY[@]}" apt-get update
-        "${RETRY[@]}" apt-get install -y protobuf-compiler cmake
+        "${RETRY[@]}" apt-get install -y protobuf-compiler
     - name: Setup Rust toolchain
       shell: bash
       # rustfmt is needed for the substrait build script
