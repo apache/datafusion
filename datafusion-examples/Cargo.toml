@@ -56,8 +56,10 @@ path = "examples/external_dependency/query-aws-s3.rs"
 arrow = { workspace = true }
 # arrow_schema is required for record_batch! macro :sad:
 arrow-flight = { workspace = true }
+arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+dashmap = { workspace = true }
 # note only use main datafusion crate for examples
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
 datafusion-proto = { workspace = true }

@@ -1923,8 +1923,10 @@ version = "45.0.0"
 dependencies = [
  "arrow",
  "arrow-flight",
+ "arrow-schema",
  "async-trait",
  "bytes",
+ "dashmap",
  "datafusion",
  "datafusion-proto",
  "env_logger",
