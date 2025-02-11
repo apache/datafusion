@@ -36,7 +36,7 @@ use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
 use arrow_schema::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
@@ -45,7 +45,7 @@ use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nes
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
     self, Bernoulli, Gaussian,
 };
-use datafusion_physical_expr_common::stats_v2::{get_one, get_zero};
+use datafusion_physical_expr_common::stats_v2::{combine_bernoullis, combine_gaussians};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -502,13 +502,21 @@ impl PhysicalExpr for BinaryExpr {
             // We might be able to construct the output statistics more accurately,
             // without falling back to an unknown distribution, if we are dealing
             // with Gaussian distributions and numerical operations.
-            if let Some(stats) = operate_on_gaussians(&self.op, left, right)? {
-                return Ok(stats);
+            if let (Gaussian(left), Gaussian(right)) = (left, right) {
+                if let Some(result) = combine_gaussians(&self.op, left, right)? {
+                    return Ok(Gaussian(result));
+                }
             }
         } else if self.op.is_logic_operator() {
             // If we are dealing with logical operators, we expect (and can only
             // operate on) Bernoulli distributions.
-            return operate_on_bernoullis(&self.op, left, right);
+            return if let (Bernoulli(left), Bernoulli(right)) = (left, right) {
+                combine_bernoullis(&self.op, left, right).map(Bernoulli)
+            } else {
+                internal_err!(
+                    "Logical operators are only compatible with `Bernoulli` distributions"
+                )
+            };
         } else if self.op.supports_propagation() {
             // If we are handling comparison operators, we expect (and can only
             // operate on) numeric, continuous distributions.
@@ -521,11 +529,11 @@ impl PhysicalExpr for BinaryExpr {
     fn propagate_statistics(
         &self,
         parent_stat: &StatisticsV2,
-        children_stat: &[&StatisticsV2],
+        children_stats: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
         let (li, ri, pi) = (
-            children_stat[0].range()?,
-            children_stat[1].range()?,
+            children_stats[0].range()?,
+            children_stats[1].range()?,
             parent_stat.range()?,
         );
         let Some(propagated_children) = self.propagate_constraints(&pi, &[&li, &ri])?
@@ -535,15 +543,18 @@ impl PhysicalExpr for BinaryExpr {
         Some(
             propagated_children
                 .into_iter()
-                .map(|child_interval| {
+                .zip(children_stats)
+                .map(|(child_interval, old_stat)| {
                     if child_interval.data_type().eq(&DataType::Boolean) {
-                        if child_interval.eq(&Interval::CERTAINLY_TRUE) {
-                            StatisticsV2::new_bernoulli(get_one().clone())
+                        let dt = old_stat.data_type();
+                        let p = if child_interval.eq(&Interval::CERTAINLY_TRUE) {
+                            ScalarValue::new_one(&dt)
                         } else if child_interval.eq(&Interval::CERTAINLY_FALSE) {
-                            StatisticsV2::new_bernoulli(get_zero().clone())
+                            ScalarValue::new_zero(&dt)
                         } else {
-                            StatisticsV2::new_bernoulli(ScalarValue::Boolean(None))
-                        }
+                            ScalarValue::try_from(&dt)
+                        }?;
+                        StatisticsV2::new_bernoulli(p)
                     } else {
                         StatisticsV2::new_from_interval(&child_interval)
                     }
@@ -793,81 +804,6 @@ pub fn similar_to(
         (true, true) => Operator::RegexNotIMatch,
     };
     Ok(Arc::new(BinaryExpr::new(expr, binary_op, pattern)))
-}
-
-fn operate_on_bernoullis(
-    op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
-) -> Result<StatisticsV2> {
-    if let (Bernoulli(lb), Bernoulli(rb)) = (left, right) {
-        let left_p = lb.p_value();
-        let right_p = rb.p_value();
-        // let target_dt = StatisticsV2::target_type(&[left_p, right_p])?;
-        let dt = left_p.data_type();
-        let zero = ScalarValue::new_zero(&dt)?;
-        let one = ScalarValue::new_one(&dt)?;
-        match op {
-            Operator::And => match (left_p.is_null(), right_p.is_null()) {
-                (false, false) => {
-                    StatisticsV2::new_bernoulli(left_p.mul_checked(right_p)?)
-                }
-                (false, true) if left_p.eq(&zero) => Ok(left.clone()),
-                (true, false) if right_p.eq(&zero) => Ok(right.clone()),
-                _ => StatisticsV2::new_bernoulli(ScalarValue::try_from(&dt)?),
-            },
-            Operator::Or => match (left_p.is_null(), right_p.is_null()) {
-                (false, false) => {
-                    let sum = left_p.add_checked(right_p)?;
-                    let product = left_p.mul_checked(right_p)?;
-                    let or_success = sum.sub_checked(product)?;
-                    StatisticsV2::new_bernoulli(or_success)
-                }
-                (false, true) if left_p.eq(&one) => Ok(left.clone()),
-                (true, false) if right_p.eq(&one) => Ok(right.clone()),
-                _ => StatisticsV2::new_bernoulli(ScalarValue::try_from(&dt)?),
-            },
-            _ => {
-                not_impl_err!("Statistical evaluation only supports AND and OR operators")
-            }
-        }
-    } else {
-        internal_err!(
-            "Logical operators are only compatible with `Bernoulli` distributions"
-        )
-    }
-}
-
-/// Applies the given operation using the given two Gaussian distributions.
-/// Currently, thie function handles only addition and subtraction operations.
-/// For details, see:
-///
-/// <https://en.wikipedia.org/wiki/Sum_of_normally_distributed_random_variables>
-fn operate_on_gaussians(
-    op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
-) -> Result<Option<StatisticsV2>> {
-    if let (Gaussian(lg), Gaussian(rg)) = (left, right) {
-        match op {
-            Operator::Plus => {
-                return StatisticsV2::new_gaussian(
-                    lg.mean().add_checked(rg.mean())?,
-                    lg.variance().add_checked(rg.variance())?,
-                )
-                .map(Some)
-            }
-            Operator::Minus => {
-                return StatisticsV2::new_gaussian(
-                    lg.mean().sub_checked(rg.mean())?,
-                    lg.variance().add_checked(rg.variance())?,
-                )
-                .map(Some)
-            }
-            _ => {}
-        }
-    }
-    Ok(None)
 }
 
 #[cfg(test)]
@@ -4741,7 +4677,8 @@ mod tests {
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(6.0), Some(18.0))?;
 
-        let parent = StatisticsV2::new_bernoulli(get_one().clone());
+        let one = ScalarValue::Float64(Some(1.0));
+        let parent = StatisticsV2::new_bernoulli(one);
         let children = vec![
             vec![
                 StatisticsV2::new_uniform(left_interval.clone())?,

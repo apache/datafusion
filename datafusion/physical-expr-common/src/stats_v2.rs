@@ -21,8 +21,9 @@ use std::sync::OnceLock;
 use crate::stats_v2::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
 
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::binary_numeric_coercion;
 
 static SCALAR_VALUE_ZERO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
@@ -179,13 +180,13 @@ impl StatisticsV2 {
         }
     }
 
-    /// Returns the data type of the statistics.
+    /// Returns the data type of the statistical parameters.
     pub fn data_type(&self) -> DataType {
         match &self {
             Uniform(u) => u.data_type(),
             Exponential(e) => e.data_type(),
             Gaussian(g) => g.data_type(),
-            Bernoulli(_) => DataType::Boolean,
+            Bernoulli(b) => b.data_type(),
             Unknown(u) => u.data_type(),
         }
     }
@@ -446,6 +447,10 @@ impl BernoulliDistribution {
         }
     }
 
+    pub fn data_type(&self) -> DataType {
+        self.p.data_type()
+    }
+
     pub fn p_value(&self) -> &ScalarValue {
         &self.p
     }
@@ -455,7 +460,7 @@ impl BernoulliDistribution {
     }
 
     pub fn median(&self) -> Result<ScalarValue> {
-        let dt = self.p.data_type();
+        let dt = self.data_type();
         let one = ScalarValue::new_one(&dt)?;
         if one.sub_checked(&self.p)?.lt(&self.p) {
             ScalarValue::new_one(&dt)
@@ -465,13 +470,13 @@ impl BernoulliDistribution {
     }
 
     pub fn variance(&self) -> Result<ScalarValue> {
-        let dt = self.p.data_type();
+        let dt = self.data_type();
         let one = ScalarValue::new_one(&dt)?;
         one.sub_checked(&self.p)?.mul_checked(&self.p)
     }
 
     pub fn range(&self) -> Interval {
-        let dt = self.p.data_type();
+        let dt = self.data_type();
         // Unwraps are safe as the constructor guarantees that the data type
         // supports zero and one values.
         if ScalarValue::new_zero(&dt).unwrap().eq(&self.p) {
@@ -538,6 +543,86 @@ impl UnknownDistribution {
 
     pub fn range(&self) -> &Interval {
         &self.range
+    }
+}
+
+/// This function takes a logical operator and two Bernoulli distributions,
+/// and it returns a new Bernoulli distribution that represents the result of
+/// the operation. Currently, only `AND` and `OR` operations are supported.
+pub fn combine_bernoullis(
+    op: &Operator,
+    left: &BernoulliDistribution,
+    right: &BernoulliDistribution,
+) -> Result<BernoulliDistribution> {
+    // TODO: Write tests for this function.
+    let left_p = left.p_value();
+    let right_p = right.p_value();
+    match op {
+        Operator::And => match (left_p.is_null(), right_p.is_null()) {
+            (false, false) => {
+                BernoulliDistribution::try_new(left_p.mul_checked(right_p)?)
+            }
+            (false, true) if left_p.eq(&ScalarValue::new_zero(&left_p.data_type())?) => {
+                Ok(left.clone())
+            }
+            (true, false)
+                if right_p.eq(&ScalarValue::new_zero(&right_p.data_type())?) =>
+            {
+                Ok(right.clone())
+            }
+            _ => {
+                let dt = StatisticsV2::target_type(&[left_p, right_p])?;
+                BernoulliDistribution::try_new(ScalarValue::try_from(&dt)?)
+            }
+        },
+        Operator::Or => match (left_p.is_null(), right_p.is_null()) {
+            (false, false) => {
+                let sum = left_p.add_checked(right_p)?;
+                let product = left_p.mul_checked(right_p)?;
+                let or_success = sum.sub_checked(product)?;
+                BernoulliDistribution::try_new(or_success)
+            }
+            (false, true) if left_p.eq(&ScalarValue::new_one(&left_p.data_type())?) => {
+                Ok(left.clone())
+            }
+            (true, false) if right_p.eq(&ScalarValue::new_one(&right_p.data_type())?) => {
+                Ok(right.clone())
+            }
+            _ => {
+                let dt = StatisticsV2::target_type(&[left_p, right_p])?;
+                BernoulliDistribution::try_new(ScalarValue::try_from(&dt)?)
+            }
+        },
+        _ => {
+            not_impl_err!("Statistical evaluation only supports AND and OR operators")
+        }
+    }
+}
+
+/// Applies the given operation to the given Gaussian distributions. Currently,
+/// this function handles only addition and subtraction operations. If the
+/// result is not a Gaussian random variable, it returns `None`. For details,
+/// see:
+///
+/// <https://en.wikipedia.org/wiki/Sum_of_normally_distributed_random_variables>
+pub fn combine_gaussians(
+    op: &Operator,
+    left: &GaussianDistribution,
+    right: &GaussianDistribution,
+) -> Result<Option<GaussianDistribution>> {
+    // TODO: Write tests for this function.
+    match op {
+        Operator::Plus => GaussianDistribution::try_new(
+            left.mean().add_checked(right.mean())?,
+            left.variance().add_checked(right.variance())?,
+        )
+        .map(Some),
+        Operator::Minus => GaussianDistribution::try_new(
+            left.mean().sub_checked(right.mean())?,
+            left.variance().add_checked(right.variance())?,
+        )
+        .map(Some),
+        _ => Ok(None),
     }
 }
 

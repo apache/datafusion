@@ -304,12 +304,14 @@ pub fn compute_mean(
         Operator::Minus => left_mean.sub_checked(right_mean),
         Operator::Multiply => left_mean.mul_checked(right_mean),
         Operator::Divide => {
-            // ((l_lower + l_upper) (log[r_lower] - log[r_upper)) / 2(c-d)
-            debug!("Division is not supported for mean computation; log() for ScalarValue is not supported");
+            // TODO: We can calculate the mean for division when we know the
+            //       distributions of the operands. For example, see:
+            //
+            // <https://stats.stackexchange.com/questions/185683/distribution-of-ratio-between-two-independent-uniform-random-variables>
             Ok(ScalarValue::Null)
         }
         _ => {
-            debug!("Unsupported operator {op} for mean computation");
+            debug!("Unsupported operator {op} for mean calculations");
             Ok(ScalarValue::Null)
         }
     }
