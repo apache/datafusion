@@ -803,6 +803,7 @@ fn operate_on_bernoullis(
     if let (Bernoulli(lb), Bernoulli(rb)) = (left, right) {
         let left_p = lb.p_value();
         let right_p = rb.p_value();
+        // let target_dt = StatisticsV2::target_type(&[left_p, right_p])?;
         let dt = left_p.data_type();
         let zero = ScalarValue::new_zero(&dt)?;
         let one = ScalarValue::new_one(&dt)?;

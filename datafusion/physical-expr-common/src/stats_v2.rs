@@ -111,11 +111,11 @@ impl StatisticsV2 {
     ///   may be absent.
     pub fn mean(&self) -> Result<ScalarValue> {
         match &self {
-            Uniform(uni) => uni.mean(),
+            Uniform(u) => u.mean(),
             Exponential(e) => e.mean(),
             Gaussian(g) => Ok(g.mean().clone()),
             Bernoulli(b) => Ok(b.mean().clone()),
-            Unknown(unk) => Ok(unk.mean().clone()),
+            Unknown(u) => Ok(u.mean().clone()),
         }
     }
 
@@ -132,11 +132,11 @@ impl StatisticsV2 {
     ///   may be absent.
     pub fn median(&self) -> Result<ScalarValue> {
         match &self {
-            Uniform(uni) => uni.median(),
+            Uniform(u) => u.median(),
             Exponential(e) => e.median(),
             Gaussian(g) => Ok(g.median().clone()),
             Bernoulli(b) => b.median(),
-            Unknown(unk) => Ok(unk.median().clone()),
+            Unknown(u) => Ok(u.median().clone()),
         }
     }
 
@@ -152,11 +152,11 @@ impl StatisticsV2 {
     ///   may be absent.
     pub fn variance(&self) -> Result<ScalarValue> {
         match &self {
-            Uniform(uni) => uni.variance(),
+            Uniform(u) => u.variance(),
             Exponential(e) => e.variance(),
             Gaussian(g) => Ok(g.variance.clone()),
             Bernoulli(b) => b.variance(),
-            Unknown(unk) => Ok(unk.variance.clone()),
+            Unknown(u) => Ok(u.variance.clone()),
         }
     }
 
@@ -171,33 +171,30 @@ impl StatisticsV2 {
     ///   may be present.
     pub fn range(&self) -> Result<Interval> {
         match &self {
-            Uniform(uni) => Ok(uni.range().clone()),
+            Uniform(u) => Ok(u.range().clone()),
             Exponential(e) => e.range(),
             Gaussian(g) => g.range(),
             Bernoulli(b) => Ok(b.range()),
-            Unknown(unk) => Ok(unk.range().clone()),
+            Unknown(u) => Ok(u.range().clone()),
         }
     }
 
     /// Returns the data type of the statistics.
     pub fn data_type(&self) -> DataType {
         match &self {
-            Uniform(uni) => uni.interval.data_type(),
-            Exponential(e) => e.offset.data_type(),
-            Gaussian(g) => g.mean.data_type(),
+            Uniform(u) => u.data_type(),
+            Exponential(e) => e.data_type(),
+            Gaussian(g) => g.data_type(),
             Bernoulli(_) => DataType::Boolean,
-            Unknown(unk) => unk.range.data_type(),
+            Unknown(u) => u.data_type(),
         }
     }
 
     pub fn target_type(args: &[&ScalarValue]) -> Result<DataType> {
-        let mut arg_types = args.iter().filter_map(|&arg| {
-            if arg == &ScalarValue::Null {
-                None
-            } else {
-                Some(arg.data_type())
-            }
-        });
+        let mut arg_types = args
+            .iter()
+            .filter(|&&arg| (arg != &ScalarValue::Null))
+            .map(|&arg| arg.data_type());
 
         let Some(dt) = arg_types.next().map_or_else(
             || Some(DataType::Null),
@@ -206,7 +203,7 @@ impl StatisticsV2 {
                     .try_fold(first, |target, arg| binary_numeric_coercion(&target, &arg))
             },
         ) else {
-            return internal_err!("Statistics can only be evaluated for numeric types");
+            return internal_err!("Can only evaluate statistics for numeric types");
         };
         Ok(dt)
     }
@@ -291,12 +288,17 @@ impl UniformDistribution {
         Ok(Self { interval })
     }
 
+    pub fn data_type(&self) -> DataType {
+        self.interval.data_type()
+    }
+
     pub fn mean(&self) -> Result<ScalarValue> {
-        let dt = self.interval.lower().data_type();
+        let dt = self.data_type();
+        let two = ScalarValue::from(2).cast_to(&dt)?;
         self.interval
             .lower()
             .add_checked(self.interval.upper())?
-            .div(ScalarValue::from(2).cast_to(&dt)?)
+            .div(two)
     }
 
     pub fn median(&self) -> Result<ScalarValue> {
@@ -304,11 +306,10 @@ impl UniformDistribution {
     }
 
     pub fn variance(&self) -> Result<ScalarValue> {
-        let width = self.interval.upper().sub_checked(self.interval.lower())?;
+        let width = self.interval.width()?;
         let dt = width.data_type();
-        width
-            .mul_checked(&width)?
-            .div(ScalarValue::from(12).cast_to(&dt)?)
+        let twelve = ScalarValue::from(12).cast_to(&dt)?;
+        width.mul_checked(&width)?.div(twelve)
     }
 
     pub fn range(&self) -> &Interval {
@@ -340,6 +341,10 @@ impl ExponentialDistribution {
         }
     }
 
+    pub fn data_type(&self) -> DataType {
+        self.rate.data_type()
+    }
+
     pub fn rate(&self) -> &ScalarValue {
         &self.rate
     }
@@ -353,7 +358,7 @@ impl ExponentialDistribution {
     }
 
     pub fn mean(&self) -> Result<ScalarValue> {
-        let one = ScalarValue::new_one(&self.rate.data_type())?;
+        let one = ScalarValue::new_one(&self.data_type())?;
         let tail_mean = one.div(&self.rate)?;
         if self.positive_tail {
             self.offset.add_checked(tail_mean)
@@ -363,7 +368,7 @@ impl ExponentialDistribution {
     }
 
     pub fn median(&self) -> Result<ScalarValue> {
-        let ln_two = ScalarValue::from(LN_2).cast_to(&self.rate.data_type())?;
+        let ln_two = ScalarValue::from(LN_2).cast_to(&self.data_type())?;
         let tail_median = ln_two.div(&self.rate)?;
         if self.positive_tail {
             self.offset.add_checked(tail_median)
@@ -373,14 +378,13 @@ impl ExponentialDistribution {
     }
 
     pub fn variance(&self) -> Result<ScalarValue> {
-        let one = ScalarValue::new_one(&self.rate.data_type())?;
+        let one = ScalarValue::new_one(&self.data_type())?;
         let rate_squared = self.rate.mul_checked(&self.rate)?;
         one.div(rate_squared)
     }
 
     pub fn range(&self) -> Result<Interval> {
-        let offset_data_type = self.offset.data_type();
-        let end = ScalarValue::try_from(offset_data_type)?;
+        let end = ScalarValue::try_from(&self.data_type())?;
         if self.positive_tail {
             Interval::try_new(self.offset.clone(), end)
         } else {
@@ -391,8 +395,8 @@ impl ExponentialDistribution {
 
 impl GaussianDistribution {
     fn try_new(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
-        let dt = variance.data_type();
-        if mean.data_type() != dt {
+        let dt = mean.data_type();
+        if variance.data_type() != dt {
             internal_err!("Mean and variance must have the same data type")
         } else if variance.is_null() {
             internal_err!("Variance of a `GaussianDistribution` cannot be null")
@@ -401,6 +405,10 @@ impl GaussianDistribution {
         } else {
             Ok(Self { mean, variance })
         }
+    }
+
+    pub fn data_type(&self) -> DataType {
+        self.mean.data_type()
     }
 
     pub fn mean(&self) -> &ScalarValue {
@@ -416,7 +424,7 @@ impl GaussianDistribution {
     }
 
     pub fn range(&self) -> Result<Interval> {
-        Interval::make_unbounded(&self.mean.data_type())
+        Interval::make_unbounded(&self.data_type())
     }
 }
 
@@ -512,6 +520,10 @@ impl UnknownDistribution {
         }
     }
 
+    pub fn data_type(&self) -> DataType {
+        self.mean.data_type()
+    }
+
     pub fn mean(&self) -> &ScalarValue {
         &self.mean
     }
@@ -534,21 +546,21 @@ mod tests {
     use crate::stats_v2::{StatisticsV2, UniformDistribution};
 
     use arrow::datatypes::DataType;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr_common::interval_arithmetic::Interval;
 
     // The test data in the following tests are placed as follows: (stat -> expected answer)
     #[test]
-    fn uniform_stats_is_valid_test() {
+    fn uniform_stats_is_valid_test() -> Result<()> {
         assert_eq!(
-            StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int8).unwrap())
-                .unwrap(),
+            StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int8)?)?,
             StatisticsV2::Uniform(UniformDistribution {
-                interval: Interval::make_zero(&DataType::Int8).unwrap()
+                interval: Interval::make_zero(&DataType::Int8)?,
             })
         );
 
         assert!(StatisticsV2::new_uniform(Interval::UNCERTAIN).is_err());
+        Ok(())
     }
 
     #[test]
@@ -669,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_stats_is_valid_test() {
+    fn unknown_stats_is_valid_test() -> Result<()> {
         let unknown_stats = vec![
             // Usage of boolean range during Unknown statistic construction is prohibited.
             (
@@ -686,7 +698,7 @@ mod tests {
                     ScalarValue::Null,
                     ScalarValue::Null,
                     ScalarValue::Null,
-                    Interval::make_zero(&DataType::Float32).unwrap(),
+                    Interval::make_zero(&DataType::Float32)?,
                 ),
                 true,
             ),
@@ -695,7 +707,7 @@ mod tests {
                     ScalarValue::Float32(Some(0.)),
                     ScalarValue::Float32(None),
                     ScalarValue::Null,
-                    Interval::make_zero(&DataType::Float32).unwrap(),
+                    Interval::make_zero(&DataType::Float32)?,
                 ),
                 true,
             ),
@@ -704,7 +716,7 @@ mod tests {
                     ScalarValue::Null,
                     ScalarValue::Float32(Some(0.)),
                     ScalarValue::Float64(None),
-                    Interval::make_zero(&DataType::Float32).unwrap(),
+                    Interval::make_zero(&DataType::Float32)?,
                 ),
                 true,
             ),
@@ -713,7 +725,7 @@ mod tests {
                     ScalarValue::Float32(Some(-10.)),
                     ScalarValue::Null,
                     ScalarValue::Null,
-                    Interval::make_zero(&DataType::Float32).unwrap(),
+                    Interval::make_zero(&DataType::Float32)?,
                 ),
                 false,
             ),
@@ -722,7 +734,7 @@ mod tests {
                     ScalarValue::Null,
                     ScalarValue::Float32(Some(10.)),
                     ScalarValue::Null,
-                    Interval::make_zero(&DataType::Float32).unwrap(),
+                    Interval::make_zero(&DataType::Float32)?,
                 ),
                 false,
             ),
@@ -731,7 +743,7 @@ mod tests {
                     ScalarValue::Null,
                     ScalarValue::Null,
                     ScalarValue::Null,
-                    Interval::make_zero(&DataType::Float32).unwrap(),
+                    Interval::make_zero(&DataType::Float32)?,
                 ),
                 true,
             ),
@@ -740,7 +752,7 @@ mod tests {
                     ScalarValue::Int32(Some(0)),
                     ScalarValue::Int32(Some(0)),
                     ScalarValue::Null,
-                    Interval::make_zero(&DataType::Int32).unwrap(),
+                    Interval::make_zero(&DataType::Int32)?,
                 ),
                 true,
             ),
@@ -749,7 +761,7 @@ mod tests {
                     ScalarValue::Float32(Some(0.)),
                     ScalarValue::Float32(Some(0.)),
                     ScalarValue::Null,
-                    Interval::make_zero(&DataType::Float32).unwrap(),
+                    Interval::make_zero(&DataType::Float32)?,
                 ),
                 true,
             ),
@@ -758,7 +770,7 @@ mod tests {
                     ScalarValue::Float64(Some(50.)),
                     ScalarValue::Float64(Some(50.)),
                     ScalarValue::Null,
-                    Interval::make(Some(0.), Some(100.)).unwrap(),
+                    Interval::make(Some(0.), Some(100.))?,
                 ),
                 true,
             ),
@@ -767,7 +779,7 @@ mod tests {
                     ScalarValue::Float64(Some(50.)),
                     ScalarValue::Float64(Some(50.)),
                     ScalarValue::Null,
-                    Interval::make(Some(-100.), Some(0.)).unwrap(),
+                    Interval::make(Some(-100.), Some(0.))?,
                 ),
                 false,
             ),
@@ -776,7 +788,7 @@ mod tests {
                     ScalarValue::Null,
                     ScalarValue::Null,
                     ScalarValue::Float64(Some(1.)),
-                    Interval::make_zero(&DataType::Float64).unwrap(),
+                    Interval::make_zero(&DataType::Float64)?,
                 ),
                 true,
             ),
@@ -785,7 +797,7 @@ mod tests {
                     ScalarValue::Null,
                     ScalarValue::Null,
                     ScalarValue::Float64(Some(-1.)),
-                    Interval::make_zero(&DataType::Float64).unwrap(),
+                    Interval::make_zero(&DataType::Float64)?,
                 ),
                 false,
             ),
@@ -793,32 +805,32 @@ mod tests {
         for case in unknown_stats {
             assert_eq!(case.0.is_ok(), case.1, "{:?}", case.0);
         }
+
+        Ok(())
     }
 
     #[test]
-    fn mean_extraction_test() {
+    fn mean_extraction_test() -> Result<()> {
         // The test data is placed as follows : (stat -> expected answer)
         let stats = vec![
             (
-                StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64).unwrap()),
+                StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64)?),
                 ScalarValue::Int64(Some(0)),
             ),
             (
-                StatisticsV2::new_uniform(
-                    Interval::make_zero(&DataType::Float64).unwrap(),
-                ),
+                StatisticsV2::new_uniform(Interval::make_zero(&DataType::Float64)?),
                 ScalarValue::Float64(Some(0.)),
             ),
             (
-                StatisticsV2::new_uniform(Interval::make(Some(1), Some(100)).unwrap()),
+                StatisticsV2::new_uniform(Interval::make(Some(1), Some(100))?),
                 ScalarValue::Int32(Some(50)),
             ),
             (
-                StatisticsV2::new_uniform(Interval::make(Some(-100), Some(-1)).unwrap()),
+                StatisticsV2::new_uniform(Interval::make(Some(-100), Some(-1))?),
                 ScalarValue::Int32(Some(-50)),
             ),
             (
-                StatisticsV2::new_uniform(Interval::make(Some(-100), Some(100)).unwrap()),
+                StatisticsV2::new_uniform(Interval::make(Some(-100), Some(100))?),
                 ScalarValue::Int32(Some(0)),
             ),
             (
@@ -860,27 +872,29 @@ mod tests {
                     ScalarValue::Float64(Some(42.)),
                     ScalarValue::Float64(Some(42.)),
                     ScalarValue::Null,
-                    Interval::make(Some(25.), Some(50.)).unwrap(),
+                    Interval::make(Some(25.), Some(50.))?,
                 ),
                 ScalarValue::Float64(Some(42.)),
             ),
         ];
 
         for case in stats {
-            assert_eq!(case.0.unwrap().mean().unwrap(), case.1);
+            assert_eq!(case.0?.mean()?, case.1);
         }
+
+        Ok(())
     }
 
     #[test]
-    fn median_extraction_test() {
+    fn median_extraction_test() -> Result<()> {
         // The test data is placed as follows: (stat -> expected answer)
         let stats = vec![
             (
-                StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64).unwrap()),
+                StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64)?),
                 ScalarValue::Int64(Some(0)),
             ),
             (
-                StatisticsV2::new_uniform(Interval::make(Some(25.), Some(75.)).unwrap()),
+                StatisticsV2::new_uniform(Interval::make(Some(25.), Some(75.))?),
                 ScalarValue::Float64(Some(50.)),
             ),
             (
@@ -918,23 +932,25 @@ mod tests {
                     ScalarValue::Float64(Some(12.)),
                     ScalarValue::Float64(Some(12.)),
                     ScalarValue::Null,
-                    Interval::make(Some(0.), Some(25.)).unwrap(),
+                    Interval::make(Some(0.), Some(25.))?,
                 ),
                 ScalarValue::Float64(Some(12.)),
             ),
         ];
 
         for case in stats {
-            assert_eq!(case.0.unwrap().median().unwrap(), case.1);
+            assert_eq!(case.0?.median()?, case.1);
         }
+
+        Ok(())
     }
 
     #[test]
-    fn variance_extraction_test() {
+    fn variance_extraction_test() -> Result<()> {
         // The test data is placed as follows : (stat -> expected answer)
         let stats = vec![
             (
-                StatisticsV2::new_uniform(Interval::make(Some(0.), Some(12.)).unwrap()),
+                StatisticsV2::new_uniform(Interval::make(Some(0.), Some(12.))?),
                 ScalarValue::Float64(Some(12.)),
             ),
             (
@@ -961,14 +977,16 @@ mod tests {
                     ScalarValue::Null,
                     ScalarValue::Null,
                     ScalarValue::Float64(Some(0.02)),
-                    Interval::make_zero(&DataType::Float64).unwrap(),
+                    Interval::make_zero(&DataType::Float64)?,
                 ),
                 ScalarValue::Float64(Some(0.02)),
             ),
         ];
 
         for case in stats {
-            assert_eq!(case.0.unwrap().variance().unwrap(), case.1);
+            assert_eq!(case.0?.variance()?, case.1);
         }
+
+        Ok(())
     }
 }
