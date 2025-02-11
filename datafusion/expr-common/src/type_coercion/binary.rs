@@ -539,6 +539,7 @@ fn type_union_resolution_coercion(
         | (other_type, DataType::Dictionary(index_type, value_type)) => {
             match type_union_resolution_coercion(value_type, other_type) {
                 // Dict with View type is redundant, use value type instead
+                // TODO: Add binary view, list view with tests
                 Some(DataType::Utf8View) => Some(DataType::Utf8View),
                 Some(new_value_type) => Some(DataType::Dictionary(
                     index_type.clone(),
@@ -1292,12 +1293,6 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
         (List(lhs_field), List(rhs_field) | FixedSizeList(rhs_field, _))
         | (FixedSizeList(lhs_field, _), List(rhs_field)) => {
             Some(List(coerce_list_children(lhs_field, rhs_field)?))
-        }
-        (ListView(lhs_field), ListView(rhs_field)) => {
-            Some(ListView(coerce_list_children(lhs_field, rhs_field)?))
-        }
-        (LargeListView(lhs_field), LargeListView(rhs_field)) => {
-            Some(LargeListView(coerce_list_children(lhs_field, rhs_field)?))
         }
         _ => None,
     }
