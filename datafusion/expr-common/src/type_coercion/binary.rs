@@ -542,7 +542,9 @@ fn type_union_resolution_coercion(
                 Some(DataType::Utf8View) => Some(DataType::Utf8View),
                 Some(DataType::BinaryView) => Some(DataType::BinaryView),
                 Some(DataType::ListView(field)) => Some(DataType::ListView(field)),
-                Some(DataType::LargeListView(field)) => Some(DataType::LargeListView(field)),
+                Some(DataType::LargeListView(field)) => {
+                    Some(DataType::LargeListView(field))
+                }
                 Some(new_value_type) => Some(DataType::Dictionary(
                     index_type.clone(),
                     Box::new(new_value_type),
