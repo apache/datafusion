@@ -161,8 +161,6 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         array: result_array,
         schema: WrappedSchema(result_schema),
     })
-
-    // TODO create a proc macro to do all the conversion and return from result to RResult
 }
 
 unsafe extern "C" fn short_circuits_fn_wrapper(udf: &FFI_ScalarUDF) -> bool {
@@ -268,16 +266,6 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         &self.signature
     }
 
-    /// What [`DataType`] will be returned by this function, given the types of
-    /// the arguments.
-    ///
-    /// # Notes
-    ///
-    /// If you provide an implementation for [`Self::return_type_from_args`],
-    /// DataFusion will not call `return_type` (this function). In such cases
-    /// is recommended to return [`DataFusionError::Internal`].
-    ///
-    /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let arg_types = signature::vec_datatype_to_rvec_wrapped(arg_types)?;
 
@@ -288,16 +276,6 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         result.and_then(|r| (&r.0).try_into().map_err(DataFusionError::from))
     }
 
-    /// Invoke the function returning the appropriate result.
-    ///
-    /// # Performance
-    ///
-    /// For the best performance, the implementations should handle the common case
-    /// when one or more of their arguments are constant values (aka
-    /// [`ColumnarValue::Scalar`]).
-    ///
-    /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
-    /// to arrays, which will likely be simpler code, but be slower.
     fn invoke_with_args(&self, invoke_args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs {
             args,
@@ -331,15 +309,6 @@ impl ScalarUDFImpl for ForeignScalarUDF {
         Ok(ColumnarValue::Array(result_array))
     }
 
-    /// Returns any aliases (alternate names) for this function.
-    ///
-    /// Aliases can be used to invoke the same function using different names.
-    /// For example in some databases `now()` and `current_timestamp()` are
-    /// aliases for the same function. This behavior can be obtained by
-    /// returning `current_timestamp` as an alias for the `now` function.
-    ///
-    /// Note: `aliases` should only include names other than [`Self::name`].
-    /// Defaults to `[]` (no aliases)
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
