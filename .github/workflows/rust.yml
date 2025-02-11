@@ -360,9 +360,9 @@ jobs:
         run: |
           cargo build --release
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test --lib --tests --bins --features avro,json,backtrace --no-fail-fast
+          cargo test --lib --tests --bins --features avro,json,backtrace --no-fail-fast --release
           cd datafusion-cli
-          cargo test --lib --tests --bins --all-features --no-fail-fast
+          cargo test --lib --tests --bins --all-features --no-fail-fast --release
 
   # Commenting out intel mac build as so few users would ever use it
   # Details: https://github.com/apache/datafusion/issues/13846
