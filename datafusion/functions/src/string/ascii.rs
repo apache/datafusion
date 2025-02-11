@@ -64,11 +64,7 @@ impl AsciiFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::coercible(
-                vec![Coercion::new_with_implicit_coercion(
-                    TypeSignatureClass::Native(logical_string()),
-                    vec![TypeSignatureClass::Native(logical_binary())],
-                    NativeType::String,
-                )],
+                vec![Coercion::new(TypeSignatureClass::Native(logical_string()))],
                 Volatility::Immutable,
             ),
         }

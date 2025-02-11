@@ -325,6 +325,16 @@ SELECT ascii('x')
 120
 
 query I
+SELECT ascii('222')
+----
+50
+
+query I
+SELECT ascii('0xa') 
+----
+48
+
+query I
 SELECT ascii(NULL)
 ----
 NULL
