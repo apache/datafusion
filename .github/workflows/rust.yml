@@ -350,13 +350,19 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-windows-builder
+      - name: Configure Fast Compilation Flags
+        run: |
+          echo "RUSTFLAGS=-C target-cpu=native -C opt-level=3 -C lto=thin -C codegen-units=1 -C embed-bitcode=no" >> $env:GITHUB_ENV
+          echo "CARGO_PROFILE_RELEASE_LTO=true" >> $env:GITHUB_ENV
+          echo "CARGO_PROFILE_RELEASE_PANIC=abort" >> $env:GITHUB_ENV
       - name: Run tests (excluding doctests)
         shell: bash
         run: |
+          cargo build --release
           export PATH=$PATH:$HOME/d/protoc/bin
-          cargo test -j 32 --lib --tests --bins --features avro,json,backtrace
+          cargo test --lib --tests --bins --features avro,json,backtrace --no-fail-fast
           cd datafusion-cli
-          cargo test -j 32 --lib --tests --bins --all-features
+          cargo test --lib --tests --bins --all-features --no-fail-fast
 
   # Commenting out intel mac build as so few users would ever use it
   # Details: https://github.com/apache/datafusion/issues/13846
