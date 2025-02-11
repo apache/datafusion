@@ -19,18 +19,23 @@ impl LogicalFixedSizeBinary {
         Ok(Self { value })
     }
 
-    /// TODO logical-types
+    /// Returns the length of the binary value.
     pub fn len(&self) -> i32 {
         // LogicalFixedSizeBinary::new guarantees that the cast succeeds
         self.value.len() as i32
     }
 
-    /// TODO logical-types
+    /// Returns whether the length of the binary value is zero.
+    pub fn is_empty(&self) -> bool {
+        self.value.len() == 0
+    }
+
+    /// Returns a read-only view to the value of the binary value.
     pub fn value(&self) -> &[u8] {
         self.value.as_ref()
     }
 
-    /// TODO logical-types
+    /// Returns the buffer of the binary value.
     pub fn into_value(self) -> Vec<u8> {
         self.value
     }

@@ -1,7 +1,7 @@
-use std::fmt::{Display, Formatter};
+use crate::types::{logical_interval, LogicalTypeRef};
 use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::IntervalUnit;
-use crate::types::{logical_interval, LogicalTypeRef};
+use std::fmt::{Display, Formatter};
 
 /// Stores a scalar for [`NativeType::Interval`].
 ///

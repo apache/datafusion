@@ -35,6 +35,11 @@ impl LogicalMap {
     pub fn len(&self) -> usize {
         self.values.len()
     }
+
+    /// Returns whether the [LogicalMap] has any entries.
+    pub fn is_empty(&self) -> bool {
+        self.values.len() == 0
+    }
 }
 
 impl Hash for LogicalMap {

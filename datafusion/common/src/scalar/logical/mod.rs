@@ -375,7 +375,7 @@ impl Display for LogicalScalar {
             LogicalScalar::Struct(v) => write!(f, "{}", v),
             LogicalScalar::Map(v) => write!(f, "{}", v),
             LogicalScalar::Union(v) => write!(f, "{}", v),
-            LogicalScalar::Null => write!(f, "{}", "NULL"),
+            LogicalScalar::Null => write!(f, "NULL"),
         }
     }
 }

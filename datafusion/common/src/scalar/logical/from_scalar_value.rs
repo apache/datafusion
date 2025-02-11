@@ -152,7 +152,7 @@ impl From<ScalarValue> for LogicalScalar {
             }
             ScalarValue::Union(None, _, _) => LogicalScalar::Null,
             ScalarValue::Union(Some((type_id, value)), f, _) => {
-                union_to_logical_scalar(f, type_id, value)
+                union_to_logical_scalar(f, type_id, *value)
             }
             ScalarValue::Dictionary(_, v) => (*v).into(),
         }
@@ -243,13 +243,13 @@ fn map_to_logical_scalar(value: Arc<MapArray>) -> LogicalScalar {
 fn union_to_logical_scalar(
     union_fields: UnionFields,
     type_id: i8,
-    value: Box<ScalarValue>,
+    value: ScalarValue,
 ) -> LogicalScalar {
     let union_fields = union_fields
         .iter()
         .map(|(tid, f)| (tid, Arc::new(LogicalField::from(f.as_ref()))))
         .collect::<LogicalUnionFields>();
-    let value = LogicalScalar::from(*value);
+    let value = LogicalScalar::from(value);
     let union = LogicalUnion::try_new(union_fields, type_id, value)
         .expect("Fields extracted from union");
     LogicalScalar::Union(union)

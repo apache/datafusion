@@ -1,9 +1,10 @@
-use std::cmp::Ordering;
-use std::fmt::{Display, Formatter};
 use crate::error::_internal_err;
 use crate::scalar::LogicalScalar;
 use crate::types::{logical_list, LogicalFieldRef, LogicalTypeRef};
 use crate::Result;
+use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 
 /// TODO logical-types
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -29,7 +30,7 @@ impl LogicalList {
     ) -> Result<Self> {
         for element in &value {
             let has_matching_type =
-                &element.logical_type() == &element_field.logical_type;
+                element.logical_type().eq(&element_field.logical_type);
             let is_allowed_null =
                 element_field.nullable && element.logical_type().native().is_null();
 
@@ -48,17 +49,22 @@ impl LogicalList {
 
     /// Returns a reference to the field of this list.
     pub fn element_field(&self) -> LogicalFieldRef {
-        self.element_field.clone()
+        Arc::clone(&self.element_field)
     }
 
     /// Returns the logical type of this list.
     pub fn logical_type(&self) -> LogicalTypeRef {
-        logical_list(self.element_field.clone())
+        logical_list(self.element_field())
     }
 
     /// Returns the length of this list.
     pub fn len(&self) -> usize {
         self.values.len()
+    }
+
+    /// Returns whether the list is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Returns the logical values of this value.
@@ -69,7 +75,7 @@ impl LogicalList {
 
 impl PartialOrd for LogicalList {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if &self.element_field.logical_type != &other.element_field.logical_type {
+        if self.element_field != other.element_field {
             return None;
         }
 

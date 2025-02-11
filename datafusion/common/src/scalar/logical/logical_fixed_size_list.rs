@@ -29,10 +29,7 @@ impl LogicalFixedSizeList {
     /// Returns the logical type of this value.
     pub fn logical_type(&self) -> LogicalTypeRef {
         // LogicalFixedSizeList::new guarantees that the cast succeeds
-        logical_fixed_size_list(
-            self.inner.element_field().clone(),
-            self.inner.len() as i32,
-        )
+        logical_fixed_size_list(self.inner.element_field(), self.inner.len() as i32)
     }
 
     /// Returns the logical values of this list.

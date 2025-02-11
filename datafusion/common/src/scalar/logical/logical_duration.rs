@@ -1,7 +1,7 @@
-use std::fmt::{Display, Formatter};
 use crate::types::{logical_duration, LogicalTypeRef};
 use arrow_schema::TimeUnit;
 use chrono::Duration;
+use std::fmt::{Display, Formatter};
 
 /// TODO logical-types
 #[derive(Debug, Clone, Eq, Hash, PartialEq, PartialOrd, Ord)]
