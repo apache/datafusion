@@ -28,6 +28,7 @@ pub mod signature;
 pub mod table_provider;
 pub mod table_source;
 pub mod udf;
+pub mod util;
 
 #[cfg(feature = "integration-tests")]
 pub mod tests;

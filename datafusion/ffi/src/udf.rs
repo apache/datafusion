@@ -36,6 +36,7 @@ use datafusion::{
 
 use crate::{
     arrow_wrappers::{WrappedArray, WrappedSchema},
+    df_result, rresult, rresult_return,
     signature::{self, rvec_wrapped_to_vec_datatype, FFI_Signature},
 };
 
@@ -97,10 +98,7 @@ unsafe extern "C" fn signature_fn_wrapper(
     let private_data = udf.private_data as *const ScalarUDFPrivateData;
     let udf = &(*private_data).udf;
 
-    match udf.signature().try_into() {
-        Ok(v) => RResult::ROk(v),
-        Err(e) => RResult::RErr(e.to_string().into()),
-    }
+    rresult!(udf.signature().try_into())
 }
 
 unsafe extern "C" fn aliases_fn_wrapper(udf: &FFI_ScalarUDF) -> RVec<RString> {
@@ -117,19 +115,14 @@ unsafe extern "C" fn return_type_fn_wrapper(
     let private_data = udf.private_data as *const ScalarUDFPrivateData;
     let udf = &(*private_data).udf;
 
-    let arg_types = match rvec_wrapped_to_vec_datatype(&arg_types) {
-        Ok(v) => v,
-        Err(e) => return RResult::RErr(e.to_string().into()),
-    };
+    let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
 
     let return_type = udf
         .return_type(&arg_types)
-        .and_then(|v| FFI_ArrowSchema::try_from(v).map_err(DataFusionError::from));
+        .and_then(|v| FFI_ArrowSchema::try_from(v).map_err(DataFusionError::from))
+        .map(WrappedSchema);
 
-    match return_type {
-        Ok(v) => RResult::ROk(WrappedSchema(v)),
-        Err(e) => RResult::RErr(e.to_string().into()),
-    }
+    rresult!(return_type)
 }
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
@@ -148,15 +141,9 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
                 .map(|v| ColumnarValue::Array(arrow::array::make_array(v)))
         })
         .collect::<std::result::Result<_, _>>();
-    let args = match args {
-        Ok(v) => v,
-        Err(e) => return RResult::RErr(e.to_string().into()),
-    };
 
-    let return_type = match DataType::try_from(&return_type.0) {
-        Ok(v) => v,
-        Err(e) => return RResult::RErr(e.to_string().into()),
-    };
+    let args = rresult_return!(args);
+    let return_type = rresult_return!(DataType::try_from(&return_type.0));
 
     let args = ScalarFunctionArgs {
         args,
@@ -164,18 +151,11 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
         return_type: &return_type,
     };
 
-    let result = match udf
+    let result = rresult_return!(udf
         .invoke_with_args(args)
-        .and_then(|r| r.to_array(number_rows))
-    {
-        Ok(v) => v,
-        Err(e) => return RResult::RErr(e.to_string().into()),
-    };
+        .and_then(|r| r.to_array(number_rows)));
 
-    let (result_array, result_schema) = match to_ffi(&result.to_data()) {
-        Ok(v) => v,
-        Err(e) => return RResult::RErr(e.to_string().into()),
-    };
+    let (result_array, result_schema) = rresult_return!(to_ffi(&result.to_data()));
 
     RResult::ROk(WrappedArray {
         array: result_array,
@@ -251,32 +231,14 @@ pub struct ForeignScalarUDF {
 unsafe impl Send for ForeignScalarUDF {}
 unsafe impl Sync for ForeignScalarUDF {}
 
-// impl DisplayAs for ForeignScalarUDF {
-//     fn fmt_as(
-//         &self,
-//         _t: datafusion::physical_plan::DisplayFormatType,
-//         f: &mut std::fmt::Formatter,
-//     ) -> std::fmt::Result {
-//         write!(
-//             f,
-//             "FFI_ScalarUDF(number_of_children={})",
-//             self.children.len(),
-//         )
-//     }
-// }
-
 impl TryFrom<&FFI_ScalarUDF> for ForeignScalarUDF {
     type Error = DataFusionError;
 
     fn try_from(udf: &FFI_ScalarUDF) -> Result<Self, Self::Error> {
         unsafe {
             let name = (udf.name)(udf).into();
-            let signature = match (udf.signature)(udf) {
-                RResult::ROk(s) => (&s).try_into()?,
-                RResult::RErr(e) => {
-                    return Err(DataFusionError::Execution(e.to_string()))
-                }
-            };
+            let ffi_signature = df_result!((udf.signature)(udf))?;
+            let signature = (&ffi_signature).try_into()?;
 
             let aliases = (udf.aliases)(udf)
                 .into_iter()
@@ -321,10 +283,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 
         let result = unsafe { (self.udf.return_type)(&self.udf, arg_types) };
 
-        let result = match result {
-            RResult::ROk(c) => Ok(c),
-            RResult::RErr(e) => Err(DataFusionError::Execution(e.to_string())),
-        };
+        let result = df_result!(result);
 
         result.and_then(|r| (&r.0).try_into().map_err(DataFusionError::from))
     }
@@ -366,11 +325,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             (self.udf.invoke_with_args)(&self.udf, args, number_rows, return_type)
         };
 
-        let result = match result {
-            RResult::ROk(v) => v,
-            RResult::RErr(e) => Err(DataFusionError::Execution(e.to_string()))?,
-        };
-
+        let result = df_result!(result)?;
         let result_array: ArrayRef = result.try_into()?;
 
         Ok(ColumnarValue::Array(result_array))
