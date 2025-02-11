@@ -238,7 +238,7 @@ struct AsyncTestRecordBatchStream {
 }
 
 impl RecordBatchStream for AsyncTestRecordBatchStream {
-    fn schema(&self) -> arrow_schema::SchemaRef {
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
         super::create_test_schema()
     }
 }
