@@ -47,6 +47,10 @@ fn init() {
     ["--command", "show datafusion.execution.batch_size", "--format", "json", "-q", "-b", "1"],
     "[{\"name\":\"datafusion.execution.batch_size\",\"value\":\"1\"}]\n"
 )]
+#[case::exec_from_commands(
+    ["--command", "select array_slice([1,2,3], 1, 2)", "--format", "json", "-q"],
+    "[{\"make_array(Int64(1),Int64(2),Int64(3))[Int64(1):Int64(2)]\":[1,2]}]\n"
+)]
 #[test]
 fn cli_quick_test<'a>(
     #[case] args: impl IntoIterator<Item = &'a str>,
