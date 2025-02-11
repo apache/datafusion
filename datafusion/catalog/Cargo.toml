@@ -40,7 +40,6 @@ futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 parking_lot = { workspace = true }
-sqlparser = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
