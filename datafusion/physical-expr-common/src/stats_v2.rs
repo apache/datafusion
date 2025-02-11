@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::f64::consts::LN_2;
 use std::sync::OnceLock;
 
 use crate::stats_v2::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
@@ -26,7 +27,6 @@ use datafusion_expr_common::type_coercion::binary::binary_numeric_coercion;
 
 static SCALAR_VALUE_ZERO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
 static SCALAR_VALUE_ONE_LOCK: OnceLock<ScalarValue> = OnceLock::new();
-static LN_TWO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
 
 /// Returns a `0` as a [`ScalarValue`].
 pub fn get_zero() -> &'static ScalarValue {
@@ -36,11 +36,6 @@ pub fn get_zero() -> &'static ScalarValue {
 /// Returns a `1` as a [`ScalarValue`].
 pub fn get_one() -> &'static ScalarValue {
     SCALAR_VALUE_ONE_LOCK.get_or_init(|| ScalarValue::Float64(Some(1.)))
-}
-
-/// Returns the number `ln(2)` as a [`ScalarValue`].
-pub fn get_ln_two() -> &'static ScalarValue {
-    LN_TWO_LOCK.get_or_init(|| ScalarValue::Float64(Some(2_f64.ln())))
 }
 
 /// New, enhanced `Statistics` definition, represents five core statistical
@@ -358,19 +353,22 @@ impl ExponentialDistribution {
     }
 
     pub fn mean(&self) -> Result<ScalarValue> {
-        let one = ScalarValue::new_one(&self.offset.data_type())?;
+        let one = ScalarValue::new_one(&self.rate.data_type())?;
+        let tail_mean = one.div(&self.rate)?;
         if self.positive_tail {
-            self.offset.add_checked(one.div(&self.rate)?)
+            self.offset.add_checked(tail_mean)
         } else {
-            self.offset.sub_checked(one.div(&self.rate)?)
+            self.offset.sub_checked(tail_mean)
         }
     }
 
     pub fn median(&self) -> Result<ScalarValue> {
+        let ln_two = ScalarValue::from(LN_2).cast_to(&self.rate.data_type())?;
+        let tail_median = ln_two.div(&self.rate)?;
         if self.positive_tail {
-            self.offset.add_checked(get_ln_two().div(&self.rate)?)
+            self.offset.add_checked(tail_median)
         } else {
-            self.offset.sub_checked(get_ln_two().div(&self.rate)?)
+            self.offset.sub_checked(tail_median)
         }
     }
 

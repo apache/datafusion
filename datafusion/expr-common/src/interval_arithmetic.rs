@@ -1281,7 +1281,7 @@ pub fn satisfy_greater(
     } else {
         right.upper.clone()
     };
-
+    // No possibility to create an invalid interval:
     Ok(Some((
         Interval::new(new_left_lower, left.upper.clone()),
         Interval::new(right.lower.clone(), new_right_upper),

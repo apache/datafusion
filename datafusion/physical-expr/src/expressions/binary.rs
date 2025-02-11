@@ -827,12 +827,12 @@ fn evaluate_statistics_logical(
                 }
             } else {
                 not_impl_err!(
-                    "Only AND and OR operator are handled for statistical evaluation"
+                    "Statistical evaluation only supports AND and OR operators"
                 )
             }
         }
         (_, _) => internal_err!(
-            "Only statistics with Bernoulli distribution can be evaluated with a logical operator"
+            "Logical operators are only compatible with `Bernoulli` distributions"
         ),
     }
 }
