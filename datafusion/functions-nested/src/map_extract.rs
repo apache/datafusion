@@ -17,17 +17,14 @@
 
 //! [`ScalarUDFImpl`] definitions for map_extract functions.
 
-use arrow::array::{ArrayRef, Capacities, MutableArrayData};
-use arrow_array::{make_array, ListArray};
-
-use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::DataType;
-use arrow_array::{Array, MapArray};
-use arrow_schema::Field;
-
-use datafusion_common::{
-    cast::as_map_array, exec_err, utils::take_function_args, Result,
+use crate::utils::{get_map_entry_field, make_scalar_function};
+use arrow::array::{
+    make_array, Array, ArrayRef, Capacities, ListArray, MapArray, MutableArrayData,
 };
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -35,8 +32,6 @@ use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 use std::vec;
-
-use crate::utils::{get_map_entry_field, make_scalar_function};
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(

@@ -44,12 +44,10 @@ use crate::{
     Statistics,
 };
 
+use arrow::array::{Array, RecordBatch, RecordBatchOptions, UInt32Array};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, SortField};
-use arrow_array::{Array, RecordBatchOptions, UInt32Array};
-use arrow_schema::DataType;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -1069,7 +1067,7 @@ mod tests {
     use crate::collect;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
-    use crate::memory::MemoryExec;
+    use crate::memory::MemorySourceConfig;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
@@ -1376,9 +1374,9 @@ mod tests {
             Arc::new(vec![3, 2, 1].into_iter().map(Some).collect::<UInt64Array>());
 
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data]).unwrap();
-        let input = Arc::new(
-            MemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None).unwrap(),
-        );
+        let input =
+            MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+                .unwrap();
 
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
@@ -1448,11 +1446,7 @@ mod tests {
                     },
                 },
             ]),
-            Arc::new(MemoryExec::try_new(
-                &[vec![batch]],
-                Arc::clone(&schema),
-                None,
-            )?),
+            MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?,
         ));
 
         assert_eq!(DataType::Int32, *sort_exec.schema().field(0).data_type());
@@ -1538,7 +1532,7 @@ mod tests {
                     },
                 },
             ]),
-            Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
+            MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?,
         ));
 
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());

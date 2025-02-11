@@ -27,7 +27,7 @@ use abi_stable::{
 };
 
 use super::table_provider::FFI_TableProvider;
-use arrow_array::RecordBatch;
+use arrow::array::RecordBatch;
 use async_provider::create_async_table_provider;
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema},

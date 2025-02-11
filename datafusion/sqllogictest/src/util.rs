@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_common::{exec_datafusion_err, Result};
+use datafusion::common::{exec_datafusion_err, Result};
 use itertools::Itertools;
 use log::Level::Warn;
 use log::{info, log_enabled, warn};

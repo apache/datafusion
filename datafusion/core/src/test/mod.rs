@@ -25,12 +25,13 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::datasource::data_source::FileSource;
 use crate::datasource::file_format::csv::CsvFormat;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::FileFormat;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::object_store::ObjectStoreUrl;
-use crate::datasource::physical_plan::{CsvExec, FileScanConfig};
+use crate::datasource::physical_plan::{CsvSource, FileScanConfig};
 use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::logical_expr::LogicalPlan;
@@ -41,6 +42,7 @@ use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::DataFusionError;
+use datafusion_physical_plan::source::DataSourceExec;
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -72,8 +74,11 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     Arc::new(provider)
 }
 
-/// Returns a [`CsvExec`] that scans "aggregate_test_100.csv" with `partitions` partitions
-pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<CsvExec>> {
+/// Returns a [`DataSourceExec`] that scans "aggregate_test_100.csv" with `partitions` partitions
+pub fn scan_partitioned_csv(
+    partitions: usize,
+    work_dir: &Path,
+) -> Result<Arc<DataSourceExec>> {
     let schema = aggr_test_schema();
     let filename = "aggregate_test_100.csv";
     let path = format!("{}/csv", arrow_test_data());
@@ -85,18 +90,10 @@ pub fn scan_partitioned_csv(partitions: usize, work_dir: &Path) -> Result<Arc<Cs
         FileCompressionType::UNCOMPRESSED,
         work_dir,
     )?;
-    let config = partitioned_csv_config(schema, file_groups);
-    Ok(Arc::new(
-        CsvExec::builder(config)
-            .with_has_header(true)
-            .with_delimeter(b',')
-            .with_quote(b'"')
-            .with_escape(None)
-            .with_comment(None)
-            .with_newlines_in_values(false)
-            .with_file_compression_type(FileCompressionType::UNCOMPRESSED)
-            .build(),
-    ))
+    let source = Arc::new(CsvSource::new(true, b'"', b'"'));
+    let config = partitioned_csv_config(schema, file_groups, source)
+        .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
+    Ok(config.new_exec())
 }
 
 /// Auto finish the wrapped BzEncoder on drop
@@ -215,8 +212,9 @@ pub fn partitioned_file_groups(
 pub fn partitioned_csv_config(
     schema: SchemaRef,
     file_groups: Vec<Vec<PartitionedFile>>,
+    source: Arc<dyn FileSource>,
 ) -> FileScanConfig {
-    FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema)
+    FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
         .with_file_groups(file_groups)
 }
 

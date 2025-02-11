@@ -148,6 +148,7 @@ To get started, see
    contributor-guide/governance
    contributor-guide/inviting
    contributor-guide/specification/index
+   contributor-guide/gsoc_application_guidelines
 
 .. _toc.subprojects:
 

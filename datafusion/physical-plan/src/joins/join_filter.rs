@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::joins::utils::ColumnIndex;
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::JoinSide;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use std::sync::Arc;

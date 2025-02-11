@@ -23,8 +23,10 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List};
-use arrow_schema::Field;
+use arrow::datatypes::{
+    DataType::{FixedSizeList, LargeList, List},
+    Field,
+};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
@@ -34,7 +36,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{ArrayFunctionSignature, Expr, TypeSignature};
 use datafusion_expr::{
-    ColumnarValue, Documentation, NullHandling, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -330,11 +332,6 @@ impl ArraySlice {
                 vec![
                     TypeSignature::ArraySignature(
                         ArrayFunctionSignature::ArrayAndIndexes(
-                            NonZeroUsize::new(1).expect("1 is non-zero"),
-                        ),
-                    ),
-                    TypeSignature::ArraySignature(
-                        ArrayFunctionSignature::ArrayAndIndexes(
                             NonZeroUsize::new(2).expect("2 is non-zero"),
                         ),
                     ),
@@ -387,10 +384,6 @@ impl ScalarUDFImpl for ArraySlice {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
-    }
-
-    fn null_handling(&self) -> NullHandling {
-        NullHandling::Propagate
     }
 
     fn invoke_batch(
@@ -481,7 +474,17 @@ where
         // 0 ~ len - 1
         let adjusted_zero_index = if index < 0 {
             if let Ok(index) = index.try_into() {
-                index + len
+                // When index < 0 and -index > length, index is clamped to the beginning of the list.
+                // Otherwise, when index < 0, the index is counted from the end of the list.
+                //
+                // Note, we actually test the contrapositive, index < -length, because negating a
+                // negative will panic if the negative is equal to the smallest representable value
+                // while negating a positive is always safe.
+                if index < (O::zero() - O::one()) * len {
+                    O::zero()
+                } else {
+                    index + len
+                }
             } else {
                 return exec_err!("array_slice got invalid index: {}", index);
             }
@@ -569,7 +572,7 @@ where
                     "array_slice got invalid stride: {:?}, it cannot be 0",
                     stride
                 );
-            } else if (from <= to && stride.is_negative())
+            } else if (from < to && stride.is_negative())
                 || (from > to && stride.is_positive())
             {
                 // return empty array
@@ -581,7 +584,7 @@ where
                 internal_datafusion_err!("array_slice got invalid stride: {}", stride)
             })?;
 
-            if from <= to {
+            if from <= to && stride > O::zero() {
                 assert!(start + to <= end);
                 if stride.eq(&O::one()) {
                     // stride is default to 1
@@ -631,7 +634,7 @@ where
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         null_builder.finish(),
     )?))
 }
@@ -682,10 +685,6 @@ impl ScalarUDFImpl for ArrayPopFront {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
-    }
-
-    fn null_handling(&self) -> NullHandling {
-        NullHandling::Propagate
     }
 
     fn invoke_batch(
@@ -786,10 +785,6 @@ impl ScalarUDFImpl for ArrayPopBack {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(arg_types[0].clone())
-    }
-
-    fn null_handling(&self) -> NullHandling {
-        NullHandling::Propagate
     }
 
     fn invoke_batch(
@@ -983,7 +978,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::array_element_udf;
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Column, DFSchema, ScalarValue};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{cast, Expr, ExprSchemable};

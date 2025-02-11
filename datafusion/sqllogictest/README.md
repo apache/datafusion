@@ -250,6 +250,13 @@ database engine. The output is a full script that is a copy of the prototype scr
 
 You can update the tests / generate expected output by passing the `--complete` argument.
 
+To regenerate and complete the sqlite test suite's files in datafusion-testing/data/sqlite/ please refer to the
+'./regenerate_sqlite_files.sh' file.
+
+_WARNING_: The regenerate_sqlite_files.sh is experimental and should be understood and run with an abundance of caution.
+When run the script will clone a remote repository locally, replace the location of a dependency with a custom git
+version, will replace an existing .rs file with one from a github gist and will run various commands locally.
+
 ```shell
 # Update ddl.slt with output from running
 cargo test --test sqllogictests -- ddl --complete

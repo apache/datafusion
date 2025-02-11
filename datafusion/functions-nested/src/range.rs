@@ -27,10 +27,9 @@ use arrow::array::{
     TimestampNanosecondArray,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::{DataType, Field};
-use arrow_schema::DataType::*;
-use arrow_schema::IntervalUnit::MonthDayNano;
-use arrow_schema::TimeUnit::Nanosecond;
+use arrow::datatypes::{
+    DataType, DataType::*, Field, IntervalUnit::MonthDayNano, TimeUnit::Nanosecond,
+};
 use datafusion_common::cast::{
     as_date32_array, as_int64_array, as_interval_mdn_array, as_timestamp_nanosecond_array,
 };

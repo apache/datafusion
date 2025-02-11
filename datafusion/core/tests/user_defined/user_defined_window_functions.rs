@@ -18,18 +18,8 @@
 //! This module contains end to end tests of creating
 //! user defined window functions
 
-use std::{
-    any::Any,
-    ops::Range,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-};
-
-use arrow::array::AsArray;
-use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema};
+use arrow::array::{ArrayRef, AsArray, Int64Array, RecordBatch, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::{assert_batches_eq, prelude::SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
@@ -42,6 +32,14 @@ use datafusion_functions_window_common::{
 use datafusion_physical_expr::{
     expressions::{col, lit},
     PhysicalExpr,
+};
+use std::{
+    any::Any,
+    ops::Range,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 /// A query with a window function evaluated over the entire partition

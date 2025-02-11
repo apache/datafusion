@@ -22,27 +22,26 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::{calculate_range, FileGroupPartitioner, FileScanConfig, RangeCalculation};
+use super::{calculate_range, FileScanConfig, RangeCalculation};
+use crate::datasource::data_source::FileSource;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
-use crate::datasource::physical_plan::file_stream::{
-    FileOpenFuture, FileOpener, FileStream,
-};
+use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
 use crate::datasource::physical_plan::FileMeta;
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
-    PlanProperties, SendableRecordBatchStream, Statistics,
-};
+use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
-use datafusion_common::Constraints;
-use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_common::{Constraints, Statistics};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
@@ -52,15 +51,14 @@ use tokio::task::JoinSet;
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
+#[deprecated(since = "46.0.0", note = "use DataSourceExec instead")]
 pub struct NdJsonExec {
+    inner: DataSourceExec,
     base_config: FileScanConfig,
-    projected_statistics: Statistics,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
     file_compression_type: FileCompressionType,
-    cache: PlanProperties,
 }
 
+#[allow(unused, deprecated)]
 impl NdJsonExec {
     /// Create a new JSON reader execution plan provided base configurations
     pub fn new(
@@ -79,12 +77,16 @@ impl NdJsonExec {
             projected_constraints,
             &base_config,
         );
+
+        let json = JsonSource::default();
+        let base_config = base_config
+            .with_file_compression_type(file_compression_type)
+            .with_source(Arc::new(json));
+
         Self {
+            inner: DataSourceExec::new(Arc::new(base_config.clone())),
+            file_compression_type: base_config.file_compression_type,
             base_config,
-            projected_statistics,
-            metrics: ExecutionPlanMetricsSet::new(),
-            file_compression_type,
-            cache,
         }
     }
 
@@ -96,6 +98,25 @@ impl NdJsonExec {
     /// Ref to file compression type
     pub fn file_compression_type(&self) -> &FileCompressionType {
         &self.file_compression_type
+    }
+
+    fn file_scan_config(&self) -> FileScanConfig {
+        let source = self.inner.source();
+        source
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+            .unwrap()
+            .clone()
+    }
+
+    fn json_source(&self) -> JsonSource {
+        let source = self.file_scan_config();
+        source
+            .file_source()
+            .as_any()
+            .downcast_ref::<JsonSource>()
+            .unwrap()
+            .clone()
     }
 
     fn output_partitioning_helper(file_scan_config: &FileScanConfig) -> Partitioning {
@@ -122,25 +143,26 @@ impl NdJsonExec {
     }
 
     fn with_file_groups(mut self, file_groups: Vec<Vec<PartitionedFile>>) -> Self {
-        self.base_config.file_groups = file_groups;
-        // Changing file groups may invalidate output partitioning. Update it also
-        let output_partitioning = Self::output_partitioning_helper(&self.base_config);
-        self.cache = self.cache.with_partitioning(output_partitioning);
+        self.base_config.file_groups = file_groups.clone();
+        let mut file_source = self.file_scan_config();
+        file_source = file_source.with_file_groups(file_groups);
+        self.inner = self.inner.with_source(Arc::new(file_source));
         self
     }
 }
 
+#[allow(unused, deprecated)]
 impl DisplayAs for NdJsonExec {
     fn fmt_as(
         &self,
         t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(f, "JsonExec: ")?;
-        self.base_config.fmt_as(t, f)
+        self.inner.fmt_as(t, f)
     }
 }
 
+#[allow(unused, deprecated)]
 impl ExecutionPlan for NdJsonExec {
     fn name(&self) -> &'static str {
         "NdJsonExec"
@@ -150,7 +172,7 @@ impl ExecutionPlan for NdJsonExec {
         self
     }
     fn properties(&self) -> &PlanProperties {
-        &self.cache
+        self.inner.properties()
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -169,26 +191,7 @@ impl ExecutionPlan for NdJsonExec {
         target_partitions: usize,
         config: &datafusion_common::config::ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if self.file_compression_type.is_compressed() {
-            return Ok(None);
-        }
-        let repartition_file_min_size = config.optimizer.repartition_file_min_size;
-        let preserve_order_within_groups = self.properties().output_ordering().is_some();
-        let file_groups = &self.base_config.file_groups;
-
-        let repartitioned_file_groups_option = FileGroupPartitioner::new()
-            .with_target_partitions(target_partitions)
-            .with_preserve_order_within_groups(preserve_order_within_groups)
-            .with_repartition_file_min_size(repartition_file_min_size)
-            .repartition_file_groups(file_groups);
-
-        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            let mut new_plan = self.clone();
-            new_plan = new_plan.with_file_groups(repartitioned_file_groups);
-            return Ok(Some(Arc::new(new_plan)));
-        }
-
-        Ok(None)
+        self.inner.repartitioned(target_partitions, config)
     }
 
     fn execute(
@@ -196,46 +199,23 @@ impl ExecutionPlan for NdJsonExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let batch_size = context.session_config().batch_size();
-
-        let object_store = context
-            .runtime_env()
-            .object_store(&self.base_config.object_store_url)?;
-        let opener = JsonOpener {
-            batch_size,
-            projected_schema: self.base_config.projected_file_schema(),
-            file_compression_type: self.file_compression_type.to_owned(),
-            object_store,
-        };
-
-        let stream =
-            FileStream::new(&self.base_config, partition, opener, &self.metrics)?;
-
-        Ok(Box::pin(stream) as SendableRecordBatchStream)
+        self.inner.execute(partition, context)
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_statistics.clone())
+        self.inner.statistics()
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        self.inner.metrics()
     }
 
     fn fetch(&self) -> Option<usize> {
-        self.base_config.limit
+        self.inner.fetch()
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        let new_config = self.base_config.clone().with_limit(limit);
-
-        Some(Arc::new(Self {
-            base_config: new_config,
-            projected_statistics: self.projected_statistics.clone(),
-            metrics: self.metrics.clone(),
-            file_compression_type: self.file_compression_type,
-            cache: self.cache.clone(),
-        }))
+        self.inner.with_fetch(limit)
     }
 }
 
@@ -261,6 +241,81 @@ impl JsonOpener {
             file_compression_type,
             object_store,
         }
+    }
+}
+
+/// JsonSource holds the extra configuration that is necessary for [`JsonOpener`]
+#[derive(Clone, Default)]
+pub struct JsonSource {
+    batch_size: Option<usize>,
+    metrics: ExecutionPlanMetricsSet,
+    projected_statistics: Option<Statistics>,
+}
+
+impl JsonSource {
+    /// Initialize a JsonSource with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl FileSource for JsonSource {
+    fn create_file_opener(
+        &self,
+        object_store: Result<Arc<dyn ObjectStore>>,
+        base_config: &FileScanConfig,
+        _partition: usize,
+    ) -> Result<Arc<dyn FileOpener>> {
+        Ok(Arc::new(JsonOpener {
+            batch_size: self
+                .batch_size
+                .expect("Batch size must set before creating opener"),
+            projected_schema: base_config.projected_file_schema(),
+            file_compression_type: base_config.file_compression_type,
+            object_store: object_store?,
+        }))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
+        let mut conf = self.clone();
+        conf.batch_size = Some(batch_size);
+        Arc::new(conf)
+    }
+
+    fn with_schema(&self, _schema: SchemaRef) -> Arc<dyn FileSource> {
+        Arc::new(Self { ..self.clone() })
+    }
+    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> {
+        let mut conf = self.clone();
+        conf.projected_statistics = Some(statistics);
+        Arc::new(conf)
+    }
+
+    fn with_projection(&self, _config: &FileScanConfig) -> Arc<dyn FileSource> {
+        Arc::new(Self { ..self.clone() })
+    }
+
+    fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        &self.metrics
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        let statistics = &self.projected_statistics;
+        Ok(statistics
+            .clone()
+            .expect("projected_statistics must be set to call"))
+    }
+
+    fn file_type(&self) -> &str {
+        "json"
+    }
+
+    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
+        !(config.file_compression_type.is_compressed() || config.new_lines_in_values)
     }
 }
 
@@ -394,6 +449,7 @@ mod tests {
     use super::*;
     use crate::dataframe::DataFrameWriteOptions;
     use crate::datasource::file_format::{json::JsonFormat, FileFormat};
+    use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
     use crate::execution::context::SessionState;
     use crate::prelude::{
@@ -405,6 +461,7 @@ mod tests {
     use arrow::array::Array;
     use arrow::datatypes::{Field, SchemaBuilder};
     use datafusion_common::cast::{as_int32_array, as_int64_array, as_string_array};
+
     use object_store::chunked::ChunkedStore;
     use object_store::local::LocalFileSystem;
     use rstest::*;
@@ -527,12 +584,12 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let exec = NdJsonExec::new(
-            FileScanConfig::new(object_store_url, file_schema)
-                .with_file_groups(file_groups)
-                .with_limit(Some(3)),
-            file_compression_type.to_owned(),
-        );
+        let source = Arc::new(JsonSource::new());
+        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+            .with_file_groups(file_groups)
+            .with_limit(Some(3))
+            .with_file_compression_type(file_compression_type.to_owned());
+        let exec = conf.new_exec();
 
         // TODO: this is not where schema inference should be tested
 
@@ -598,12 +655,12 @@ mod tests {
         let file_schema = Arc::new(builder.finish());
         let missing_field_idx = file_schema.fields.len() - 1;
 
-        let exec = NdJsonExec::new(
-            FileScanConfig::new(object_store_url, file_schema)
-                .with_file_groups(file_groups)
-                .with_limit(Some(3)),
-            file_compression_type.to_owned(),
-        );
+        let source = Arc::new(JsonSource::new());
+        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+            .with_file_groups(file_groups)
+            .with_limit(Some(3))
+            .with_file_compression_type(file_compression_type.to_owned());
+        let exec = conf.new_exec();
 
         let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
@@ -638,12 +695,12 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let exec = NdJsonExec::new(
-            FileScanConfig::new(object_store_url, file_schema)
-                .with_file_groups(file_groups)
-                .with_projection(Some(vec![0, 2])),
-            file_compression_type.to_owned(),
-        );
+        let source = Arc::new(JsonSource::new());
+        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+            .with_file_groups(file_groups)
+            .with_projection(Some(vec![0, 2]))
+            .with_file_compression_type(file_compression_type.to_owned());
+        let exec = conf.new_exec();
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 
@@ -683,12 +740,12 @@ mod tests {
         let (object_store_url, file_groups, file_schema) =
             prepare_store(&state, file_compression_type.to_owned(), tmp_dir.path()).await;
 
-        let exec = NdJsonExec::new(
-            FileScanConfig::new(object_store_url, file_schema)
-                .with_file_groups(file_groups)
-                .with_projection(Some(vec![3, 0, 2])),
-            file_compression_type.to_owned(),
-        );
+        let source = Arc::new(JsonSource::new());
+        let conf = FileScanConfig::new(object_store_url, file_schema, source)
+            .with_file_groups(file_groups)
+            .with_projection(Some(vec![3, 0, 2]))
+            .with_file_compression_type(file_compression_type.to_owned());
+        let exec = conf.new_exec();
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);
 

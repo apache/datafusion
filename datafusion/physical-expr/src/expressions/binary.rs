@@ -30,7 +30,7 @@ use arrow::compute::kernels::comparison::{regexp_is_match, regexp_is_match_scala
 use arrow::compute::kernels::concat_elements::concat_elements_utf8;
 use arrow::compute::{cast, ilike, like, nilike, nlike};
 use arrow::datatypes::*;
-use arrow_schema::ArrowError;
+use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;

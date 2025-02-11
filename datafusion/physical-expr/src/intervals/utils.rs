@@ -25,7 +25,7 @@ use crate::{
 };
 
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
-use arrow_schema::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::Operator;

@@ -27,9 +27,12 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
+default = ["compression"]
+
 [dependencies]
 arrow = { workspace = true }
-arrow-schema = { workspace = true }
 async-compression = { version = "0.4.0", features = [
     "bzip2",
     "gzip",
@@ -37,6 +40,8 @@ async-compression = { version = "0.4.0", features = [
     "zstd",
     "tokio",
 ], optional = true }
+bytes = { workspace = true }
+bzip2 = { version = "0.5.0", optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
@@ -45,17 +50,21 @@ datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
 glob = "0.3.0"
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 url = { workspace = true }
+xz2 = { version = "0.1", optional = true, features = ["static"] }
+zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true }
 
 [lints]
 workspace = true

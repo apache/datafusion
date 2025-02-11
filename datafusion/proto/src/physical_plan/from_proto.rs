@@ -26,6 +26,7 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 
 use datafusion::arrow::datatypes::Schema;
+use datafusion::datasource::data_source::FileSource;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
 #[cfg(feature = "parquet")]
@@ -469,12 +470,19 @@ pub fn parse_protobuf_partitioning(
     }
 }
 
+pub fn parse_protobuf_file_scan_schema(
+    proto: &protobuf::FileScanExecConf,
+) -> Result<Arc<Schema>> {
+    Ok(Arc::new(convert_required!(proto.schema)?))
+}
+
 pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
     codec: &dyn PhysicalExtensionCodec,
+    source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
-    let schema: Arc<Schema> = Arc::new(convert_required!(proto.schema)?);
+    let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
     let projection = proto
         .projection
         .iter()
@@ -530,17 +538,14 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.push(sort_expr);
     }
 
-    Ok(FileScanConfig {
-        object_store_url,
-        file_schema,
-        file_groups,
-        constraints,
-        statistics,
-        projection,
-        limit: proto.limit.as_ref().map(|sl| sl.limit as usize),
-        table_partition_cols,
-        output_ordering,
-    })
+    Ok(FileScanConfig::new(object_store_url, file_schema, source)
+        .with_file_groups(file_groups)
+        .with_constraints(constraints)
+        .with_statistics(statistics)
+        .with_projection(projection)
+        .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
+        .with_table_partition_cols(table_partition_cols)
+        .with_output_ordering(output_ordering))
 }
 
 impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
