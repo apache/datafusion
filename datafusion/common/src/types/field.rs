@@ -29,6 +29,13 @@ pub struct LogicalField {
     pub nullable: bool,
 }
 
+impl LogicalField {
+    /// Returns an immutable reference to the Field's name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 impl PartialEq for LogicalField {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
@@ -61,6 +68,18 @@ pub type LogicalFieldRef = Arc<LogicalField>;
 /// A cheaply cloneable, owned collection of [`LogicalFieldRef`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LogicalFields(Arc<[LogicalFieldRef]>);
+
+impl LogicalFields {
+    /// Searches for a field by name, returning it along with its index if found
+    /// Searches for a logical field by name, returning it along with its index if found
+    pub fn find(&self, name: &str) -> Option<(usize, &LogicalField)> {
+        self.0
+            .iter()
+            .enumerate()
+            .find(|(_, b)| b.name() == name)
+            .map(|(i, b)| (i, b.as_ref()))
+    }
+}
 
 impl Deref for LogicalFields {
     type Target = [LogicalFieldRef];
