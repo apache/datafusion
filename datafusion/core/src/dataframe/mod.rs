@@ -1718,29 +1718,31 @@ impl DataFrame {
 
         let mut col_exists = false;
         let new_column = expr.alias(name);
-        let mut fields: Vec<Expr> = plan
+        let mut fields: Vec<(Expr, bool)> = plan
             .schema()
             .iter()
             .filter_map(|(qualifier, field)| {
                 if field.name() == name {
                     col_exists = true;
-                    Some(new_column.clone())
+                    Some((new_column.clone(), true))
                 } else {
                     let e = col(Column::from((qualifier, field)));
                     window_fn_str
                         .as_ref()
                         .filter(|s| *s == &e.to_string())
                         .is_none()
-                        .then_some(e)
+                        .then_some((e, false))
                 }
             })
             .collect();
 
         if !col_exists {
-            fields.push(new_column);
+            fields.push((new_column, true));
         }
 
-        let project_plan = LogicalPlanBuilder::from(plan).project(fields)?.build()?;
+        let project_plan = LogicalPlanBuilder::from(plan)
+            .project_with_validation(fields)?
+            .build()?;
 
         Ok(DataFrame {
             session_state: self.session_state,
@@ -1801,14 +1803,14 @@ impl DataFrame {
             .iter()
             .map(|(qualifier, field)| {
                 if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                    col(Column::from((qualifier, field))).alias(new_name)
+                    (col(Column::from((qualifier, field))).alias(new_name), false)
                 } else {
-                    col(Column::from((qualifier, field)))
+                    (col(Column::from((qualifier, field))), false)
                 }
             })
             .collect::<Vec<_>>();
         let project_plan = LogicalPlanBuilder::from(self.plan)
-            .project(projection)?
+            .project_with_validation(projection)?
             .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
