@@ -19,7 +19,7 @@
 
 use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow::array::{Array, ArrayRef, ListArray};
-use arrow_schema::{DataType, Field};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,

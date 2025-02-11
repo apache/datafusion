@@ -17,7 +17,7 @@
 
 use crate::write::demux::{start_demuxer_task, DemuxedStreamReceiver};
 use crate::{ListingTableUrl, PartitionedFile};
-use arrow_schema::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, SchemaRef};
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common_runtime::SpawnedTask;

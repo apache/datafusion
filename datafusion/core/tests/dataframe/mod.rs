@@ -26,9 +26,12 @@ use arrow::array::{
     StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray,
 };
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{DataType, Field, Float32Type, Int32Type, Schema, UInt64Type};
+use arrow::datatypes::{
+    DataType, Field, Float32Type, Int32Type, Schema, SchemaRef, UInt64Type, UnionFields,
+    UnionMode,
+};
+use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::{ArrowError, SchemaRef, UnionFields, UnionMode};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,

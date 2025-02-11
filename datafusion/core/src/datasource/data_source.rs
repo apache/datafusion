@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::datasource::physical_plan::{FileOpener, FileScanConfig};
 
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::Statistics;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::{Schema, SchemaBuilder};
+use arrow::datatypes::{Schema, SchemaBuilder};
 use datafusion_common::Result;
 use datafusion_physical_expr::window::WindowExpr;
 use std::sync::Arc;

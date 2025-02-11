@@ -18,7 +18,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
-use arrow_schema::TimeUnit;
+use arrow::datatypes::TimeUnit;
 use datafusion_common::Result;
 use datafusion_expr::Expr;
 use regex::Regex;

@@ -25,8 +25,7 @@ use arrow::array::{
     builder::PrimitiveBuilder, cast::AsArray, downcast_primitive, Array, ArrayRef,
     ArrowPrimitiveType, PrimitiveArray, StringArray,
 };
-use arrow::datatypes::i256;
-use arrow_schema::DataType;
+use arrow::datatypes::{i256, DataType};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use half::f16;

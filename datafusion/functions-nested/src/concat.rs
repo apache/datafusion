@@ -25,7 +25,7 @@ use arrow::array::{
     OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow_schema::{DataType, Field};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,

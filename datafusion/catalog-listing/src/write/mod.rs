@@ -26,7 +26,7 @@ use crate::file_sink_config::FileSinkConfig;
 use datafusion_common::error::Result;
 
 use arrow::array::RecordBatch;
-use arrow_schema::Schema;
+use arrow::datatypes::Schema;
 use bytes::Bytes;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;

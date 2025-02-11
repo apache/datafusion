@@ -27,9 +27,8 @@ use arrow::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
         Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     },
-    datatypes::DataType,
+    datatypes::{DataType, Field, Schema},
 };
-use arrow_schema::{Field, Schema};
 
 use datafusion_common::{
     downcast_value, internal_err, not_impl_datafusion_err, not_impl_err, plan_err,
@@ -491,7 +490,7 @@ impl Accumulator for ApproxPercentileAccumulator {
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::DataType;
+    use arrow::datatypes::DataType;
 
     use datafusion_functions_aggregate_common::tdigest::TDigest;
 

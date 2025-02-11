@@ -24,8 +24,8 @@ use crate::physical_optimizer::test_utils::{
     schema, TestAggregate,
 };
 
+use arrow::datatypes::DataType;
 use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
-use arrow_schema::DataType;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;

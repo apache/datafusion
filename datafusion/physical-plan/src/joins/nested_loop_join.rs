@@ -1037,8 +1037,8 @@ pub(crate) mod tests {
     };
 
     use arrow::array::Int32Array;
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
-    use arrow_schema::SortOptions;
     use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::Operator;
