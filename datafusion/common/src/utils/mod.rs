@@ -891,11 +891,10 @@ pub fn get_available_parallelism() -> usize {
 ///
 /// # Example
 /// ```
-/// # use datafusion_common::ScalarValue;
 /// # use datafusion_common::Result;
-/// # use datafusion_expr_common::columnar_value::ColumnarValue;
-/// # use datafusion_functions::utils::take_function_args;
-/// fn my_function(args: &[ColumnarValue]) -> Result<()> {
+/// # use datafusion_common::utils::take_function_args;
+/// # use datafusion_common::ScalarValue;
+/// fn my_function(args: &[ScalarValue]) -> Result<()> {
 ///   // function expects 2 args, so create a 2-element array
 ///   let [arg1, arg2] = take_function_args("my_function", args)?;
 ///   // ... do stuff..
@@ -903,13 +902,11 @@ pub fn get_available_parallelism() -> usize {
 /// }
 ///
 /// // Calling the function with 1 argument produces an error:
-/// let ten = ColumnarValue::from(ScalarValue::from(10i32));
-/// let twenty = ColumnarValue::from(ScalarValue::from(20i32));
-/// let args = vec![ten.clone()];
+/// let args = vec![ScalarValue::Int32(Some(10))];
 /// let err = my_function(&args).unwrap_err();
 /// assert_eq!(err.to_string(), "Execution error: my_function function requires 2 arguments, got 1");
 /// // Calling the function with 2 arguments works great
-/// let args = vec![ten, twenty];
+/// let args = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))];
 /// my_function(&args).unwrap();
 /// ```
 pub fn take_function_args<const N: usize, T>(
