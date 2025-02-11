@@ -20,6 +20,7 @@ impl LogicalFixedSizeBinary {
 
     /// TODO logical-types
     pub fn len(&self) -> i32 {
+        // LogicalFixedSizeBinary::new guarantees that the cast succeeds
         self.value.len() as i32
     }
 
@@ -33,9 +34,8 @@ impl LogicalFixedSizeBinary {
         self.value
     }
 
-    /// TODO logical-types
+    /// Returns the logical type of this value
     pub fn logical_type(&self) -> LogicalTypeRef {
-        // LogicalFixedSizeBinary::new guarantees that the cast succeeds
         logical_fixed_size_binary(self.len())
     }
 }

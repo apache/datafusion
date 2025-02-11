@@ -62,8 +62,9 @@ use arrow_schema::{UnionFields, UnionMode};
 use bigdecimal::num_traits::FromBytes;
 use half::f16;
 pub use logical::{
-    LogicalDecimal, LogicalFixedSizeBinary, LogicalFixedSizeList, LogicalInterval,
-    LogicalList, LogicalMap, LogicalScalar, LogicalStruct, LogicalTime, LogicalUnion,
+    LogicalDate, LogicalDecimal, LogicalDuration, LogicalFixedSizeBinary,
+    LogicalFixedSizeList, LogicalInterval, LogicalList, LogicalMap, LogicalScalar,
+    LogicalStruct, LogicalTime, LogicalTimestamp, LogicalTimestampValue, LogicalUnion,
 };
 pub use struct_builder::ScalarStructBuilder;
 

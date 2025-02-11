@@ -13,7 +13,7 @@ impl LogicalDuration {
         LogicalDuration { time_unit, value }
     }
 
-    /// Returns the logical type of this duration.
+    /// Returns the logical type of this value.
     pub fn logical_type(&self) -> LogicalTypeRef {
         logical_duration(self.time_unit)
     }

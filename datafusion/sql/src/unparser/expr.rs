@@ -28,15 +28,11 @@ use std::vec;
 use super::dialect::IntervalStyle;
 use super::Unparser;
 use arrow::util::display::array_value_to_string;
-use arrow_array::temporal_conversions::{as_datetime, as_datetime_with_timezone, date32_to_datetime, date64_to_datetime};
-use arrow_array::timezone::Tz;
-use arrow_array::types::{
-    TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
-};
 use arrow_schema::{DataType, TimeUnit};
 use bigdecimal::ToPrimitive;
-use datafusion_common::scalar::{LogicalInterval, LogicalScalar, LogicalTime};
+use datafusion_common::scalar::{
+    LogicalInterval, LogicalScalar, LogicalTime, LogicalTimestamp, LogicalTimestampValue,
+};
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
     ScalarValue,
@@ -186,9 +182,7 @@ impl Unparser<'_> {
             Expr::Cast(Cast { expr, data_type }) => {
                 Ok(self.cast_to_sql(expr, data_type)?)
             }
-            Expr::Literal(value) => {
-                Ok(self.scalar_to_sql(&value.clone().into())?)
-            }
+            Expr::Literal(value) => Ok(self.scalar_to_sql(&value.clone().into())?),
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(WindowFunction {
                 fun,
@@ -945,49 +939,16 @@ impl Unparser<'_> {
         }
     }
 
-    fn handle_timestamp(
-        &self,
-        time_unit: TimeUnit,
-        time_zone: &Option<Arc<str>>,
-        v: i64,
-    ) -> Result<ast::Expr> {
-        let ts = if let Some(tz) = time_zone {
-            let tz = Tz::from_str(tz)?;
-            match time_unit {
-                TimeUnit::Second => {
-                    as_datetime_with_timezone::<TimestampSecondType>(v, tz)
-                }
-                TimeUnit::Millisecond => {
-                    as_datetime_with_timezone::<TimestampMillisecondType>(v, tz)
-                }
-                TimeUnit::Microsecond => {
-                    as_datetime_with_timezone::<TimestampMicrosecondType>(v, tz)
-                }
-                TimeUnit::Nanosecond => {
-                    as_datetime_with_timezone::<TimestampNanosecondType>(v, tz)
-                }
-            }
-            .ok_or(internal_datafusion_err!(
-                "Unable to convert {v:?} to DateTime"
-            ))?
-            .to_string()
-        } else {
-            match time_unit {
-                TimeUnit::Second => as_datetime::<TimestampSecondType>(v),
-                TimeUnit::Millisecond => as_datetime::<TimestampMillisecondType>(v),
-                TimeUnit::Microsecond => as_datetime::<TimestampMicrosecondType>(v),
-                TimeUnit::Nanosecond => as_datetime::<TimestampNanosecondType>(v),
-            }
-            .ok_or(internal_datafusion_err!(
-                "Unable to convert {v:?} to DateTime"
-            ))?
-            .to_string()
+    fn handle_timestamp(&self, v: &LogicalTimestamp) -> Result<ast::Expr> {
+        let ts = match v.value()? {
+            LogicalTimestampValue::WithTimezone(v) => v.to_string(),
+            LogicalTimestampValue::WithoutTimezone(v) => v.to_string(),
         };
 
         Ok(ast::Expr::Cast {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::Value(SingleQuotedString(ts))),
-            data_type: self.dialect.timestamp_cast_dtype(&time_unit, &None),
+            data_type: self.dialect.timestamp_cast_dtype(&v.time_unit(), &None),
             format: None,
         })
     }
@@ -1091,22 +1052,18 @@ impl Unparser<'_> {
             LogicalScalar::FixedSizeList(a) => self.scalar_value_list_to_sql(a.values()),
             LogicalScalar::List(a) => self.scalar_value_list_to_sql(a.values()),
             LogicalScalar::Date(v) => {
-                let date = date32_to_datetime(*v).ok_or(internal_datafusion_err!(
-                    "Unable to convert Date to NaiveDate"
-                ))?.date();
+                let date = v.value()?.to_string();
                 Ok(ast::Expr::Cast {
                     kind: ast::CastKind::Cast,
-                    expr: Box::new(ast::Expr::Value(SingleQuotedString(
-                        date.to_string(),
-                    ))),
+                    expr: Box::new(ast::Expr::Value(SingleQuotedString(date))),
                     data_type: ast::DataType::Date,
                     format: None,
                 })
             }
             LogicalScalar::Time(t) => self.handle_time(t),
-            LogicalScalar::Timestamp(tu, tz, v) => self.handle_timestamp(*tu, tz, *v),
+            LogicalScalar::Timestamp(v) => self.handle_timestamp(v),
             LogicalScalar::Interval(v) => self.interval_scalar_to_sql(v),
-            LogicalScalar::Duration(_, _) => {
+            LogicalScalar::Duration(_) => {
                 not_impl_err!("Unsupported scalar: {v:?}")
             }
             LogicalScalar::Struct(_) => not_impl_err!("Unsupported scalar: {v:?}"),

@@ -16,7 +16,7 @@ pub enum LogicalInterval {
 }
 
 impl LogicalInterval {
-    /// Returns the [`LogicalTypeRef`] for [`self`].
+    /// Returns the logical type of this value.
     pub fn logical_type(&self) -> LogicalTypeRef {
         logical_interval(self.interval_unit())
     }

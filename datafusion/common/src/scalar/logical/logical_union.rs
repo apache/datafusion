@@ -11,7 +11,7 @@ pub struct LogicalUnion {
 }
 
 impl LogicalUnion {
-    /// Returns the [`LogicalTypeRef`] for [`self`].
+    /// Returns the logical type of this value.
     pub fn logical_type(&self) -> LogicalTypeRef {
         logical_union(self.fields.clone())
     }

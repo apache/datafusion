@@ -60,7 +60,7 @@ impl LogicalList {
         self.values.len()
     }
 
-    /// Returns the logical values of this list.
+    /// Returns the logical values of this value.
     pub fn values(&self) -> &[LogicalScalar] {
         self.values.as_slice()
     }

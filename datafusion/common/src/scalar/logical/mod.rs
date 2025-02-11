@@ -1,4 +1,5 @@
 mod from_scalar_value;
+mod logical_date;
 mod logical_decimal;
 mod logical_duration;
 mod logical_fixed_size_binary;
@@ -14,8 +15,8 @@ mod logical_union;
 use crate::types::{
     logical_binary, logical_boolean, logical_date, logical_float16, logical_float32,
     logical_float64, logical_int16, logical_int32, logical_int64, logical_int8,
-    logical_null, logical_string, logical_time, logical_uint16, logical_uint32,
-    logical_uint64, logical_uint8, LogicalField, LogicalType, LogicalTypeRef, NativeType,
+    logical_null, logical_string, logical_uint16, logical_uint32, logical_uint64,
+    logical_uint8, LogicalField, LogicalType, LogicalTypeRef, NativeType,
 };
 use crate::ScalarValue;
 use arrow_array::Array;
@@ -27,9 +28,9 @@ use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 
-use crate::scalar::logical::logical_duration::LogicalDuration;
-use crate::scalar::logical::logical_timestamp::LogicalTimestamp;
+pub use logical_date::LogicalDate;
 pub use logical_decimal::LogicalDecimal;
+pub use logical_duration::LogicalDuration;
 pub use logical_fixed_size_binary::LogicalFixedSizeBinary;
 pub use logical_fixed_size_list::LogicalFixedSizeList;
 pub use logical_interval::LogicalInterval;
@@ -37,6 +38,8 @@ pub use logical_list::LogicalList;
 pub use logical_map::LogicalMap;
 pub use logical_struct::LogicalStruct;
 pub use logical_time::LogicalTime;
+pub use logical_timestamp::LogicalTimestamp;
+pub use logical_timestamp::LogicalTimestampValue;
 pub use logical_union::LogicalUnion;
 
 /// Representation of a logical scalar. Contrary to a physical [`ScalarValue`], a logical scalar
@@ -75,7 +78,7 @@ pub enum LogicalScalar {
     /// Stores a scalar for [`NativeType::Timestamp`].
     Timestamp(LogicalTimestamp),
     /// Stores a scalar for [NativeType::Date].
-    Date(i32),
+    Date(LogicalDate),
     /// Stores a scalar for [`NativeType::Time`].
     Time(LogicalTime),
     /// Stores a scalar for [`NativeType::Duration`].
@@ -100,10 +103,11 @@ pub enum LogicalScalar {
     Decimal(LogicalDecimal),
     /// Stores a scalar for [`NativeType::Map`].
     Map(LogicalMap),
+    // TODO logical-types: Values for ExtensionTypes
 }
 
 impl LogicalScalar {
-    /// Returns the [`LogicalTypeRef`] for [`self`].
+    /// Returns the logical type of this value.
     pub fn logical_type(&self) -> LogicalTypeRef {
         match self {
             LogicalScalar::Null => logical_null(),
@@ -121,7 +125,7 @@ impl LogicalScalar {
             LogicalScalar::Float64(_) => logical_float64(),
             LogicalScalar::Timestamp(timestamp) => timestamp.logical_type(),
             LogicalScalar::Date(_) => logical_date(),
-            LogicalScalar::Time(time) => logical_time(time.time_unit()),
+            LogicalScalar::Time(time) => time.logical_type(),
             LogicalScalar::Duration(duration) => duration.logical_type(),
             LogicalScalar::Interval(i) => i.logical_type(),
             LogicalScalar::Binary(_) => logical_binary(),

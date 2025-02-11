@@ -1,11 +1,11 @@
 use crate::scalar::logical::logical_duration::LogicalDuration;
 use crate::scalar::logical::logical_timestamp::LogicalTimestamp;
 use crate::scalar::{
-    LogicalDecimal, LogicalFixedSizeBinary, LogicalFixedSizeList, LogicalInterval,
-    LogicalList, LogicalScalar, LogicalTime,
+    LogicalDate, LogicalDecimal, LogicalFixedSizeBinary, LogicalFixedSizeList,
+    LogicalInterval, LogicalList, LogicalScalar, LogicalStruct, LogicalTime,
 };
-use crate::types::{LogicalField, NativeType};
-use crate::ScalarValue;
+use crate::types::{LogicalField, LogicalFields, NativeType};
+use crate::{HashMap, ScalarValue};
 use arrow_array::{Array, FixedSizeListArray, ListArray, MapArray, StructArray};
 use arrow_schema::{DataType, TimeUnit, UnionFields};
 use bigdecimal::num_bigint::BigInt;
@@ -81,7 +81,7 @@ impl From<ScalarValue> for LogicalScalar {
             ScalarValue::Struct(v) => struct_to_logical_scalar(v),
             ScalarValue::Map(v) => map_to_logical_scalar(v),
             ScalarValue::Date32(None) => LogicalScalar::Null,
-            ScalarValue::Date32(Some(v)) => LogicalScalar::Date(v),
+            ScalarValue::Date32(Some(v)) => LogicalScalar::Date(LogicalDate::new(v)),
             ScalarValue::Date64(None) => LogicalScalar::Null,
             ScalarValue::Date64(Some(v)) => LogicalScalar::Timestamp(
                 LogicalTimestamp::new(TimeUnit::Millisecond, None, v),
@@ -146,7 +146,7 @@ impl From<ScalarValue> for LogicalScalar {
             ScalarValue::DurationNanosecond(Some(v)) => {
                 LogicalScalar::Duration(LogicalDuration::new(TimeUnit::Nanosecond, v))
             }
-            ScalarValue::Union(v, f, _) => union_to_logical_scalar(v, f),
+            ScalarValue::Union(v, f, _) => union_to_logical_scalar(f, v),
             ScalarValue::Dictionary(_, v) => (*v).into(),
         }
     }
@@ -179,6 +179,7 @@ fn list_to_logical_scalar(
     LogicalScalar::List(values)
 }
 
+/// Creates a [LogicalFixedSizeList] from a [FixedSizeListArray]  and wraps it in a `LogicalScalar`.
 fn fixed_size_list_to_logical_scalar(list: Arc<FixedSizeListArray>) -> LogicalScalar {
     let list =
         list_to_logical_scalar(list.value_type(), list.is_nullable(), list.values());
@@ -190,10 +191,27 @@ fn fixed_size_list_to_logical_scalar(list: Arc<FixedSizeListArray>) -> LogicalSc
     )
 }
 
-/// Creates a `LogicalStruct` from a `StructArray` and wraps it in a `LogicalScalar`.
+/// Creates a [LogicalStruct] from a [StructArray] and wraps it in a `LogicalScalar`.
 fn struct_to_logical_scalar(value: Arc<StructArray>) -> LogicalScalar {
-    let fields = value.fields().clone();
-    todo!("logical-types")
+    let fields = value
+        .fields()
+        .iter()
+        .map(|f| Arc::new(LogicalField::from(f.as_ref())))
+        .collect::<LogicalFields>();
+
+    let mut values = HashMap::new();
+    for f in fields.iter() {
+        let value_array = value
+            .column_by_name(f.name())
+            .expect("Fields extracted from value");
+        let value = ScalarValue::try_from_array(value_array, 0)
+            .expect("Extracting a scalar must succeed");
+        values.insert(f.name().to_string(), LogicalScalar::from(value));
+    }
+
+    let logical_struct = LogicalStruct::try_new(fields, values)
+        .expect("Fields extracted from StructArray");
+    LogicalScalar::Struct(logical_struct)
 }
 
 fn map_to_logical_scalar(p0: Arc<MapArray>) -> LogicalScalar {
@@ -201,8 +219,8 @@ fn map_to_logical_scalar(p0: Arc<MapArray>) -> LogicalScalar {
 }
 
 fn union_to_logical_scalar(
-    p0: Option<(i8, Box<ScalarValue>)>,
-    p1: UnionFields,
+    union_fields: UnionFields,
+    value: Option<(i8, Box<ScalarValue>)>,
 ) -> LogicalScalar {
     todo!()
 }

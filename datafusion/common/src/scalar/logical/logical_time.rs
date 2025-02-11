@@ -1,4 +1,4 @@
-use crate::types::NativeType;
+use crate::types::{logical_time, LogicalTypeRef, NativeType};
 use arrow_array::temporal_conversions::{
     time32ms_to_time, time32s_to_time, time64ns_to_time, time64us_to_time,
 };
@@ -21,6 +21,11 @@ pub enum LogicalTime {
 }
 
 impl LogicalTime {
+    /// Returns the logical type of this value.
+    pub fn logical_type(&self) -> LogicalTypeRef {
+        logical_time(self.time_unit())
+    }
+
     /// Returns the [`TimeUnit`].
     pub fn time_unit(&self) -> TimeUnit {
         match self {
