@@ -406,7 +406,7 @@ impl Interval {
 
         // There must be no way to create an interval whose endpoints have
         // different types.
-        assert!(
+        debug_assert!(
             lower_type == upper_type,
             "Interval bounds have different types: {lower_type} != {upper_type}"
         );
@@ -646,7 +646,7 @@ impl Interval {
         let upper = min_of_bounds(&self.upper, &rhs.upper);
 
         // New lower and upper bounds must always construct a valid interval.
-        assert!(
+        debug_assert!(
             (lower.is_null() || upper.is_null() || (lower <= upper)),
             "The intersection of two intervals can not be an invalid interval"
         );
@@ -1125,11 +1125,11 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
     match value {
         // f32/f64::NEG_INF/INF and f32/f64::NaN values should not emerge at this point.
         Float32(Some(val)) => {
-            assert!(val.is_finite(), "Non-standardized floating point usage");
+            debug_assert!(val.is_finite(), "Non-standardized floating point usage");
             Float32(Some(if INC { next_up(val) } else { next_down(val) }))
         }
         Float64(Some(val)) => {
-            assert!(val.is_finite(), "Non-standardized floating point usage");
+            debug_assert!(val.is_finite(), "Non-standardized floating point usage");
             Float64(Some(if INC { next_up(val) } else { next_down(val) }))
         }
         Int8(Some(val)) => Int8(Some(increment_decrement::<INC, i8>(val))),
