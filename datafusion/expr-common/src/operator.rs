@@ -176,7 +176,6 @@ impl Operator {
                 | &Operator::Lt
                 | &Operator::LtEq
                 | &Operator::Eq
-                | &Operator::NotEq
                 | &Operator::Multiply
                 | &Operator::Divide
                 | &Operator::IsDistinctFrom
