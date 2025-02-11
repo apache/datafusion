@@ -558,7 +558,6 @@ select * from validate_arrow_file_dict;
 c foo
 d bar
 
-
 # Copy from table to folder of json
 query I
 COPY source_table to 'test_files/scratch/copy/table_arrow' STORED AS ARROW;
@@ -632,3 +631,4 @@ COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);
 # Copy using execution.keep_partition_by_columns with an invalid value
 query error DataFusion error: Invalid or Unsupported Configuration: provided value for 'execution.keep_partition_by_columns' was not recognized: "invalid_value"
 COPY source_table  to '/tmp/table.parquet' OPTIONS (execution.keep_partition_by_columns invalid_value);
+

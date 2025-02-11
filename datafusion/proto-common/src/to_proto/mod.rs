@@ -97,9 +97,6 @@ impl TryFrom<&Field> for protobuf::Field {
             nullable: field.is_nullable(),
             children: Vec::new(),
             metadata: field.metadata().clone(),
-            #[allow(deprecated)]
-            // See https://github.com/apache/datafusion/issues/14173 to remove deprecated dict_id
-            dict_id: field.dict_id().unwrap_or(0),
             dict_ordered: field.dict_is_ordered().unwrap_or(false),
         })
     }
