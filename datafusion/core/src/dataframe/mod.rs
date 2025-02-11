@@ -45,8 +45,7 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
-use arrow::datatypes::{DataType, Field};
-use arrow_schema::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
@@ -1004,7 +1003,9 @@ impl DataFrame {
     ///
     /// `left_cols` and `right_cols` are used to form "equijoin" predicates (see
     /// example below), which are then combined with the optional `filter`
-    /// expression.
+    /// expression. If `left_cols` and `right_cols` contain ambiguous column
+    /// references, they will be disambiguated by prioritizing the left relation
+    /// for `left_cols` and the right relation for `right_cols`.
     ///
     /// Note that in case of outer join, the `filter` is applied to only matched rows.
     ///

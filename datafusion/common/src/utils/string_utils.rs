@@ -17,8 +17,8 @@
 
 //! Utilities for working with strings
 
-use arrow::{array::AsArray, datatypes::DataType};
-use arrow_array::Array;
+use arrow::array::{Array, AsArray};
+use arrow::datatypes::DataType;
 
 /// Convenient function to convert an Arrow string array to a vector of strings
 pub fn string_array_to_vec(array: &dyn Array) -> Vec<Option<&str>> {

@@ -19,31 +19,29 @@
 //!
 //! [Information Schema]: https://en.wikipedia.org/wiki/Information_schema
 
-use crate::catalog::{CatalogProviderList, SchemaProvider, TableProvider};
-use crate::datasource::streaming::StreamingTable;
-use crate::execution::context::TaskContext;
-use crate::logical_expr::{TableType, Volatility};
-use crate::physical_plan::stream::RecordBatchStreamAdapter;
-use crate::physical_plan::SendableRecordBatchStream;
-use crate::{
-    config::{ConfigEntry, ConfigOptions},
-    physical_plan::streaming::PartitionStream,
-};
+use crate::streaming::StreamingTable;
+use crate::{CatalogProviderList, SchemaProvider, TableProvider};
+use arrow::array::builder::{BooleanBuilder, UInt8Builder};
 use arrow::{
     array::{StringBuilder, UInt64Builder},
     datatypes::{DataType, Field, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use arrow_array::builder::{BooleanBuilder, UInt8Builder};
 use async_trait::async_trait;
+use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
 use datafusion_common::DataFusionError;
+use datafusion_execution::TaskContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
+use datafusion_expr::{TableType, Volatility};
+use datafusion_physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion_physical_plan::streaming::PartitionStream;
+use datafusion_physical_plan::SendableRecordBatchStream;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
-pub(crate) const INFORMATION_SCHEMA: &str = "information_schema";
+pub const INFORMATION_SCHEMA: &str = "information_schema";
 pub(crate) const TABLES: &str = "tables";
 pub(crate) const VIEWS: &str = "views";
 pub(crate) const COLUMNS: &str = "columns";

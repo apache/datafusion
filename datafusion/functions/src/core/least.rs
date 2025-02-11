@@ -17,10 +17,10 @@
 
 use crate::core::greatest_least_utils::GreatestLeastOperator;
 use arrow::array::{make_comparator, Array, BooleanArray};
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::cmp;
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
-use arrow_buffer::BooleanBuffer;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_doc::Documentation;
 use datafusion_expr::ColumnarValue;

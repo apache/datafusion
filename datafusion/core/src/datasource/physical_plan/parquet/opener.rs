@@ -32,7 +32,8 @@ use crate::datasource::physical_plan::{
 };
 use crate::datasource::schema_adapter::SchemaAdapterFactory;
 
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 use datafusion_common::{exec_err, Result};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
@@ -295,7 +296,7 @@ fn create_initial_plan(
             // check row group count matches the plan
             return Ok(access_plan.clone());
         } else {
-            debug!("ParquetExec Ignoring unknown extension specified for {file_name}");
+            debug!("DataSourceExec Ignoring unknown extension specified for {file_name}");
         }
     }
 

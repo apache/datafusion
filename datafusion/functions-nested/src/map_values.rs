@@ -18,8 +18,8 @@
 //! [`ScalarUDFImpl`] definitions for map_values function.
 
 use crate::utils::{get_map_entry_field, make_scalar_function};
-use arrow_array::{Array, ArrayRef, ListArray};
-use arrow_schema::{DataType, Field};
+use arrow::array::{Array, ArrayRef, ListArray};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
@@ -129,6 +129,6 @@ fn map_values_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         Arc::new(Field::new_list_field(map_array.value_type().clone(), true)),
         map_array.offsets().clone(),
         Arc::clone(map_array.values()),
-        None,
+        map_array.nulls().cloned(),
     )))
 }

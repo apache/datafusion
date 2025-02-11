@@ -20,17 +20,18 @@
 use std::sync::Arc;
 use std::{any::Any, cmp::Ordering};
 
-use arrow::array::{Capacities, MutableArrayData};
-use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
-use arrow_schema::{DataType, Field};
+use arrow::array::{
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullBufferBuilder,
+    OffsetSizeTrait,
+};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
 };
 use datafusion_expr::{
-    type_coercion::binary::get_wider_type, ColumnarValue, Documentation, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -276,25 +277,32 @@ impl ScalarUDFImpl for ArrayConcat {
         let mut expr_type = DataType::Null;
         let mut max_dims = 0;
         for arg_type in arg_types {
-            match arg_type {
-                DataType::List(field) => {
-                    if !field.data_type().equals_datatype(&DataType::Null) {
-                        let dims = list_ndims(arg_type);
-                        expr_type = match max_dims.cmp(&dims) {
-                            Ordering::Greater => expr_type,
-                            Ordering::Equal => get_wider_type(&expr_type, arg_type)?,
-                            Ordering::Less => {
-                                max_dims = dims;
-                                arg_type.clone()
-                            }
-                        };
+            let DataType::List(field) = arg_type else {
+                return plan_err!(
+                    "The array_concat function can only accept list as the args."
+                );
+            };
+            if !field.data_type().equals_datatype(&DataType::Null) {
+                let dims = list_ndims(arg_type);
+                expr_type = match max_dims.cmp(&dims) {
+                    Ordering::Greater => expr_type,
+                    Ordering::Equal => {
+                        if expr_type == DataType::Null {
+                            arg_type.clone()
+                        } else if !expr_type.equals_datatype(arg_type) {
+                            return plan_err!(
+                            "It is not possible to concatenate arrays of different types. Expected: {}, got: {}", expr_type, arg_type
+                                );
+                        } else {
+                            expr_type
+                        }
                     }
-                }
-                _ => {
-                    return plan_err!(
-                        "The array_concat function can only accept list as the args."
-                    )
-                }
+
+                    Ordering::Less => {
+                        max_dims = dims;
+                        arg_type.clone()
+                    }
+                };
             }
         }
 
@@ -525,7 +533,7 @@ where
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(data_type.to_owned(), true)),
         OffsetBuffer::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         None,
     )?))
 }

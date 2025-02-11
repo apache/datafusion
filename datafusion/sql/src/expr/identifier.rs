@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::Field;
-use sqlparser::ast::{Expr as SQLExpr, Ident};
-
+use arrow::datatypes::Field;
 use datafusion_common::{
     internal_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
-    DataFusionError, Result, TableReference,
+    DataFusionError, Result, Span, TableReference,
 };
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
+use sqlparser::ast::{Expr as SQLExpr, Ident};
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_expr::UNNAMED_TABLE;
@@ -35,6 +34,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
+        let id_span = id.span;
         if id.value.starts_with('@') {
             // TODO: figure out if ScalarVariables should be insensitive.
             let var_names = vec![id.value];
@@ -56,10 +56,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             if let Ok((qualifier, _)) =
                 schema.qualified_field_with_unqualified_name(normalize_ident.as_str())
             {
-                return Ok(Expr::Column(Column {
-                    relation: qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
-                    name: normalize_ident,
-                }));
+                let mut column = Column::new(
+                    qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
+                    normalize_ident,
+                );
+                if self.options.collect_spans {
+                    if let Some(span) = Span::try_from_sqlparser_span(id_span) {
+                        column.spans_mut().add_span(span);
+                    }
+                }
+                return Ok(Expr::Column(column));
             }
 
             // Check the outer query schema
@@ -76,14 +82,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             // Default case
-            Ok(Expr::Column(Column {
-                relation: None,
-                name: normalize_ident,
-            }))
+            let mut column = Column::new_unqualified(normalize_ident);
+            if self.options.collect_spans {
+                if let Some(span) = Span::try_from_sqlparser_span(id_span) {
+                    column.spans_mut().add_span(span);
+                }
+            }
+            Ok(Expr::Column(column))
         }
     }
 
-    pub(super) fn sql_compound_identifier_to_expr(
+    pub(crate) fn sql_compound_identifier_to_expr(
         &self,
         ids: Vec<Ident>,
         schema: &DFSchema,
@@ -92,6 +101,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if ids.len() < 2 {
             return internal_err!("Not a compound identifier: {ids:?}");
         }
+
+        let ids_span = Span::union_iter(
+            ids.iter()
+                .filter_map(|id| Span::try_from_sqlparser_span(id.span)),
+        );
 
         if ids[0].value.starts_with('@') {
             let var_names: Vec<_> = ids
@@ -136,7 +150,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 // Found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {
-                    Ok(Expr::Column(Column::from((qualifier, field))))
+                    let mut column = Column::from((qualifier, field));
+                    if self.options.collect_spans {
+                        if let Some(span) = ids_span {
+                            column.spans_mut().add_span(span);
+                        }
+                    }
+                    Ok(Expr::Column(column))
                 }
                 None => {
                     // Return default where use all identifiers to not have a nested field
@@ -179,7 +199,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             let s = &ids[0..ids.len()];
                             // Safe unwrap as s can never be empty or exceed the bounds
                             let (relation, column_name) = form_identifier(s).unwrap();
-                            Ok(Expr::Column(Column::new(relation, column_name)))
+                            let mut column = Column::new(relation, column_name);
+                            if self.options.collect_spans {
+                                if let Some(span) = ids_span {
+                                    column.spans_mut().add_span(span);
+                                }
+                            }
+                            Ok(Expr::Column(column))
                         }
                     }
                 }

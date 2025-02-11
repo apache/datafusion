@@ -35,6 +35,14 @@ create table test_substr as
 select arrow_cast(col1, 'Utf8View') as c1 from test_substr_base;
 
 statement ok
+create table test_datetime as
+select
+  arrow_cast(column1, 'Utf8View') as ts,
+  arrow_cast(column2, 'Utf8View') as d,
+  arrow_cast(column3, 'Utf8View') as t
+from test_datetime_base;
+
+statement ok
 drop table test_source
 
 #
@@ -50,6 +58,9 @@ drop table test_basic_operator;
 
 statement ok
 drop table test_substr_base;
+
+statement ok
+drop table test_datetime_base;
 
 
 # --------------------------------------
@@ -371,7 +382,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: starts_with(test.column1_utf8, substr(test.column1_utf8, Int64(1), Int64(2))) AS c1, starts_with(test.column1_large_utf8, substr(test.column1_large_utf8, Int64(1), Int64(2))) AS c2, starts_with(test.column1_utf8view, substr(test.column1_utf8view, Int64(1), Int64(2))) AS c3
+01)Projection: starts_with(CAST(test.column1_utf8 AS Utf8View), substr(test.column1_utf8, Int64(1), Int64(2))) AS c1, starts_with(CAST(test.column1_large_utf8 AS Utf8View), substr(test.column1_large_utf8, Int64(1), Int64(2))) AS c2, starts_with(test.column1_utf8view, substr(test.column1_utf8view, Int64(1), Int64(2))) AS c3
 02)--TableScan: test projection=[column1_utf8, column1_large_utf8, column1_utf8view]
 
 query BBB
@@ -783,7 +794,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: regexp_match(CAST(test.column1_utf8view AS Utf8), Utf8("^https?://(?:www\.)?([^/]+)/.*$")) AS k
+01)Projection: regexp_match(test.column1_utf8view, Utf8View("^https?://(?:www\.)?([^/]+)/.*$")) AS k
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for REGEXP_REPLACE

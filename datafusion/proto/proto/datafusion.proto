@@ -1005,6 +1005,8 @@ message ParquetScanExecNode {
   reserved 2;
 
   PhysicalExprNode predicate = 3;
+
+  datafusion_common.TableParquetOptions parquet_options = 4;
 }
 
 message CsvScanExecNode {

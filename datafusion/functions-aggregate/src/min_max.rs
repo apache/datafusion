@@ -33,10 +33,9 @@ use arrow::array::{
 use arrow::compute;
 use arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, Float16Type, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
 };
-use arrow_schema::IntervalUnit;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     downcast_value, exec_err, internal_err, ColumnStatistics, DataFusionError, Result,
@@ -56,8 +55,8 @@ use arrow::datatypes::{
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{
-    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation, Signature,
-    Volatility,
+    function::AccumulatorArgs, Accumulator, AggregateUDFImpl, Documentation,
+    SetMonotonicity, Signature, Volatility,
 };
 use datafusion_expr::{GroupsAccumulator, StatisticsArgs};
 use datafusion_macros::user_doc;
@@ -360,6 +359,12 @@ impl AggregateUDFImpl for Max {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn set_monotonicity(&self, _data_type: &DataType) -> SetMonotonicity {
+        // `MAX` is monotonically increasing as it always increases or stays
+        // the same as new values are seen.
+        SetMonotonicity::Increasing
     }
 }
 
@@ -1182,6 +1187,12 @@ impl AggregateUDFImpl for Min {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn set_monotonicity(&self, _data_type: &DataType) -> SetMonotonicity {
+        // `MIN` is monotonically decreasing as it always decreases or stays
+        // the same as new values are seen.
+        SetMonotonicity::Decreasing
     }
 }
 

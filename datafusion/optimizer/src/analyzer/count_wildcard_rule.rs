@@ -25,7 +25,7 @@ use datafusion_expr::expr::{AggregateFunction, WindowFunction};
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 
-/// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
+/// Rewrite `Count(Expr::Wildcard)` to `Count(Expr::Literal)`.
 ///
 /// Resolves issue: <https://github.com/apache/datafusion/issues/5473>
 #[derive(Default, Debug)]

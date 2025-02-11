@@ -30,10 +30,8 @@ use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::ExecutionPlanProperties;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
-use arrow_array::{ArrayRef, UInt64Array};
-use arrow_schema::{DataType, Field, Schema};
+use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};

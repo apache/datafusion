@@ -17,13 +17,15 @@
 
 //! [`VersionFunc`]: Implementation of the `version` function.
 
+use crate::utils::take_function_args;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
+
 #[user_doc(
     doc_section(label = "Other Functions"),
     description = "Returns the version of DataFusion.",
@@ -70,11 +72,8 @@ impl ScalarUDFImpl for VersionFunc {
     }
 
     fn return_type(&self, args: &[DataType]) -> Result<DataType> {
-        if args.is_empty() {
-            Ok(DataType::Utf8)
-        } else {
-            plan_err!("version expects no arguments")
-        }
+        let [] = take_function_args(self.name(), args)?;
+        Ok(DataType::Utf8)
     }
 
     fn invoke_batch(
@@ -82,9 +81,7 @@ impl ScalarUDFImpl for VersionFunc {
         args: &[ColumnarValue],
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
-        if !args.is_empty() {
-            return internal_err!("{} function does not accept arguments", self.name());
-        }
+        let [] = take_function_args(self.name(), args)?;
         // TODO it would be great to add rust version and arrow version,
         // but that requires a `build.rs` script and/or adding a version const to arrow-rs
         let version = format!(

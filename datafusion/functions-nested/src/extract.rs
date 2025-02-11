@@ -17,30 +17,29 @@
 
 //! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
-use arrow::array::Array;
-use arrow::array::ArrayRef;
-use arrow::array::ArrowNativeTypeOp;
-use arrow::array::Capacities;
-use arrow::array::GenericListArray;
-use arrow::array::Int64Array;
-use arrow::array::MutableArrayData;
-use arrow::array::OffsetSizeTrait;
+use arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, Capacities, GenericListArray, Int64Array,
+    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List};
-use arrow_schema::Field;
+use arrow::datatypes::{
+    DataType::{FixedSizeList, LargeList, List},
+    Field,
+};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
 use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, DataFusionError, Result,
 };
-use datafusion_expr::Expr;
+use datafusion_expr::{ArrayFunctionSignature, Expr, TypeSignature};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -330,7 +329,21 @@ pub(super) struct ArraySlice {
 impl ArraySlice {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::ArraySignature(
+                        ArrayFunctionSignature::ArrayAndIndexes(
+                            NonZeroUsize::new(2).expect("2 is non-zero"),
+                        ),
+                    ),
+                    TypeSignature::ArraySignature(
+                        ArrayFunctionSignature::ArrayAndIndexes(
+                            NonZeroUsize::new(3).expect("3 is non-zero"),
+                        ),
+                    ),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("list_slice")],
         }
     }
@@ -430,8 +443,6 @@ fn array_slice_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         }
         LargeList(_) => {
             let array = as_large_list_array(&args[0])?;
-            let from_array = as_int64_array(&args[1])?;
-            let to_array = as_int64_array(&args[2])?;
             general_array_slice::<i64>(array, from_array, to_array, stride)
         }
         _ => exec_err!("array_slice does not support type: {:?}", array_data_type),
@@ -451,9 +462,8 @@ where
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
 
-    // use_nulls: false, we don't need nulls but empty array for array_slice, so we don't need explicit nulls but adjust offset to indicate nulls.
     let mut mutable =
-        MutableArrayData::with_capacities(vec![&original_data], false, capacity);
+        MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
     // We have the slice syntax compatible with DuckDB v0.8.1.
     // The rule `adjusted_from_index` and `adjusted_to_index` follows the rule of array_slice in duckdb.
@@ -465,7 +475,17 @@ where
         // 0 ~ len - 1
         let adjusted_zero_index = if index < 0 {
             if let Ok(index) = index.try_into() {
-                index + len
+                // When index < 0 and -index > length, index is clamped to the beginning of the list.
+                // Otherwise, when index < 0, the index is counted from the end of the list.
+                //
+                // Note, we actually test the contrapositive, index < -length, because negating a
+                // negative will panic if the negative is equal to the smallest representable value
+                // while negating a positive is always safe.
+                if index < (O::zero() - O::one()) * len {
+                    O::zero()
+                } else {
+                    index + len
+                }
             } else {
                 return exec_err!("array_slice got invalid index: {}", index);
             }
@@ -516,30 +536,33 @@ where
     }
 
     let mut offsets = vec![O::usize_as(0)];
+    let mut null_builder = NullBufferBuilder::new(array.len());
 
     for (row_index, offset_window) in array.offsets().windows(2).enumerate() {
         let start = offset_window[0];
         let end = offset_window[1];
         let len = end - start;
 
-        // len 0 indicate array is null, return empty array in this row.
+        // If any input is null, return null.
+        if array.is_null(row_index)
+            || from_array.is_null(row_index)
+            || to_array.is_null(row_index)
+        {
+            mutable.extend_nulls(1);
+            offsets.push(offsets[row_index] + O::usize_as(1));
+            null_builder.append_null();
+            continue;
+        }
+        null_builder.append_non_null();
+
+        // Empty arrays always return an empty array.
         if len == O::usize_as(0) {
             offsets.push(offsets[row_index]);
             continue;
         }
 
-        // If index is null, we consider it as the minimum / maximum index of the array.
-        let from_index = if from_array.is_null(row_index) {
-            Some(O::usize_as(0))
-        } else {
-            adjusted_from_index::<O>(from_array.value(row_index), len)?
-        };
-
-        let to_index = if to_array.is_null(row_index) {
-            Some(len - O::usize_as(1))
-        } else {
-            adjusted_to_index::<O>(to_array.value(row_index), len)?
-        };
+        let from_index = adjusted_from_index::<O>(from_array.value(row_index), len)?;
+        let to_index = adjusted_to_index::<O>(to_array.value(row_index), len)?;
 
         if let (Some(from), Some(to)) = (from_index, to_index) {
             let stride = stride.map(|s| s.value(row_index));
@@ -550,7 +573,7 @@ where
                     "array_slice got invalid stride: {:?}, it cannot be 0",
                     stride
                 );
-            } else if (from <= to && stride.is_negative())
+            } else if (from < to && stride.is_negative())
                 || (from > to && stride.is_positive())
             {
                 // return empty array
@@ -562,7 +585,7 @@ where
                 internal_datafusion_err!("array_slice got invalid stride: {}", stride)
             })?;
 
-            if from <= to {
+            if from <= to && stride > O::zero() {
                 assert!(start + to <= end);
                 if stride.eq(&O::one()) {
                     // stride is default to 1
@@ -612,8 +635,8 @@ where
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
-        None,
+        arrow::array::make_array(data),
+        null_builder.finish(),
     )?))
 }
 
@@ -961,7 +984,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::array_element_udf;
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Column, DFSchema, ScalarValue};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{cast, Expr, ExprSchemable};

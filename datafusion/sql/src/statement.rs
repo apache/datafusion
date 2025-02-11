@@ -29,7 +29,7 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 
-use arrow_schema::{DataType, Fields};
+use arrow::datatypes::{DataType, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
@@ -56,7 +56,7 @@ use datafusion_expr::{
 };
 use sqlparser::ast::{
     self, BeginTransactionKind, NullsDistinctOption, ShowStatementIn,
-    ShowStatementOptions, SqliteOnConflict,
+    ShowStatementOptions, SqliteOnConflict, TableObject, UpdateTableFromKind,
 };
 use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
@@ -497,6 +497,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if_not_exists,
                 temporary,
                 to,
+                params,
             } => {
                 if materialized {
                     return not_impl_err!("Materialized views not supported")?;
@@ -532,6 +533,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     if_not_exists,
                     temporary,
                     to,
+                    params,
                 };
                 let sql = stmt.to_string();
                 let Statement::CreateView {
@@ -818,7 +820,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Statement::Insert(Insert {
                 or,
                 into,
-                table_name,
                 columns,
                 overwrite,
                 source,
@@ -832,7 +833,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 mut replace_into,
                 priority,
                 insert_alias,
+                assignments,
+                has_table_keyword,
+                settings,
+                format_clause,
             }) => {
+                let table_name = match table {
+                    TableObject::TableName(table_name) => table_name,
+                    TableObject::TableFunction(_) => {
+                        return not_impl_err!("INSERT INTO Table functions not supported")
+                    }
+                };
                 if let Some(or) = or {
                     match or {
                         SqliteOnConflict::Replace => replace_into = true,
@@ -844,9 +855,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 if !after_columns.is_empty() {
                     plan_err!("After-columns clause not supported")?;
-                }
-                if table {
-                    plan_err!("Table clause not supported")?;
                 }
                 if on.is_some() {
                     plan_err!("Insert-on clause not supported")?;
@@ -873,7 +881,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if insert_alias.is_some() {
                     plan_err!("Inserts with an alias not supported")?;
                 }
-                let _ = into; // optional keyword doesn't change behavior
+                if !assignments.is_empty() {
+                    plan_err!("Inserts with assignments not supported")?;
+                }
+                if settings.is_some() {
+                    plan_err!("Inserts with settings not supported")?;
+                }
+                if format_clause.is_some() {
+                    plan_err!("Inserts with format clause not supported")?;
+                }
+                // optional keywords don't change behavior
+                let _ = into;
+                let _ = has_table_keyword;
                 self.insert_to_plan(table_name, columns, source, overwrite, replace_into)
             }
             Statement::Update {
@@ -884,6 +903,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 returning,
                 or,
             } => {
+                let from =
+                    from.map(|update_table_from_kind| match update_table_from_kind {
+                        UpdateTableFromKind::BeforeSet(from) => from,
+                        UpdateTableFromKind::AfterSet(from) => from,
+                    });
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
                 }
@@ -969,6 +993,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     ast::TransactionIsolationLevel::Serializable => {
                         TransactionIsolationLevel::Serializable
                     }
+                    ast::TransactionIsolationLevel::Snapshot => {
+                        TransactionIsolationLevel::Snapshot
+                    }
                 };
                 let access_mode = match access_mode {
                     ast::TransactionAccessMode::ReadOnly => {
@@ -984,7 +1011,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 });
                 Ok(LogicalPlan::Statement(statement))
             }
-            Statement::Commit { chain } => {
+            Statement::Commit {
+                chain,
+                end,
+                modifier,
+            } => {
+                if end {
+                    return not_impl_err!("COMMIT AND END not supported");
+                };
+                if let Some(modifier) = modifier {
+                    return not_impl_err!("COMMIT {modifier} not supported");
+                };
                 let statement = PlanStatement::TransactionEnd(TransactionEnd {
                     conclusion: TransactionConclusion::Commit,
                     chain,
@@ -1860,6 +1897,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let column_index = table_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
+
                     if value_indices[column_index].is_some() {
                         return schema_err!(SchemaError::DuplicateUnqualifiedField {
                             name: c,
@@ -1900,6 +1938,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Projection
         let mut planner_context =
             PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
+        planner_context.set_table_schema(Some(DFSchemaRef::new(
+            DFSchema::from_unqualified_fields(fields.clone(), Default::default())?,
+        )));
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {
             plan_err!("Column count doesn't match insert query!")?;

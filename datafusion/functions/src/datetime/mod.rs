@@ -136,8 +136,8 @@ pub mod expr_fn {
     /// # use datafusion::error::Result;
     /// # use datafusion_common::ScalarValue::TimestampNanosecond;
     /// # use std::sync::Arc;
-    /// # use arrow_array::{Date32Array, RecordBatch, StringArray};
-    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use arrow::array::{Date32Array, RecordBatch, StringArray};
+    /// # use arrow::datatypes::{DataType, Field, Schema};
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
     /// let schema = Arc::new(Schema::new(vec![

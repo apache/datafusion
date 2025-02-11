@@ -100,9 +100,12 @@ impl WindowUDF {
     where
         F: WindowUDFImpl + 'static,
     {
-        Self {
-            inner: Arc::new(fun),
-        }
+        Self::new_from_shared_impl(Arc::new(fun))
+    }
+
+    /// Create a new `WindowUDF` from a `[WindowUDFImpl]` trait object
+    pub fn new_from_shared_impl(fun: Arc<dyn WindowUDFImpl>) -> WindowUDF {
+        Self { inner: fun }
     }
 
     /// Return the underlying [`WindowUDFImpl`] trait object for this function

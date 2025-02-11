@@ -91,9 +91,12 @@ impl ScalarUDF {
     where
         F: ScalarUDFImpl + 'static,
     {
-        Self {
-            inner: Arc::new(fun),
-        }
+        Self::new_from_shared_impl(Arc::new(fun))
+    }
+
+    /// Create a new `ScalarUDF` from a `[ScalarUDFImpl]` trait object
+    pub fn new_from_shared_impl(fun: Arc<dyn ScalarUDFImpl>) -> ScalarUDF {
+        Self { inner: fun }
     }
 
     /// Return the underlying [`ScalarUDFImpl`] trait object for this function

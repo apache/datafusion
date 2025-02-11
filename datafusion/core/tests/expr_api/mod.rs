@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{
+    builder::{ListBuilder, StringBuilder},
+    ArrayRef, Int64Array, RecordBatch, StringArray, StructArray,
+};
+use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
-use arrow_array::builder::{ListBuilder, StringBuilder};
-use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray, StructArray};
-use arrow_schema::{DataType, Field};
 use datafusion::prelude::*;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::ExprFunctionExt;

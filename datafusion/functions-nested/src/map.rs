@@ -19,10 +19,9 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::ArrayData;
-use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
-use arrow_buffer::{Buffer, ToByteSlice};
-use arrow_schema::{DataType, Field, SchemaBuilder};
+use arrow::array::{Array, ArrayData, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
+use arrow::buffer::Buffer;
+use arrow::datatypes::{DataType, Field, SchemaBuilder, ToByteSlice};
 
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
 use datafusion_common::{exec_err, HashSet, Result, ScalarValue};

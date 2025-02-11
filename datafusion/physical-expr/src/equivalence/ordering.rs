@@ -22,7 +22,7 @@ use std::vec::IntoIter;
 
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr};
-use arrow_schema::SortOptions;
+use arrow::compute::SortOptions;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
@@ -279,8 +279,8 @@ mod tests {
         ScalarFunctionExpr,
     };
 
+    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::SortOptions;
     use datafusion_common::Result;
     use datafusion_expr::{Operator, ScalarUDF};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;

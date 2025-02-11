@@ -375,8 +375,13 @@ pub fn ensure_sorting(
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
         // This `SortPreservingMergeExec` is unnecessary, input already has a
-        // single partition.
-        let child_node = requirements.children.swap_remove(0);
+        // single partition and no fetch is required.
+        let mut child_node = requirements.children.swap_remove(0);
+        if let Some(fetch) = plan.fetch() {
+            // Add the limit exec if the spm has a fetch
+            child_node.plan =
+                Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
+        }
         return Ok(Transformed::yes(child_node));
     }
 
@@ -460,12 +465,12 @@ fn adjust_window_sort_removal(
         if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
             let window_expr = exec.window_expr();
             let new_window =
-                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys)?;
+                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
             (window_expr, new_window)
         } else if let Some(exec) = plan.downcast_ref::<BoundedWindowAggExec>() {
             let window_expr = exec.window_expr();
             let new_window =
-                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys)?;
+                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
             (window_expr, new_window)
         } else {
             return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
@@ -493,14 +498,14 @@ fn adjust_window_sort_removal(
             Arc::new(BoundedWindowAggExec::try_new(
                 window_expr.to_vec(),
                 child_plan,
-                window_expr[0].partition_by().to_vec(),
                 InputOrderMode::Sorted,
+                !window_expr[0].partition_by().is_empty(),
             )?) as _
         } else {
             Arc::new(WindowAggExec::try_new(
                 window_expr.to_vec(),
                 child_plan,
-                window_expr[0].partition_by().to_vec(),
+                !window_expr[0].partition_by().is_empty(),
             )?) as _
         }
     };

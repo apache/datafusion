@@ -18,13 +18,12 @@
 //! [`ScalarUDFImpl`] definitions for array_replace, array_replace_n and array_replace_all functions.
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, Capacities, MutableArrayData, OffsetSizeTrait,
+    Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
+    NullBufferBuilder, OffsetSizeTrait,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
-use arrow_array::GenericListArray;
-use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
-use arrow_schema::Field;
+use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
@@ -375,7 +374,7 @@ fn general_replace<O: OffsetSizeTrait>(
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(list_array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         valid.finish(),
     )?))
 }

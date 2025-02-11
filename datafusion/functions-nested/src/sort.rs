@@ -18,11 +18,11 @@
 //! [`ScalarUDFImpl`] definitions for array_sort function.
 
 use crate::utils::make_scalar_function;
-use arrow::compute;
-use arrow_array::{Array, ArrayRef, ListArray};
-use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
-use arrow_schema::DataType::{FixedSizeList, LargeList, List};
-use arrow_schema::{DataType, Field, SortOptions};
+use arrow::array::{Array, ArrayRef, ListArray, NullBufferBuilder};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::DataType::{FixedSizeList, LargeList, List};
+use arrow::datatypes::{DataType, Field};
+use arrow::{compute, compute::SortOptions};
 use datafusion_common::cast::{as_list_array, as_string_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
