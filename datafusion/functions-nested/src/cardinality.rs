@@ -55,6 +55,7 @@ impl Cardinality {
                             ArrayFunctionArgument::Array,
                         ])
                         .expect("contains array"),
+                        array_coercion: None,
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::MapArray),
                 ],

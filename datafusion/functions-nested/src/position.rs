@@ -94,6 +94,7 @@ impl ArrayPosition {
         Self {
             signature: Signature::array_and_element_and_optional_index(
                 Volatility::Immutable,
+                None,
             ),
             aliases: vec![
                 String::from("list_position"),
@@ -252,7 +253,7 @@ pub(super) struct ArrayPositions {
 impl ArrayPositions {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(Volatility::Immutable),
+            signature: Signature::array_and_element(Volatility::Immutable, None),
             aliases: vec![String::from("list_positions")],
         }
     }

@@ -26,7 +26,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::utils::coerced_fixed_size_list_to_list;
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -79,7 +79,10 @@ impl Default for ArrayRemove {
 impl ArrayRemove {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(Volatility::Immutable),
+            signature: Signature::array_and_element(
+                Volatility::Immutable,
+                Some(ListCoercion::FixedSizedListToList),
+            ),
             aliases: vec!["list_remove".to_string()],
         }
     }
@@ -99,7 +102,7 @@ impl ScalarUDFImpl for ArrayRemove {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(coerced_fixed_size_list_to_list(&arg_types[0]))
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_batch(
@@ -236,7 +239,10 @@ pub(super) struct ArrayRemoveAll {
 impl ArrayRemoveAll {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(Volatility::Immutable),
+            signature: Signature::array_and_element(
+                Volatility::Immutable,
+                Some(ListCoercion::FixedSizedListToList),
+            ),
             aliases: vec!["list_remove_all".to_string()],
         }
     }
@@ -256,7 +262,7 @@ impl ScalarUDFImpl for ArrayRemoveAll {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(coerced_fixed_size_list_to_list(&arg_types[0]))
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_batch(

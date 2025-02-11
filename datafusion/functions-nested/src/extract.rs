@@ -30,7 +30,7 @@ use arrow::datatypes::{
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
-use datafusion_common::utils::coerced_fixed_size_list_to_list;
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
     DataFusionError, Result,
@@ -119,7 +119,7 @@ impl Default for ArrayElement {
 impl ArrayElement {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_index(Volatility::Immutable),
+            signature: Signature::array_and_index(Volatility::Immutable, None),
             aliases: vec![
                 String::from("array_extract"),
                 String::from("list_element"),
@@ -340,6 +340,7 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                         ])
                         .expect("contains array"),
+                        array_coercion: None,
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                         arguments: ArrayFunctionArguments::new(vec![
@@ -349,6 +350,7 @@ impl ArraySlice {
                             ArrayFunctionArgument::Index,
                         ])
                         .expect("contains array"),
+                        array_coercion: None,
                     }),
                 ],
                 Volatility::Immutable,
@@ -675,7 +677,10 @@ pub(super) struct ArrayPopFront {
 impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::array(
+                Volatility::Immutable,
+                Some(ListCoercion::FixedSizedListToList),
+            ),
             aliases: vec![String::from("list_pop_front")],
         }
     }
@@ -694,7 +699,7 @@ impl ScalarUDFImpl for ArrayPopFront {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(coerced_fixed_size_list_to_list(&arg_types[0]))
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_batch(
@@ -775,7 +780,10 @@ pub(super) struct ArrayPopBack {
 impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::array(
+                Volatility::Immutable,
+                Some(ListCoercion::FixedSizedListToList),
+            ),
             aliases: vec![String::from("list_pop_back")],
         }
     }
@@ -794,7 +802,7 @@ impl ScalarUDFImpl for ArrayPopBack {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(coerced_fixed_size_list_to_list(&arg_types[0]))
+        Ok(arg_types[0].clone())
     }
 
     fn invoke_batch(
@@ -876,7 +884,7 @@ pub(super) struct ArrayAnyValue {
 impl ArrayAnyValue {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature::array(Volatility::Immutable, None),
             aliases: vec![String::from("list_any_value")],
         }
     }

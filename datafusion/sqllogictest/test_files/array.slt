@@ -2656,6 +2656,29 @@ select list_push_front(1, arrow_cast(make_array(2, 3, 4), 'LargeList(Int64)')), 
 ----
 [1, 2, 3, 4] [1.0, 2.0, 3.0, 4.0] [h, e, l, l, o]
 
+# array_prepend scalar function #7 (element is fixed size list)
+query ???
+select array_prepend(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'), make_array(arrow_cast(make_array(2), 'FixedSizeList(1, Int64)'), arrow_cast(make_array(3), 'FixedSizeList(1, Int64)'), arrow_cast(make_array(4), 'FixedSizeList(1, Int64)'))),
+       array_prepend(arrow_cast(make_array(1.0), 'FixedSizeList(1, Float64)'), make_array(arrow_cast([2.0], 'FixedSizeList(1, Float64)'), arrow_cast([3.0], 'FixedSizeList(1, Float64)'), arrow_cast([4.0], 'FixedSizeList(1, Float64)'))),
+       array_prepend(arrow_cast(make_array('h'), 'FixedSizeList(1, Utf8)'), make_array(arrow_cast(['e'], 'FixedSizeList(1, Utf8)'), arrow_cast(['l'], 'FixedSizeList(1, Utf8)'), arrow_cast(['l'], 'FixedSizeList(1, Utf8)'), arrow_cast(['o'], 'FixedSizeList(1, Utf8)')));
+----
+[[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
+# TODO: https://github.com/apache/datafusion/issues/14613
+#query ???
+#select array_prepend(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'), arrow_cast(make_array(make_array(2), make_array(3), make_array(4)), 'LargeList(FixedSizeList(1, Int64))')),
+#       array_prepend(arrow_cast(make_array(1.0), 'FixedSizeList(1, Float64)'), arrow_cast(make_array([2.0], [3.0], [4.0]), 'LargeList(FixedSizeList(1, Float64))')),
+#       array_prepend(arrow_cast(make_array('h'), 'FixedSizeList(1, Utf8)'), arrow_cast(make_array(['e'], ['l'], ['l'], ['o']), 'LargeList(FixedSizeList(1, Utf8))'));
+#----
+#[[1], [2], [3], [4]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
+query ???
+select array_prepend(arrow_cast([1], 'FixedSizeList(1, Int64)'), arrow_cast([[1], [2], [3]], 'FixedSizeList(3, FixedSizeList(1, Int64))')),
+       array_prepend(arrow_cast([1.0], 'FixedSizeList(1, Float64)'), arrow_cast([[2.0], [3.0], [4.0]], 'FixedSizeList(3, FixedSizeList(1, Float64))')),
+       array_prepend(arrow_cast(['h'], 'FixedSizeList(1, Utf8)'), arrow_cast([['e'], ['l'], ['l'], ['o']], 'FixedSizeList(4, FixedSizeList(1, Utf8))'));
+----
+[[1], [1], [2], [3]] [[1.0], [2.0], [3.0], [4.0]] [[h], [e], [l], [l], [o]]
+
 # array_prepend with columns #1
 query ?
 select array_prepend(column2, column1) from arrays_values;

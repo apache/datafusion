@@ -21,7 +21,7 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
-use datafusion_common::utils::coerced_fixed_size_list_to_list;
+use datafusion_common::utils::{coerced_fixed_size_list_to_list, ListCoercion};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
     types::{LogicalType, NativeType},
@@ -362,6 +362,7 @@ fn get_valid_types(
         function_name: &str,
         current_types: &[DataType],
         arguments: &[ArrayFunctionArgument],
+        array_coercion: Option<&ListCoercion>,
     ) -> Result<Vec<Vec<DataType>>> {
         if current_types.len() != arguments.len() {
             return Ok(vec![vec![]]);
@@ -396,6 +397,7 @@ fn get_valid_types(
         let new_array_type = datafusion_common::utils::coerced_type_with_base_type_only(
             &array_type,
             &new_base_type,
+            array_coercion,
         );
 
         let new_elem_type = match new_array_type {
@@ -418,6 +420,7 @@ fn get_valid_types(
                         datafusion_common::utils::coerced_type_with_base_type_only(
                             &current_type,
                             &new_base_type,
+                            array_coercion,
                         );
                     // All array arguments must be coercible to the same type
                     if new_type != new_array_type {
@@ -700,8 +703,8 @@ fn get_valid_types(
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
         TypeSignature::ArraySignature(ref function_signature) => {
             match function_signature {
-                ArrayFunctionSignature::Array { arguments } => {
-                    array_valid_types(function_name, current_types, arguments.inner())?
+                ArrayFunctionSignature::Array { arguments, array_coercion, } => {
+                    array_valid_types(function_name, current_types, arguments.inner(), array_coercion.as_ref())?
                 }
                 ArrayFunctionSignature::RecursiveArray => {
                     if current_types.len() != 1 {

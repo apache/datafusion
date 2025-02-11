@@ -590,6 +590,13 @@ pub fn base_type(data_type: &DataType) -> DataType {
     }
 }
 
+/// Information about how to coerce lists.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum ListCoercion {
+    /// [`DataType::FixedSizeList`] should be coerced to [`DataType::List`].
+    FixedSizedListToList,
+}
+
 /// A helper function to coerce base type in List.
 ///
 /// Example
@@ -600,16 +607,22 @@ pub fn base_type(data_type: &DataType) -> DataType {
 ///
 /// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// let base_type = DataType::Float64;
-/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type);
+/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type, None);
 /// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))));
 pub fn coerced_type_with_base_type_only(
     data_type: &DataType,
     base_type: &DataType,
+    array_coercion: Option<&ListCoercion>,
 ) -> DataType {
-    match data_type {
-        DataType::List(field) => {
-            let field_type =
-                coerced_type_with_base_type_only(field.data_type(), base_type);
+    match (data_type, array_coercion) {
+        (DataType::List(field), _)
+        | (DataType::FixedSizeList(field, _), Some(ListCoercion::FixedSizedListToList)) =>
+        {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
 
             DataType::List(Arc::new(Field::new(
                 field.name(),
@@ -617,18 +630,24 @@ pub fn coerced_type_with_base_type_only(
                 field.is_nullable(),
             )))
         }
-        DataType::FixedSizeList(field, len) => {
-            let field_type =
-                coerced_type_with_base_type_only(field.data_type(), base_type);
+        (DataType::FixedSizeList(field, len), _) => {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
 
             DataType::FixedSizeList(
                 Arc::new(Field::new(field.name(), field_type, field.is_nullable())),
                 *len,
             )
         }
-        DataType::LargeList(field) => {
-            let field_type =
-                coerced_type_with_base_type_only(field.data_type(), base_type);
+        (DataType::LargeList(field), _) => {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
 
             DataType::LargeList(Arc::new(Field::new(
                 field.name(),
