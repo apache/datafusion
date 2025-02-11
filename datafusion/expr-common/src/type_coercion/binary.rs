@@ -539,12 +539,11 @@ fn type_union_resolution_coercion(
         | (other_type, DataType::Dictionary(index_type, value_type)) => {
             match type_union_resolution_coercion(value_type, other_type) {
                 // Dict(k, Utf8View) is redundant, Utf8View is good enough
-                Some(DataType::Utf8View) => {
-                    Some(DataType::Utf8View)
-                }
-                Some(new_value_type) => {
-                    Some(DataType::Dictionary(index_type.clone(), Box::new(new_value_type)))
-                }
+                Some(DataType::Utf8View) => Some(DataType::Utf8View),
+                Some(new_value_type) => Some(DataType::Dictionary(
+                    index_type.clone(),
+                    Box::new(new_value_type),
+                )),
                 None => None,
             }
         }
