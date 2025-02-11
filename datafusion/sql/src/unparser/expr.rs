@@ -21,21 +21,18 @@ use sqlparser::ast::{
     self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
     Subscript, TimezoneInfo, UnaryOperator,
 };
-use std::str::FromStr;
-use std::sync::Arc;
 use std::vec;
 
 use super::dialect::IntervalStyle;
 use super::Unparser;
 use arrow::util::display::array_value_to_string;
-use arrow_schema::{DataType, TimeUnit};
+use arrow_schema::DataType;
 use bigdecimal::ToPrimitive;
 use datafusion_common::scalar::{
     LogicalInterval, LogicalScalar, LogicalTime, LogicalTimestamp, LogicalTimestampValue,
 };
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
-    ScalarValue,
+    internal_err, not_impl_err, plan_err, Column, Result, ScalarValue,
 };
 use datafusion_expr::{
     expr::{Alias, Exists, InList, ScalarFunction, Sort, WindowFunction},
@@ -954,10 +951,7 @@ impl Unparser<'_> {
     }
 
     fn handle_time(&self, v: &LogicalTime) -> Result<ast::Expr> {
-        let time = v
-            .value_as_time()
-            .ok_or(internal_datafusion_err!("Unable to convert {v:?} to Time"))?
-            .to_string();
+        let time = v.value()?.to_string();
         Ok(ast::Expr::Cast {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::Value(SingleQuotedString(time))),

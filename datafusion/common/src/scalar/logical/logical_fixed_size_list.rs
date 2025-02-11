@@ -4,6 +4,7 @@ use crate::scalar::LogicalScalar;
 use crate::types::{logical_fixed_size_list, LogicalTypeRef};
 use crate::DataFusionError;
 use bigdecimal::ToPrimitive;
+use std::fmt::{Display, Formatter};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug, PartialOrd)]
 pub struct LogicalFixedSizeList {
@@ -28,7 +29,10 @@ impl LogicalFixedSizeList {
     /// Returns the logical type of this value.
     pub fn logical_type(&self) -> LogicalTypeRef {
         // LogicalFixedSizeList::new guarantees that the cast succeeds
-        logical_fixed_size_list(self.inner.element_field().clone(), self.inner.len() as i32)
+        logical_fixed_size_list(
+            self.inner.element_field().clone(),
+            self.inner.len() as i32,
+        )
     }
 
     /// Returns the logical values of this list.
@@ -47,5 +51,11 @@ impl TryFrom<LogicalList> for LogicalFixedSizeList {
 
     fn try_from(value: LogicalList) -> Result<Self, Self::Error> {
         LogicalFixedSizeList::try_new(value)
+    }
+}
+
+impl Display for LogicalFixedSizeList {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.inner)
     }
 }

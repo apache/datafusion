@@ -2,15 +2,16 @@ use crate::scalar::logical::logical_duration::LogicalDuration;
 use crate::scalar::logical::logical_timestamp::LogicalTimestamp;
 use crate::scalar::{
     LogicalDate, LogicalDecimal, LogicalFixedSizeBinary, LogicalFixedSizeList,
-    LogicalInterval, LogicalList, LogicalScalar, LogicalStruct, LogicalTime,
+    LogicalInterval, LogicalList, LogicalMap, LogicalScalar, LogicalStruct, LogicalTime,
+    LogicalUnion,
 };
-use crate::types::{LogicalField, LogicalFields, NativeType};
+use crate::types::{LogicalField, LogicalFields, LogicalUnionFields, NativeType};
 use crate::{HashMap, ScalarValue};
-use arrow_array::{Array, FixedSizeListArray, ListArray, MapArray, StructArray};
+use arrow_array::types::{Decimal128Type, Decimal256Type, DecimalType};
+use arrow_array::{Array, FixedSizeListArray, MapArray, StructArray};
 use arrow_schema::{DataType, TimeUnit, UnionFields};
-use bigdecimal::num_bigint::BigInt;
-use bigdecimal::num_traits::FromBytes;
 use bigdecimal::BigDecimal;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// Converts a physical [`ScalarValue`] into a logical [`LogicalScalar`].
@@ -28,15 +29,18 @@ impl From<ScalarValue> for LogicalScalar {
             ScalarValue::Float64(Some(v)) => LogicalScalar::Float64(v),
             ScalarValue::Decimal128(None, _, _) => LogicalScalar::Null,
             ScalarValue::Decimal128(Some(v), p, s) => LogicalScalar::Decimal(
-                LogicalDecimal::try_new(BigDecimal::new(BigInt::from(v), s as i64))
-                    .expect("Value cannot be too big"),
+                LogicalDecimal::try_new(
+                    BigDecimal::from_str(&Decimal128Type::format_decimal(v, p, s))
+                        .expect("Value must be parsable"),
+                )
+                .expect("Value cannot be too big"),
             ),
             ScalarValue::Decimal256(None, _, _) => LogicalScalar::Null,
             ScalarValue::Decimal256(Some(v), p, s) => LogicalScalar::Decimal(
-                LogicalDecimal::try_new(BigDecimal::new(
-                    BigInt::from_ne_bytes(v.to_le_bytes().as_ref()),
-                    s as i64,
-                ))
+                LogicalDecimal::try_new(
+                    BigDecimal::from_str(&Decimal256Type::format_decimal(v, p, s))
+                        .expect("Value must be parsable"),
+                )
                 .expect("Value cannot be too big"),
             ),
             ScalarValue::Int8(None) => LogicalScalar::Null,
@@ -146,7 +150,10 @@ impl From<ScalarValue> for LogicalScalar {
             ScalarValue::DurationNanosecond(Some(v)) => {
                 LogicalScalar::Duration(LogicalDuration::new(TimeUnit::Nanosecond, v))
             }
-            ScalarValue::Union(v, f, _) => union_to_logical_scalar(f, v),
+            ScalarValue::Union(None, _, _) => LogicalScalar::Null,
+            ScalarValue::Union(Some((type_id, value)), f, _) => {
+                union_to_logical_scalar(f, type_id, value)
+            }
             ScalarValue::Dictionary(_, v) => (*v).into(),
         }
     }
@@ -214,13 +221,36 @@ fn struct_to_logical_scalar(value: Arc<StructArray>) -> LogicalScalar {
     LogicalScalar::Struct(logical_struct)
 }
 
-fn map_to_logical_scalar(p0: Arc<MapArray>) -> LogicalScalar {
-    todo!()
+fn map_to_logical_scalar(value: Arc<MapArray>) -> LogicalScalar {
+    let keys = value.keys();
+    let values = value.values();
+    assert_eq!(keys.len(), values.len(), "Illegal map array");
+
+    let mut map = HashMap::new();
+    for i in 0..keys.len() {
+        let key = ScalarValue::try_from_array(keys, i)
+            .expect("Should be able to create a ScalarValue");
+        let value = ScalarValue::try_from_array(values, i)
+            .expect("Should be able to create a ScalarValue");
+        map.insert(LogicalScalar::from(key), LogicalScalar::from(value));
+    }
+
+    LogicalScalar::Map(
+        LogicalMap::try_new(map).expect("Physical map should also not have null as key"),
+    )
 }
 
 fn union_to_logical_scalar(
     union_fields: UnionFields,
-    value: Option<(i8, Box<ScalarValue>)>,
+    type_id: i8,
+    value: Box<ScalarValue>,
 ) -> LogicalScalar {
-    todo!()
+    let union_fields = union_fields
+        .iter()
+        .map(|(tid, f)| (tid, Arc::new(LogicalField::from(f.as_ref()))))
+        .collect::<LogicalUnionFields>();
+    let value = LogicalScalar::from(*value);
+    let union = LogicalUnion::try_new(union_fields, type_id, value)
+        .expect("Fields extracted from union");
+    LogicalScalar::Union(union)
 }

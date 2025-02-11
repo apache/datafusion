@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::{LogicalTypeRef, NativeType};
 use arrow_schema::{Field, Fields, UnionFields};
 use std::hash::{Hash, Hasher};
 use std::{ops::Deref, sync::Arc};
-
-use super::{LogicalTypeRef, NativeType};
 
 /// A record of a logical type, its name and its nullability.
 #[derive(Debug, Clone, Eq, PartialOrd, Ord)]
@@ -108,6 +107,15 @@ impl FromIterator<LogicalFieldRef> for LogicalFields {
 /// corresponding type ids.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LogicalUnionFields(Arc<[(i8, LogicalFieldRef)]>);
+
+impl LogicalUnionFields {
+    pub fn find_by_type_id(&self, type_id: i8) -> Option<&LogicalField> {
+        self.0
+            .iter()
+            .find(|(tid, _)| *tid == type_id)
+            .map(|(_, b)| b.as_ref())
+    }
+}
 
 impl Deref for LogicalUnionFields {
     type Target = [(i8, LogicalFieldRef)];

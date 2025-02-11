@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
 use crate::error::_internal_err;
 use crate::scalar::LogicalScalar;
 use crate::types::{logical_list, LogicalFieldRef, LogicalTypeRef};
@@ -84,5 +85,18 @@ impl PartialOrd for LogicalList {
         }
 
         Some(Ordering::Equal)
+    }
+}
+
+impl Display for LogicalList {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[")?;
+        for (idx, val) in self.values().iter().enumerate() {
+            if idx > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}", val)?;
+        }
+        write!(f, "]")
     }
 }

@@ -1,9 +1,11 @@
-use crate::types::{logical_time, LogicalTypeRef, NativeType};
+use crate::types::{logical_time, LogicalTypeRef};
+use crate::{Result, _internal_datafusion_err};
 use arrow_array::temporal_conversions::{
     time32ms_to_time, time32s_to_time, time64ns_to_time, time64us_to_time,
 };
 use arrow_schema::TimeUnit;
 use chrono::NaiveTime;
+use std::fmt::{Display, Formatter};
 
 /// Stores a scalar for [`NativeType::Time`].
 ///
@@ -37,12 +39,19 @@ impl LogicalTime {
     }
 
     /// Returns a [NaiveTime] representing the time of [self].
-    pub fn value_as_time(&self) -> Option<NaiveTime> {
+    pub fn value(&self) -> Result<NaiveTime> {
         match self {
             LogicalTime::Second(v) => time32s_to_time(*v),
             LogicalTime::Millisecond(v) => time32ms_to_time(*v),
             LogicalTime::Microsecond(v) => time64us_to_time(*v),
             LogicalTime::Nanosecond(v) => time64ns_to_time(*v),
         }
+        .ok_or(_internal_datafusion_err!("Cannot create NaiveTime."))
+    }
+}
+
+impl Display for LogicalTime {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value().map_err(|_| std::fmt::Error)?)
     }
 }

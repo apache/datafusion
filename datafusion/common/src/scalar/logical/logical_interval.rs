@@ -1,6 +1,7 @@
+use std::fmt::{Display, Formatter};
 use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano};
 use arrow_schema::IntervalUnit;
-use crate::types::{logical_interval, LogicalTypeRef, NativeType};
+use crate::types::{logical_interval, LogicalTypeRef};
 
 /// Stores a scalar for [`NativeType::Interval`].
 ///
@@ -27,6 +28,16 @@ impl LogicalInterval {
             LogicalInterval::YearMonth(_) => IntervalUnit::YearMonth,
             LogicalInterval::DayTime(_) => IntervalUnit::DayTime,
             LogicalInterval::MonthDayNano(_) => IntervalUnit::MonthDayNano,
+        }
+    }
+}
+
+impl Display for LogicalInterval {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogicalInterval::YearMonth(v) => write!(f, "{:?}", v),
+            LogicalInterval::DayTime(v) => write!(f, "{:?}", v),
+            LogicalInterval::MonthDayNano(v) => write!(f, "{:?}", v),
         }
     }
 }

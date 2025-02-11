@@ -2,6 +2,7 @@ use crate::error::_internal_err;
 use crate::types::{logical_decimal, LogicalTypeRef};
 use crate::Result;
 use bigdecimal::{BigDecimal, ToPrimitive};
+use std::fmt::{Display, Formatter};
 
 /// TODO logical-types
 #[derive(Debug, Clone, Eq, Hash, PartialEq, PartialOrd, Ord)]
@@ -43,5 +44,11 @@ impl LogicalDecimal {
             self.value.digits() as u8,
             self.value.fractional_digit_count() as i8,
         )
+    }
+}
+
+impl Display for LogicalDecimal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value())
     }
 }

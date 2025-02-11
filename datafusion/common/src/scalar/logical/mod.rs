@@ -16,13 +16,8 @@ use crate::types::{
     logical_binary, logical_boolean, logical_date, logical_float16, logical_float32,
     logical_float64, logical_int16, logical_int32, logical_int64, logical_int8,
     logical_null, logical_string, logical_uint16, logical_uint32, logical_uint64,
-    logical_uint8, LogicalField, LogicalType, LogicalTypeRef, NativeType,
+    logical_uint8, LogicalField, LogicalType, LogicalTypeRef,
 };
-use crate::ScalarValue;
-use arrow_array::Array;
-use arrow_schema::DataType;
-use bigdecimal::num_traits::FromBytes;
-use bigdecimal::ToPrimitive;
 use half::f16;
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
@@ -342,6 +337,45 @@ impl Hash for LogicalScalar {
 
 impl Display for LogicalScalar {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        match self {
+            LogicalScalar::Decimal(v) => {
+                write!(f, "{v}")
+            }
+            LogicalScalar::Boolean(v) => write!(f, "{}", v),
+            LogicalScalar::Float16(v) => write!(f, "{}", v),
+            LogicalScalar::Float32(v) => write!(f, "{}", v),
+            LogicalScalar::Float64(v) => write!(f, "{}", v),
+            LogicalScalar::Int8(v) => write!(f, "{}", v),
+            LogicalScalar::Int16(v) => write!(f, "{}", v),
+            LogicalScalar::Int32(v) => write!(f, "{}", v),
+            LogicalScalar::Int64(v) => write!(f, "{}", v),
+            LogicalScalar::UInt8(v) => write!(f, "{}", v),
+            LogicalScalar::UInt16(v) => write!(f, "{}", v),
+            LogicalScalar::UInt32(v) => write!(f, "{}", v),
+            LogicalScalar::UInt64(v) => write!(f, "{}", v),
+            LogicalScalar::Timestamp(v) => write!(f, "{}", v),
+            LogicalScalar::String(v) => write!(f, "{}", v),
+            LogicalScalar::Binary(v) => {
+                // print up to first 10 bytes, with trailing ... if needed
+                for b in v.iter().take(10) {
+                    write!(f, "{b:02X}")?;
+                }
+                if v.len() > 10 {
+                    write!(f, "...")?;
+                }
+                Ok(())
+            }
+            LogicalScalar::FixedSizeBinary(v) => write!(f, "{}", v),
+            LogicalScalar::List(v) => write!(f, "{}", v),
+            LogicalScalar::FixedSizeList(v) => write!(f, "{}", v),
+            LogicalScalar::Date(v) => write!(f, "{}", v),
+            LogicalScalar::Time(v) => write!(f, "{}", v),
+            LogicalScalar::Interval(v) => write!(f, "{}", v),
+            LogicalScalar::Duration(v) => write!(f, "{}", v),
+            LogicalScalar::Struct(v) => write!(f, "{}", v),
+            LogicalScalar::Map(v) => write!(f, "{}", v),
+            LogicalScalar::Union(v) => write!(f, "{}", v),
+            LogicalScalar::Null => write!(f, "{}", "NULL"),
+        }
     }
 }

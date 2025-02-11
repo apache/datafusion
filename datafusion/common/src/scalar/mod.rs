@@ -59,7 +59,6 @@ use arrow::{
     },
 };
 use arrow_schema::{UnionFields, UnionMode};
-use bigdecimal::num_traits::FromBytes;
 use half::f16;
 pub use logical::{
     LogicalDate, LogicalDecimal, LogicalDuration, LogicalFixedSizeBinary,

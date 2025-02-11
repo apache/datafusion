@@ -2,6 +2,7 @@ use crate::types::{logical_date, LogicalTypeRef};
 use crate::{Result, _internal_datafusion_err};
 use arrow_array::temporal_conversions::date32_to_datetime;
 use chrono::NaiveDate;
+use std::fmt::{Display, Formatter};
 
 /// TODO logical-types
 #[derive(Debug, Clone, Eq, Hash, PartialEq, PartialOrd, Ord)]
@@ -27,5 +28,11 @@ impl LogicalDate {
                 "Unable to convert LogicalDate to NaiveDate"
             ))
             .map(|d| d.date())
+    }
+}
+
+impl Display for LogicalDate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value().map_err(|_| std::fmt::Error)?)
     }
 }

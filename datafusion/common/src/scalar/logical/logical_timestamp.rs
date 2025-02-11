@@ -8,6 +8,7 @@ use arrow_array::types::{
 };
 use arrow_schema::TimeUnit;
 use chrono::{DateTime, NaiveDateTime};
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -104,5 +105,20 @@ impl LogicalTimestampValue {
             "Unable to convert {value:?} to DateTime"
         ))?;
         Ok(LogicalTimestampValue::WithoutTimezone(result))
+    }
+}
+
+impl Display for LogicalTimestamp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value().map_err(|_| std::fmt::Error)?)
+    }
+}
+
+impl Display for LogicalTimestampValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogicalTimestampValue::WithTimezone(v) => write!(f, "{}", v),
+            LogicalTimestampValue::WithoutTimezone(v) => write!(f, "{}", v),
+        }
     }
 }

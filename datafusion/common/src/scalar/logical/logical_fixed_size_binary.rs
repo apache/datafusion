@@ -1,6 +1,7 @@
 use crate::error::_internal_err;
 use crate::types::{logical_fixed_size_binary, LogicalTypeRef};
 use bigdecimal::ToPrimitive;
+use std::fmt::{Display, Formatter};
 
 /// TODO logical-types
 #[derive(Debug, Clone, Eq, Hash, PartialEq, PartialOrd, Ord)]
@@ -37,5 +38,18 @@ impl LogicalFixedSizeBinary {
     /// Returns the logical type of this value
     pub fn logical_type(&self) -> LogicalTypeRef {
         logical_fixed_size_binary(self.len())
+    }
+}
+
+impl Display for LogicalFixedSizeBinary {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // print up to first 10 bytes, with trailing ... if needed
+        for b in self.value.iter().take(10) {
+            write!(f, "{b:02X}")?;
+        }
+        if self.value.len() > 10 {
+            write!(f, "...")?;
+        }
+        Ok(())
     }
 }

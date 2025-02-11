@@ -3,6 +3,7 @@ use crate::scalar::LogicalScalar;
 use crate::types::{logical_struct, LogicalFields, LogicalTypeRef};
 use crate::{HashMap, Result};
 use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 
 /// Represents a logical struct.
@@ -61,6 +62,48 @@ impl Hash for LogicalStruct {
 
 impl PartialOrd for LogicalStruct {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        todo!("logical-types")
+        if self.fields.len() != self.fields.len() {
+            return None;
+        }
+
+        if self.logical_type() != other.logical_type() {
+            return None;
+        }
+
+        for col_index in 0..self.fields.len() {
+            let field = self.fields.get(col_index).unwrap();
+            let v1 = self
+                .values
+                .get(field.name())
+                .expect("Field resolved via self");
+            let v2 = other
+                .values
+                .get(field.name())
+                .expect("Logical types are equal");
+
+            let result = v1.partial_cmp(v2)?;
+            if result != Ordering::Equal {
+                return Some(result);
+            }
+        }
+
+        Some(Ordering::Equal)
+    }
+}
+
+impl Display for LogicalStruct {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{")?;
+        for (idx, field) in self.fields.iter().enumerate() {
+            let value = &self
+                .values
+                .get(field.name())
+                .expect("Field resolved via self");
+            if idx > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}: {}", field.name(), value)?;
+        }
+        write!(f, "}}")
     }
 }
