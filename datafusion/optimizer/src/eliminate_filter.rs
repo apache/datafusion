@@ -17,6 +17,7 @@
 
 //! [`EliminateFilter`] replaces `where false` or `where null` with an empty relation.
 
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, Filter, LogicalPlan};
@@ -60,7 +61,7 @@ impl OptimizerRule for EliminateFilter {
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::Filter(Filter {
-                predicate: Expr::Literal(ScalarValue::Boolean(v)),
+                predicate: Expr::Literal(LogicalScalar::Boolean(v)),
                 input,
                 ..
             }) => match v {

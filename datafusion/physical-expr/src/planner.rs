@@ -26,7 +26,7 @@ use crate::{
 use arrow::datatypes::Schema;
 use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::{
-    exec_err, not_impl_err, plan_err, DFSchema, Result, ScalarValue, ToDFSchema,
+    exec_err, not_impl_err, plan_err, DFSchema, Result, ToDFSchema,
 };
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Alias, Cast, InList, Placeholder, ScalarFunction};
@@ -119,7 +119,7 @@ pub fn create_physical_expr(
             let idx = input_dfschema.index_of_column(c)?;
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
-        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
+        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone().into()))),
         Expr::ScalarVariable(_, variable_names) => {
             if is_system_variables(variable_names) {
                 match execution_props.get_var_provider(VarType::System) {
@@ -348,8 +348,8 @@ pub fn create_physical_expr(
             list,
             negated,
         }) => match expr.as_ref() {
-            Expr::Literal(ScalarValue::Utf8(None)) => {
-                Ok(expressions::lit(ScalarValue::Boolean(None)))
+            Expr::Literal(LogicalScalar::Utf8(None)) => {
+                Ok(expressions::lit(LogicalScalar::Boolean(None)))
             }
             _ => {
                 let value_expr =

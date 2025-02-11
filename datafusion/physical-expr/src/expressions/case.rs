@@ -574,6 +574,7 @@ pub fn case(
 mod tests {
     use super::*;
 
+    use crate::expressions::literal::lit_v2;
     use crate::expressions::{binary, cast, col, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
@@ -728,7 +729,7 @@ mod tests {
         let schema = batch.schema();
 
         // CASE a WHEN NULL THEN 0 WHEN a THEN 123 ELSE 999 END
-        let when1 = lit(ScalarValue::Utf8(None));
+        let when1 = lit(LogicalScalar::Utf8(None));
         let then1 = lit(0i32);
         let when2 = col("a", &schema)?;
         let then2 = lit(123i32);

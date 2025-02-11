@@ -174,9 +174,9 @@ pub enum LogicalScalar {
     /// `.0`: a tuple of union `type_id` and the single value held by this Scalar
     /// `.1`: the list of fields, zero-to-one of which will by set in `.0`
     /// `.2`: the physical storage of the source/destination UnionArray from which this Scalar came
-    Union(Option<(i8, Box<ScalarValue>)>, UnionFields, UnionMode),
+    Union(Option<(i8, Box<LogicalScalar>)>, UnionFields, UnionMode),
     /// Dictionary type: index type and value
-    Dictionary(Box<DataType>, Box<ScalarValue>),
+    Dictionary(Box<DataType>, Box<LogicalScalar>),
 }
 
 impl Eq for LogicalScalar {}
@@ -1063,6 +1063,71 @@ impl LogicalScalar {
             _ => return None,
         };
         Some(v.as_ref().map(|v| v.as_str()))
+    }
+}
+
+impl From<&LogicalScalar> for ScalarValue {
+    fn from(value: &LogicalScalar) -> Self {
+        value.to_owned().into()
+    }
+}
+
+impl From<LogicalScalar> for ScalarValue {
+    fn from(logical_scalar: LogicalScalar) -> Self {
+        match logical_scalar {
+            LogicalScalar::Boolean(v) => ScalarValue::Boolean(v),
+            LogicalScalar::UInt8(v) => ScalarValue::UInt8(v),
+            LogicalScalar::UInt16(v) => ScalarValue::UInt16(v),
+            LogicalScalar::UInt32(v) => ScalarValue::UInt32(v),
+            LogicalScalar::UInt64(v) => ScalarValue::UInt64(v),
+            LogicalScalar::Int8(v) => ScalarValue::Int8(v),
+            LogicalScalar::Int16(v) => ScalarValue::Int16(v),
+            LogicalScalar::Int32(v) => ScalarValue::Int32(v),
+            LogicalScalar::Int64(v) => ScalarValue::Int64(v),
+            LogicalScalar::Float16(v) => ScalarValue::Float16(v),
+            LogicalScalar::Float32(v) => ScalarValue::Float32(v),
+            LogicalScalar::Float64(v) => ScalarValue::Float64(v),
+            LogicalScalar::Decimal128(v, p, s) => ScalarValue::Decimal128(v, p, s),
+            LogicalScalar::Decimal256(v, p, s) => ScalarValue::Decimal256(v, p, s),
+            LogicalScalar::TimestampSecond(v, tz) => ScalarValue::TimestampSecond(v, tz),
+            LogicalScalar::TimestampMillisecond(v, tz) => ScalarValue::TimestampMillisecond(v, tz),
+            LogicalScalar::TimestampMicrosecond(v, tz) => ScalarValue::TimestampMicrosecond(v, tz),
+            LogicalScalar::TimestampNanosecond(v, tz) => ScalarValue::TimestampNanosecond(v, tz),
+            LogicalScalar::Utf8(v) => ScalarValue::Utf8(v),
+            LogicalScalar::LargeUtf8(v) => ScalarValue::LargeUtf8(v),
+            LogicalScalar::Utf8View(v) => ScalarValue::Utf8View(v),
+            LogicalScalar::Binary(v) => ScalarValue::Binary(v),
+            LogicalScalar::BinaryView(v) => ScalarValue::BinaryView(v),
+            LogicalScalar::FixedSizeBinary(sz, v) => ScalarValue::FixedSizeBinary(sz, v),
+            LogicalScalar::LargeBinary(v) => ScalarValue::LargeBinary(v),
+            LogicalScalar::Date32(v) => ScalarValue::Date32(v),
+            LogicalScalar::Date64(v) => ScalarValue::Date64(v),
+            LogicalScalar::Time32Second(v) => ScalarValue::Time32Second(v),
+            LogicalScalar::Time32Millisecond(v) => ScalarValue::Time32Millisecond(v),
+            LogicalScalar::Time64Microsecond(v) => ScalarValue::Time64Microsecond(v),
+            LogicalScalar::Time64Nanosecond(v) => ScalarValue::Time64Nanosecond(v),
+            LogicalScalar::IntervalYearMonth(v) => ScalarValue::IntervalYearMonth(v),
+            LogicalScalar::IntervalDayTime(v) => ScalarValue::IntervalDayTime(v),
+            LogicalScalar::IntervalMonthDayNano(v) => ScalarValue::IntervalMonthDayNano(v),
+            LogicalScalar::DurationSecond(v) => ScalarValue::DurationSecond(v),
+            LogicalScalar::DurationMillisecond(v) => ScalarValue::DurationMillisecond(v),
+            LogicalScalar::DurationMicrosecond(v) => ScalarValue::DurationMicrosecond(v),
+            LogicalScalar::DurationNanosecond(v) => ScalarValue::DurationNanosecond(v),
+            LogicalScalar::List(v) => ScalarValue::List(v),
+            LogicalScalar::LargeList(v) => ScalarValue::LargeList(v),
+            LogicalScalar::FixedSizeList(v) => ScalarValue::FixedSizeList(v),
+            LogicalScalar::Struct(v) => ScalarValue::Struct(v),
+            LogicalScalar::Map(v) => ScalarValue::Map(v),
+            LogicalScalar::Union(u, fields, mode) => {
+                if let Some((type_id, v)) = u {
+                    ScalarValue::Union(Some((type_id, Box::new((*v).into()))), fields, mode)
+                } else {
+                    ScalarValue::Union(None, fields, mode)
+                }
+            }
+            LogicalScalar::Dictionary(k, v) => ScalarValue::Dictionary(k, Box::new((*v).into())),
+            LogicalScalar::Null => ScalarValue::Null,
+        }
     }
 }
 

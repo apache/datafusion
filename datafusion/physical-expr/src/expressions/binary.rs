@@ -731,8 +731,8 @@ pub fn similar_to(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit, try_cast, Column, Literal};
-    use datafusion_common::plan_datafusion_err;
+    use crate::expressions::{col, lit, literal::lit_v2, try_cast, Column, Literal};
+    use datafusion_common::{plan_datafusion_err, scalar::LogicalScalar};
 
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
@@ -2519,7 +2519,7 @@ mod tests {
         op: Operator,
         expected: &BooleanArray,
     ) -> Result<()> {
-        let scalar = lit(scalar.clone());
+        let scalar = lit_v2(scalar.clone());
         let op = binary_op(scalar, op, col("a", schema)?, schema)?;
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
         let result = op
@@ -2539,7 +2539,7 @@ mod tests {
         op: Operator,
         expected: &BooleanArray,
     ) -> Result<()> {
-        let scalar = lit(scalar.clone());
+        let scalar = lit_v2(scalar.clone());
         let op = binary_op(col("a", schema)?, op, scalar, schema)?;
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
         let result = op

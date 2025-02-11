@@ -30,8 +30,9 @@ use arrow::datatypes::{
     MIN_DECIMAL128_FOR_EACH_PRECISION,
 };
 use arrow::temporal_conversions::{MICROSECONDS, MILLISECONDS, NANOSECONDS};
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
-use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result, ScalarValue};
+use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, TryCast};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{lit, Expr, ExprSchemable, LogicalPlan};
@@ -174,6 +175,7 @@ impl TreeNodeRewriter for UnwrapCastExprRewriter {
                                 else {
                                     return Ok(Transformed::no(expr));
                                 };
+
                                 **left = lit(value);
                                 // unwrap the cast/try_cast for the right expr
                                 **right = mem::take(right_expr);
@@ -315,16 +317,16 @@ fn is_supported_dictionary_type(data_type: &DataType) -> bool {
 
 /// Convert a literal value from one data type to another
 fn try_cast_literal_to_type(
-    lit_value: &ScalarValue,
+    lit_value: &LogicalScalar,
     target_type: &DataType,
-) -> Option<ScalarValue> {
+) -> Option<LogicalScalar> {
     let lit_data_type = lit_value.data_type();
     if !is_supported_type(&lit_data_type) || !is_supported_type(target_type) {
         return None;
     }
     if lit_value.is_null() {
         // null value can be cast to any type of null value
-        return ScalarValue::try_from(target_type).ok();
+        return LogicalScalar::try_from(target_type).ok();
     }
     try_cast_numeric_literal(lit_value, target_type)
         .or_else(|| try_cast_string_literal(lit_value, target_type))
@@ -333,9 +335,9 @@ fn try_cast_literal_to_type(
 
 /// Convert a numeric value from one numeric data type to another
 fn try_cast_numeric_literal(
-    lit_value: &ScalarValue,
+    lit_value: &LogicalScalar,
     target_type: &DataType,
-) -> Option<ScalarValue> {
+) -> Option<LogicalScalar> {
     let lit_data_type = lit_value.data_type();
     if !is_supported_numeric_type(&lit_data_type)
         || !is_supported_numeric_type(target_type)
@@ -376,19 +378,19 @@ fn try_cast_numeric_literal(
         _ => return None,
     };
     let lit_value_target_type = match lit_value {
-        ScalarValue::Int8(Some(v)) => (*v as i128).checked_mul(mul),
-        ScalarValue::Int16(Some(v)) => (*v as i128).checked_mul(mul),
-        ScalarValue::Int32(Some(v)) => (*v as i128).checked_mul(mul),
-        ScalarValue::Int64(Some(v)) => (*v as i128).checked_mul(mul),
-        ScalarValue::UInt8(Some(v)) => (*v as i128).checked_mul(mul),
-        ScalarValue::UInt16(Some(v)) => (*v as i128).checked_mul(mul),
-        ScalarValue::UInt32(Some(v)) => (*v as i128).checked_mul(mul),
-        ScalarValue::UInt64(Some(v)) => (*v as i128).checked_mul(mul),
-        ScalarValue::TimestampSecond(Some(v), _) => (*v as i128).checked_mul(mul),
-        ScalarValue::TimestampMillisecond(Some(v), _) => (*v as i128).checked_mul(mul),
-        ScalarValue::TimestampMicrosecond(Some(v), _) => (*v as i128).checked_mul(mul),
-        ScalarValue::TimestampNanosecond(Some(v), _) => (*v as i128).checked_mul(mul),
-        ScalarValue::Decimal128(Some(v), _, scale) => {
+        LogicalScalar::Int8(Some(v)) => (*v as i128).checked_mul(mul),
+        LogicalScalar::Int16(Some(v)) => (*v as i128).checked_mul(mul),
+        LogicalScalar::Int32(Some(v)) => (*v as i128).checked_mul(mul),
+        LogicalScalar::Int64(Some(v)) => (*v as i128).checked_mul(mul),
+        LogicalScalar::UInt8(Some(v)) => (*v as i128).checked_mul(mul),
+        LogicalScalar::UInt16(Some(v)) => (*v as i128).checked_mul(mul),
+        LogicalScalar::UInt32(Some(v)) => (*v as i128).checked_mul(mul),
+        LogicalScalar::UInt64(Some(v)) => (*v as i128).checked_mul(mul),
+        LogicalScalar::TimestampSecond(Some(v), _) => (*v as i128).checked_mul(mul),
+        LogicalScalar::TimestampMillisecond(Some(v), _) => (*v as i128).checked_mul(mul),
+        LogicalScalar::TimestampMicrosecond(Some(v), _) => (*v as i128).checked_mul(mul),
+        LogicalScalar::TimestampNanosecond(Some(v), _) => (*v as i128).checked_mul(mul),
+        LogicalScalar::Decimal128(Some(v), _, scale) => {
             let lit_scale_mul = 10_i128.pow(*scale as u32);
             if mul >= lit_scale_mul {
                 // Example:
@@ -417,21 +419,21 @@ fn try_cast_numeric_literal(
                 // the value casted from lit to the target type is in the range of target type.
                 // return the target type of scalar value
                 let result_scalar = match target_type {
-                    DataType::Int8 => ScalarValue::Int8(Some(value as i8)),
-                    DataType::Int16 => ScalarValue::Int16(Some(value as i16)),
-                    DataType::Int32 => ScalarValue::Int32(Some(value as i32)),
-                    DataType::Int64 => ScalarValue::Int64(Some(value as i64)),
-                    DataType::UInt8 => ScalarValue::UInt8(Some(value as u8)),
-                    DataType::UInt16 => ScalarValue::UInt16(Some(value as u16)),
-                    DataType::UInt32 => ScalarValue::UInt32(Some(value as u32)),
-                    DataType::UInt64 => ScalarValue::UInt64(Some(value as u64)),
+                    DataType::Int8 => LogicalScalar::Int8(Some(value as i8)),
+                    DataType::Int16 => LogicalScalar::Int16(Some(value as i16)),
+                    DataType::Int32 => LogicalScalar::Int32(Some(value as i32)),
+                    DataType::Int64 => LogicalScalar::Int64(Some(value as i64)),
+                    DataType::UInt8 => LogicalScalar::UInt8(Some(value as u8)),
+                    DataType::UInt16 => LogicalScalar::UInt16(Some(value as u16)),
+                    DataType::UInt32 => LogicalScalar::UInt32(Some(value as u32)),
+                    DataType::UInt64 => LogicalScalar::UInt64(Some(value as u64)),
                     DataType::Timestamp(TimeUnit::Second, tz) => {
                         let value = cast_between_timestamp(
                             &lit_data_type,
                             &DataType::Timestamp(TimeUnit::Second, tz.clone()),
                             value,
                         );
-                        ScalarValue::TimestampSecond(value, tz.clone())
+                        LogicalScalar::TimestampSecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Millisecond, tz) => {
                         let value = cast_between_timestamp(
@@ -439,7 +441,7 @@ fn try_cast_numeric_literal(
                             &DataType::Timestamp(TimeUnit::Millisecond, tz.clone()),
                             value,
                         );
-                        ScalarValue::TimestampMillisecond(value, tz.clone())
+                        LogicalScalar::TimestampMillisecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Microsecond, tz) => {
                         let value = cast_between_timestamp(
@@ -447,7 +449,7 @@ fn try_cast_numeric_literal(
                             &DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
                             value,
                         );
-                        ScalarValue::TimestampMicrosecond(value, tz.clone())
+                        LogicalScalar::TimestampMicrosecond(value, tz.clone())
                     }
                     DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
                         let value = cast_between_timestamp(
@@ -455,10 +457,10 @@ fn try_cast_numeric_literal(
                             &DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
                             value,
                         );
-                        ScalarValue::TimestampNanosecond(value, tz.clone())
+                        LogicalScalar::TimestampNanosecond(value, tz.clone())
                     }
                     DataType::Decimal128(p, s) => {
-                        ScalarValue::Decimal128(Some(value), *p, *s)
+                        LogicalScalar::Decimal128(Some(value), *p, *s)
                     }
                     _ => {
                         return None;
@@ -473,14 +475,14 @@ fn try_cast_numeric_literal(
 }
 
 fn try_cast_string_literal(
-    lit_value: &ScalarValue,
+    lit_value: &LogicalScalar,
     target_type: &DataType,
-) -> Option<ScalarValue> {
+) -> Option<LogicalScalar> {
     let string_value = lit_value.try_as_str()?.map(|s| s.to_string());
     let scalar_value = match target_type {
-        DataType::Utf8 => ScalarValue::Utf8(string_value),
-        DataType::LargeUtf8 => ScalarValue::LargeUtf8(string_value),
-        DataType::Utf8View => ScalarValue::Utf8View(string_value),
+        DataType::Utf8 => LogicalScalar::Utf8(string_value),
+        DataType::LargeUtf8 => LogicalScalar::Utf8(string_value),
+        DataType::Utf8View => LogicalScalar::Utf8(string_value),
         _ => return None,
     };
     Some(scalar_value)
@@ -488,13 +490,13 @@ fn try_cast_string_literal(
 
 /// Attempt to cast to/from a dictionary type by wrapping/unwrapping the dictionary
 fn try_cast_dictionary(
-    lit_value: &ScalarValue,
+    lit_value: &LogicalScalar,
     target_type: &DataType,
-) -> Option<ScalarValue> {
+) -> Option<LogicalScalar> {
     let lit_value_type = lit_value.data_type();
     let result_scalar = match (lit_value, target_type) {
         // Unwrap dictionary when inner type matches target type
-        (ScalarValue::Dictionary(_, inner_value), _)
+        (LogicalScalar::Dictionary(_, inner_value), _)
             if inner_value.data_type() == *target_type =>
         {
             (**inner_value).clone()
@@ -503,7 +505,7 @@ fn try_cast_dictionary(
         (_, DataType::Dictionary(index_type, inner_type))
             if **inner_type == lit_value_type =>
         {
-            ScalarValue::Dictionary(index_type.clone(), Box::new(lit_value.clone()))
+            LogicalScalar::Dictionary(index_type.clone(), Box::new(lit_value.clone()))
         }
         _ => {
             return None;

@@ -21,8 +21,9 @@
 
 use std::{borrow::Cow, collections::HashMap};
 
+use arrow::array::Scalar;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
 use datafusion_expr::{expr::InList, lit, Between, BinaryExpr, Expr};
 
@@ -89,6 +90,8 @@ impl TreeNodeRewriter for GuaranteeRewriter<'_> {
                     low.as_ref(),
                     high.as_ref(),
                 ) {
+                    let low = ScalarValue::from(low.clone());
+                    let high = ScalarValue::from(high.clone());
                     let expr_interval = NullableInterval::NotNull {
                         values: Interval::try_new(low.clone(), high.clone())?,
                     };

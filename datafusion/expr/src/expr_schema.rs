@@ -28,8 +28,7 @@ use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, TableReference,
+    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema, Result, ScalarValue, TableReference
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -429,10 +428,11 @@ impl ExprSchemable for Expr {
                 let arguments = args
                     .iter()
                     .map(|e| match e {
-                        Expr::Literal(sv) => Some(sv),
+                        Expr::Literal(sv) => Some(ScalarValue::from(sv)),
                         _ => None,
                     })
                     .collect::<Vec<_>>();
+                let arguments = arguments.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
                 let args = ReturnTypeArgs {
                     arg_types: &new_data_types,
                     scalar_arguments: &arguments,
