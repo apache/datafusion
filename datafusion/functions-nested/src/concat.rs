@@ -26,7 +26,8 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::utils::ListCoercion;use datafusion_common::Result;
+use datafusion_common::utils::ListCoercion;
+use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array,
     exec_err, not_impl_err, plan_err,

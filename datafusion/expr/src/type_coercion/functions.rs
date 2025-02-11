@@ -701,29 +701,27 @@ fn get_valid_types(
             vec![current_types.to_vec()]
         }
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
-        TypeSignature::ArraySignature(ref function_signature) => {
-            match function_signature {
-                ArrayFunctionSignature::Array { arguments, array_coercion, } => {
-                    array_valid_types(function_name, current_types, arguments.inner(), array_coercion.as_ref())?
+        TypeSignature::ArraySignature(ref function_signature) => match function_signature {
+            ArrayFunctionSignature::Array { arguments, array_coercion, } => {
+                array_valid_types(function_name, current_types, arguments.inner(), array_coercion.as_ref())?
+            }
+            ArrayFunctionSignature::RecursiveArray => {
+                if current_types.len() != 1 {
+                    return Ok(vec![vec![]]);
                 }
-                ArrayFunctionSignature::RecursiveArray => {
-                    if current_types.len() != 1 {
-                        return Ok(vec![vec![]]);
-                    }
-                    recursive_array(&current_types[0])
-                        .map_or_else(|| vec![vec![]], |array_type| vec![vec![array_type]])
+                recursive_array(&current_types[0])
+                    .map_or_else(|| vec![vec![]], |array_type| vec![vec![array_type]])
+            }
+            ArrayFunctionSignature::MapArray => {
+                if current_types.len() != 1 {
+                    return Ok(vec![vec![]]);
                 }
-                ArrayFunctionSignature::MapArray => {
-                    if current_types.len() != 1 {
-                        return Ok(vec![vec![]]);
-                    }
-                    match &current_types[0] {
-                        DataType::Map(_, _) => vec![vec![current_types[0].clone()]],
-                        _ => vec![vec![]],
-                    }
+                match &current_types[0] {
+                    DataType::Map(_, _) => vec![vec![current_types[0].clone()]],
+                    _ => vec![vec![]],
                 }
             }
-        }
+        },
         TypeSignature::Nullary => {
             if !current_types.is_empty() {
                 return plan_err!(

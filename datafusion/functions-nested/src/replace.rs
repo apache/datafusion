@@ -25,6 +25,7 @@ use arrow::datatypes::{DataType, Field};
 
 use arrow::buffer::OffsetBuffer;
 use datafusion_common::cast::as_int64_array;
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ArrayFunctionArgument, ArrayFunctionArguments, ArrayFunctionSignature, ColumnarValue,
@@ -35,7 +36,6 @@ use datafusion_macros::user_doc;
 use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
 
-use datafusion_common::utils::ListCoercion;
 use std::any::Any;
 use std::sync::Arc;
 
