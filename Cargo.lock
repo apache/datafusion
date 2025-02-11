@@ -2231,6 +2231,7 @@ dependencies = [
  "ahash 0.8.11",
  "arrow",
  "arrow-ord",
+ "arrow-schema",
  "async-trait",
  "chrono",
  "criterion",
