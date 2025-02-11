@@ -169,7 +169,7 @@ macro_rules! value_transition {
 ///    limits after any operation, they either become unbounded or they are fixed
 ///    to the maximum/minimum value of the datatype, depending on the direction
 ///    of the overflowing endpoint, opting for the safer choice.
-///  
+///
 /// 4. **Floating-point special cases**:
 ///    - `INF` values are converted to `NULL`s while constructing an interval to
 ///      ensure consistency, with other data types.
@@ -654,6 +654,45 @@ impl Interval {
         Ok(Some(Self { lower, upper }))
     }
 
+    /// Compute the union of this interval with the given interval.
+    ///
+    /// NOTE: This function only works with intervals of the same data type.
+    ///       Attempting to compare intervals of different data types will lead
+    ///       to an error.
+    pub fn union<T: Borrow<Self>>(&self, other: T) -> Result<Self> {
+        let rhs = other.borrow();
+        if self.data_type().ne(&rhs.data_type()) {
+            return internal_err!(
+                "Cannot calculate the union of intervals with different data types, lhs:{}, rhs:{}",
+                self.data_type(),
+                rhs.data_type()
+            );
+        };
+
+        let lower = if self.lower.is_null()
+            || (!rhs.lower.is_null() && self.lower <= rhs.lower)
+        {
+            self.lower.clone()
+        } else {
+            rhs.lower.clone()
+        };
+        let upper = if self.upper.is_null()
+            || (!rhs.upper.is_null() && self.upper >= rhs.upper)
+        {
+            self.upper.clone()
+        } else {
+            rhs.upper.clone()
+        };
+
+        // New lower and upper bounds must always construct a valid interval.
+        debug_assert!(
+            (lower.is_null() || upper.is_null() || (lower <= upper)),
+            "The union of two intervals can not be an invalid interval"
+        );
+
+        Ok(Self { lower, upper })
+    }
+
     /// Decide if this interval contains a [`ScalarValue`] (`other`) by returning `true` or `false`.
     pub fn contains_value<T: Borrow<ScalarValue>>(&self, other: T) -> Result<bool> {
         let rhs = other.borrow();
@@ -829,6 +868,16 @@ impl Interval {
         } else {
             Ok(div_helper_zero_exclusive(&dt, self, rhs, &zero_point))
         }
+    }
+
+    /// Compute the width of this interval; i.e. the difference between its
+    /// bounds. If the underlying data type doesn't support subtraction, this
+    /// function will return an error.
+    pub fn width(&self) -> Result<ScalarValue> {
+        let dt = self.data_type();
+        let width_dt =
+            BinaryTypeCoercer::new(&dt, &Operator::Minus, &dt).get_result_type()?;
+        Ok(sub_bounds::<true>(&width_dt, &self.upper, &self.lower))
     }
 
     /// Returns the cardinality of this interval, which is the number of all
@@ -1183,7 +1232,7 @@ fn next_value_helper<const INC: bool>(value: ScalarValue) -> ScalarValue {
 
 /// Returns the greater of the given interval bounds. Assumes that a `NULL`
 /// value represents `NEG_INF`.
-pub fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if !first.is_null() && (second.is_null() || first >= second) {
         first.clone()
     } else {
@@ -1193,7 +1242,7 @@ pub fn max_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
 
 /// Returns the lesser of the given interval bounds. Assumes that a `NULL`
 /// value represents `INF`.
-pub fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
+fn min_of_bounds(first: &ScalarValue, second: &ScalarValue) -> ScalarValue {
     if !first.is_null() && (second.is_null() || first <= second) {
         first.clone()
     } else {
@@ -2540,6 +2589,126 @@ mod tests {
     }
 
     #[test]
+    fn union_test() -> Result<()> {
+        let possible_cases = vec![
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make_unbounded(&DataType::Int64)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(1000_i64))?,
+                Interval::make_unbounded(&DataType::Int64)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(2000_i64))?,
+                Interval::make_unbounded(&DataType::Int64)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(Some(1000_i64), None)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(1500_i64))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+                Interval::make(Some(500_i64), Some(1500_i64))?,
+                Interval::make(Some(500_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
+                Interval::make::<i64>(None, None)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(0_i64))?,
+                Interval::make_unbounded(&DataType::Int64)?,
+            ),
+            (
+                Interval::make(Some(1000_i64), None)?,
+                Interval::make(None, Some(999_i64))?,
+                Interval::make_unbounded(&DataType::Int64)?,
+            ),
+            (
+                Interval::make(Some(1500_i64), Some(2000_i64))?,
+                Interval::make(Some(1000_i64), Some(1499_i64))?,
+                Interval::make(Some(1000_i64), Some(2000_i64))?,
+            ),
+            (
+                Interval::make(Some(0_i64), Some(1000_i64))?,
+                Interval::make(Some(2000_i64), Some(3000_i64))?,
+                Interval::make(Some(0_i64), Some(3000_i64))?,
+            ),
+            (
+                Interval::make(None, Some(2000_u64))?,
+                Interval::make(Some(500_u64), None)?,
+                Interval::make(Some(0_u64), None)?,
+            ),
+            (
+                Interval::make(Some(0_u64), Some(0_u64))?,
+                Interval::make(Some(0_u64), None)?,
+                Interval::make(Some(0_u64), None)?,
+            ),
+            (
+                Interval::make(Some(1000.0_f32), None)?,
+                Interval::make(None, Some(1000.0_f32))?,
+                Interval::make_unbounded(&DataType::Float32)?,
+            ),
+            (
+                Interval::make(Some(1000.0_f32), Some(1500.0_f32))?,
+                Interval::make(Some(0.0_f32), Some(1500.0_f32))?,
+                Interval::make(Some(0.0_f32), Some(1500.0_f32))?,
+            ),
+            (
+                Interval::try_new(
+                    prev_value(ScalarValue::Float32(Some(1.0))),
+                    prev_value(ScalarValue::Float32(Some(1.0))),
+                )?,
+                Interval::make(Some(1.0_f32), Some(1.0_f32))?,
+                Interval::try_new(
+                    prev_value(ScalarValue::Float32(Some(1.0))),
+                    ScalarValue::Float32(Some(1.0)),
+                )?,
+            ),
+            (
+                Interval::try_new(
+                    next_value(ScalarValue::Float32(Some(1.0))),
+                    next_value(ScalarValue::Float32(Some(1.0))),
+                )?,
+                Interval::make(Some(1.0_f32), Some(1.0_f32))?,
+                Interval::try_new(
+                    ScalarValue::Float32(Some(1.0)),
+                    next_value(ScalarValue::Float32(Some(1.0))),
+                )?,
+            ),
+            (
+                Interval::make(Some(-1000.0_f64), Some(1500.0_f64))?,
+                Interval::make(Some(-1500.0_f64), Some(2000.0_f64))?,
+                Interval::make(Some(-1000.0_f64), Some(2000.0_f64))?,
+            ),
+            (
+                Interval::make(Some(16.0_f64), Some(32.0_f64))?,
+                Interval::make(Some(32.0_f64), Some(64.0_f64))?,
+                Interval::make(Some(16.0_f64), Some(64.0_f64))?,
+            ),
+        ];
+        for (first, second, expected) in possible_cases {
+            println!("{}", first);
+            println!("{}", second);
+            assert_eq!(first.union(second)?, expected)
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_contains() -> Result<()> {
         let possible_cases = vec![
             (
@@ -3248,6 +3417,53 @@ mod tests {
             result,
             ScalarValue::Decimal128(Some(99999999999999999999999999999999999999), 38, 35)
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_width_of_intervals() -> Result<()> {
+        let intervals = [
+            (
+                Interval::make(Some(0.25_f64), Some(0.50_f64))?,
+                ScalarValue::from(0.25_f64),
+            ),
+            (
+                Interval::make(Some(0.5_f64), Some(1.0_f64))?,
+                ScalarValue::from(0.5_f64),
+            ),
+            (
+                Interval::make(Some(1.0_f64), Some(2.0_f64))?,
+                ScalarValue::from(1.0_f64),
+            ),
+            (
+                Interval::make(Some(32.0_f64), Some(64.0_f64))?,
+                ScalarValue::from(32.0_f64),
+            ),
+            (
+                Interval::make(Some(-0.50_f64), Some(-0.25_f64))?,
+                ScalarValue::from(0.25_f64),
+            ),
+            (
+                Interval::make(Some(-32.0_f64), Some(-16.0_f64))?,
+                ScalarValue::from(16.0_f64),
+            ),
+            (
+                Interval::make(Some(-0.50_f64), Some(0.25_f64))?,
+                ScalarValue::from(0.75_f64),
+            ),
+            (
+                Interval::make(Some(-32.0_f64), Some(16.0_f64))?,
+                ScalarValue::from(48.0_f64),
+            ),
+            (
+                Interval::make(Some(-32_i64), Some(16_i64))?,
+                ScalarValue::from(48_i64),
+            ),
+        ];
+        for (interval, expected) in intervals {
+            assert_eq!(interval.width()?, expected);
+        }
 
         Ok(())
     }

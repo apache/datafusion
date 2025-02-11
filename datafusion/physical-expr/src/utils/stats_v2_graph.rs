@@ -24,9 +24,7 @@ use crate::utils::{build_dag, ExprTreeNode};
 
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr_common::interval_arithmetic::{
-    apply_operator, max_of_bounds, min_of_bounds, Interval,
-};
+use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
     Exponential, Gaussian, Uniform, Unknown,
@@ -234,41 +232,61 @@ pub fn create_bernoulli_from_comparison(
     right: &StatisticsV2,
 ) -> Result<StatisticsV2> {
     let (li, ri) = (left.range()?, right.range()?);
-    if matches!(left, Uniform(_))
-        && matches!(right, Uniform(_))
-        && matches!(op, Operator::Eq | Operator::NotEq)
-    {
-        // TODO: Can we handle inequality operators for Uniform-Uniform comparisons?
-        if let Some(intersection) = li.intersect(&ri)? {
-            let overall_spread = max_of_bounds(li.upper(), ri.upper())
-                .sub_checked(min_of_bounds(li.lower(), ri.lower()))?;
-            let intersection_spread =
-                intersection.upper().sub_checked(intersection.lower())?;
-            let p = intersection_spread
-                .cast_to(&DataType::Float64)?
-                .div(overall_spread.cast_to(&DataType::Float64)?)?;
-            if op == &Operator::Eq {
-                StatisticsV2::new_bernoulli(p)
-            } else {
-                let one = ScalarValue::new_one(&li.data_type())?;
-                StatisticsV2::new_bernoulli(one.sub(p)?)
+    match (left, right) {
+        (Uniform(_), Uniform(_)) => {
+            match op {
+                Operator::Eq | Operator::NotEq => {
+                    return if let Some(intersection) = li.intersect(&ri)? {
+                        let union = li.union(&ri)?;
+                        let union_width = union.width()?;
+                        // We know that the intersection and the union have the same data types,
+                        // it is sufficient to check one of them:
+                        let p = if union_width.data_type().is_integer() {
+                            intersection
+                                .width()?
+                                .cast_to(&DataType::Float64)?
+                                .div(union_width.cast_to(&DataType::Float64)?)?
+                        } else {
+                            intersection.width()?.div(union_width)?
+                        };
+                        if op == &Operator::Eq {
+                            StatisticsV2::new_bernoulli(p)
+                        } else {
+                            let one = ScalarValue::new_one(&li.data_type())?;
+                            StatisticsV2::new_bernoulli(one.sub(p)?)
+                        }
+                    } else if op == &Operator::Eq {
+                        StatisticsV2::new_bernoulli(ScalarValue::new_zero(
+                            &li.data_type(),
+                        )?)
+                    } else {
+                        StatisticsV2::new_bernoulli(ScalarValue::new_one(
+                            &li.data_type(),
+                        )?)
+                    };
+                }
+                Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
+                    // TODO: We can handle inequality operators and calculate a `p` value
+                    //       instead of falling back to an unknown Bernoulli distribution.
+                }
+                _ => {}
             }
-        } else if op == &Operator::Eq {
-            StatisticsV2::new_bernoulli(ScalarValue::new_zero(&li.data_type())?)
-        } else {
-            StatisticsV2::new_bernoulli(ScalarValue::new_one(&li.data_type())?)
         }
+        (Gaussian(_), Gaussian(_)) => {
+            // TODO: We can handle Gaussian comparisons and calculate a `p` value
+            //       instead of falling back to an unknown Bernoulli distribution.
+        }
+        _ => {}
+    }
+    let range_evaluation = apply_operator(op, &li, &ri)?;
+    if range_evaluation.eq(&Interval::CERTAINLY_FALSE) {
+        StatisticsV2::new_bernoulli(ScalarValue::new_zero(&li.data_type())?)
+    } else if range_evaluation.eq(&Interval::CERTAINLY_TRUE) {
+        StatisticsV2::new_bernoulli(ScalarValue::new_one(&li.data_type())?)
+    } else if range_evaluation.eq(&Interval::UNCERTAIN) {
+        StatisticsV2::new_bernoulli(ScalarValue::try_from(&li.data_type())?)
     } else {
-        let range_evaluation = apply_operator(op, &li, &ri)?;
-        if range_evaluation.eq(&Interval::CERTAINLY_FALSE) {
-            StatisticsV2::new_bernoulli(ScalarValue::new_zero(&li.data_type())?)
-        } else if range_evaluation.eq(&Interval::CERTAINLY_TRUE) {
-            StatisticsV2::new_bernoulli(ScalarValue::new_one(&li.data_type())?)
-        } else if range_evaluation.eq(&Interval::UNCERTAIN) {
-            StatisticsV2::new_bernoulli(ScalarValue::try_from(&li.data_type())?)
-        } else {
-            internal_err!("new_bernoulli_from_binary_expr() must be called with predicate operators")
-        }
+        internal_err!("This function must be called with a comparison operator")
     }
 }
 
