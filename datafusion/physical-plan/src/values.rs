@@ -47,7 +47,7 @@ pub struct ValuesExec {
 }
 
 impl ValuesExec {
-    /// create a new values exec from data as expr
+    /// Create a new values exec from data as expr
     pub fn try_new(
         schema: SchemaRef,
         data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
@@ -57,7 +57,7 @@ impl ValuesExec {
         }
         let n_row = data.len();
         let n_col = schema.fields().len();
-        // we have this single row batch as a placeholder to satisfy evaluation argument
+        // We have this single row batch as a placeholder to satisfy evaluation argument
         // and generate a single output row
         let batch = RecordBatch::try_new_with_options(
             Arc::new(Schema::empty()),
@@ -126,7 +126,7 @@ impl ValuesExec {
         })
     }
 
-    /// provides the data
+    /// Provides the data
     pub fn data(&self) -> Vec<RecordBatch> {
         self.data.clone()
     }
@@ -219,6 +219,7 @@ mod tests {
     use crate::test::{self, make_partition};
 
     use arrow_schema::{DataType, Field};
+    use datafusion_common::stats::{ColumnStatistics, Precision};
 
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
@@ -268,5 +269,35 @@ mod tests {
         // Test that a null value is rejected
         let _ = ValuesExec::try_new(schema, vec![vec![lit(ScalarValue::UInt32(None))]])
             .unwrap_err();
+    }
+
+    #[test]
+    fn values_stats_with_nulls_only() -> Result<()> {
+        let data = vec![
+            vec![lit(ScalarValue::Null)],
+            vec![lit(ScalarValue::Null)],
+            vec![lit(ScalarValue::Null)],
+        ];
+        let rows = data.len();
+        let values = ValuesExec::try_new(
+            Arc::new(Schema::new(vec![Field::new("col0", DataType::Null, true)])),
+            data,
+        )?;
+
+        assert_eq!(
+            values.statistics()?,
+            Statistics {
+                num_rows: Precision::Exact(rows),
+                total_byte_size: Precision::Exact(8), // not important
+                column_statistics: vec![ColumnStatistics {
+                    null_count: Precision::Exact(rows), // there are only nulls
+                    distinct_count: Precision::Absent,
+                    max_value: Precision::Absent,
+                    min_value: Precision::Absent,
+                },],
+            }
+        );
+
+        Ok(())
     }
 }

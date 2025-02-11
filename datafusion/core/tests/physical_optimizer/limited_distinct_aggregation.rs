@@ -347,10 +347,10 @@ fn test_has_aggregate_expression() -> Result<()> {
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema, vec!["a".to_string()]),
-        vec![agg.count_expr(&schema)], /* aggr_expr */
-        vec![None],                    /* filter_expr */
-        source,                        /* input */
-        schema.clone(),                /* input_schema */
+        vec![Arc::new(agg.count_expr(&schema))], /* aggr_expr */
+        vec![None],                              /* filter_expr */
+        source,                                  /* input */
+        schema.clone(),                          /* input_schema */
     )?;
     let limit_exec = LocalLimitExec::new(
         Arc::new(single_agg),
@@ -384,10 +384,10 @@ fn test_has_filter() -> Result<()> {
     let single_agg = AggregateExec::try_new(
         AggregateMode::Single,
         build_group_by(&schema.clone(), vec!["a".to_string()]),
-        vec![agg.count_expr(&schema)], /* aggr_expr */
-        vec![filter_expr],             /* filter_expr */
-        source,                        /* input */
-        schema.clone(),                /* input_schema */
+        vec![Arc::new(agg.count_expr(&schema))], /* aggr_expr */
+        vec![filter_expr],                       /* filter_expr */
+        source,                                  /* input */
+        schema.clone(),                          /* input_schema */
     )?;
     let limit_exec = LocalLimitExec::new(
         Arc::new(single_agg),

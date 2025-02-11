@@ -174,6 +174,7 @@ pub fn populate_csv_partitions(
 }
 
 /// TableFactory for tests
+#[derive(Default, Debug)]
 pub struct TestTableFactory {}
 
 #[async_trait]
@@ -191,6 +192,7 @@ impl TableProviderFactory for TestTableFactory {
 }
 
 /// TableProvider for testing purposes
+#[derive(Debug)]
 pub struct TestTableProvider {
     /// URL of table files or folder
     pub url: String,

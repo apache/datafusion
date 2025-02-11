@@ -28,14 +28,14 @@ CREATE TABLE test(
 ;
 
 # errors
-query error DataFusion error: Error during planning: The encode function can only accept utf8 or binary\.
-select encode(12, 'hex')
+query error 1st argument should be Utf8 or Binary or Null, got Int64
+select encode(12, 'hex');
 
 query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
 select encode(bin_field, 'non_encoding') from test;
 
-query error DataFusion error: Error during planning: The decode function can only accept utf8 or binary\.
-select decode(12, 'hex')
+query error 1st argument should be Utf8 or Binary or Null, got Int64
+select decode(12, 'hex');
 
 query error DataFusion error: Error during planning: There is no built\-in encoding named 'non_encoding', currently supported encodings are: base64, hex
 select decode(hex_field, 'non_encoding') from test;

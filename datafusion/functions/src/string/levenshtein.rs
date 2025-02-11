@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{ArrayRef, Int32Array, Int64Array, OffsetSizeTrait};
 use arrow::datatypes::DataType;
@@ -25,8 +25,8 @@ use crate::utils::{make_scalar_function, utf8_to_int_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::TypeSignature::*;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
@@ -43,14 +43,7 @@ impl Default for LevenshteinFunc {
 impl LevenshteinFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![DataType::Utf8View, DataType::Utf8View]),
-                    Exact(vec![DataType::Utf8, DataType::Utf8]),
-                    Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }
@@ -83,6 +76,33 @@ impl ScalarUDFImpl for LevenshteinFunc {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_levenshtein_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_levenshtein_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Returns the [`Levenshtein distance`](https://en.wikipedia.org/wiki/Levenshtein_distance) between the two given strings.")
+            .with_syntax_example("levenshtein(str1, str2)")
+            .with_sql_example(r#"```sql
+> select levenshtein('kitten', 'sitting');
++---------------------------------------------+
+| levenshtein(Utf8("kitten"),Utf8("sitting")) |
++---------------------------------------------+
+| 3                                           |
++---------------------------------------------+
+```"#)
+            .with_argument("str1", "String expression to compute Levenshtein distance with str2.")
+            .with_argument("str2", "String expression to compute Levenshtein distance with str1.")
+            .build()
+            .unwrap()
+    })
 }
 
 ///Returns the Levenshtein distance between the two given strings.

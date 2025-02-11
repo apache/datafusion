@@ -1,2 +1,0 @@
-o_orderkey,o_custkey,o_orderstatus,o_totalprice,o_orderdate,o_orderpriority,o_clerk,o_shippriority,o_comment
-1,1,O,1000.00,2023-01-01,5-LOW,Clerk#000000001,0,No comment

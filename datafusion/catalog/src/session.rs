@@ -139,6 +139,7 @@ impl From<&dyn Session> for TaskContext {
 }
 type SessionRefLock = Arc<Mutex<Option<Weak<RwLock<dyn Session>>>>>;
 /// The state store that stores the reference of the runtime session state.
+#[derive(Debug)]
 pub struct SessionStore {
     session: SessionRefLock,
 }

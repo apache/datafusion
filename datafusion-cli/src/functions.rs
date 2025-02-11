@@ -214,6 +214,7 @@ pub fn display_all_functions() -> Result<()> {
 }
 
 /// PARQUET_META table function
+#[derive(Debug)]
 struct ParquetMetadataTable {
     schema: SchemaRef,
     batch: RecordBatch,
@@ -314,6 +315,7 @@ fn fixed_len_byte_array_to_string(val: Option<&FixedLenByteArray>) -> Option<Str
     })
 }
 
+#[derive(Debug)]
 pub struct ParquetMetadataFunc {}
 
 impl TableFunctionImpl for ParquetMetadataFunc {

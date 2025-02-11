@@ -313,13 +313,6 @@ impl SessionContext {
     }
 
     /// Creates a new `SessionContext` using the provided
-    /// [`SessionConfig`] and a new [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_config")]
-    pub fn with_config(config: SessionConfig) -> Self {
-        Self::new_with_config(config)
-    }
-
-    /// Creates a new `SessionContext` using the provided
     /// [`SessionConfig`] and a [`RuntimeEnv`].
     ///
     /// # Resource Limits
@@ -341,13 +334,6 @@ impl SessionContext {
         Self::new_with_state(state)
     }
 
-    /// Creates a new `SessionContext` using the provided
-    /// [`SessionConfig`] and a [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionState::new_with_config_rt")]
-    pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        Self::new_with_config_rt(config, runtime)
-    }
-
     /// Creates a new `SessionContext` using the provided [`SessionState`]
     pub fn new_with_state(state: SessionState) -> Self {
         Self {
@@ -357,11 +343,17 @@ impl SessionContext {
         }
     }
 
-    /// Enable dynamic file querying for the current session.
+    /// Enable querying local files as tables.
     ///
-    /// This allows queries to directly access arbitrary file names via SQL like
-    /// `SELECT * from 'my_file.parquet'`
-    /// so it should only be enabled for systems that such access is not a security risk
+    /// This feature is security sensitive and should only be enabled for
+    /// systems that wish to permit direct access to the file system from SQL.
+    ///
+    /// When enabled, this feature permits direct access to arbitrary files via
+    /// SQL like
+    ///
+    /// ```sql
+    /// SELECT * from 'my_file.parquet'
+    /// ```
     ///
     /// See [DynamicFileCatalog] for more details
     ///
@@ -370,7 +362,8 @@ impl SessionContext {
     /// # use datafusion::{error::Result, assert_batches_eq};
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let ctx = SessionContext::new().enable_url_table();
+    /// let ctx = SessionContext::new()
+    ///   .enable_url_table(); // permit local file access
     /// let results = ctx
     ///   .sql("SELECT a, MIN(b) FROM 'tests/data/example.csv' as example GROUP BY a LIMIT 100")
     ///   .await?
@@ -389,26 +382,60 @@ impl SessionContext {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn enable_url_table(&self) -> Self {
-        let state_ref = self.state();
+    pub fn enable_url_table(self) -> Self {
+        let current_catalog_list = Arc::clone(self.state.read().catalog_list());
         let factory = Arc::new(DynamicListTableFactory::new(SessionStore::new()));
         let catalog_list = Arc::new(DynamicFileCatalog::new(
-            Arc::clone(state_ref.catalog_list()),
+            current_catalog_list,
             Arc::clone(&factory) as Arc<dyn UrlTableFactory>,
         ));
-        let new_state = SessionStateBuilder::new_from_existing(self.state())
+        let ctx: SessionContext = self
+            .into_state_builder()
             .with_catalog_list(catalog_list)
-            .build();
-        let ctx = SessionContext::new_with_state(new_state);
+            .build()
+            .into();
+        // register new state with the factory
         factory.session_store().with_state(ctx.state_weak_ref());
         ctx
     }
 
-    /// Creates a new `SessionContext` using the provided [`SessionState`]
-    #[deprecated(since = "32.0.0", note = "Use SessionContext::new_with_state")]
-    pub fn with_state(state: SessionState) -> Self {
-        Self::new_with_state(state)
+    /// Convert the current `SessionContext` into a [`SessionStateBuilder`]
+    ///
+    /// This is useful to switch back to `SessionState` with custom settings such as
+    /// [`Self::enable_url_table`].
+    ///
+    /// Avoids cloning the SessionState if possible.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::execution::SessionStateBuilder;
+    /// # use datafusion_optimizer::push_down_filter::PushDownFilter;
+    /// let my_rule = PushDownFilter{}; // pretend it is a new rule
+    /// // Create a new builder with a custom optimizer rule
+    /// let context: SessionContext = SessionStateBuilder::new()
+    ///   .with_optimizer_rule(Arc::new(my_rule))
+    ///   .build()
+    ///   .into();
+    /// // Enable local file access and convert context back to a builder
+    /// let builder = context
+    ///   .enable_url_table()
+    ///   .into_state_builder();
+    /// ```
+    pub fn into_state_builder(self) -> SessionStateBuilder {
+        let SessionContext {
+            session_id: _,
+            session_start_time: _,
+            state,
+        } = self;
+        let state = match Arc::try_unwrap(state) {
+            Ok(rwlock) => rwlock.into_inner(),
+            Err(state) => state.read().clone(),
+        };
+        SessionStateBuilder::from(state)
     }
+
     /// Returns the time this `SessionContext` was created
     pub fn session_start_time(&self) -> DateTime<Utc> {
         self.session_start_time
@@ -711,6 +738,11 @@ impl SessionContext {
         cmd: &CreateExternalTable,
     ) -> Result<DataFrame> {
         let exist = self.table_exist(cmd.name.clone())?;
+
+        if cmd.temporary {
+            return not_impl_err!("Temporary tables not supported");
+        }
+
         if exist {
             match cmd.if_not_exists {
                 true => return self.return_empty_dataframe(),
@@ -734,10 +766,16 @@ impl SessionContext {
             or_replace,
             constraints,
             column_defaults,
+            temporary,
         } = cmd;
 
         let input = Arc::unwrap_or_clone(input);
         let input = self.state().optimize(&input)?;
+
+        if temporary {
+            return not_impl_err!("Temporary tables not supported");
+        }
+
         let table = self.table(name.clone()).await;
         match (if_not_exists, or_replace, table) {
             (true, false, Ok(_)) => self.return_empty_dataframe(),
@@ -786,9 +824,14 @@ impl SessionContext {
             input,
             or_replace,
             definition,
+            temporary,
         } = cmd;
 
         let view = self.table(name.clone()).await;
+
+        if temporary {
+            return not_impl_err!("Temporary views not supported");
+        }
 
         match (or_replace, view) {
             (true, Ok(_)) => {
@@ -1237,7 +1280,7 @@ impl SessionContext {
     /// [`ObjectStore`]: object_store::ObjectStore
     pub async fn register_listing_table(
         &self,
-        name: &str,
+        table_ref: impl Into<TableReference>,
         table_path: impl AsRef<str>,
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
@@ -1252,10 +1295,7 @@ impl SessionContext {
             .with_listing_options(options)
             .with_schema(resolved_schema);
         let table = ListingTable::try_new(config)?.with_definition(sql_definition);
-        self.register_table(
-            TableReference::Bare { table: name.into() },
-            Arc::new(table),
-        )?;
+        self.register_table(table_ref, Arc::new(table))?;
         Ok(())
     }
 
@@ -1515,9 +1555,15 @@ impl From<SessionState> for SessionContext {
     }
 }
 
+impl From<SessionContext> for SessionStateBuilder {
+    fn from(session: SessionContext) -> Self {
+        session.into_state_builder()
+    }
+}
+
 /// A planner used to add extensions to DataFusion logical and physical plans.
 #[async_trait]
-pub trait QueryPlanner {
+pub trait QueryPlanner: Debug {
     /// Given a `LogicalPlan`, create an [`ExecutionPlan`] suitable for execution
     async fn create_physical_plan(
         &self,
@@ -1530,7 +1576,7 @@ pub trait QueryPlanner {
 /// and interact with [SessionState] to registers new udf, udaf or udwf.
 
 #[async_trait]
-pub trait FunctionFactory: Sync + Send {
+pub trait FunctionFactory: Debug + Sync + Send {
     /// Handles creation of user defined function specified in [CreateFunction] statement
     async fn create(
         &self,
@@ -1553,6 +1599,7 @@ pub enum RegisterFunction {
 
 /// Default implementation of [SerializerRegistry] that throws unimplemented error
 /// for all requests.
+#[derive(Debug)]
 pub struct EmptySerializerRegistry;
 
 impl SerializerRegistry for EmptySerializerRegistry {
@@ -2099,6 +2146,7 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
     struct MyQueryPlanner {}
 
     #[async_trait]

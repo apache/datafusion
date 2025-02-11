@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, AsArray, GenericStringArray, OffsetSizeTrait,
@@ -27,8 +27,11 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{exec_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct TranslateFunc {
@@ -76,6 +79,34 @@ impl ScalarUDFImpl for TranslateFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(invoke_translate, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_translate_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_translate_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Translates characters in a string to specified translation characters.")
+            .with_syntax_example("translate(str, chars, translation)")
+            .with_sql_example(r#"```sql
+> select translate('twice', 'wic', 'her');
++--------------------------------------------------+
+| translate(Utf8("twice"),Utf8("wic"),Utf8("her")) |
++--------------------------------------------------+
+| there                                            |
++--------------------------------------------------+
+```"#)
+            .with_standard_argument("str", Some("String"))
+            .with_argument("chars", "Characters to translate.")
+            .with_argument("translation", "Translation characters. Translation characters replace only characters at the same position in the **chars** string.")
+            .build()
+            .unwrap()
+    })
 }
 
 fn invoke_translate(args: &[ArrayRef]) -> Result<ArrayRef> {

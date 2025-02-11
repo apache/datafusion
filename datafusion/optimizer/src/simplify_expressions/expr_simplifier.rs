@@ -32,14 +32,18 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
-use datafusion_expr::expr::{InList, InSubquery, WindowFunction};
 use datafusion_expr::simplify::ExprSimplifyResult;
 use datafusion_expr::{
     and, lit, or, BinaryExpr, Case, ColumnarValue, Expr, Like, Operator, Volatility,
     WindowFunctionDefinition,
 };
 use datafusion_expr::{expr::ScalarFunction, interval_arithmetic::NullableInterval};
+use datafusion_expr::{
+    expr::{InList, InSubquery, WindowFunction},
+    utils::{iter_conjunction, iter_conjunction_owned},
+};
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
+use indexmap::IndexSet;
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
@@ -838,21 +842,38 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: Or,
                 right,
             }) if expr_contains(&right, &left, Or) => Transformed::yes(*right),
-            // A OR (A AND B) --> A (if B not null)
+            // A OR (A AND B) --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if !info.nullable(&right)? && is_op_with(And, &right, &left) => {
-                Transformed::yes(*left)
-            }
-            // (A AND B) OR A --> A (if B not null)
+            }) if is_op_with(And, &right, &left) => Transformed::yes(*left),
+            // (A AND B) OR A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: Or,
                 right,
-            }) if !info.nullable(&left)? && is_op_with(And, &left, &right) => {
-                Transformed::yes(*right)
+            }) if is_op_with(And, &left, &right) => Transformed::yes(*right),
+            // Eliminate common factors in conjunctions e.g
+            // (A AND B) OR (A AND C) -> A AND (B OR C)
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Or,
+                right,
+            }) if has_common_conjunction(&left, &right) => {
+                let lhs: IndexSet<Expr> = iter_conjunction_owned(*left).collect();
+                let (common, rhs): (Vec<_>, Vec<_>) =
+                    iter_conjunction_owned(*right).partition(|e| lhs.contains(e));
+
+                let new_rhs = rhs.into_iter().reduce(and);
+                let new_lhs = lhs.into_iter().filter(|e| !common.contains(e)).reduce(and);
+                let common_conjunction = common.into_iter().reduce(and).unwrap();
+
+                let new_expr = match (new_lhs, new_rhs) {
+                    (Some(lhs), Some(rhs)) => and(common_conjunction, or(lhs, rhs)),
+                    (_, _) => common_conjunction,
+                };
+                Transformed::yes(new_expr)
             }
 
             //
@@ -911,22 +932,18 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 op: And,
                 right,
             }) if expr_contains(&right, &left, And) => Transformed::yes(*right),
-            // A AND (A OR B) --> A (if B not null)
+            // A AND (A OR B) --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if !info.nullable(&right)? && is_op_with(Or, &right, &left) => {
-                Transformed::yes(*left)
-            }
-            // (A OR B) AND A --> A (if B not null)
+            }) if is_op_with(Or, &right, &left) => Transformed::yes(*left),
+            // (A OR B) AND A --> A
             Expr::BinaryExpr(BinaryExpr {
                 left,
                 op: And,
                 right,
-            }) if !info.nullable(&left)? && is_op_with(Or, &left, &right) => {
-                Transformed::yes(*right)
-            }
+            }) if is_op_with(Or, &left, &right) => Transformed::yes(*right),
 
             //
             // Rules for Multiply
@@ -1028,7 +1045,9 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
                 && !info.get_data_type(&left)?.is_floating()
                 && is_one(&right) =>
             {
-                Transformed::yes(lit(0))
+                Transformed::yes(Expr::Literal(ScalarValue::new_zero(
+                    &info.get_data_type(&left)?,
+                )?))
             }
 
             //
@@ -1662,6 +1681,11 @@ impl<'a, S: SimplifyInfo> TreeNodeRewriter for Simplifier<'a, S> {
     }
 }
 
+fn has_common_conjunction(lhs: &Expr, rhs: &Expr) -> bool {
+    let lhs: HashSet<&Expr> = iter_conjunction(lhs).collect();
+    iter_conjunction(rhs).any(|e| lhs.contains(&e))
+}
+
 // TODO: We might not need this after defer pattern for Box is stabilized. https://github.com/rust-lang/rust/issues/87121
 fn are_inlist_and_eq_and_match_neg(
     left: &Expr,
@@ -1789,6 +1813,8 @@ fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
+    use crate::simplify_expressions::SimplifyContext;
+    use crate::test::test_table_scan_with_name;
     use datafusion_common::{assert_contains, DFSchemaRef, ToDFSchema};
     use datafusion_expr::{
         function::{
@@ -1798,14 +1824,13 @@ mod tests {
         interval_arithmetic::Interval,
         *,
     };
+    use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+    use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
     use std::{
         collections::HashMap,
         ops::{BitAnd, BitOr, BitXor},
         sync::Arc,
     };
-
-    use crate::simplify_expressions::SimplifyContext;
-    use crate::test::test_table_scan_with_name;
 
     use super::*;
 
@@ -2170,11 +2195,11 @@ mod tests {
 
     #[test]
     fn test_simplify_modulo_by_one_non_null() {
-        let expr = col("c2_non_null") % lit(1);
-        let expected = lit(0);
+        let expr = col("c3_non_null") % lit(1);
+        let expected = lit(0_i64);
         assert_eq!(simplify(expr), expected);
         let expr =
-            col("c2_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
+            col("c3_non_null") % lit(ScalarValue::Decimal128(Some(10000000000), 31, 10));
         assert_eq!(simplify(expr), expected);
     }
 
@@ -2608,15 +2633,11 @@ mod tests {
         // (c2 > 5) OR ((c1 < 6) AND (c2 > 5))
         let expr = or(l.clone(), r.clone());
 
-        // no rewrites if c1 can be null
-        let expected = expr.clone();
+        let expected = l.clone();
         assert_eq!(simplify(expr), expected);
 
         // ((c1 < 6) AND (c2 > 5)) OR (c2 > 5)
-        let expr = or(l, r);
-
-        // no rewrites if c1 can be null
-        let expected = expr.clone();
+        let expr = or(r, l);
         assert_eq!(simplify(expr), expected);
     }
 
@@ -2647,13 +2668,11 @@ mod tests {
         // (c2 > 5) AND ((c1 < 6) OR (c2 > 5)) --> c2 > 5
         let expr = and(l.clone(), r.clone());
 
-        // no rewrites if c1 can be null
-        let expected = expr.clone();
+        let expected = l.clone();
         assert_eq!(simplify(expr), expected);
 
         // ((c1 < 6) OR (c2 > 5)) AND (c2 > 5) --> c2 > 5
-        let expr = and(l, r);
-        let expected = expr.clone();
+        let expr = and(r, l);
         assert_eq!(simplify(expr), expected);
     }
 
@@ -3222,7 +3241,7 @@ mod tests {
                 )],
                 Some(Box::new(col("c2").eq(lit(true)))),
             )))),
-            col("c2").or(col("c2").not().and(col("c2"))) // #1716
+            col("c2")
         );
 
         // CASE WHEN ISNULL(c2) THEN true ELSE c2
@@ -3754,6 +3773,47 @@ mod tests {
         assert_eq!(expr, expected);
         assert_eq!(num_iter, 2);
     }
+
+    fn boolean_test_schema() -> DFSchemaRef {
+        Schema::new(vec![
+            Field::new("A", DataType::Boolean, false),
+            Field::new("B", DataType::Boolean, false),
+            Field::new("C", DataType::Boolean, false),
+            Field::new("D", DataType::Boolean, false),
+        ])
+        .to_dfschema_ref()
+        .unwrap()
+    }
+
+    #[test]
+    fn simplify_common_factor_conjuction_in_disjunction() {
+        let props = ExecutionProps::new();
+        let schema = boolean_test_schema();
+        let simplifier =
+            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema));
+
+        let a = || col("A");
+        let b = || col("B");
+        let c = || col("C");
+        let d = || col("D");
+
+        // (A AND B) OR (A AND C) -> A AND (B OR C)
+        let expr = a().and(b()).or(a().and(c()));
+        let expected = a().and(b().or(c()));
+
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+
+        // (A AND B) OR (A AND C) OR (A AND D) -> A AND (B OR C OR D)
+        let expr = a().and(b()).or(a().and(c())).or(a().and(d()));
+        let expected = a().and(b().or(c()).or(d()));
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+
+        // A OR (B AND C AND A) -> A
+        let expr = a().or(b().and(c().and(a())));
+        let expected = a();
+        assert_eq!(expected, simplifier.simplify(expr).unwrap());
+    }
+
     #[test]
     fn test_simplify_udaf() {
         let udaf = AggregateUDF::new_from_impl(SimplifyMockUdaf::new_with_simplify());
@@ -3901,10 +3961,6 @@ mod tests {
             unimplemented!()
         }
 
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            unimplemented!("not needed for tests")
-        }
-
         fn simplify(&self) -> Option<WindowFunctionSimplification> {
             if self.simplify {
                 Some(Box::new(|_, _| Ok(col("result_column"))))
@@ -3913,7 +3969,14 @@ mod tests {
             }
         }
 
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+        fn partition_evaluator(
+            &self,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
+            unimplemented!("not needed for tests")
+        }
+
+        fn field(&self, _field_args: WindowUDFFieldArgs) -> Result<Field> {
             unimplemented!("not needed for tests")
         }
     }

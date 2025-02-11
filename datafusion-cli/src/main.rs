@@ -232,7 +232,7 @@ async fn main_inner() -> Result<()> {
 }
 
 fn create_runtime_env(rn_config: RuntimeConfig) -> Result<RuntimeEnv> {
-    RuntimeEnv::new(rn_config)
+    RuntimeEnv::try_new(rn_config)
 }
 
 fn parse_valid_file(dir: &str) -> Result<String, String> {

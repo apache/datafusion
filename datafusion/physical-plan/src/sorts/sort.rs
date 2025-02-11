@@ -30,7 +30,7 @@ use crate::limit::LimitStream;
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use crate::sorts::streaming_merge::streaming_merge;
+use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::{read_spill_as_stream, spill_record_batches};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
@@ -40,7 +40,7 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-use arrow::compute::{concat_batches, lexsort_to_indices, take, SortColumn};
+use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
@@ -54,6 +54,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortRequirement;
 
+use crate::execution_plan::CardinalityEffect;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -341,21 +342,17 @@ impl ExternalSorter {
                 streams.push(stream);
             }
 
-            streaming_merge(
-                streams,
-                Arc::clone(&self.schema),
-                &self.expr,
-                self.metrics.baseline.clone(),
-                self.batch_size,
-                self.fetch,
-                self.reservation.new_empty(),
-            )
-        } else if !self.in_mem_batches.is_empty() {
-            self.in_mem_sort_stream(self.metrics.baseline.clone())
+            StreamingMergeBuilder::new()
+                .with_streams(streams)
+                .with_schema(Arc::clone(&self.schema))
+                .with_expressions(&self.expr)
+                .with_metrics(self.metrics.baseline.clone())
+                .with_batch_size(self.batch_size)
+                .with_fetch(self.fetch)
+                .with_reservation(self.reservation.new_empty())
+                .build()
         } else {
-            Ok(Box::pin(EmptyRecordBatchStream::new(Arc::clone(
-                &self.schema,
-            ))))
+            self.in_mem_sort_stream(self.metrics.baseline.clone())
         }
     }
 
@@ -500,7 +497,11 @@ impl ExternalSorter {
         &mut self,
         metrics: BaselineMetrics,
     ) -> Result<SendableRecordBatchStream> {
-        assert_ne!(self.in_mem_batches.len(), 0);
+        if self.in_mem_batches.is_empty() {
+            return Ok(Box::pin(EmptyRecordBatchStream::new(Arc::clone(
+                &self.schema,
+            ))));
+        }
 
         // The elapsed compute timer is updated when the value is dropped.
         // There is no need for an explicit call to drop.
@@ -508,7 +509,7 @@ impl ExternalSorter {
         let _timer = elapsed_compute.timer();
 
         if self.in_mem_batches.len() == 1 {
-            let batch = self.in_mem_batches.remove(0);
+            let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
             return self.sort_batch_stream(batch, metrics, reservation);
         }
@@ -533,15 +534,15 @@ impl ExternalSorter {
             })
             .collect::<Result<_>>()?;
 
-        streaming_merge(
-            streams,
-            Arc::clone(&self.schema),
-            &self.expr,
-            metrics,
-            self.batch_size,
-            self.fetch,
-            self.merge_reservation.new_empty(),
-        )
+        StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(Arc::clone(&self.schema))
+            .with_expressions(&self.expr)
+            .with_metrics(metrics)
+            .with_batch_size(self.batch_size)
+            .with_fetch(self.fetch)
+            .with_reservation(self.merge_reservation.new_empty())
+            .build()
     }
 
     /// Sorts a single `RecordBatch` into a single stream.
@@ -616,11 +617,7 @@ pub fn sort_batch(
         lexsort_to_indices(&sort_columns, fetch)?
     };
 
-    let columns = batch
-        .columns()
-        .iter()
-        .map(|c| take(c.as_ref(), &indices, None))
-        .collect::<Result<_, _>>()?;
+    let columns = take_arrays(batch.columns(), &indices, None)?;
 
     let options = RecordBatchOptions::new().with_row_count(Some(indices.len()));
     Ok(RecordBatch::try_new_with_options(
@@ -792,7 +789,9 @@ impl SortExec {
     ) -> PlanProperties {
         // Determine execution mode:
         let sort_satisfied = input.equivalence_properties().ordering_satisfy_requirement(
-            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter()).as_slice(),
+            PhysicalSortRequirement::from_sort_exprs(sort_exprs.iter())
+                .inner
+                .as_slice(),
         );
         let mode = match input.execution_mode() {
             ExecutionMode::Unbounded if sort_satisfied => ExecutionMode::Unbounded,
@@ -895,7 +894,9 @@ impl ExecutionPlan for SortExec {
             .input
             .equivalence_properties()
             .ordering_satisfy_requirement(
-                PhysicalSortRequirement::from_sort_exprs(self.expr.iter()).as_slice(),
+                PhysicalSortRequirement::from_sort_exprs(self.expr.iter())
+                    .inner
+                    .as_slice(),
             );
 
         match (sort_satisfied, self.fetch.as_ref()) {
@@ -971,6 +972,14 @@ impl ExecutionPlan for SortExec {
     fn fetch(&self) -> Option<usize> {
         self.fetch
     }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        if self.fetch.is_none() {
+            CardinalityEffect::Equal
+        } else {
+            CardinalityEffect::LowerEqual
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1022,9 +1031,8 @@ mod tests {
     impl SortedUnboundedExec {
         fn compute_properties(schema: SchemaRef) -> PlanProperties {
             let mut eq_properties = EquivalenceProperties::new(schema);
-            eq_properties.add_new_orderings(vec![vec![PhysicalSortExpr::new(
+            eq_properties.add_new_orderings(vec![vec![PhysicalSortExpr::new_default(
                 Arc::new(Column::new("c1", 0)),
-                SortOptions::default(),
             )]]);
             let mode = ExecutionMode::Unbounded;
             PlanProperties::new(eq_properties, Partitioning::UnknownPartitioning(1), mode)
@@ -1560,10 +1568,9 @@ mod tests {
             cache: SortedUnboundedExec::compute_properties(Arc::new(schema.clone())),
         };
         let mut plan = SortExec::new(
-            vec![PhysicalSortExpr::new(
-                Arc::new(Column::new("c1", 0)),
-                SortOptions::default(),
-            )],
+            vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+                "c1", 0,
+            )))],
             Arc::new(source),
         );
         plan = plan.with_fetch(Some(9));

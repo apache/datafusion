@@ -37,14 +37,14 @@ mod simplification;
 fn test_octet_length() {
     #[rustfmt::skip]
     evaluate_expr_test(
-        octet_length(col("list")),
+        octet_length(col("id")),
         vec![
             "+------+",
             "| expr |",
             "+------+",
-            "| 5    |",
-            "| 18   |",
-            "| 6    |",
+            "| 1    |",
+            "| 1    |",
+            "| 1    |",
             "+------+",
         ],
     );

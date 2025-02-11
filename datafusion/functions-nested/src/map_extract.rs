@@ -26,9 +26,12 @@ use arrow_buffer::OffsetBuffer;
 use arrow_schema::Field;
 
 use datafusion_common::{cast::as_map_array, exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MAP;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::vec;
 
 use crate::utils::{get_map_entry_field, make_scalar_function};
@@ -101,6 +104,48 @@ impl ScalarUDFImpl for MapExtract {
             field.first().unwrap().data_type().clone(),
         ])
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_map_extract_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_map_extract_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MAP)
+            .with_description(
+                "Returns a list containing the value for the given key or an empty list if the key is not present in the map.",
+            )
+            .with_syntax_example("map_extract(map, key)")
+            .with_sql_example(
+                r#"```sql
+SELECT map_extract(MAP {'a': 1, 'b': NULL, 'c': 3}, 'a');
+----
+[1]
+
+SELECT map_extract(MAP {1: 'one', 2: 'two'}, 2);
+----
+['two']
+
+SELECT map_extract(MAP {'x': 10, 'y': NULL, 'z': 30}, 'y');
+----
+[]
+```"#,
+            )
+            .with_argument(
+                "map",
+                "Map expression. Can be a constant, column, or function, and any combination of map operators.",
+            )
+            .with_argument(
+                "key",
+                "Key to extract from the map. Can be a constant, column, or function, any combination of arithmetic or string operators, or a named expression of the previously listed.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 fn general_map_extract_inner(

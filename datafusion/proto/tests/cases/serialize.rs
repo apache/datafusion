@@ -238,7 +238,7 @@ fn context_with_udf() -> SessionContext {
     let udf = create_udf(
         "dummy",
         vec![DataType::Utf8],
-        Arc::new(DataType::Utf8),
+        DataType::Utf8,
         Volatility::Immutable,
         scalar_fn,
     );

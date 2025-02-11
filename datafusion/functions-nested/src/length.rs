@@ -27,9 +27,12 @@ use core::any::type_name;
 use datafusion_common::cast::{as_generic_list_array, as_int64_array};
 use datafusion_common::DataFusionError;
 use datafusion_common::{exec_err, plan_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     ArrayLength,
@@ -81,6 +84,43 @@ impl ScalarUDFImpl for ArrayLength {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_length_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_length_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns the length of the array dimension.",
+            )
+            .with_syntax_example("array_length(array, dimension)")
+            .with_sql_example(
+                r#"```sql
+> select array_length([1, 2, 3, 4, 5], 1);
++-------------------------------------------+
+| array_length(List([1,2,3,4,5]), 1)        |
++-------------------------------------------+
+| 5                                         |
++-------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "dimension",
+                "Array dimension.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Array_length SQL function

@@ -95,7 +95,7 @@ impl NullState {
     ///
     /// When value_fn is called it also sets
     ///
-    /// 1. `self.seen_values[group_index]` to true for all rows that had a non null vale
+    /// 1. `self.seen_values[group_index]` to true for all rows that had a non null value
     pub fn accumulate<T, F>(
         &mut self,
         group_indices: &[usize],

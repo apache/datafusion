@@ -102,7 +102,12 @@ SELECT nanvl(asin(10), 1.0), nanvl(1.0, 2.0), nanvl(asin(10), asin(10))
 
 # isnan
 query BBBB
-SELECT isnan(1.0), isnan('NaN'::DOUBLE), isnan(-'NaN'::DOUBLE), isnan(NULL)
+SELECT isnan(1.0::DOUBLE), isnan('NaN'::DOUBLE), isnan(-'NaN'::DOUBLE), isnan(NULL)
+----
+false true true NULL
+
+query BBBB
+SELECT isnan(1.0::FLOAT), isnan('NaN'::FLOAT), isnan(-'NaN'::FLOAT), isnan(NULL::FLOAT)
 ----
 false true true NULL
 

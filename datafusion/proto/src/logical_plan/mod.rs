@@ -20,7 +20,10 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::protobuf::logical_plan_node::LogicalPlanType::CustomScan;
-use crate::protobuf::{CustomTableScanNode, SortExprNodeCollection};
+use crate::protobuf::{
+    ColumnUnnestListItem, ColumnUnnestListRecursion, CustomTableScanNode,
+    SortExprNodeCollection,
+};
 use crate::{
     convert_required, into_required,
     protobuf::{
@@ -58,14 +61,14 @@ use datafusion_expr::{
     dml,
     logical_plan::{
         builder::project, Aggregate, CreateCatalog, CreateCatalogSchema,
-        CreateExternalTable, CreateView, CrossJoin, DdlStatement, Distinct,
-        EmptyRelation, Extension, Join, JoinConstraint, Limit, Prepare, Projection,
-        Repartition, Sort, SubqueryAlias, TableScan, Values, Window,
+        CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
+        Extension, Join, JoinConstraint, Prepare, Projection, Repartition, Sort,
+        SubqueryAlias, TableScan, Values, Window,
     },
     DistinctOn, DropView, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF, SortExpr,
     WindowUDF,
 };
-use datafusion_expr::{AggregateUDF, Unnest};
+use datafusion_expr::{AggregateUDF, ColumnUnnestList, FetchType, SkipType, Unnest};
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_sorts;
@@ -278,6 +281,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| e.into())
                 }?;
+
                 LogicalPlanBuilder::values(values)?.build()
             }
             LogicalPlanType::Projection(projection) => {
@@ -362,13 +366,18 @@ impl AsLogicalPlan for LogicalPlanNode {
                             "logical_plan::from_proto() Unsupported file format '{self:?}'"
                         ))
                     })? {
-                        #[cfg(feature = "parquet")]
+                        #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
                         FileFormatType::Parquet(protobuf::ParquetFormat {options}) => {
-                            let mut parquet = ParquetFormat::default();
-                            if let Some(options) = options {
-                                parquet = parquet.with_options(options.try_into()?)
+                            #[cfg(feature = "parquet")]
+                            {
+                                let mut parquet = ParquetFormat::default();
+                                if let Some(options) = options {
+                                    parquet = parquet.with_options(options.try_into()?)
+                                }
+                                Arc::new(parquet)
                             }
-                            Arc::new(parquet)
+                            #[cfg(not(feature = "parquet"))]
+                            panic!("Unable to process parquet file since `parquet` feature is not enabled");
                         }
                         FileFormatType::Csv(protobuf::CsvFormat {
                             options
@@ -480,7 +489,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(sort.input, ctx, extension_codec)?;
                 let sort_expr: Vec<SortExpr> =
                     from_proto::parse_sorts(&sort.expr, ctx, extension_codec)?;
-                LogicalPlanBuilder::from(input).sort(sort_expr)?.build()
+                let fetch: Option<usize> = sort.fetch.try_into().ok();
+                LogicalPlanBuilder::from(input)
+                    .sort_with_limit(sort_expr, fetch)?
+                    .build()
             }
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion::logical_expr::Partitioning;
@@ -488,9 +500,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
                 let pb_partition_method = repartition.partition_method.as_ref().ok_or_else(|| {
-                    DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, RepartitionNode was missing required field 'partition_method'",
-                    ))
+                    internal_datafusion_err!(
+                        "Protobuf deserialization error, RepartitionNode was missing required field 'partition_method'"
+                    )
                 })?;
 
                 let partitioning_scheme = match pb_partition_method {
@@ -516,7 +528,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::CreateExternalTable(create_extern_table) => {
                 let pb_schema = (create_extern_table.schema.clone()).ok_or_else(|| {
                     DataFusionError::Internal(String::from(
-                        "Protobuf deserialization error, CreateExternalTableNode was missing required field schema.",
+                        "Protobuf deserialization error, CreateExternalTableNode was missing required field schema."
                     ))
                 })?;
 
@@ -566,6 +578,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             .clone(),
                         order_exprs,
                         if_not_exists: create_extern_table.if_not_exists,
+                        temporary: create_extern_table.temporary,
                         definition,
                         unbounded: create_extern_table.unbounded,
                         options: create_extern_table.options.clone(),
@@ -588,6 +601,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
                     name: from_table_reference(create_view.name.as_ref(), "CreateView")?,
+                    temporary: create_view.temporary,
                     input: Arc::new(plan),
                     or_replace: create_view.or_replace,
                     definition,
@@ -864,7 +878,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                     list_type_columns: unnest
                         .list_type_columns
                         .iter()
-                        .map(|c| *c as usize)
+                        .map(|c| {
+                            let recursion_item = c.recursion.as_ref().unwrap();
+                            (
+                                c.input_index as _,
+                                ColumnUnnestList {
+                                    output_column: recursion_item
+                                        .output_column
+                                        .as_ref()
+                                        .unwrap()
+                                        .into(),
+                                    depth: recursion_item.depth as _,
+                                },
+                            )
+                        })
                         .collect(),
                     struct_type_columns: unnest
                         .struct_type_columns
@@ -1238,17 +1265,28 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Limit(Limit { input, skip, fetch }) => {
+            LogicalPlan::Limit(limit) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
-                        input.as_ref(),
+                        limit.input.as_ref(),
                         extension_codec,
                     )?;
+                let SkipType::Literal(skip) = limit.get_skip_type()? else {
+                    return Err(proto_error(
+                        "LogicalPlan::Limit only supports literal skip values",
+                    ));
+                };
+                let FetchType::Literal(fetch) = limit.get_fetch_type()? else {
+                    return Err(proto_error(
+                        "LogicalPlan::Limit only supports literal fetch values",
+                    ));
+                };
+
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
                         protobuf::LimitNode {
                             input: Some(Box::new(input)),
-                            skip: *skip as i64,
+                            skip: skip as i64,
                             fetch: fetch.unwrap_or(i64::MAX as usize) as i64,
                         },
                     ))),
@@ -1334,6 +1372,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     options,
                     constraints,
                     column_defaults,
+                    temporary,
                 },
             )) => {
                 let mut converted_order_exprs: Vec<SortExprNodeCollection> = vec![];
@@ -1360,6 +1399,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             schema: Some(df_schema.try_into()?),
                             table_partition_cols: table_partition_cols.clone(),
                             if_not_exists: *if_not_exists,
+                            temporary: *temporary,
                             order_exprs: converted_order_exprs,
                             definition: definition.clone().unwrap_or_default(),
                             unbounded: *unbounded,
@@ -1375,6 +1415,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 input,
                 or_replace,
                 definition,
+                temporary,
             })) => Ok(protobuf::LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateView(Box::new(
                     protobuf::CreateViewNode {
@@ -1384,6 +1425,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             extension_codec,
                         )?)),
                         or_replace: *or_replace,
+                        temporary: *temporary,
                         definition: definition.clone().unwrap_or_default(),
                     },
                 ))),
@@ -1461,24 +1503,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
-            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-                let left = protobuf::LogicalPlanNode::try_from_logical_plan(
-                    left.as_ref(),
-                    extension_codec,
-                )?;
-                let right = protobuf::LogicalPlanNode::try_from_logical_plan(
-                    right.as_ref(),
-                    extension_codec,
-                )?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::CrossJoin(Box::new(
-                        protobuf::CrossJoinNode {
-                            left: Some(Box::new(left)),
-                            right: Some(Box::new(right)),
-                        },
-                    ))),
-                })
-            }
             LogicalPlan::Extension(extension) => {
                 let mut buf: Vec<u8> = vec![];
                 extension_codec.try_encode(extension, &mut buf)?;
@@ -1536,15 +1560,25 @@ impl AsLogicalPlan for LogicalPlanNode {
                     input,
                     extension_codec,
                 )?;
+                let proto_unnest_list_items = list_type_columns
+                    .iter()
+                    .map(|(index, ul)| ColumnUnnestListItem {
+                        input_index: *index as _,
+                        recursion: Some(ColumnUnnestListRecursion {
+                            output_column: Some(ul.output_column.to_owned().into()),
+                            depth: ul.depth as _,
+                        }),
+                    })
+                    .collect();
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Unnest(Box::new(
                         protobuf::UnnestNode {
                             input: Some(Box::new(input)),
-                            exec_columns: exec_columns.iter().map(|c| c.into()).collect(),
-                            list_type_columns: list_type_columns
+                            exec_columns: exec_columns
                                 .iter()
-                                .map(|c| *c as u64)
+                                .map(|col| col.into())
                                 .collect(),
+                            list_type_columns: proto_unnest_list_items,
                             struct_type_columns: struct_type_columns
                                 .iter()
                                 .map(|c| *c as u64)

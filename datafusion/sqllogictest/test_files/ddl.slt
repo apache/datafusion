@@ -775,3 +775,33 @@ physical_plan CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/te
 
 statement ok
 drop table t;
+
+statement ok
+set datafusion.explain.logical_plan_only=true;
+
+query TT
+explain CREATE TEMPORARY VIEW z AS VALUES (1,2,3);
+----
+logical_plan
+01)CreateView: Bare { table: "z" }
+02)--Values: (Int64(1), Int64(2), Int64(3))
+
+query TT
+explain CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../core/tests/data/example.arrow';
+----
+logical_plan CreateExternalTable: Bare { table: "tty" }
+
+statement ok
+set datafusion.explain.logical_plan_only=false;
+
+statement error DataFusion error: This feature is not implemented: Temporary tables not supported
+CREATE EXTERNAL TEMPORARY TABLE tty STORED as ARROW LOCATION '../core/tests/data/example.arrow';
+
+statement error DataFusion error: This feature is not implemented: Temporary views not supported
+CREATE TEMPORARY VIEW y AS VALUES (1,2,3);
+
+query error DataFusion error: Schema error: No field named a\.
+EXPLAIN CREATE TABLE t(a int) AS VALUES (a + a);
+
+statement error DataFusion error: Schema error: No field named a\.
+CREATE TABLE t(a int) AS SELECT x FROM (VALUES (a)) t(x) WHERE false;

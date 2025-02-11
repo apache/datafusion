@@ -19,15 +19,17 @@ use arrow::array::{ArrayRef, Int64Array};
 use arrow::error::ArrowError;
 use std::any::Any;
 use std::mem::swap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{arrow_datafusion_err, exec_err, DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MATH;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct GcdFunc {
@@ -69,6 +71,27 @@ impl ScalarUDFImpl for GcdFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(gcd, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_gcd_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_gcd_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MATH)
+            .with_description(
+                "Returns the greatest common divisor of `expression_x` and `expression_y`. Returns 0 if both inputs are zero.",
+            )
+            .with_syntax_example("gcd(expression_x, expression_y)")
+            .with_standard_argument("expression_x", Some("First numeric"))
+            .with_standard_argument("expression_y", Some("Second numeric"))
+            .build()
+            .unwrap()
+    })
 }
 
 /// Gcd SQL function
@@ -102,8 +125,6 @@ pub(super) fn unsigned_gcd(mut a: u64, mut b: u64) -> u64 {
     }
 
     let shift = (a | b).trailing_zeros();
-    a >>= shift;
-    b >>= shift;
     a >>= a.trailing_zeros();
     loop {
         b >>= b.trailing_zeros();

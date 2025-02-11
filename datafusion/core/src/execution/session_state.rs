@@ -68,6 +68,7 @@ use datafusion_sql::parser::{DFParser, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 use itertools::Itertools;
 use log::{debug, info};
+use object_store::ObjectStore;
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::dialect::dialect_from_str;
 use std::any::Any;
@@ -75,6 +76,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
+use url::Url;
 use uuid::Uuid;
 
 /// `SessionState` contains all the necessary state to plan and execute queries,
@@ -172,27 +174,30 @@ pub struct SessionState {
 }
 
 impl Debug for SessionState {
+    /// Prefer having short fields at the top and long vector fields near the end
+    /// Group fields by
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionState")
             .field("session_id", &self.session_id)
-            .field("analyzer", &"...")
-            .field("expr_planners", &"...")
-            .field("optimizer", &"...")
-            .field("physical_optimizers", &"...")
-            .field("query_planner", &"...")
-            .field("catalog_list", &"...")
-            .field("table_functions", &"...")
+            .field("config", &self.config)
+            .field("runtime_env", &self.runtime_env)
+            .field("catalog_list", &self.catalog_list)
+            .field("serializer_registry", &self.serializer_registry)
+            .field("file_formats", &self.file_formats)
+            .field("execution_props", &self.execution_props)
+            .field("table_options", &self.table_options)
+            .field("table_factories", &self.table_factories)
+            .field("function_factory", &self.function_factory)
+            .field("expr_planners", &self.expr_planners)
+            .field("query_planners", &self.query_planner)
+            .field("analyzer", &self.analyzer)
+            .field("optimizer", &self.optimizer)
+            .field("physical_optimizers", &self.physical_optimizers)
+            .field("table_functions", &self.table_functions)
             .field("scalar_functions", &self.scalar_functions)
             .field("aggregate_functions", &self.aggregate_functions)
             .field("window_functions", &self.window_functions)
-            .field("serializer_registry", &"...")
-            .field("config", &self.config)
-            .field("table_options", &self.table_options)
-            .field("execution_props", &self.execution_props)
-            .field("table_factories", &"...")
-            .field("runtime_env", &self.runtime_env)
-            .field("function_factory", &"...")
-            .finish_non_exhaustive()
+            .finish()
     }
 }
 
@@ -259,36 +264,9 @@ impl SessionState {
     }
 
     /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionStateBuilder")]
-    pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_default_features()
-            .build()
-    }
-
-    /// Returns new [`SessionState`] using the provided
     /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogProviderList`]
     #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
     pub fn new_with_config_rt_and_catalog_list(
-        config: SessionConfig,
-        runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogProviderList>,
-    ) -> Self {
-        SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_catalog_list(catalog_list)
-            .with_default_features()
-            .build()
-    }
-
-    /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`] and [`RuntimeEnv`].
-    #[deprecated(since = "32.0.0", note = "Use SessionStateBuilder")]
-    pub fn with_config_rt_and_catalog_list(
         config: SessionConfig,
         runtime: Arc<RuntimeEnv>,
         catalog_list: Arc<dyn CatalogProviderList>,
@@ -1220,6 +1198,18 @@ impl SessionStateBuilder {
         self
     }
 
+    /// Add a [`TableProviderFactory`] to the map of factories
+    pub fn with_table_factory(
+        mut self,
+        key: String,
+        table_factory: Arc<dyn TableProviderFactory>,
+    ) -> Self {
+        let mut table_factories = self.table_factories.unwrap_or_default();
+        table_factories.insert(key, table_factory);
+        self.table_factories = Some(table_factories);
+        self
+    }
+
     /// Set the map of [`TableProviderFactory`]s
     pub fn with_table_factories(
         mut self,
@@ -1241,6 +1231,41 @@ impl SessionStateBuilder {
         function_factory: Option<Arc<dyn FunctionFactory>>,
     ) -> Self {
         self.function_factory = function_factory;
+        self
+    }
+
+    /// Register an `ObjectStore` to the [`RuntimeEnv`]. See [`RuntimeEnv::register_object_store`]
+    /// for more details.
+    ///
+    /// Note that this creates a default [`RuntimeEnv`] if  there isn't one passed in already.
+    ///
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::execution::session_state::SessionStateBuilder;
+    /// # use datafusion_execution::runtime_env::RuntimeEnv;
+    /// # use url::Url;
+    /// # use std::sync::Arc;
+    /// # let http_store = object_store::local::LocalFileSystem::new();
+    /// let url = Url::try_from("file://").unwrap();
+    /// let object_store = object_store::local::LocalFileSystem::new();
+    /// let state = SessionStateBuilder::new()
+    ///     .with_config(SessionConfig::new())  
+    ///     .with_object_store(&url, Arc::new(object_store))
+    ///     .with_default_features()
+    ///     .build();
+    /// ```
+    pub fn with_object_store(
+        mut self,
+        url: &Url,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Self {
+        if self.runtime_env.is_none() {
+            self.runtime_env = Some(Arc::new(RuntimeEnv::default()));
+        }
+        self.runtime_env
+            .as_ref()
+            .unwrap()
+            .register_object_store(url, object_store);
         self
     }
 
@@ -1494,6 +1519,37 @@ impl SessionStateBuilder {
         &mut self,
     ) -> &mut Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>> {
         &mut self.physical_optimizer_rules
+    }
+}
+
+impl Debug for SessionStateBuilder {
+    /// Prefer having short fields at the top and long vector fields near the end
+    /// Group fields by
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionStateBuilder")
+            .field("session_id", &self.session_id)
+            .field("config", &self.config)
+            .field("runtime_env", &self.runtime_env)
+            .field("catalog_list", &self.catalog_list)
+            .field("serializer_registry", &self.serializer_registry)
+            .field("file_formats", &self.file_formats)
+            .field("execution_props", &self.execution_props)
+            .field("table_options", &self.table_options)
+            .field("table_factories", &self.table_factories)
+            .field("function_factory", &self.function_factory)
+            .field("expr_planners", &self.expr_planners)
+            .field("query_planners", &self.query_planner)
+            .field("analyzer_rules", &self.analyzer_rules)
+            .field("analyzer", &self.analyzer)
+            .field("optimizer_rules", &self.optimizer_rules)
+            .field("optimizer", &self.optimizer)
+            .field("physical_optimizer_rules", &self.physical_optimizer_rules)
+            .field("physical_optimizers", &self.physical_optimizers)
+            .field("table_functions", &self.table_functions)
+            .field("scalar_functions", &self.scalar_functions)
+            .field("aggregate_functions", &self.aggregate_functions)
+            .field("window_functions", &self.window_functions)
+            .finish()
     }
 }
 
@@ -1773,6 +1829,7 @@ impl From<&SessionState> for TaskContext {
 }
 
 /// The query planner used if no user defined planner is provided
+#[derive(Debug)]
 struct DefaultQueryPlanner {}
 
 #[async_trait]
@@ -1932,6 +1989,7 @@ mod tests {
 
     #[test]
     fn test_session_state_with_optimizer_rules() {
+        #[derive(Default, Debug)]
         struct DummyRule {}
 
         impl OptimizerRule for DummyRule {
@@ -1955,5 +2013,23 @@ mod tests {
             state.optimizers().len(),
             Optimizer::default().rules.len() + 1
         );
+    }
+
+    #[test]
+    fn test_with_table_factories() -> Result<()> {
+        use crate::test_util::TestTableFactory;
+
+        let state = SessionStateBuilder::new().build();
+        let table_factories = state.table_factories();
+        assert!(table_factories.is_empty());
+
+        let table_factory = Arc::new(TestTableFactory {});
+        let state = SessionStateBuilder::new()
+            .with_table_factory("employee".to_string(), table_factory)
+            .build();
+        let table_factories = state.table_factories();
+        assert_eq!(table_factories.len(), 1);
+        assert!(table_factories.contains_key("employee"));
+        Ok(())
     }
 }

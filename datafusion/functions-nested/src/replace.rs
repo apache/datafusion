@@ -27,13 +27,16 @@ use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
 use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::utils::compare_element_to_list;
 use crate::utils::make_scalar_function;
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 // Create static instances of ScalarUDFs for each function
 make_udf_expr_and_func!(ArrayReplace,
@@ -94,6 +97,47 @@ impl ScalarUDFImpl for ArrayReplace {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_replace_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_array_replace_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Replaces the first occurrence of the specified element with another specified element.",
+            )
+            .with_syntax_example("array_replace(array, from, to)")
+            .with_sql_example(
+                r#"```sql
+> select array_replace([1, 2, 2, 3, 2, 1, 4], 2, 5);
++--------------------------------------------------------+
+| array_replace(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++--------------------------------------------------------+
+| [1, 5, 2, 3, 2, 1, 4]                                  |
++--------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "from",
+                "Initial element.",
+            )
+            .with_argument(
+                "to",
+                "Final element.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]
@@ -135,6 +179,49 @@ impl ScalarUDFImpl for ArrayReplaceN {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_replace_n_doc())
+    }
+}
+
+fn get_array_replace_n_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Replaces the first `max` occurrences of the specified element with another specified element.",
+            )
+            .with_syntax_example("array_replace_n(array, from, to, max)")
+            .with_sql_example(
+                r#"```sql
+> select array_replace_n([1, 2, 2, 3, 2, 1, 4], 2, 5, 2);
++-------------------------------------------------------------------+
+| array_replace_n(List([1,2,2,3,2,1,4]),Int64(2),Int64(5),Int64(2)) |
++-------------------------------------------------------------------+
+| [1, 5, 5, 3, 2, 1, 4]                                             |
++-------------------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "from",
+                "Initial element.",
+            )
+            .with_argument(
+                "to",
+                "Final element.",
+            )
+            .with_argument(
+                "max",
+                "Number of first occurrences to replace.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 #[derive(Debug)]
@@ -176,6 +263,45 @@ impl ScalarUDFImpl for ArrayReplaceAll {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_array_replace_all_doc())
+    }
+}
+
+fn get_array_replace_all_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Replaces all occurrences of the specified element with another specified element.",
+            )
+            .with_syntax_example("array_replace_all(array, from, to)")
+            .with_sql_example(
+                r#"```sql
+> select array_replace_all([1, 2, 2, 3, 2, 1, 4], 2, 5);
++------------------------------------------------------------+
+| array_replace_all(List([1,2,2,3,2,1,4]),Int64(2),Int64(5)) |
++------------------------------------------------------------+
+| [1, 5, 5, 3, 5, 1, 4]                                      |
++------------------------------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .with_argument(
+                "from",
+                "Initial element.",
+            )
+            .with_argument(
+                "to",
+                "Final element.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// For each element of `list_array[i]`, replaces up to `arr_n[i]`  occurrences

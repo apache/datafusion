@@ -102,7 +102,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             expr_vec.push(Sort::new(
                 expr,
                 asc,
-                // when asc is true, by default nulls last to be consistent with postgres
+                // When asc is true, by default nulls last to be consistent with postgres
                 // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
                 nulls_first.unwrap_or(!asc),
             ))

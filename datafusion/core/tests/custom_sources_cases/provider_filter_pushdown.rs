@@ -142,7 +142,7 @@ impl ExecutionPlan for CustomPlan {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct CustomProvider {
     zero_batch: RecordBatch,
     one_batch: RecordBatch,

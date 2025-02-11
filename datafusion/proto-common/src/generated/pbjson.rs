@@ -1548,18 +1548,22 @@ impl serde::Serialize for CsvOptions {
         let mut struct_ser = serializer.serialize_struct("datafusion_common.CsvOptions", len)?;
         if !self.has_header.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("hasHeader", pbjson::private::base64::encode(&self.has_header).as_str())?;
         }
         if !self.delimiter.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("delimiter", pbjson::private::base64::encode(&self.delimiter).as_str())?;
         }
         if !self.quote.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("quote", pbjson::private::base64::encode(&self.quote).as_str())?;
         }
         if !self.escape.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("escape", pbjson::private::base64::encode(&self.escape).as_str())?;
         }
         if self.compression != 0 {
@@ -1569,6 +1573,7 @@ impl serde::Serialize for CsvOptions {
         }
         if self.schema_infer_max_rec != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&self.schema_infer_max_rec).as_str())?;
         }
         if !self.date_format.is_empty() {
@@ -1591,18 +1596,22 @@ impl serde::Serialize for CsvOptions {
         }
         if !self.comment.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("comment", pbjson::private::base64::encode(&self.comment).as_str())?;
         }
         if !self.double_quote.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("doubleQuote", pbjson::private::base64::encode(&self.double_quote).as_str())?;
         }
         if !self.newlines_in_values.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("newlinesInValues", pbjson::private::base64::encode(&self.newlines_in_values).as_str())?;
         }
         if !self.terminator.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("terminator", pbjson::private::base64::encode(&self.terminator).as_str())?;
         }
         struct_ser.end()
@@ -2276,14 +2285,17 @@ impl serde::Serialize for Decimal128 {
         let mut struct_ser = serializer.serialize_struct("datafusion_common.Decimal128", len)?;
         if !self.value.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("value", pbjson::private::base64::encode(&self.value).as_str())?;
         }
         if self.p != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("p", ToString::to_string(&self.p).as_str())?;
         }
         if self.s != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("s", ToString::to_string(&self.s).as_str())?;
         }
         struct_ser.end()
@@ -2410,14 +2422,17 @@ impl serde::Serialize for Decimal256 {
         let mut struct_ser = serializer.serialize_struct("datafusion_common.Decimal256", len)?;
         if !self.value.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("value", pbjson::private::base64::encode(&self.value).as_str())?;
         }
         if self.p != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("p", ToString::to_string(&self.p).as_str())?;
         }
         if self.s != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("s", ToString::to_string(&self.s).as_str())?;
         }
         struct_ser.end()
@@ -3080,6 +3095,7 @@ impl serde::Serialize for Field {
         }
         if self.dict_id != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("dictId", ToString::to_string(&self.dict_id).as_str())?;
         }
         if self.dict_ordered {
@@ -3484,6 +3500,7 @@ impl serde::Serialize for IntervalMonthDayNanoValue {
         }
         if self.nanos != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("nanos", ToString::to_string(&self.nanos).as_str())?;
         }
         struct_ser.end()
@@ -3917,6 +3934,7 @@ impl serde::Serialize for JsonOptions {
         }
         if self.schema_infer_max_rec != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("schemaInferMaxRec", ToString::to_string(&self.schema_infer_max_rec).as_str())?;
         }
         struct_ser.end()
@@ -4474,6 +4492,7 @@ impl serde::Serialize for ParquetColumnOptions {
             match v {
                 parquet_column_options::BloomFilterNdvOpt::BloomFilterNdv(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("bloomFilterNdv", ToString::to_string(&v).as_str())?;
                 }
             }
@@ -4894,6 +4913,9 @@ impl serde::Serialize for ParquetOptions {
         if self.schema_force_view_types {
             len += 1;
         }
+        if self.binary_as_string {
+            len += 1;
+        }
         if self.dictionary_page_size_limit != 0 {
             len += 1;
         }
@@ -4951,10 +4973,12 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.data_pagesize_limit != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("dataPagesizeLimit", ToString::to_string(&self.data_pagesize_limit).as_str())?;
         }
         if self.write_batch_size != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("writeBatchSize", ToString::to_string(&self.write_batch_size).as_str())?;
         }
         if !self.writer_version.is_empty() {
@@ -4965,10 +4989,12 @@ impl serde::Serialize for ParquetOptions {
         }
         if self.maximum_parallel_row_group_writers != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("maximumParallelRowGroupWriters", ToString::to_string(&self.maximum_parallel_row_group_writers).as_str())?;
         }
         if self.maximum_buffered_record_batches_per_stream != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("maximumBufferedRecordBatchesPerStream", ToString::to_string(&self.maximum_buffered_record_batches_per_stream).as_str())?;
         }
         if self.bloom_filter_on_read {
@@ -4980,16 +5006,22 @@ impl serde::Serialize for ParquetOptions {
         if self.schema_force_view_types {
             struct_ser.serialize_field("schemaForceViewTypes", &self.schema_force_view_types)?;
         }
+        if self.binary_as_string {
+            struct_ser.serialize_field("binaryAsString", &self.binary_as_string)?;
+        }
         if self.dictionary_page_size_limit != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("dictionaryPageSizeLimit", ToString::to_string(&self.dictionary_page_size_limit).as_str())?;
         }
         if self.data_page_row_count_limit != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("dataPageRowCountLimit", ToString::to_string(&self.data_page_row_count_limit).as_str())?;
         }
         if self.max_row_group_size != 0 {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("maxRowGroupSize", ToString::to_string(&self.max_row_group_size).as_str())?;
         }
         if !self.created_by.is_empty() {
@@ -4999,6 +5031,7 @@ impl serde::Serialize for ParquetOptions {
             match v {
                 parquet_options::MetadataSizeHintOpt::MetadataSizeHint(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("metadataSizeHint", ToString::to_string(&v).as_str())?;
                 }
             }
@@ -5028,6 +5061,7 @@ impl serde::Serialize for ParquetOptions {
             match v {
                 parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("maxStatisticsSize", ToString::to_string(&v).as_str())?;
                 }
             }
@@ -5036,6 +5070,7 @@ impl serde::Serialize for ParquetOptions {
             match v {
                 parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("columnIndexTruncateLength", ToString::to_string(&v).as_str())?;
                 }
             }
@@ -5058,6 +5093,7 @@ impl serde::Serialize for ParquetOptions {
             match v {
                 parquet_options::BloomFilterNdvOpt::BloomFilterNdv(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("bloomFilterNdv", ToString::to_string(&v).as_str())?;
                 }
             }
@@ -5099,6 +5135,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             "bloomFilterOnWrite",
             "schema_force_view_types",
             "schemaForceViewTypes",
+            "binary_as_string",
+            "binaryAsString",
             "dictionary_page_size_limit",
             "dictionaryPageSizeLimit",
             "data_page_row_count_limit",
@@ -5140,7 +5178,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
             MaximumBufferedRecordBatchesPerStream,
             BloomFilterOnRead,
             BloomFilterOnWrite,
-            schemaForceViewTypes,
+            SchemaForceViewTypes,
+            BinaryAsString,
             DictionaryPageSizeLimit,
             DataPageRowCountLimit,
             MaxRowGroupSize,
@@ -5188,7 +5227,8 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             "maximumBufferedRecordBatchesPerStream" | "maximum_buffered_record_batches_per_stream" => Ok(GeneratedField::MaximumBufferedRecordBatchesPerStream),
                             "bloomFilterOnRead" | "bloom_filter_on_read" => Ok(GeneratedField::BloomFilterOnRead),
                             "bloomFilterOnWrite" | "bloom_filter_on_write" => Ok(GeneratedField::BloomFilterOnWrite),
-                            "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::schemaForceViewTypes),
+                            "schemaForceViewTypes" | "schema_force_view_types" => Ok(GeneratedField::SchemaForceViewTypes),
+                            "binaryAsString" | "binary_as_string" => Ok(GeneratedField::BinaryAsString),
                             "dictionaryPageSizeLimit" | "dictionary_page_size_limit" => Ok(GeneratedField::DictionaryPageSizeLimit),
                             "dataPageRowCountLimit" | "data_page_row_count_limit" => Ok(GeneratedField::DataPageRowCountLimit),
                             "maxRowGroupSize" | "max_row_group_size" => Ok(GeneratedField::MaxRowGroupSize),
@@ -5235,6 +5275,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                 let mut bloom_filter_on_read__ = None;
                 let mut bloom_filter_on_write__ = None;
                 let mut schema_force_view_types__ = None;
+                let mut binary_as_string__ = None;
                 let mut dictionary_page_size_limit__ = None;
                 let mut data_page_row_count_limit__ = None;
                 let mut max_row_group_size__ = None;
@@ -5336,11 +5377,17 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                             }
                             bloom_filter_on_write__ = Some(map_.next_value()?);
                         }
-                        GeneratedField::schemaForceViewTypes => {
+                        GeneratedField::SchemaForceViewTypes => {
                             if schema_force_view_types__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("schemaForceViewTypes"));
                             }
                             schema_force_view_types__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BinaryAsString => {
+                            if binary_as_string__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("binaryAsString"));
+                            }
+                            binary_as_string__ = Some(map_.next_value()?);
                         }
                         GeneratedField::DictionaryPageSizeLimit => {
                             if dictionary_page_size_limit__.is_some() {
@@ -5443,6 +5490,7 @@ impl<'de> serde::Deserialize<'de> for ParquetOptions {
                     bloom_filter_on_read: bloom_filter_on_read__.unwrap_or_default(),
                     bloom_filter_on_write: bloom_filter_on_write__.unwrap_or_default(),
                     schema_force_view_types: schema_force_view_types__.unwrap_or_default(),
+                    binary_as_string: binary_as_string__.unwrap_or_default(),
                     dictionary_page_size_limit: dictionary_page_size_limit__.unwrap_or_default(),
                     data_page_row_count_limit: data_page_row_count_limit__.unwrap_or_default(),
                     max_row_group_size: max_row_group_size__.unwrap_or_default(),
@@ -5867,6 +5915,7 @@ impl serde::Serialize for ScalarFixedSizeBinary {
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ScalarFixedSizeBinary", len)?;
         if !self.values.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("values", pbjson::private::base64::encode(&self.values).as_str())?;
         }
         if self.length != 0 {
@@ -5986,10 +6035,12 @@ impl serde::Serialize for ScalarNestedValue {
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ScalarNestedValue", len)?;
         if !self.ipc_message.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("ipcMessage", pbjson::private::base64::encode(&self.ipc_message).as_str())?;
         }
         if !self.arrow_data.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("arrowData", pbjson::private::base64::encode(&self.arrow_data).as_str())?;
         }
         if let Some(v) = self.schema.as_ref() {
@@ -6130,10 +6181,12 @@ impl serde::Serialize for scalar_nested_value::Dictionary {
         let mut struct_ser = serializer.serialize_struct("datafusion_common.ScalarNestedValue.Dictionary", len)?;
         if !self.ipc_message.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("ipcMessage", pbjson::private::base64::encode(&self.ipc_message).as_str())?;
         }
         if !self.arrow_data.is_empty() {
             #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("arrowData", pbjson::private::base64::encode(&self.arrow_data).as_str())?;
         }
         struct_ser.end()
@@ -6354,10 +6407,12 @@ impl serde::Serialize for ScalarTime64Value {
             match v {
                 scalar_time64_value::Value::Time64MicrosecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("time64MicrosecondValue", ToString::to_string(&v).as_str())?;
                 }
                 scalar_time64_value::Value::Time64NanosecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("time64NanosecondValue", ToString::to_string(&v).as_str())?;
                 }
             }
@@ -6471,18 +6526,22 @@ impl serde::Serialize for ScalarTimestampValue {
             match v {
                 scalar_timestamp_value::Value::TimeMicrosecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("timeMicrosecondValue", ToString::to_string(&v).as_str())?;
                 }
                 scalar_timestamp_value::Value::TimeNanosecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("timeNanosecondValue", ToString::to_string(&v).as_str())?;
                 }
                 scalar_timestamp_value::Value::TimeSecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("timeSecondValue", ToString::to_string(&v).as_str())?;
                 }
                 scalar_timestamp_value::Value::TimeMillisecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("timeMillisecondValue", ToString::to_string(&v).as_str())?;
                 }
             }
@@ -6645,6 +6704,7 @@ impl serde::Serialize for ScalarValue {
                 }
                 scalar_value::Value::Int64Value(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("int64Value", ToString::to_string(&v).as_str())?;
                 }
                 scalar_value::Value::Uint8Value(v) => {
@@ -6658,6 +6718,7 @@ impl serde::Serialize for ScalarValue {
                 }
                 scalar_value::Value::Uint64Value(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("uint64Value", ToString::to_string(&v).as_str())?;
                 }
                 scalar_value::Value::Float32Value(v) => {
@@ -6695,6 +6756,7 @@ impl serde::Serialize for ScalarValue {
                 }
                 scalar_value::Value::Date64Value(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("date64Value", ToString::to_string(&v).as_str())?;
                 }
                 scalar_value::Value::IntervalYearmonthValue(v) => {
@@ -6702,18 +6764,22 @@ impl serde::Serialize for ScalarValue {
                 }
                 scalar_value::Value::DurationSecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("durationSecondValue", ToString::to_string(&v).as_str())?;
                 }
                 scalar_value::Value::DurationMillisecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("durationMillisecondValue", ToString::to_string(&v).as_str())?;
                 }
                 scalar_value::Value::DurationMicrosecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("durationMicrosecondValue", ToString::to_string(&v).as_str())?;
                 }
                 scalar_value::Value::DurationNanosecondValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("durationNanosecondValue", ToString::to_string(&v).as_str())?;
                 }
                 scalar_value::Value::TimestampValue(v) => {
@@ -6724,14 +6790,17 @@ impl serde::Serialize for ScalarValue {
                 }
                 scalar_value::Value::BinaryValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("binaryValue", pbjson::private::base64::encode(&v).as_str())?;
                 }
                 scalar_value::Value::LargeBinaryValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("largeBinaryValue", pbjson::private::base64::encode(&v).as_str())?;
                 }
                 scalar_value::Value::BinaryViewValue(v) => {
                     #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("binaryViewValue", pbjson::private::base64::encode(&v).as_str())?;
                 }
                 scalar_value::Value::Time64Value(v) => {

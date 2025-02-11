@@ -538,24 +538,28 @@ impl<'a> TestCase<'a> {
             PushdownExpected::None
         };
 
-        let pushdown_rows_filtered = get_value(&metrics, "pushdown_rows_filtered");
-        println!("  pushdown_rows_filtered: {pushdown_rows_filtered}");
+        let pushdown_rows_pruned = get_value(&metrics, "pushdown_rows_pruned");
+        println!("  pushdown_rows_pruned: {pushdown_rows_pruned}");
+        let pushdown_rows_matched = get_value(&metrics, "pushdown_rows_matched");
+        println!("  pushdown_rows_matched: {pushdown_rows_matched}");
 
         match pushdown_expected {
             PushdownExpected::None => {
-                assert_eq!(pushdown_rows_filtered, 0, "{}", self.name);
+                assert_eq!(pushdown_rows_pruned, 0, "{}", self.name);
             }
             PushdownExpected::Some => {
                 assert!(
-                    pushdown_rows_filtered > 0,
+                    pushdown_rows_pruned > 0,
                     "{}: Expected to filter rows via pushdown, but none were",
                     self.name
                 );
             }
         };
 
-        let page_index_rows_filtered = get_value(&metrics, "page_index_rows_filtered");
-        println!(" page_index_rows_filtered: {page_index_rows_filtered}");
+        let page_index_rows_pruned = get_value(&metrics, "page_index_rows_pruned");
+        println!(" page_index_rows_pruned: {page_index_rows_pruned}");
+        let page_index_rows_matched = get_value(&metrics, "page_index_rows_matched");
+        println!(" page_index_rows_matched: {page_index_rows_matched}");
 
         let page_index_filtering_expected = if scan_options.enable_page_index {
             self.page_index_filtering_expected
@@ -567,11 +571,11 @@ impl<'a> TestCase<'a> {
 
         match page_index_filtering_expected {
             PageIndexFilteringExpected::None => {
-                assert_eq!(page_index_rows_filtered, 0);
+                assert_eq!(page_index_rows_pruned, 0);
             }
             PageIndexFilteringExpected::Some => {
                 assert!(
-                    page_index_rows_filtered > 0,
+                    page_index_rows_pruned > 0,
                     "Expected to filter rows via page index but none were",
                 );
             }

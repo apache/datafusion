@@ -20,9 +20,11 @@
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 /// Wrap another catalog provider list
+#[derive(Debug)]
 pub struct DynamicFileCatalog {
     /// The inner catalog provider list
     inner: Arc<dyn CatalogProviderList>,
@@ -67,6 +69,7 @@ impl CatalogProviderList for DynamicFileCatalog {
 }
 
 /// Wraps another catalog provider
+#[derive(Debug)]
 struct DynamicFileCatalogProvider {
     /// The inner catalog provider
     inner: Arc<dyn CatalogProvider>,
@@ -114,6 +117,7 @@ impl CatalogProvider for DynamicFileCatalogProvider {
 ///
 /// The provider will try to create a table provider from the file path if the table provider
 /// isn't exist in the inner schema provider.
+#[derive(Debug)]
 pub struct DynamicFileSchemaProvider {
     /// The inner schema provider
     inner: Arc<dyn SchemaProvider>,
@@ -174,7 +178,7 @@ impl SchemaProvider for DynamicFileSchemaProvider {
 
 /// [UrlTableFactory] is a factory that can create a table provider from the given url.
 #[async_trait]
-pub trait UrlTableFactory: Sync + Send {
+pub trait UrlTableFactory: Debug + Sync + Send {
     /// create a new table provider from the provided url
     async fn try_new(
         &self,

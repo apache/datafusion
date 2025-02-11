@@ -142,10 +142,11 @@ impl Operator {
         )
     }
 
-    /// Return true if the operator is a comparison operator.
+    /// Return true if the comparison operator can be used in interval arithmetic and constraint
+    /// propagation
     ///
-    /// For example, 'Binary(a, >, b)' would be a comparison expression.
-    pub fn is_comparison_operator(&self) -> bool {
+    /// For example, 'Binary(a, >, b)' expression supports propagation.
+    pub fn supports_propagation(&self) -> bool {
         matches!(
             self,
             Operator::Eq
@@ -161,6 +162,15 @@ impl Operator {
                 | Operator::RegexNotMatch
                 | Operator::RegexNotIMatch
         )
+    }
+
+    /// Return true if the comparison operator can be used in interval arithmetic and constraint
+    /// propagation
+    ///
+    /// For example, 'Binary(a, >, b)' expression supports propagation.
+    #[deprecated(since = "43.0.0", note = "please use `supports_propagation` instead")]
+    pub fn is_comparison_operator(&self) -> bool {
+        self.supports_propagation()
     }
 
     /// Return true if the operator is a logic operator.

@@ -73,7 +73,7 @@ impl PhysicalExpr for IsNotNullExpr {
         let arg = self.arg.evaluate(batch)?;
         match arg {
             ColumnarValue::Array(array) => {
-                let is_not_null = super::is_null::compute_is_not_null(array)?;
+                let is_not_null = arrow::compute::is_not_null(&array)?;
                 Ok(ColumnarValue::Array(Arc::new(is_not_null)))
             }
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(

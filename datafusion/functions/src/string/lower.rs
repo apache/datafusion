@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::datatypes::DataType;
-
-use datafusion_common::Result;
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use std::any::Any;
+use std::sync::OnceLock;
 
 use crate::string::common::to_lower;
 use crate::utils::utf8_to_str_type;
+use datafusion_common::Result;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug)]
 pub struct LowerFunc {
@@ -39,13 +39,8 @@ impl Default for LowerFunc {
 
 impl LowerFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8, LargeUtf8, Utf8View],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(1, Volatility::Immutable),
         }
     }
 }
@@ -70,8 +65,37 @@ impl ScalarUDFImpl for LowerFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         to_lower(args, "lower")
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_lower_doc())
+    }
 }
 
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_lower_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Converts a string to lower-case.")
+            .with_syntax_example("lower(str)")
+            .with_sql_example(
+                r#"```sql
+> select lower('Ångström');
++-------------------------+
+| lower(Utf8("Ångström")) |
++-------------------------+
+| ångström                |
++-------------------------+
+```"#,
+            )
+            .with_standard_argument("str", Some("String"))
+            .with_related_udf("initcap")
+            .with_related_udf("upper")
+            .build()
+            .unwrap()
+    })
+}
 #[cfg(test)]
 mod tests {
     use super::*;

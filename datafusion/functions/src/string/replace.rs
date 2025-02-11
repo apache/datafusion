@@ -16,18 +16,17 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
 use arrow::datatypes::DataType;
 
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct ReplaceFunc {
@@ -42,16 +41,8 @@ impl Default for ReplaceFunc {
 
 impl ReplaceFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![
-                    Exact(vec![Utf8View, Utf8View, Utf8View]),
-                    Exact(vec![Utf8, Utf8, Utf8]),
-                    Exact(vec![LargeUtf8, LargeUtf8, LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(3, Volatility::Immutable),
         }
     }
 }
@@ -83,6 +74,34 @@ impl ScalarUDFImpl for ReplaceFunc {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_replace_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_replace_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Replaces all occurrences of a specified substring in a string with a new substring.")
+            .with_syntax_example("replace(str, substr, replacement)")
+            .with_sql_example(r#"```sql
+> select replace('ABabbaBA', 'ab', 'cd');
++-------------------------------------------------+
+| replace(Utf8("ABabbaBA"),Utf8("ab"),Utf8("cd")) |
++-------------------------------------------------+
+| ABcdbaBA                                        |
++-------------------------------------------------+
+```"#)
+            .with_standard_argument("str", Some("String"))
+            .with_standard_argument("substr", Some("Substring expression to replace in the input string. Substring"))
+            .with_standard_argument("replacement", Some("Replacement substring"))
+            .build()
+            .unwrap()
+    })
 }
 
 fn replace_view(args: &[ArrayRef]) -> Result<ArrayRef> {

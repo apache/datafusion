@@ -22,12 +22,15 @@ use arrow::{
     array::{ArrayRef, AsArray, Float64Array},
     datatypes::Float64Type,
 };
+use arrow_schema::Field;
 use datafusion::error::Result;
 use datafusion::prelude::*;
 use datafusion_common::ScalarValue;
+use datafusion_expr::function::WindowUDFFieldArgs;
 use datafusion_expr::{
     PartitionEvaluator, Signature, WindowFrame, WindowUDF, WindowUDFImpl,
 };
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 
 /// This example shows how to use the full WindowUDFImpl API to implement a user
 /// defined window function. As in the `simple_udwf.rs` example, this struct implements
@@ -70,15 +73,17 @@ impl WindowUDFImpl for SmoothItUdf {
         &self.signature
     }
 
-    /// What is the type of value that will be returned by this function.
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Float64)
-    }
-
     /// Create a `PartitionEvaluator` to evaluate this function on a new
     /// partition.
-    fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
+    fn partition_evaluator(
+        &self,
+        _partition_evaluator_args: PartitionEvaluatorArgs,
+    ) -> Result<Box<dyn PartitionEvaluator>> {
         Ok(Box::new(MyPartitionEvaluator::new()))
+    }
+
+    fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+        Ok(Field::new(field_args.name(), DataType::Float64, true))
     }
 }
 

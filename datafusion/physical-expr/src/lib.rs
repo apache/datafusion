@@ -26,9 +26,7 @@ pub mod binary_map {
 }
 pub mod equivalence;
 pub mod expressions;
-pub mod functions;
 pub mod intervals;
-pub mod math_expressions;
 mod partitioning;
 mod physical_expr;
 pub mod planner;

@@ -30,6 +30,13 @@ use hashbrown::raw::RawTable;
 use std::sync::Arc;
 
 /// A [`GroupValues`] making use of [`Rows`]
+///
+/// This is a general implementation of [`GroupValues`] that works for any
+/// combination of data types and number of columns, including nested types such as
+/// structs and lists.
+///
+/// It uses the arrow-rs [`Rows`] to store the group values, which is a row-wise
+/// representation.
 pub struct GroupValuesRows {
     /// The output schema
     schema: SchemaRef,
@@ -83,6 +90,7 @@ impl GroupValuesRows {
         let map = RawTable::with_capacity(0);
 
         let starting_rows_capacity = 1000;
+
         let starting_data_capacity = 64 * starting_rows_capacity;
         let rows_buffer =
             row_converter.empty_rows(starting_rows_capacity, starting_data_capacity);
@@ -219,7 +227,8 @@ impl GroupValues for GroupValuesRows {
             }
         };
 
-        // TODO: Materialize dictionaries in group keys (#7647)
+        // TODO: Materialize dictionaries in group keys
+        // https://github.com/apache/datafusion/issues/7647
         for (field, array) in self.schema.fields.iter().zip(&mut output) {
             let expected = field.data_type();
             *array = dictionary_encode_if_necessary(

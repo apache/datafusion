@@ -21,12 +21,13 @@ use crate::utils::{get_map_entry_field, make_scalar_function};
 use arrow_array::{Array, ArrayRef, ListArray};
 use arrow_schema::{DataType, Field};
 use datafusion_common::{cast::as_map_array, exec_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_MAP;
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     MapValuesFunc,
@@ -81,6 +82,40 @@ impl ScalarUDFImpl for MapValuesFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> datafusion_common::Result<ColumnarValue> {
         make_scalar_function(map_values_inner)(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_map_values_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_map_values_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_MAP)
+            .with_description(
+                "Returns a list of all values in the map."
+            )
+            .with_syntax_example("map_values(map)")
+            .with_sql_example(
+                r#"```sql
+SELECT map_values(MAP {'a': 1, 'b': NULL, 'c': 3});
+----
+[1, , 3]
+
+SELECT map_values(map([100, 5], [42, 43]));
+----
+[42, 43]
+```"#,
+            )
+            .with_argument(
+                "map",
+                "Map expression. Can be a constant, column, or function, and any combination of map operators."
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 fn map_values_inner(args: &[ArrayRef]) -> Result<ArrayRef> {

@@ -19,7 +19,15 @@
 
 # Window Functions
 
-A _window function_ performs a calculation across a set of table rows that are somehow related to the current row. This is comparable to the type of calculation that can be done with an aggregate function. However, window functions do not cause rows to become grouped into a single output row like non-window aggregate calls would. Instead, the rows retain their separate identities. Behind the scenes, the window function is able to access more than just the current row of the query result
+A _window function_ performs a calculation across a set of table rows that are somehow related to the current row.
+
+Note: this documentation is in the process of being migrated to be [automatically created from the codebase].
+Please see the [Window Functions (new)](window_functions_new.md) page for
+the rest of the documentation.
+
+[automatically created from the codebase]: https://github.com/apache/datafusion/issues/12740
+
+Window functions are comparable to the type of calculation that can be done with an aggregate function. However, window functions do not cause rows to become grouped into a single output row like non-window aggregate calls would. Instead, the rows retain their separate identities. Behind the scenes, the window function is able to access more than just the current row of the query result
 
 Here is an example that shows how to compare each employee's salary with the average salary in his or her department:
 
@@ -138,102 +146,11 @@ RANGE and GROUPS modes require an ORDER BY clause (with RANGE the ORDER BY must 
 
 All [aggregate functions](aggregate_functions.md) can be used as window functions.
 
-## Ranking functions
-
-- [row_number](#row_number)
-- [rank](#rank)
-- [dense_rank](#dense_rank)
-- [ntile](#ntile)
-
-### `row_number`
-
-Number of the current row within its partition, counting from 1.
-
-```sql
-row_number()
-```
-
-### `rank`
-
-Rank of the current row with gaps; same as row_number of its first peer.
-
-```sql
-rank()
-```
-
-### `dense_rank`
-
-Rank of the current row without gaps; this function counts peer groups.
-
-```sql
-dense_rank()
-```
-
-### `ntile`
-
-Integer ranging from 1 to the argument value, dividing the partition as equally as possible.
-
-```sql
-ntile(expression)
-```
-
-#### Arguments
-
-- **expression**: An integer describing the number groups the partition should be split into
-
 ## Analytical functions
 
-- [cume_dist](#cume_dist)
-- [percent_rank](#percent_rank)
-- [lag](#lag)
-- [lead](#lead)
 - [first_value](#first_value)
 - [last_value](#last_value)
 - [nth_value](#nth_value)
-
-### `cume_dist`
-
-Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).
-
-```sql
-cume_dist()
-```
-
-### `percent_rank`
-
-Relative rank of the current row: (rank - 1) / (total rows - 1).
-
-```sql
-percent_rank()
-```
-
-### `lag`
-
-Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value). Both offset and default are evaluated with respect to the current row. If omitted, offset defaults to 1 and default to null.
-
-```sql
-lag(expression, offset, default)
-```
-
-#### Arguments
-
-- **expression**: Expression to operate on
-- **offset**: Integer. Specifies how many rows back the value of _expression_ should be retrieved. Defaults to 1.
-- **default**: The default value if the offset is not within the partition. Must be of the same type as _expression_.
-
-### `lead`
-
-Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value). Both offset and default are evaluated with respect to the current row. If omitted, offset defaults to 1 and default to null.
-
-```sql
-lead(expression, offset, default)
-```
-
-#### Arguments
-
-- **expression**: Expression to operate on
-- **offset**: Integer. Specifies how many rows forward the value of _expression_ should be retrieved. Defaults to 1.
-- **default**: The default value if the offset is not within the partition. Must be of the same type as _expression_.
 
 ### `first_value`
 

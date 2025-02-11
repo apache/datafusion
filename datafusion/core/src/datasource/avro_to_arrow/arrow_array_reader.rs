@@ -573,7 +573,7 @@ impl<'a, R: Read> AvroArrowArrayReader<'a, R> {
                 // extract list values, with non-lists converted to Value::Null
                 let array_item_count = rows
                     .iter()
-                    .map(|row| match row {
+                    .map(|row| match maybe_resolve_union(row) {
                         Value::Array(values) => values.len(),
                         _ => 1,
                     })
@@ -1639,6 +1639,93 @@ mod test {
             "| {col2: hello} |",
             "| {col2: }      |",
             "+---------------+",
+        ];
+        assert_batches_eq!(expected, &[batch]);
+    }
+
+    #[test]
+    fn test_avro_nullable_struct_array() {
+        let schema = apache_avro::Schema::parse_str(
+            r#"
+            {
+              "type": "record",
+              "name": "r1",
+              "fields": [
+                {
+                  "name": "col1",
+                  "type": [
+                    "null",
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": [
+                                "null",
+                                {
+                                    "type": "record",
+                                    "name": "Item",
+                                    "fields": [
+                                        {
+                                            "name": "id",
+                                            "type": "long"
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                  ],
+                  "default": null
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let jv1 = serde_json::json!({
+            "col1": [
+                {
+                    "id": 234
+                },
+                {
+                    "id": 345
+                }
+            ]
+        });
+        let r1 = apache_avro::to_value(jv1)
+            .unwrap()
+            .resolve(&schema)
+            .unwrap();
+        let r2 = apache_avro::to_value(serde_json::json!({ "col1": null }))
+            .unwrap()
+            .resolve(&schema)
+            .unwrap();
+
+        let mut w = apache_avro::Writer::new(&schema, vec![]);
+        for _i in 0..5 {
+            w.append(r1.clone()).unwrap();
+        }
+        w.append(r2).unwrap();
+        let bytes = w.into_inner().unwrap();
+
+        let mut reader = ReaderBuilder::new()
+            .read_schema()
+            .with_batch_size(20)
+            .build(std::io::Cursor::new(bytes))
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 6);
+        assert_eq!(batch.num_columns(), 1);
+
+        let expected = [
+            "+------------------------+",
+            "| col1                   |",
+            "+------------------------+",
+            "| [{id: 234}, {id: 345}] |",
+            "| [{id: 234}, {id: 345}] |",
+            "| [{id: 234}, {id: 345}] |",
+            "| [{id: 234}, {id: 345}] |",
+            "| [{id: 234}, {id: 345}] |",
+            "|                        |",
+            "+------------------------+",
         ];
         assert_batches_eq!(expected, &[batch]);
     }

@@ -17,8 +17,7 @@
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
-use arrow::array::ArrayRef;
-use arrow::array::NullArray;
+use arrow::array::{Array, ArrayRef, NullArray};
 use arrow::compute::{kernels, CastOptions};
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
@@ -130,7 +129,7 @@ impl ColumnarValue {
         })
     }
 
-    /// null columnar values are implemented as a null array in order to pass batch
+    /// Null columnar values are implemented as a null array in order to pass batch
     /// num_rows
     pub fn create_null_array(num_rows: usize) -> Self {
         ColumnarValue::Array(Arc::new(NullArray::new(num_rows)))

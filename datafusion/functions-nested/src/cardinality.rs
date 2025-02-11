@@ -26,12 +26,13 @@ use arrow_schema::DataType::{FixedSizeList, LargeList, List, Map, UInt64};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_map_array};
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, ScalarUDFImpl, Signature, TypeSignature,
-    Volatility,
+    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 make_udf_expr_and_func!(
     Cardinality,
@@ -89,6 +90,39 @@ impl ScalarUDFImpl for Cardinality {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_cardinality_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_cardinality_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_ARRAY)
+            .with_description(
+                "Returns the total number of elements in the array.",
+            )
+            .with_syntax_example("cardinality(array)")
+            .with_sql_example(
+                r#"```sql
+> select cardinality([[1, 2, 3, 4], [5, 6, 7, 8]]);
++--------------------------------------+
+| cardinality(List([1,2,3,4,5,6,7,8])) |
++--------------------------------------+
+| 8                                    |
++--------------------------------------+
+```"#,
+            )
+            .with_argument(
+                "array",
+                "Array expression. Can be a constant, column, or function, and any combination of array operators.",
+            )
+            .build()
+            .unwrap()
+    })
 }
 
 /// Cardinality SQL function

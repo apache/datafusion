@@ -49,49 +49,120 @@ macro_rules! merge_helper {
     }};
 }
 
-/// Perform a streaming merge of [`SendableRecordBatchStream`] based on provided sort expressions
-/// while preserving order.
-pub fn streaming_merge(
+#[derive(Default)]
+pub struct StreamingMergeBuilder<'a> {
     streams: Vec<SendableRecordBatchStream>,
-    schema: SchemaRef,
-    expressions: &[PhysicalSortExpr],
-    metrics: BaselineMetrics,
-    batch_size: usize,
+    schema: Option<SchemaRef>,
+    expressions: &'a [PhysicalSortExpr],
+    metrics: Option<BaselineMetrics>,
+    batch_size: Option<usize>,
     fetch: Option<usize>,
-    reservation: MemoryReservation,
-) -> Result<SendableRecordBatchStream> {
-    // If there are no sort expressions, preserving the order
-    // doesn't mean anything (and result in infinite loops)
-    if expressions.is_empty() {
-        return internal_err!("Sort expressions cannot be empty for streaming merge");
+    reservation: Option<MemoryReservation>,
+}
+
+impl<'a> StreamingMergeBuilder<'a> {
+    pub fn new() -> Self {
+        Self::default()
     }
-    // Special case single column comparisons with optimized cursor implementations
-    if expressions.len() == 1 {
-        let sort = expressions[0].clone();
-        let data_type = sort.expr.data_type(schema.as_ref())?;
-        downcast_primitive! {
-            data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation),
-            DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
-            _ => {}
+
+    pub fn with_streams(mut self, streams: Vec<SendableRecordBatchStream>) -> Self {
+        self.streams = streams;
+        self
+    }
+
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
+    pub fn with_expressions(mut self, expressions: &'a [PhysicalSortExpr]) -> Self {
+        self.expressions = expressions;
+        self
+    }
+
+    pub fn with_metrics(mut self, metrics: BaselineMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = Some(batch_size);
+        self
+    }
+
+    pub fn with_fetch(mut self, fetch: Option<usize>) -> Self {
+        self.fetch = fetch;
+        self
+    }
+
+    pub fn with_reservation(mut self, reservation: MemoryReservation) -> Self {
+        self.reservation = Some(reservation);
+        self
+    }
+
+    pub fn build(self) -> Result<SendableRecordBatchStream> {
+        let Self {
+            streams,
+            schema,
+            metrics,
+            batch_size,
+            reservation,
+            fetch,
+            expressions,
+        } = self;
+
+        // Early return if streams or expressions are empty
+        let checks = [
+            (
+                streams.is_empty(),
+                "Streams cannot be empty for streaming merge",
+            ),
+            (
+                expressions.is_empty(),
+                "Sort expressions cannot be empty for streaming merge",
+            ),
+        ];
+
+        if let Some((_, error_message)) = checks.iter().find(|(condition, _)| *condition)
+        {
+            return internal_err!("{}", error_message);
         }
+
+        // Unwrapping mandatory fields
+        let schema = schema.expect("Schema cannot be empty for streaming merge");
+        let metrics = metrics.expect("Metrics cannot be empty for streaming merge");
+        let batch_size =
+            batch_size.expect("Batch size cannot be empty for streaming merge");
+        let reservation =
+            reservation.expect("Reservation cannot be empty for streaming merge");
+
+        // Special case single column comparisons with optimized cursor implementations
+        if expressions.len() == 1 {
+            let sort = expressions[0].clone();
+            let data_type = sort.expr.data_type(schema.as_ref())?;
+            downcast_primitive! {
+                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation),
+                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
+                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
+                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
+                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation)
+                _ => {}
+            }
+        }
+
+        let streams = RowCursorStream::try_new(
+            schema.as_ref(),
+            expressions,
+            streams,
+            reservation.new_empty(),
+        )?;
+        Ok(Box::pin(SortPreservingMergeStream::new(
+            Box::new(streams),
+            schema,
+            metrics,
+            batch_size,
+            fetch,
+            reservation,
+        )))
     }
-
-    let streams = RowCursorStream::try_new(
-        schema.as_ref(),
-        expressions,
-        streams,
-        reservation.new_empty(),
-    )?;
-
-    Ok(Box::pin(SortPreservingMergeStream::new(
-        Box::new(streams),
-        schema,
-        metrics,
-        batch_size,
-        fetch,
-        reservation,
-    )))
 }

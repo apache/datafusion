@@ -28,16 +28,18 @@ runs:
     - name: Install Build Dependencies
       shell: bash
       run: |
-        apt-get update
-        apt-get install -y protobuf-compiler
+        RETRY="ci/scripts/retry"
+        "${RETRY}" apt-get update
+        "${RETRY}" apt-get install -y protobuf-compiler
     - name: Setup Rust toolchain
       shell: bash
       # rustfmt is needed for the substrait build script
       run: |
+        RETRY="ci/scripts/retry"
         echo "Installing ${{ inputs.rust-version }}"
-        rustup toolchain install ${{ inputs.rust-version }}
-        rustup default ${{ inputs.rust-version }}
-        rustup component add rustfmt
+        "${RETRY}" rustup toolchain install ${{ inputs.rust-version }}
+        "${RETRY}" rustup default ${{ inputs.rust-version }}
+        "${RETRY}" rustup component add rustfmt
     - name: Configure rust runtime env
       uses: ./.github/actions/setup-rust-runtime
     - name: Fixup git permissions

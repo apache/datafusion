@@ -26,7 +26,6 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_expr::expr::{BinaryExpr, Cast, TryCast};
 use std::sync::Arc;
 
-#[derive(Default)]
 ///
 /// Attempt to replace outer joins with inner joins.
 ///
@@ -49,6 +48,7 @@ use std::sync::Arc;
 /// filters from the WHERE clause return false while any inputs are
 /// null and columns of those quals are come from nullable side of
 /// outer join.
+#[derive(Default, Debug)]
 pub struct EliminateOuterJoin;
 
 impl EliminateOuterJoin {

@@ -16,17 +16,16 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
 
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
-
 use crate::utils::make_scalar_function;
+use datafusion_common::{internal_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation, Volatility};
+use datafusion_expr::{ScalarUDFImpl, Signature};
 
 #[derive(Debug)]
 pub struct EndsWithFunc {
@@ -42,17 +41,7 @@ impl Default for EndsWithFunc {
 impl EndsWithFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    // Planner attempts coercion to the target type starting with the most preferred candidate.
-                    // For example, given input `(Utf8View, Utf8)`, it first tries coercing to `(Utf8View, Utf8View)`.
-                    // If that fails, it proceeds to `(Utf8, Utf8)`.
-                    Exact(vec![DataType::Utf8View, DataType::Utf8View]),
-                    Exact(vec![DataType::Utf8, DataType::Utf8]),
-                    Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::string(2, Volatility::Immutable),
         }
     }
 }
@@ -84,6 +73,41 @@ impl ScalarUDFImpl for EndsWithFunc {
             }
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_ends_with_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_ends_with_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Tests if a string ends with a substring.")
+            .with_syntax_example("ends_with(str, substr)")
+            .with_sql_example(
+                r#"```sql
+>  select ends_with('datafusion', 'soin');
++--------------------------------------------+
+| ends_with(Utf8("datafusion"),Utf8("soin")) |
++--------------------------------------------+
+| false                                      |
++--------------------------------------------+
+> select ends_with('datafusion', 'sion');
++--------------------------------------------+
+| ends_with(Utf8("datafusion"),Utf8("sion")) |
++--------------------------------------------+
+| true                                       |
++--------------------------------------------+
+```"#,
+            )
+            .with_standard_argument("str", Some("String"))
+            .with_argument("substr", "Substring to test for.")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Returns true if string ends with suffix.

@@ -45,7 +45,7 @@ use super::ExprSimplifier;
 /// `Filter: b > 2`
 ///
 /// [`Expr`]: datafusion_expr::Expr
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct SimplifyExpressions {}
 
 impl OptimizerRule for SimplifyExpressions {
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(1, table_scan.schema().fields().len());
         assert_fields_eq(&table_scan, vec!["a"]);
 
-        let expected = "TableScan: test projection=[a], full_filters=[Boolean(true) AS b IS NOT NULL]";
+        let expected = "TableScan: test projection=[a], full_filters=[Boolean(true)]";
 
         assert_optimized_plan_eq(table_scan, expected)
     }

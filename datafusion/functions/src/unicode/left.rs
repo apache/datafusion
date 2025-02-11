@@ -17,7 +17,7 @@
 
 use std::any::Any;
 use std::cmp::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
     Array, ArrayAccessor, ArrayIter, ArrayRef, GenericStringArray, Int64Array,
@@ -25,15 +25,17 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::exec_err;
 use datafusion_common::Result;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct LeftFunc {
@@ -91,6 +93,34 @@ impl ScalarUDFImpl for LeftFunc {
             ),
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_left_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_left_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Returns a specified number of characters from the left side of a string.")
+            .with_syntax_example("left(str, n)")
+            .with_sql_example(r#"```sql
+> select left('datafusion', 4);
++-----------------------------------+
+| left(Utf8("datafusion"),Int64(4)) |
++-----------------------------------+
+| data                              |
++-----------------------------------+
+```"#)
+            .with_standard_argument("str", Some("String"))
+            .with_argument("n", "Number of characters to return.")
+            .with_related_udf("right")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Returns first n characters in the string, or when n is negative, returns all but last |n| characters.

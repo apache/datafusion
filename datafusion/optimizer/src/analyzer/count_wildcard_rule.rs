@@ -28,7 +28,7 @@ use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 /// Rewrite `Count(Expr:Wildcard)` to `Count(Expr:Literal)`.
 ///
 /// Resolves issue: <https://github.com/apache/datafusion/issues/5473>
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CountWildcardRule {}
 
 impl CountWildcardRule {
@@ -48,13 +48,7 @@ impl AnalyzerRule for CountWildcardRule {
 }
 
 fn is_wildcard(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::Wildcard {
-            qualifier: None,
-            ..
-        }
-    )
+    matches!(expr, Expr::Wildcard { .. })
 }
 
 fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {

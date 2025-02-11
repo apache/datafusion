@@ -231,6 +231,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     }
 }
 
+/// Enum representing the different levels of metrics to display
 #[derive(Debug, Clone, Copy)]
 enum ShowMetrics {
     /// Do not show any metrics

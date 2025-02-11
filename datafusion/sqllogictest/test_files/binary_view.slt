@@ -200,3 +200,18 @@ NULL R NULL NULL NULL NULL
 
 statement ok
 drop table test;
+
+statement ok
+create table bv as values 
+(
+  arrow_cast('one', 'BinaryView'), 
+  arrow_cast('two', 'BinaryView')
+);
+
+query B
+select column1 like 'o%' from bv;
+----
+true
+
+statement ok
+drop table bv;

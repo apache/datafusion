@@ -19,8 +19,12 @@
 use super::basic::{sha256, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_HASHING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct SHA256Func {
@@ -60,7 +64,36 @@ impl ScalarUDFImpl for SHA256Func {
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
+
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         sha256(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_sha256_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_sha256_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_HASHING)
+            .with_description("Computes the SHA-256 hash of a binary string.")
+            .with_syntax_example("sha256(expression)")
+            .with_sql_example(
+                r#"```sql
+> select sha256('foo');
++--------------------------------------+
+| sha256(Utf8("foo"))                  |
++--------------------------------------+
+| <sha256_hash_result>                 |
++--------------------------------------+
+```"#,
+            )
+            .with_standard_argument("expression", Some("String"))
+            .build()
+            .unwrap()
+    })
 }

@@ -37,7 +37,7 @@ use parking_lot::Mutex;
 #[derive(Debug, Clone)]
 pub struct Count {
     /// value of the metric counter
-    value: std::sync::Arc<AtomicUsize>,
+    value: Arc<AtomicUsize>,
 }
 
 impl PartialEq for Count {
@@ -86,7 +86,7 @@ impl Count {
 #[derive(Debug, Clone)]
 pub struct Gauge {
     /// value of the metric gauge
-    value: std::sync::Arc<AtomicUsize>,
+    value: Arc<AtomicUsize>,
 }
 
 impl PartialEq for Gauge {

@@ -24,7 +24,7 @@ use crate::common::spawn_buffered;
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
-use crate::sorts::streaming_merge;
+use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
@@ -65,6 +65,11 @@ use log::{debug, trace};
 ///  Input Streams                                             Output stream
 ///    (sorted)                                                  (sorted)
 /// ```
+///
+/// # Error Handling
+///
+/// If any of the input partitions return an error, the error is propagated to
+/// the output and inputs are not polled again.
 #[derive(Debug)]
 pub struct SortPreservingMergeExec {
     /// Input plan
@@ -268,15 +273,15 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
-                let result = streaming_merge(
-                    receivers,
-                    schema,
-                    &self.expr,
-                    BaselineMetrics::new(&self.metrics, partition),
-                    context.session_config().batch_size(),
-                    self.fetch,
-                    reservation,
-                )?;
+                let result = StreamingMergeBuilder::new()
+                    .with_streams(receivers)
+                    .with_schema(schema)
+                    .with_expressions(&self.expr)
+                    .with_metrics(BaselineMetrics::new(&self.metrics, partition))
+                    .with_batch_size(context.session_config().batch_size())
+                    .with_fetch(self.fetch)
+                    .with_reservation(reservation)
+                    .build()?;
 
                 debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
 
@@ -955,16 +960,15 @@ mod tests {
             MemoryConsumer::new("test").register(&task_ctx.runtime_env().memory_pool);
 
         let fetch = None;
-        let merge_stream = streaming_merge(
-            streams,
-            batches.schema(),
-            sort.as_slice(),
-            BaselineMetrics::new(&metrics, 0),
-            task_ctx.session_config().batch_size(),
-            fetch,
-            reservation,
-        )
-        .unwrap();
+        let merge_stream = StreamingMergeBuilder::new()
+            .with_streams(streams)
+            .with_schema(batches.schema())
+            .with_expressions(sort.as_slice())
+            .with_metrics(BaselineMetrics::new(&metrics, 0))
+            .with_batch_size(task_ctx.session_config().batch_size())
+            .with_fetch(fetch)
+            .with_reservation(reservation)
+            .build()?;
 
         let mut merged = common::collect(merge_stream).await.unwrap();
 
@@ -1174,9 +1178,7 @@ mod tests {
             let mut eq_properties = EquivalenceProperties::new(schema);
             eq_properties.add_new_orderings(vec![columns
                 .iter()
-                .map(|expr| {
-                    PhysicalSortExpr::new(Arc::clone(expr), SortOptions::default())
-                })
+                .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)))
                 .collect::<Vec<_>>()]);
             let mode = ExecutionMode::Unbounded;
             PlanProperties::new(eq_properties, Partitioning::Hash(columns, 3), mode)
@@ -1286,10 +1288,9 @@ mod tests {
             congestion_cleared: Arc::new(Mutex::new(false)),
         };
         let spm = SortPreservingMergeExec::new(
-            vec![PhysicalSortExpr::new(
-                Arc::new(Column::new("c1", 0)),
-                SortOptions::default(),
-            )],
+            vec![PhysicalSortExpr::new_default(Arc::new(Column::new(
+                "c1", 0,
+            )))],
             Arc::new(source),
         );
         let spm_task = SpawnedTask::spawn(collect(Arc::new(spm), task_ctx));

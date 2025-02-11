@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use datafusion::execution::registry::FunctionRegistry;
 use datafusion_common::{
-    exec_datafusion_err, internal_err, plan_datafusion_err, Result, ScalarValue,
-    TableReference, UnnestOptions,
+    exec_datafusion_err, internal_err, plan_datafusion_err, RecursionUnnestOption,
+    Result, ScalarValue, TableReference, UnnestOptions,
 };
 use datafusion_expr::expr::{Alias, Placeholder, Sort};
 use datafusion_expr::expr::{Unnest, WildcardOptions};
@@ -56,6 +56,15 @@ impl From<&protobuf::UnnestOptions> for UnnestOptions {
     fn from(opts: &protobuf::UnnestOptions) -> Self {
         Self {
             preserve_nulls: opts.preserve_nulls,
+            recursions: opts
+                .recursions
+                .iter()
+                .map(|r| RecursionUnnestOption {
+                    input_column: r.input_column.as_ref().unwrap().into(),
+                    output_column: r.output_column.as_ref().unwrap().into(),
+                    depth: r.depth as usize,
+                })
+                .collect::<Vec<_>>(),
         }
     }
 }
@@ -142,14 +151,7 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     fn from(built_in_function: protobuf::BuiltInWindowFunction) -> Self {
         match built_in_function {
             protobuf::BuiltInWindowFunction::Unspecified => todo!(),
-            protobuf::BuiltInWindowFunction::Rank => Self::Rank,
-            protobuf::BuiltInWindowFunction::PercentRank => Self::PercentRank,
-            protobuf::BuiltInWindowFunction::DenseRank => Self::DenseRank,
-            protobuf::BuiltInWindowFunction::Lag => Self::Lag,
-            protobuf::BuiltInWindowFunction::Lead => Self::Lead,
             protobuf::BuiltInWindowFunction::FirstValue => Self::FirstValue,
-            protobuf::BuiltInWindowFunction::CumeDist => Self::CumeDist,
-            protobuf::BuiltInWindowFunction::Ntile => Self::Ntile,
             protobuf::BuiltInWindowFunction::NthValue => Self::NthValue,
             protobuf::BuiltInWindowFunction::LastValue => Self::LastValue,
         }
@@ -289,10 +291,7 @@ pub fn parse_expr(
                         .map_err(|_| Error::unknown("BuiltInWindowFunction", *i))?
                         .into();
 
-                    let args =
-                        parse_optional_expr(expr.expr.as_deref(), registry, codec)?
-                            .map(|e| vec![e])
-                            .unwrap_or_else(Vec::new);
+                    let args = parse_exprs(&expr.exprs, registry, codec)?;
 
                     Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::BuiltInWindowFunction(
@@ -312,10 +311,7 @@ pub fn parse_expr(
                         None => registry.udaf(udaf_name)?,
                     };
 
-                    let args =
-                        parse_optional_expr(expr.expr.as_deref(), registry, codec)?
-                            .map(|e| vec![e])
-                            .unwrap_or_else(Vec::new);
+                    let args = parse_exprs(&expr.exprs, registry, codec)?;
                     Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::AggregateUDF(udaf_function),
                         args,
@@ -332,10 +328,7 @@ pub fn parse_expr(
                         None => registry.udwf(udwf_name)?,
                     };
 
-                    let args =
-                        parse_optional_expr(expr.expr.as_deref(), registry, codec)?
-                            .map(|e| vec![e])
-                            .unwrap_or_else(Vec::new);
+                    let args = parse_exprs(&expr.exprs, registry, codec)?;
                     Expr::WindowFunction(WindowFunction::new(
                         expr::WindowFunctionDefinition::WindowUDF(udwf_function),
                         args,

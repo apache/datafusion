@@ -21,6 +21,7 @@ use super::super::options::{ParquetReadOptions, ReadOptions};
 use super::{DataFilePaths, DataFrame, ExecutionPlan, Result, SessionContext};
 use crate::datasource::physical_plan::parquet::plan_to_parquet;
 
+use datafusion_common::TableReference;
 use parquet::file::properties::WriterProperties;
 
 impl SessionContext {
@@ -42,15 +43,15 @@ impl SessionContext {
     /// statements executed against this context.
     pub async fn register_parquet(
         &self,
-        name: &str,
-        table_path: &str,
+        table_ref: impl Into<TableReference>,
+        table_path: impl AsRef<str>,
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
         let listing_options = options
             .to_listing_options(&self.copied_config(), self.copied_table_options());
 
         self.register_listing_table(
-            name,
+            table_ref,
             table_path,
             listing_options,
             options.schema.map(|s| Arc::new(s.to_owned())),

@@ -777,6 +777,7 @@ fn batches_byte_size(batches: &[RecordBatch]) -> usize {
     batches.iter().map(|b| b.get_array_memory_size()).sum()
 }
 
+#[derive(Debug)]
 struct DummyStreamPartition {
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
@@ -798,6 +799,7 @@ impl PartitionStream for DummyStreamPartition {
 }
 
 ///  Wrapper over a TableProvider that can provide ordering information
+#[derive(Debug)]
 struct SortedTableProvider {
     schema: SchemaRef,
     batches: Vec<Vec<RecordBatch>>,
@@ -838,7 +840,7 @@ impl TableProvider for SortedTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mem_exec =
             MemoryExec::try_new(&self.batches, self.schema(), projection.cloned())?
-                .with_sort_information(self.sort_information.clone());
+                .try_with_sort_information(self.sort_information.clone())?;
 
         Ok(Arc::new(mem_exec))
     }

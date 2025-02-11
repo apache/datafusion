@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion_common::DFSchemaRef;
+use std::cmp::Ordering;
 use std::fmt::{self, Display};
 
 /// Various types of Statements.
@@ -25,7 +26,7 @@ use std::fmt::{self, Display};
 /// While DataFusion does not offer support transactions, it provides
 /// [`LogicalPlan`](crate::LogicalPlan) support to assist building
 /// database systems using DataFusion
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum Statement {
     // Begin a transaction
     TransactionStart(TransactionStart),
@@ -92,21 +93,21 @@ impl Statement {
 }
 
 /// Indicates if a transaction was committed or aborted
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub enum TransactionConclusion {
     Commit,
     Rollback,
 }
 
 /// Indicates if this transaction is allowed to write
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub enum TransactionAccessMode {
     ReadOnly,
     ReadWrite,
 }
 
 /// Indicates ANSI transaction isolation level
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub enum TransactionIsolationLevel {
     ReadUncommitted,
     ReadCommitted,
@@ -125,6 +126,18 @@ pub struct TransactionStart {
     pub schema: DFSchemaRef,
 }
 
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for TransactionStart {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.access_mode.partial_cmp(&other.access_mode) {
+            Some(Ordering::Equal) => {
+                self.isolation_level.partial_cmp(&other.isolation_level)
+            }
+            cmp => cmp,
+        }
+    }
+}
+
 /// Indicator that any current transaction should be terminated
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TransactionEnd {
@@ -134,6 +147,16 @@ pub struct TransactionEnd {
     pub chain: bool,
     /// Empty schema
     pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for TransactionEnd {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.conclusion.partial_cmp(&other.conclusion) {
+            Some(Ordering::Equal) => self.chain.partial_cmp(&other.chain),
+            cmp => cmp,
+        }
+    }
 }
 
 /// Set a Variable's value -- value in
@@ -146,4 +169,14 @@ pub struct SetVariable {
     pub value: String,
     /// Dummy schema
     pub schema: DFSchemaRef,
+}
+
+// Manual implementation needed because of `schema` field. Comparison excludes this field.
+impl PartialOrd for SetVariable {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.variable.partial_cmp(&other.value) {
+            Some(Ordering::Equal) => self.value.partial_cmp(&other.value),
+            cmp => cmp,
+        }
+    }
 }

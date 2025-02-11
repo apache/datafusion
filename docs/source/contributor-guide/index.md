@@ -116,6 +116,20 @@ If you are concerned that a larger design will be lost in a string of small PRs,
 
 Note all commits in a PR are squashed when merged to the `main` branch so there is one commit per PR after merge.
 
+## Conventional Commits & Labeling PRs
+
+We generate change logs for each release using an automated process that will categorize PRs based on the title
+and/or the GitHub labels attached to the PR.
+
+We follow the [Conventional Commits] specification to categorize PRs based on the title. This most often simply means
+looking for titles starting with prefixes such as `fix:`, `feat:`, `docs:`, or `chore:`. We do not enforce this
+convention but encourage its use if you want your PR to feature in the correct section of the changelog.
+
+The change log generator will also look at GitHub labels such as `bug`, `enhancement`, or `api change`, and labels
+do take priority over the conventional commit approach, allowing maintainers to re-categorize PRs after they have been merged.
+
+[conventional commits]: https://www.conventionalcommits.org/en/v1.0.0/
+
 # Reviewing Pull Requests
 
 Some helpful links:

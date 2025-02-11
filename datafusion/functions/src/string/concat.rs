@@ -18,17 +18,19 @@
 use arrow::array::{as_largestring_array, Array};
 use arrow::datatypes::DataType;
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use crate::string::concat;
+use crate::strings::{
+    ColumnarValueRef, LargeStringArrayBuilder, StringArrayBuilder, StringViewArrayBuilder,
+};
 use datafusion_common::cast::{as_string_array, as_string_view_array};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
-use datafusion_expr::{lit, ColumnarValue, Expr, Volatility};
+use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-
-use crate::string::common::*;
-use crate::string::concat;
 
 #[derive(Debug)]
 pub struct ConcatFunc {
@@ -244,6 +246,36 @@ impl ScalarUDFImpl for ConcatFunc {
     ) -> Result<ExprSimplifyResult> {
         simplify_concat(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_concat_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_concat_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Concatenates multiple strings together.")
+            .with_syntax_example("concat(str[, ..., str_n])")
+            .with_sql_example(
+                r#"```sql
+> select concat('data', 'f', 'us', 'ion');
++-------------------------------------------------------+
+| concat(Utf8("data"),Utf8("f"),Utf8("us"),Utf8("ion")) |
++-------------------------------------------------------+
+| datafusion                                            |
++-------------------------------------------------------+
+```"#,
+            )
+            .with_standard_argument("str", Some("String"))
+            .with_argument("str_n", "Subsequent string expressions to concatenate.")
+            .with_related_udf("concat_ws")
+            .build()
+            .unwrap()
+    })
 }
 
 pub fn simplify_concat(args: Vec<Expr>) -> Result<ExprSimplifyResult> {

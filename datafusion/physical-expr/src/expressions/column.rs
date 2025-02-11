@@ -163,7 +163,10 @@ impl Column {
             internal_err!(
                 "PhysicalExpr Column references column '{}' at index {} (zero-based) but input schema only has {} columns: {:?}",
                 self.name,
-                self.index, input_schema.fields.len(), input_schema.fields().iter().map(|f| f.name().clone()).collect::<Vec<String>>())
+                self.index,
+                input_schema.fields.len(),
+                input_schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>()
+            )
         }
     }
 }

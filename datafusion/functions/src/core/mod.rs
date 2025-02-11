@@ -107,5 +107,6 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         get_field(),
         coalesce(),
         version(),
+        r#struct(),
     ]
 }

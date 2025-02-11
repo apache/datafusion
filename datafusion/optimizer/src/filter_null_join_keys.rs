@@ -29,7 +29,7 @@ use std::sync::Arc;
 /// The FilterNullJoinKeys rule will identify joins with equi-join conditions
 /// where the join key is nullable and then insert an `IsNotNull` filter on the nullable side since null values
 /// can never match.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct FilterNullJoinKeys {}
 
 impl OptimizerRule for FilterNullJoinKeys {

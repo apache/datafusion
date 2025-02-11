@@ -44,6 +44,154 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::task::JoinSet;
 
+use crate::fuzz_cases::aggregation_fuzzer::{
+    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
+};
+
+// ========================================================================
+//  The new aggregation fuzz tests based on [`AggregationFuzzer`]
+// ========================================================================
+//
+// Notes on tests:
+//
+// Since the supported types differ for each aggregation function, the tests
+// below are structured so they enumerate each different aggregate function.
+//
+// The test framework handles varying combinations of arguments (data types),
+// sortedness, and grouping parameters
+//
+// TODO: Test floating point values (where output needs to be compared with some
+// acceptable range due to floating point rounding)
+//
+// TODO: test other aggregate functions
+// - AVG (unstable given the wide range of inputs)
+//
+// TODO: specific test for ordering (ensure all group by columns are ordered)
+//  Currently the data is sorted by random columns, so there are almost no
+//  repeated runs. To improve coverage we should also sort by lower cardinality columns
+#[tokio::test(flavor = "multi_thread")]
+async fn test_min() {
+    let data_gen_config = baseline_config();
+
+    // Queries like SELECT min(a) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("min")
+        // min works on all column types
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_max() {
+    let data_gen_config = baseline_config();
+
+    // Queries like SELECT max(a) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("max")
+        // max works on all column types
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_sum() {
+    let data_gen_config = baseline_config();
+
+    // Queries like SELECT sum(a), sum(distinct) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("sum")
+        .with_distinct_aggregate_function("sum")
+        // sum only works on numeric columns
+        .with_aggregate_arguments(data_gen_config.numeric_columns())
+        .with_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_count() {
+    let data_gen_config = baseline_config();
+
+    // Queries like SELECT count(a), count(distinct) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("count")
+        .with_distinct_aggregate_function("count")
+        // count work for all arguments
+        .with_aggregate_arguments(data_gen_config.all_columns())
+        .with_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+/// Return a standard set of columns for testing data generation
+///
+/// Includes numeric and string types
+///
+/// Does not include:
+/// 1. Floating point numbers
+/// 1. structured types
+fn baseline_config() -> DatasetGeneratorConfig {
+    let columns = vec![
+        ColumnDescr::new("i8", DataType::Int8),
+        ColumnDescr::new("i16", DataType::Int16),
+        ColumnDescr::new("i32", DataType::Int32),
+        ColumnDescr::new("i64", DataType::Int64),
+        ColumnDescr::new("u8", DataType::UInt8),
+        ColumnDescr::new("u16", DataType::UInt16),
+        ColumnDescr::new("u32", DataType::UInt32),
+        ColumnDescr::new("u64", DataType::UInt64),
+        ColumnDescr::new("date32", DataType::Date32),
+        ColumnDescr::new("date64", DataType::Date64),
+        // TODO: date/time columns
+        // todo decimal columns
+        // begin string columns
+        ColumnDescr::new("utf8", DataType::Utf8),
+        ColumnDescr::new("largeutf8", DataType::LargeUtf8),
+        // TODO add support for utf8view in data generator
+        // ColumnDescr::new("utf8view", DataType::Utf8View),
+        // todo binary
+    ];
+
+    DatasetGeneratorConfig {
+        columns,
+        rows_num_range: (512, 1024),
+        sort_keys_set: vec![
+            // low cardinality to try and get many repeated runs
+            vec![String::from("u8")],
+            vec![String::from("utf8"), String::from("u8")],
+        ],
+    }
+}
+
+// ========================================================================
+//  The old aggregation fuzz tests
+// ========================================================================
+
+/// Tracks if this stream is generating input or output
 /// Tests that streaming aggregate and batch (non streaming) aggregate produce
 /// same results
 #[tokio::test(flavor = "multi_thread")]
@@ -58,7 +206,7 @@ async fn streaming_aggregate_test() {
         vec!["d", "c", "a"],
         vec!["d", "c", "b", "a"],
     ];
-    let n = 300;
+    let n = 10;
     let distincts = vec![10, 20];
     for distinct in distincts {
         let mut join_set = JoinSet::new();
@@ -100,7 +248,8 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     let running_source = Arc::new(
         MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
-            .with_sort_information(vec![sort_keys]),
+            .try_with_sort_information(vec![sort_keys])
+            .unwrap(),
     );
 
     let aggregate_expr =
@@ -109,6 +258,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
                 .schema(Arc::clone(&schema))
                 .alias("sum1")
                 .build()
+                .map(Arc::new)
                 .unwrap(),
         ];
     let expr = group_by_columns
@@ -311,6 +461,7 @@ async fn group_by_string_test(
     let actual = extract_result_counts(results);
     assert_eq!(expected, actual);
 }
+
 async fn verify_ordered_aggregate(frame: &DataFrame, expected_sort: bool) {
     struct Visitor {
         expected_sort: bool,

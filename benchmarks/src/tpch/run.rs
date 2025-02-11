@@ -21,7 +21,7 @@ use std::sync::Arc;
 use super::{
     get_query_sql, get_tbl_tpch_table_schema, get_tpch_table_schema, TPCH_TABLES,
 };
-use crate::{BenchmarkRun, CommonOpt};
+use crate::util::{BenchmarkRun, CommonOpt};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};

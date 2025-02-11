@@ -19,10 +19,12 @@
 use super::basic::{digest, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_HASHING;
 use datafusion_expr::{
-    ColumnarValue, ScalarUDFImpl, Signature, TypeSignature::*, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature::*, Volatility,
 };
 use std::any::Any;
+use std::sync::OnceLock;
 
 #[derive(Debug)]
 pub struct DigestFunc {
@@ -69,4 +71,48 @@ impl ScalarUDFImpl for DigestFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         digest(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_digest_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_digest_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_HASHING)
+            .with_description(
+                "Computes the binary hash of an expression using the specified algorithm.",
+            )
+            .with_syntax_example("digest(expression, algorithm)")
+            .with_sql_example(
+                r#"```sql
+> select digest('foo', 'sha256');
++------------------------------------------+
+| digest(Utf8("foo"), Utf8("sha256"))      |
++------------------------------------------+
+| <binary_hash_result>                     |
++------------------------------------------+
+```"#,
+            )
+            .with_standard_argument(
+                "expression", Some("String"))
+            .with_argument(
+                "algorithm",
+                "String expression specifying algorithm to use. Must be one of:
+                
+- md5
+- sha224
+- sha256
+- sha384
+- sha512
+- blake2s
+- blake2b
+- blake3",
+            )
+            .build()
+            .unwrap()
+    })
 }

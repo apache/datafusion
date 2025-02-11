@@ -17,11 +17,15 @@
 
 //! "regex" DataFusion functions
 
+use std::sync::Arc;
+
+pub mod regexpcount;
 pub mod regexplike;
 pub mod regexpmatch;
 pub mod regexpreplace;
 
 // create UDFs
+make_udf_function!(regexpcount::RegexpCountFunc, REGEXP_COUNT, regexp_count);
 make_udf_function!(regexpmatch::RegexpMatchFunc, REGEXP_MATCH, regexp_match);
 make_udf_function!(regexplike::RegexpLikeFunc, REGEXP_LIKE, regexp_like);
 make_udf_function!(
@@ -32,6 +36,24 @@ make_udf_function!(
 
 pub mod expr_fn {
     use datafusion_expr::Expr;
+
+    /// Returns the number of consecutive occurrences of a regular expression in a string.
+    pub fn regexp_count(
+        values: Expr,
+        regex: Expr,
+        start: Option<Expr>,
+        flags: Option<Expr>,
+    ) -> Expr {
+        let mut args = vec![values, regex];
+        if let Some(start) = start {
+            args.push(start);
+        };
+
+        if let Some(flags) = flags {
+            args.push(flags);
+        };
+        super::regexp_count().call(args)
+    }
 
     /// Returns a list of regular expression matches in a string.
     pub fn regexp_match(values: Expr, regex: Expr, flags: Option<Expr>) -> Expr {
@@ -67,6 +89,11 @@ pub mod expr_fn {
 }
 
 /// Returns all DataFusion functions defined in this package
-pub fn functions() -> Vec<std::sync::Arc<datafusion_expr::ScalarUDF>> {
-    vec![regexp_match(), regexp_like(), regexp_replace()]
+pub fn functions() -> Vec<Arc<datafusion_expr::ScalarUDF>> {
+    vec![
+        regexp_count(),
+        regexp_match(),
+        regexp_like(),
+        regexp_replace(),
+    ]
 }

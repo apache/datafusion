@@ -69,7 +69,7 @@ value
 :::
 
 :::{note}
-Since `&&` and `||` are existed as logical operators in Rust, but those are not overloadable and not works with expression API.
+Since `&&` and `||` are logical operators in Rust and cannot be overloaded these are not available in the expression API.
 :::
 
 ## Bitwise Expressions
@@ -151,7 +151,7 @@ but these operators always return a `bool` which makes them not work with the ex
 | trunc(x)              | truncate toward zero                              |
 
 :::{note}
-Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g
+Unlike to some databases the math functions in Datafusion works the same way as Rust math functions, avoiding failing on corner cases e.g.
 
 ```sql
 select log(-1), log(0), sqrt(-1);

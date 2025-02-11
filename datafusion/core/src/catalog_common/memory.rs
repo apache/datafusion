@@ -28,6 +28,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// Simple in-memory list of catalogs
+#[derive(Debug)]
 pub struct MemoryCatalogProviderList {
     /// Collection of catalogs containing schemas and ultimately TableProviders
     pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
@@ -71,6 +72,7 @@ impl CatalogProviderList for MemoryCatalogProviderList {
 }
 
 /// Simple in-memory implementation of a catalog.
+#[derive(Debug)]
 pub struct MemoryCatalogProvider {
     schemas: DashMap<String, Arc<dyn SchemaProvider>>,
 }
@@ -136,6 +138,7 @@ impl CatalogProvider for MemoryCatalogProvider {
 }
 
 /// Simple in-memory implementation of a schema.
+#[derive(Debug)]
 pub struct MemorySchemaProvider {
     tables: DashMap<String, Arc<dyn TableProvider>>,
 }
@@ -248,6 +251,7 @@ mod test {
     #[test]
     fn default_register_schema_not_supported() {
         // mimic a new CatalogProvider and ensure it does not support registering schemas
+        #[derive(Debug)]
         struct TestProvider {}
         impl CatalogProvider for TestProvider {
             fn as_any(&self) -> &dyn Any {

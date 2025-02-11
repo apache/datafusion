@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 pub use crate::schema::SchemaProvider;
@@ -101,7 +102,7 @@ use datafusion_common::Result;
 ///
 /// [`TableProvider`]: crate::TableProvider
 
-pub trait CatalogProvider: Sync + Send {
+pub trait CatalogProvider: Debug + Sync + Send {
     /// Returns the catalog provider as [`Any`]
     /// so that it can be downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
@@ -152,7 +153,7 @@ pub trait CatalogProvider: Sync + Send {
 ///
 /// Please see the documentation on `CatalogProvider` for details of
 /// implementing a custom catalog.
-pub trait CatalogProviderList: Sync + Send {
+pub trait CatalogProviderList: Debug + Sync + Send {
     /// Returns the catalog list as [`Any`]
     /// so that it can be downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;

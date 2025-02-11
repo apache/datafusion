@@ -16,20 +16,20 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, DataType, Int32Type, Int64Type,
 };
 
+use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_primitive_array;
 use datafusion_common::Result;
 use datafusion_common::{exec_err, plan_err};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
-
-use crate::utils::make_scalar_function;
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
@@ -110,6 +110,34 @@ impl ScalarUDFImpl for ToHexFunc {
             other => exec_err!("Unsupported data type {other:?} for function to_hex"),
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_to_hex_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_to_hex_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Converts an integer to a hexadecimal string.")
+            .with_syntax_example("to_hex(int)")
+            .with_sql_example(
+                r#"```sql
+> select to_hex(12345689);
++-------------------------+
+| to_hex(Int64(12345689)) |
++-------------------------+
+| bc6159                  |
++-------------------------+
+```"#,
+            )
+            .with_standard_argument("int", Some("Integer"))
+            .build()
+            .unwrap()
+    })
 }
 
 #[cfg(test)]

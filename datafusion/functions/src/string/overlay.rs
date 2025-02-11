@@ -16,20 +16,19 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{
     as_generic_string_array, as_int64_array, as_string_view_array,
 };
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-
-use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct OverlayFunc {
@@ -48,12 +47,12 @@ impl OverlayFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8View, Utf8View, Int64, Int64]),
-                    Exact(vec![Utf8, Utf8, Int64, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
-                    Exact(vec![Utf8View, Utf8View, Int64]),
-                    Exact(vec![Utf8, Utf8, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8View, Int64, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Int64, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, Int64, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8View, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, Int64]),
                 ],
                 Volatility::Immutable,
             ),
@@ -87,6 +86,35 @@ impl ScalarUDFImpl for OverlayFunc {
             other => exec_err!("Unsupported data type {other:?} for function overlay"),
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_overlay_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_overlay_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Returns the string which is replaced by another string from the specified position and specified count length.")
+            .with_syntax_example("overlay(str PLACING substr FROM pos [FOR count])")
+            .with_sql_example(r#"```sql
+> select overlay('Txxxxas' placing 'hom' from 2 for 4);
++--------------------------------------------------------+
+| overlay(Utf8("Txxxxas"),Utf8("hom"),Int64(2),Int64(4)) |
++--------------------------------------------------------+
+| Thomas                                                 |
++--------------------------------------------------------+
+```"#)
+            .with_standard_argument("str", Some("String"))
+            .with_argument("substr", "Substring to replace in str.")
+            .with_argument("pos", "The start position to start the replace in str.")
+            .with_argument("count", "The count of characters to be replaced from start position of str. If not specified, will use substr length instead.")
+            .build()
+            .unwrap()
+    })
 }
 
 macro_rules! process_overlay {

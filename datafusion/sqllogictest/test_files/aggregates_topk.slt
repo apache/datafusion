@@ -53,6 +53,11 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
+query TI
+select * from (select trace_id, MAX(timestamp) max_ts from traces t group by trace_id) where trace_id != 'b' order by max_ts desc limit 3;
+----
+c 4
+a 1
 
 query TI
 select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
@@ -88,6 +93,12 @@ c 1 2
 
 statement ok
 set datafusion.optimizer.enable_topk_aggregation = true;
+
+query TI
+select * from (select trace_id, MAX(timestamp) max_ts from traces t group by trace_id) where max_ts != 3 order by max_ts desc limit 2;
+----
+c 4
+a 1
 
 query TT
 explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;

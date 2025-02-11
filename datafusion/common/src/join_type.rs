@@ -26,7 +26,7 @@ use crate::error::_not_impl_err;
 use crate::{DataFusionError, Result};
 
 /// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub enum JoinType {
     /// Inner Join
     Inner,
@@ -88,7 +88,7 @@ impl FromStr for JoinType {
 }
 
 /// Join constraint
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub enum JoinConstraint {
     /// Join ON
     On,

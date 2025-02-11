@@ -86,6 +86,10 @@ pub fn map_columns_before_projection(
     parent_required: &[Arc<dyn PhysicalExpr>],
     proj_exprs: &[(Arc<dyn PhysicalExpr>, String)],
 ) -> Vec<Arc<dyn PhysicalExpr>> {
+    if parent_required.is_empty() {
+        // No need to build mapping.
+        return vec![];
+    }
     let column_mapping = proj_exprs
         .iter()
         .filter_map(|(expr, name)| {

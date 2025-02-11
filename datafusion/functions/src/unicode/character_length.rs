@@ -15,16 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::string::common::StringArrayType;
+use crate::strings::StringArrayType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]
 pub struct CharacterLengthFunc {
@@ -76,6 +79,36 @@ impl ScalarUDFImpl for CharacterLengthFunc {
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_character_length_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_character_length_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Returns the number of characters in a string.")
+            .with_syntax_example("character_length(str)")
+            .with_sql_example(
+                r#"```sql
+> select character_length('Ångström');
++------------------------------------+
+| character_length(Utf8("Ångström")) |
++------------------------------------+
+| 8                                  |
++------------------------------------+
+```"#,
+            )
+            .with_standard_argument("str", Some("String"))
+            .with_related_udf("bit_length")
+            .with_related_udf("octet_length")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Returns number of characters in the string.

@@ -35,7 +35,7 @@ use crate::physical_optimizer::sanity_checker::SanityCheckPlan;
 use crate::physical_optimizer::topk_aggregation::TopKAggregation;
 
 /// A rule-based physical optimizer.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PhysicalOptimizer {
     /// All rules to apply
     pub rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,

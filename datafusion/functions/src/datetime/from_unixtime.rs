@@ -15,14 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, Timestamp};
 use arrow::datatypes::TimeUnit::Second;
+use std::any::Any;
+use std::sync::OnceLock;
 
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_DATETIME;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct FromUnixtimeFunc {
@@ -78,4 +81,24 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
             }
         }
     }
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_from_unixtime_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_from_unixtime_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_DATETIME)
+            .with_description("Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as nanoseconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.")
+            .with_syntax_example("from_unixtime(expression)")
+            .with_argument(
+                "expression",
+                "Expression to operate on. Can be a constant, column, or function, and any combination of arithmetic operators."
+            )
+            .build()
+            .unwrap()
+    })
 }

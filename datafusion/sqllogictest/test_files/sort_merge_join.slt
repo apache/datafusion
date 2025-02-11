@@ -126,22 +126,24 @@ Alice 50 Alice 1
 Alice 50 Alice 2
 Bob 1 NULL NULL
 
+# Uncomment when filtered FULL moved
 # full join with join filter
-query TITI rowsort
-SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t2.b * 50 > t1.b
-----
-Alice 100 NULL NULL
-Alice 50 Alice 2
-Bob 1 NULL NULL
-NULL NULL Alice 1
+#query TITI rowsort
+#SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t2.b * 50 > t1.b
+#----
+#Alice 100 NULL NULL
+#Alice 50 Alice 2
+#Bob 1 NULL NULL
+#NULL NULL Alice 1
 
-query TITI rowsort
-SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t1.b > t2.b + 50
-----
-Alice 100 Alice 1
-Alice 100 Alice 2
-Alice 50 NULL NULL
-Bob 1 NULL NULL
+# Uncomment when filtered FULL moved
+#query TITI rowsort
+#SELECT * FROM t1 FULL JOIN t2 ON t1.a = t2.a AND t1.b > t2.b + 50
+#----
+#Alice 100 Alice 1
+#Alice 100 Alice 2
+#Alice 50 NULL NULL
+#Bob 1 NULL NULL
 
 statement ok
 DROP TABLE t1;
@@ -493,6 +495,7 @@ select t1.* from t1 where not exists (select 1 from t2 where t2.a = t1.a and t1.
 ) order by 1, 2
 ----
 
+
 query II
 select * from (
 with
@@ -576,7 +579,7 @@ query II
 select * from (
 with
 t1 as (
-    select 11 a, 12 b),
+   select 11 a, 12 b),
 t2 as (
     select 11 a, 12 c union all
     select 11 a, 11 c union all

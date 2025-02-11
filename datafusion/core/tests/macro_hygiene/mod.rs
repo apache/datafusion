@@ -37,3 +37,13 @@ mod plan_datafusion_err {
         plan_datafusion_err!("foo");
     }
 }
+
+mod record_batch {
+    // NO other imports!
+    use datafusion_common::record_batch;
+
+    #[test]
+    fn test_macro() {
+        record_batch!(("column_name", Int32, vec![1, 2, 3])).unwrap();
+    }
+}

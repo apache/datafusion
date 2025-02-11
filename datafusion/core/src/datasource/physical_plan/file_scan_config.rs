@@ -248,9 +248,10 @@ impl FileScanConfig {
             column_statistics: table_cols_stats,
         };
 
-        let projected_schema = Arc::new(
-            Schema::new(table_fields).with_metadata(self.file_schema.metadata().clone()),
-        );
+        let projected_schema = Arc::new(Schema::new_with_metadata(
+            table_fields,
+            self.file_schema.metadata().clone(),
+        ));
 
         let projected_output_ordering =
             get_projected_output_ordering(self, &projected_schema);
@@ -258,7 +259,7 @@ impl FileScanConfig {
         (projected_schema, table_stats, projected_output_ordering)
     }
 
-    #[allow(unused)] // Only used by avro
+    #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
     pub(crate) fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()
@@ -281,7 +282,12 @@ impl FileScanConfig {
 
         fields.map_or_else(
             || Arc::clone(&self.file_schema),
-            |f| Arc::new(Schema::new(f).with_metadata(self.file_schema.metadata.clone())),
+            |f| {
+                Arc::new(Schema::new_with_metadata(
+                    f,
+                    self.file_schema.metadata.clone(),
+                ))
+            },
         )
     }
 

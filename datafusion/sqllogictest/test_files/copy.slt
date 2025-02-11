@@ -36,7 +36,7 @@ statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet STORED AS PARQUET 
 LOCATION 'test_files/scratch/copy/partitioned_table1/' PARTITIONED BY (col2);
 
-query I?
+query IT
 select * from validate_partitioned_parquet order by col1, col2;
 ----
 1 Foo
@@ -64,7 +64,7 @@ statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet2 STORED AS PARQUET 
 LOCATION 'test_files/scratch/copy/partitioned_table2/' PARTITIONED BY (column2, column3);
 
-query I??
+query ITT
 select * from validate_partitioned_parquet2 order by column1,column2,column3;
 ----
 1 a x
@@ -92,7 +92,7 @@ statement ok
 CREATE EXTERNAL TABLE validate_partitioned_parquet3 STORED AS PARQUET 
 LOCATION 'test_files/scratch/copy/partitioned_table3/' PARTITIONED BY (column1, column3);
 
-query ?T?
+query TTT
 select column1, column2, column3 from validate_partitioned_parquet3 order by column1,column2,column3;
 ----
 1 a x
@@ -552,7 +552,7 @@ CREATE EXTERNAL TABLE validate_arrow_file_dict
 STORED AS arrow
 LOCATION 'test_files/scratch/copy/table_dict.arrow';
 
-query T?
+query TT
 select * from validate_arrow_file_dict;
 ----
 c foo

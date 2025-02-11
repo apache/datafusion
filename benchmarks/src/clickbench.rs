@@ -18,6 +18,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::util::{BenchmarkRun, CommonOpt};
 use datafusion::{
     error::{DataFusionError, Result},
     prelude::SessionContext,
@@ -25,8 +26,6 @@ use datafusion::{
 use datafusion_common::exec_datafusion_err;
 use datafusion_common::instant::Instant;
 use structopt::StructOpt;
-
-use crate::{BenchmarkRun, CommonOpt};
 
 /// Run the clickbench benchmark
 ///
@@ -116,12 +115,15 @@ impl RunOpt {
             None => queries.min_query_id()..=queries.max_query_id(),
         };
 
+        // configure parquet options
         let mut config = self.common.config();
-        config
-            .options_mut()
-            .execution
-            .parquet
-            .schema_force_view_types = self.common.force_view_types;
+        {
+            let parquet_options = &mut config.options_mut().execution.parquet;
+            parquet_options.schema_force_view_types = self.common.force_view_types;
+            // The hits_partitioned dataset specifies string columns
+            // as binary due to how it was written. Force it to strings
+            parquet_options.binary_as_string = true;
+        }
 
         let ctx = SessionContext::new_with_config(config);
         self.register_hits(&ctx).await?;
@@ -149,7 +151,7 @@ impl RunOpt {
         Ok(())
     }
 
-    /// Registrs the `hits.parquet` as a table named `hits`
+    /// Registers the `hits.parquet` as a table named `hits`
     async fn register_hits(&self, ctx: &SessionContext) -> Result<()> {
         let options = Default::default();
         let path = self.path.as_os_str().to_str().unwrap();

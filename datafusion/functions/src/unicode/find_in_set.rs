@@ -16,7 +16,7 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::{
     ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray, OffsetSizeTrait,
@@ -24,11 +24,13 @@ use arrow::array::{
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
 
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::Exact;
-use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-
 use crate::utils::{make_scalar_function, utf8_to_int_type};
+use datafusion_common::{exec_err, Result};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+};
 
 #[derive(Debug)]
 pub struct FindInSetFunc {
@@ -77,6 +79,33 @@ impl ScalarUDFImpl for FindInSetFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(find_in_set, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_find_in_set_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_find_in_set_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings.")
+            .with_syntax_example("find_in_set(str, strlist)")
+            .with_sql_example(r#"```sql
+> select find_in_set('b', 'a,b,c,d');
++----------------------------------------+
+| find_in_set(Utf8("b"),Utf8("a,b,c,d")) |
++----------------------------------------+
+| 2                                      |
++----------------------------------------+ 
+```"#)
+            .with_argument("str", "String expression to find in strlist.")
+            .with_argument("strlist", "A string list is a string composed of substrings separated by , characters.")
+            .build()
+            .unwrap()
+    })
 }
 
 ///Returns a value in the range of 1 to N if the string str is in the string list strlist consisting of N substrings

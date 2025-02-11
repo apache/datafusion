@@ -46,6 +46,7 @@ arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }
+indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
 sqlparser = { workspace = true }
@@ -55,6 +56,7 @@ strum = { version = "0.26.1", features = ["derive"] }
 ctor = { workspace = true }
 datafusion-functions = { workspace = true, default-features = true }
 datafusion-functions-aggregate = { workspace = true }
+datafusion-functions-nested = { workspace = true }
 datafusion-functions-window = { workspace = true }
 env_logger = { workspace = true }
 paste = "^1.0"

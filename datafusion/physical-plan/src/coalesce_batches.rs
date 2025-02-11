@@ -34,6 +34,7 @@ use datafusion_common::Result;
 use datafusion_execution::TaskContext;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
+use crate::execution_plan::CardinalityEffect;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 
@@ -51,7 +52,7 @@ use futures::stream::{Stream, StreamExt};
 pub struct CoalesceBatchesExec {
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
-    /// Minimum number of rows for coalesces batches
+    /// Minimum number of rows for coalescing batches
     target_batch_size: usize,
     /// Maximum number of rows to fetch, `None` means fetching all rows
     fetch: Option<usize>,
@@ -198,6 +199,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
 
     fn fetch(&self) -> Option<usize> {
         self.fetch
+    }
+
+    fn cardinality_effect(&self) -> CardinalityEffect {
+        CardinalityEffect::Equal
     }
 }
 

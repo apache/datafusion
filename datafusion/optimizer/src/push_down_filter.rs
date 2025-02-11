@@ -24,19 +24,15 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    internal_err, plan_err, qualified_name, Column, DFSchema, DFSchemaRef,
-    JoinConstraint, Result,
+    internal_err, plan_err, qualified_name, Column, DFSchema, Result,
 };
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::logical_plan::{
-    CrossJoin, Join, JoinType, LogicalPlan, TableScan, Union,
-};
+use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, TableScan, Union};
 use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    and, build_join_schema, or, BinaryExpr, Expr, Filter, LogicalPlanBuilder, Operator,
-    Projection, TableProviderFilterPushDown,
+    and, or, BinaryExpr, Expr, Filter, Operator, Projection, TableProviderFilterPushDown,
 };
 
 use crate::optimizer::ApplyOrder;
@@ -130,7 +126,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 /// reaches a plan node that does not commute with that filter, it adds the
 /// filter to that place. When it passes through a projection, it re-writes the
 /// filter's expression taking into account that projection.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct PushDownFilter {}
 
 /// For a given JOIN type, determine whether each input of the join is preserved
@@ -743,7 +739,9 @@ impl OptimizerRule for PushDownFilter {
                     let mut accum: HashSet<Column> = HashSet::new();
                     expr_to_columns(&predicate, &mut accum)?;
 
-                    if unnest.exec_columns.iter().any(|c| accum.contains(c)) {
+                    if unnest.list_type_columns.iter().any(|(_, unnest_list)| {
+                        accum.contains(&unnest_list.output_column)
+                    }) {
                         unnest_predicates.push(predicate);
                     } else {
                         non_unnest_predicates.push(predicate);
@@ -865,12 +863,6 @@ impl OptimizerRule for PushDownFilter {
                     })
             }
             LogicalPlan::Join(join) => push_down_join(join, Some(&filter.predicate)),
-            LogicalPlan::CrossJoin(cross_join) => {
-                let predicates = split_conjunction_owned(filter.predicate);
-                let join = convert_cross_join_to_inner_join(cross_join)?;
-                let plan = push_down_all_join(predicates, vec![], join, vec![])?;
-                convert_to_cross_join_if_beneficial(plan.data)
-            }
             LogicalPlan::TableScan(scan) => {
                 let filter_predicates = split_conjunction(&filter.predicate);
                 let results = scan
@@ -1112,48 +1104,6 @@ impl PushDownFilter {
     }
 }
 
-/// Converts the given cross join to an inner join with an empty equality
-/// predicate and an empty filter condition.
-fn convert_cross_join_to_inner_join(cross_join: CrossJoin) -> Result<Join> {
-    let CrossJoin { left, right, .. } = cross_join;
-    let join_schema = build_join_schema(left.schema(), right.schema(), &JoinType::Inner)?;
-    Ok(Join {
-        left,
-        right,
-        join_type: JoinType::Inner,
-        join_constraint: JoinConstraint::On,
-        on: vec![],
-        filter: None,
-        schema: DFSchemaRef::new(join_schema),
-        null_equals_null: false,
-    })
-}
-
-/// Converts the given inner join with an empty equality predicate and an
-/// empty filter condition to a cross join.
-fn convert_to_cross_join_if_beneficial(
-    plan: LogicalPlan,
-) -> Result<Transformed<LogicalPlan>> {
-    match plan {
-        // Can be converted back to cross join
-        LogicalPlan::Join(join) if join.on.is_empty() && join.filter.is_none() => {
-            LogicalPlanBuilder::from(Arc::unwrap_or_clone(join.left))
-                .cross_join(Arc::unwrap_or_clone(join.right))?
-                .build()
-                .map(Transformed::yes)
-        }
-        LogicalPlan::Filter(filter) => {
-            convert_to_cross_join_if_beneficial(Arc::unwrap_or_clone(filter.input))?
-                .transform_data(|child_plan| {
-                    Filter::try_new(filter.predicate, Arc::new(child_plan))
-                        .map(LogicalPlan::Filter)
-                        .map(Transformed::yes)
-                })
-        }
-        plan => Ok(Transformed::no(plan)),
-    }
-}
-
 /// replaces columns by its name on the projection.
 pub fn replace_cols_by_name(
     e: Expr,
@@ -1195,22 +1145,23 @@ fn contain(e: &Expr, check_map: &HashMap<String, Expr>) -> bool {
 #[cfg(test)]
 mod tests {
     use std::any::Any;
+    use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
 
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use async_trait::async_trait;
 
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DFSchemaRef, ScalarValue};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
-        col, in_list, in_subquery, lit, ColumnarValue, Extension, ScalarUDF,
-        ScalarUDFImpl, Signature, TableSource, TableType, UserDefinedLogicalNodeCore,
-        Volatility,
+        col, in_list, in_subquery, lit, ColumnarValue, Extension, LogicalPlanBuilder,
+        ScalarUDF, ScalarUDFImpl, Signature, TableSource, TableType,
+        UserDefinedLogicalNodeCore, Volatility,
     };
 
     use crate::optimizer::Optimizer;
-    use crate::rewrite_disjunctive_predicate::RewriteDisjunctivePredicate;
+    use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::*;
     use crate::OptimizerContext;
     use datafusion_expr::test::function_stub::sum;
@@ -1232,7 +1183,7 @@ mod tests {
         expected: &str,
     ) -> Result<()> {
         let optimizer = Optimizer::with_rules(vec![
-            Arc::new(RewriteDisjunctivePredicate::new()),
+            Arc::new(SimplifyExpressions::new()),
             Arc::new(PushDownFilter::new()),
         ]);
         let optimized_plan =
@@ -1451,6 +1402,13 @@ mod tests {
         schema: DFSchemaRef,
     }
 
+    // Manual implementation needed because of `schema` field. Comparison excludes this field.
+    impl PartialOrd for NoopPlan {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            self.input.partial_cmp(&other.input)
+        }
+    }
+
     impl UserDefinedLogicalNodeCore for NoopPlan {
         fn name(&self) -> &str {
             "NoopPlan"
@@ -1488,6 +1446,10 @@ mod tests {
                 input: inputs,
                 schema: Arc::clone(&self.schema),
             })
+        }
+
+        fn supports_limit_pushdown(&self) -> bool {
+            false // Disallow limit push-down by default
         }
     }
 
@@ -1713,7 +1675,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.a, test1.d\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Projection: test.a, test.b, test.c\
         \n      TableScan: test, full_filters=[test.a = Int32(1)]\
         \n    Projection: test1.d, test1.e, test1.f\
@@ -1740,7 +1702,7 @@ mod tests {
             .build()?;
 
         let expected = "Projection: test.a, test1.a\
-        \n  CrossJoin:\
+        \n  Cross Join: \
         \n    Projection: test.a, test.b, test.c\
         \n      TableScan: test, full_filters=[test.a = Int32(1)]\
         \n    Projection: test1.a, test1.b, test1.c\

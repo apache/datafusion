@@ -16,23 +16,21 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use crate::strings::StringArrayType;
+use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{
     ArrayRef, AsArray, GenericStringArray, GenericStringBuilder, Int64Array,
     OffsetSizeTrait, StringViewArray,
 };
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Int64, LargeUtf8, Utf8, Utf8View};
-
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-
-use crate::string::common::StringArrayType;
-use crate::utils::{make_scalar_function, utf8_to_str_type};
 
 #[derive(Debug)]
 pub struct RepeatFunc {
@@ -53,9 +51,9 @@ impl RepeatFunc {
                     // Planner attempts coercion to the target type starting with the most preferred candidate.
                     // For example, given input `(Utf8View, Int64)`, it first tries coercing to `(Utf8View, Int64)`.
                     // If that fails, it proceeds to `(Utf8, Int64)`.
-                    Exact(vec![Utf8View, Int64]),
-                    Exact(vec![Utf8, Int64]),
-                    Exact(vec![LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, Int64]),
                 ],
                 Volatility::Immutable,
             ),
@@ -83,6 +81,37 @@ impl ScalarUDFImpl for RepeatFunc {
     fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
         make_scalar_function(repeat, vec![])(args)
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_repeat_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_repeat_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description(
+                "Returns a string with an input string repeated a specified number.",
+            )
+            .with_syntax_example("repeat(str, n)")
+            .with_sql_example(
+                r#"```sql
+> select repeat('data', 3);
++-------------------------------+
+| repeat(Utf8("data"),Int64(3)) |
++-------------------------------+
+| datadatadata                  |
++-------------------------------+
+```"#,
+            )
+            .with_standard_argument("str", Some("String"))
+            .with_argument("n", "Number of times to repeat the input string.")
+            .build()
+            .unwrap()
+    })
 }
 
 /// Repeats string the specified number of times.

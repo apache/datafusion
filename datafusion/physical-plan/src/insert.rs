@@ -271,7 +271,7 @@ fn make_count_batch(count: u64) -> RecordBatch {
 }
 
 fn make_count_schema() -> SchemaRef {
-    // define a schema.
+    // Define a schema.
     Arc::new(Schema::new(vec![Field::new(
         "count",
         DataType::UInt64,

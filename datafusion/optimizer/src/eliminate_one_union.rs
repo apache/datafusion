@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 /// An optimization rule that eliminates union with one element.
 pub struct EliminateOneUnion;
 

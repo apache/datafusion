@@ -104,8 +104,9 @@ impl<O: OffsetSizeTrait> ArrowBytesSet<O> {
 /// `Binary`, and `LargeBinary`) values that can produce the set of keys on
 /// output as `GenericBinaryArray` without copies.
 ///
-/// Equivalent to `HashSet<String, V>` but with better performance for arrow
-/// data.
+/// Equivalent to `HashSet<String, V>` but with better performance if you need
+/// to emit the keys as an Arrow `StringArray` / `BinaryArray`. For other
+/// purposes it is the same as a `HashMap<String, V>`
 ///
 /// # Generic Arguments
 ///
@@ -237,7 +238,7 @@ where
 /// The size, in number of entries, of the initial hash table
 const INITIAL_MAP_CAPACITY: usize = 128;
 /// The initial size, in bytes, of the string data
-const INITIAL_BUFFER_CAPACITY: usize = 8 * 1024;
+pub const INITIAL_BUFFER_CAPACITY: usize = 8 * 1024;
 impl<O: OffsetSizeTrait, V> ArrowBytesMap<O, V>
 where
     V: Debug + PartialEq + Eq + Clone + Copy + Default,

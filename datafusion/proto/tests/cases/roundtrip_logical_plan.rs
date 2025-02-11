@@ -47,7 +47,10 @@ use datafusion::functions_aggregate::expr_fn::{
 };
 use datafusion::functions_aggregate::min_max::max_udaf;
 use datafusion::functions_nested::map::map;
-use datafusion::functions_window::row_number::row_number;
+use datafusion::functions_window::expr_fn::{
+    cume_dist, dense_rank, lag, lead, ntile, percent_rank, rank, row_number,
+};
+use datafusion::functions_window::rank::rank_udwf;
 use datafusion::prelude::*;
 use datafusion::test_util::{TestTableFactory, TestTableProvider};
 use datafusion_common::config::TableOptions;
@@ -73,8 +76,9 @@ use datafusion_functions_aggregate::expr_fn::{
     approx_distinct, array_agg, avg, bit_and, bit_or, bit_xor, bool_and, bool_or, corr,
     nth_value,
 };
-use datafusion_functions_aggregate::kurtosis_pop::kurtosis_pop;
 use datafusion_functions_aggregate::string_agg::string_agg;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes, logical_plan_from_bytes_with_extension_codec,
     logical_plan_to_bytes, logical_plan_to_bytes_with_extension_codec,
@@ -331,6 +335,32 @@ async fn roundtrip_logical_plan_aggregation() -> Result<()> {
     .await?;
 
     let query = "SELECT a, SUM(b + 1) as b_sum FROM t1 GROUP BY a ORDER BY b_sum DESC";
+    let plan = ctx.sql(query).await?.into_optimized_plan()?;
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx)?;
+    assert_eq!(format!("{plan}"), format!("{logical_round_trip}"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_logical_plan_sort() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::Int64, true),
+        Field::new("b", DataType::Decimal128(15, 2), true),
+    ]);
+
+    ctx.register_csv(
+        "t1",
+        "tests/testdata/test.csv",
+        CsvReadOptions::default().schema(&schema),
+    )
+    .await?;
+
+    let query = "SELECT a, b FROM t1 ORDER BY b LIMIT 5";
     let plan = ctx.sql(query).await?.into_optimized_plan()?;
 
     let bytes = logical_plan_to_bytes(&plan)?;
@@ -910,8 +940,18 @@ async fn roundtrip_expr_api() -> Result<()> {
             vec![lit(1), lit(2), lit(3)],
             vec![lit(10), lit(20), lit(30)],
         ),
+        cume_dist(),
         row_number(),
-        kurtosis_pop(lit(1)),
+        rank(),
+        dense_rank(),
+        percent_rank(),
+        lead(col("b"), None, None),
+        lead(col("b"), Some(2), None),
+        lead(col("b"), Some(2), Some(ScalarValue::from(100))),
+        lag(col("b"), None, None),
+        lag(col("b"), Some(2), None),
+        lag(col("b"), Some(2), Some(ScalarValue::from(100))),
+        ntile(lit(3)),
         nth_value(col("b"), 1, vec![]),
         nth_value(
             col("b"),
@@ -978,7 +1018,7 @@ pub mod proto {
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, PartialOrd, Hash)]
 struct TopKPlanNode {
     k: usize,
     input: LogicalPlan,
@@ -1034,6 +1074,10 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
             input: inputs.swap_remove(0),
             expr: exprs.swap_remove(0),
         })
+    }
+
+    fn supports_limit_pushdown(&self) -> bool {
+        false // Disallow limit push-down by default
     }
 }
 
@@ -2172,7 +2216,7 @@ fn roundtrip_scalar_udf() {
     let udf = create_udf(
         "dummy",
         vec![DataType::Utf8],
-        Arc::new(DataType::Utf8),
+        DataType::Utf8,
         Volatility::Immutable,
         scalar_fn,
     );
@@ -2275,9 +2319,7 @@ fn roundtrip_window() {
 
     // 1. without window_frame
     let test_expr1 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2288,9 +2330,7 @@ fn roundtrip_window() {
 
     // 2. with default window_frame
     let test_expr2 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2307,9 +2347,7 @@ fn roundtrip_window() {
     );
 
     let test_expr3 = Expr::WindowFunction(expr::WindowFunction::new(
-        WindowFunctionDefinition::BuiltInWindowFunction(
-            datafusion_expr::BuiltInWindowFunction::Rank,
-        ),
+        WindowFunctionDefinition::WindowUDF(rank_udwf()),
         vec![],
     ))
     .partition_by(vec![col("col1")])
@@ -2430,19 +2468,23 @@ fn roundtrip_window() {
             &self.signature
         }
 
-        fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-            if arg_types.len() != 1 {
-                return plan_err!(
-                    "dummy_udwf expects 1 argument, got {}: {:?}",
-                    arg_types.len(),
-                    arg_types
-                );
-            }
-            Ok(arg_types[0].clone())
+        fn partition_evaluator(
+            &self,
+            _partition_evaluator_args: PartitionEvaluatorArgs,
+        ) -> Result<Box<dyn PartitionEvaluator>> {
+            make_partition_evaluator()
         }
 
-        fn partition_evaluator(&self) -> Result<Box<dyn PartitionEvaluator>> {
-            make_partition_evaluator()
+        fn field(&self, field_args: WindowUDFFieldArgs) -> Result<Field> {
+            if let Some(return_type) = field_args.get_input_type(0) {
+                Ok(Field::new(field_args.name(), return_type, true))
+            } else {
+                plan_err!(
+                    "dummy_udwf expects 1 argument, got {}: {:?}",
+                    field_args.input_types().len(),
+                    field_args.input_types()
+                )
+            }
         }
     }
 

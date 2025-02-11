@@ -21,6 +21,7 @@
 use async_trait::async_trait;
 use datafusion_common::{exec_err, DataFusionError};
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::table::TableProvider;
@@ -32,7 +33,7 @@ use datafusion_common::Result;
 ///
 /// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
-pub trait SchemaProvider: Sync + Send {
+pub trait SchemaProvider: Debug + Sync + Send {
     /// Returns the owner of the Schema, default is None. This value is reported
     /// as part of `information_tables.schemata
     fn owner_name(&self) -> Option<&str> {

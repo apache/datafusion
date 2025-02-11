@@ -70,7 +70,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .build()?;
                     (plan, alias)
                 } else {
-                    // normalize name and alias
+                    // Normalize name and alias
                     let table_ref = self.object_name_to_table_reference(name)?;
                     let table_name = table_ref.to_string();
                     let cte = planner_context.get_cte(&table_name);
@@ -163,7 +163,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         subquery: TableFactor,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // At this point for a syntacitally valid query the outer_from_schema is
+        // At this point for a syntactically valid query the outer_from_schema is
         // guaranteed to be set, so the `.unwrap()` call will never panic. This
         // is the case because we only call this method for lateral table
         // factors, and those can never be the first factor in a FROM list. This

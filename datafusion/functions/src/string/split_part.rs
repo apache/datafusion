@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::strings::StringArrayType;
+use crate::utils::utf8_to_str_type;
 use arrow::array::{
     ArrayRef, GenericStringArray, Int64Array, OffsetSizeTrait, StringViewArray,
 };
@@ -23,15 +25,11 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::ScalarValue;
 use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::TypeSignature::*;
-use datafusion_expr::{ColumnarValue, Volatility};
+use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
+use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use std::any::Any;
-use std::sync::Arc;
-
-use crate::utils::utf8_to_str_type;
-
-use super::common::StringArrayType;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]
 pub struct SplitPartFunc {
@@ -50,15 +48,15 @@ impl SplitPartFunc {
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Utf8View, Utf8View, Int64]),
-                    Exact(vec![Utf8View, Utf8, Int64]),
-                    Exact(vec![Utf8View, LargeUtf8, Int64]),
-                    Exact(vec![Utf8, Utf8View, Int64]),
-                    Exact(vec![Utf8, Utf8, Int64]),
-                    Exact(vec![LargeUtf8, Utf8View, Int64]),
-                    Exact(vec![LargeUtf8, Utf8, Int64]),
-                    Exact(vec![Utf8, LargeUtf8, Int64]),
-                    Exact(vec![LargeUtf8, LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8View, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, Utf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8View, LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Utf8View, Int64]),
+                    TypeSignature::Exact(vec![Utf8, Utf8, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, Utf8View, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, Utf8, Int64]),
+                    TypeSignature::Exact(vec![Utf8, LargeUtf8, Int64]),
+                    TypeSignature::Exact(vec![LargeUtf8, LargeUtf8, Int64]),
                 ],
                 Volatility::Immutable,
             ),
@@ -178,6 +176,34 @@ impl ScalarUDFImpl for SplitPartFunc {
             result.map(ColumnarValue::Array)
         }
     }
+
+    fn documentation(&self) -> Option<&Documentation> {
+        Some(get_split_part_doc())
+    }
+}
+
+static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+
+fn get_split_part_doc() -> &'static Documentation {
+    DOCUMENTATION.get_or_init(|| {
+        Documentation::builder()
+            .with_doc_section(DOC_SECTION_STRING)
+            .with_description("Splits a string based on a specified delimiter and returns the substring in the specified position.")
+            .with_syntax_example("split_part(str, delimiter, pos)")
+            .with_sql_example(r#"```sql
+> select split_part('1.2.3.4.5', '.', 3);
++--------------------------------------------------+
+| split_part(Utf8("1.2.3.4.5"),Utf8("."),Int64(3)) |
++--------------------------------------------------+
+| 3                                                |
++--------------------------------------------------+
+```"#)
+            .with_standard_argument("str", Some("String"))
+            .with_argument("delimiter", "String or character to split on.")
+            .with_argument("pos", "Position of the part to return.")
+            .build()
+            .unwrap()
+    })
 }
 
 /// impl

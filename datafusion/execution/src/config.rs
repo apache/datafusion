@@ -432,6 +432,20 @@ impl SessionConfig {
         self
     }
 
+    /// Enables or disables the enforcement of batch size in joins
+    pub fn with_enforce_batch_size_in_joins(
+        mut self,
+        enforce_batch_size_in_joins: bool,
+    ) -> Self {
+        self.options.execution.enforce_batch_size_in_joins = enforce_batch_size_in_joins;
+        self
+    }
+
+    /// Returns true if the joins will be enforced to output batches of the configured size
+    pub fn enforce_batch_size_in_joins(&self) -> bool {
+        self.options.execution.enforce_batch_size_in_joins
+    }
+
     /// Convert configuration options to name-value pairs with values
     /// converted to strings.
     ///

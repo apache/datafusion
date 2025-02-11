@@ -530,19 +530,6 @@ pub enum WindowFn {
     Aggregate(Box<dyn Accumulator>),
 }
 
-/// State for the RANK(percent_rank, rank, dense_rank) built-in window function.
-#[derive(Debug, Clone, Default)]
-pub struct RankState {
-    /// The last values for rank as these values change, we increase n_rank
-    pub last_rank_data: Option<Vec<ScalarValue>>,
-    /// The index where last_rank_boundary is started
-    pub last_rank_boundary: usize,
-    /// Keep the number of entries in current rank
-    pub current_group_count: usize,
-    /// Rank number kept from the start
-    pub n_rank: usize,
-}
-
 /// Tag to differentiate special use cases of the NTH_VALUE built-in window function.
 #[derive(Debug, Copy, Clone)]
 pub enum NthValueKind {

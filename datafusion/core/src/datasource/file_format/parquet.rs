@@ -20,13 +20,15 @@
 use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
+use std::ops::Range;
 use std::sync::Arc;
 
 use super::write::demux::start_demuxer_task;
 use super::write::{create_writer, SharedBuffer};
 use super::{
-    coerce_file_schema_to_view_type, transform_schema_to_view, FileFormat,
-    FileFormatFactory, FileScanConfig,
+    coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
+    transform_binary_to_string, transform_schema_to_view, FileFormat, FileFormatFactory,
+    FilePushdownSupport, FileScanConfig,
 };
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
@@ -47,18 +49,20 @@ use datafusion_common::file_options::parquet_writer::ParquetWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
+    internal_datafusion_err, not_impl_err, DataFusionError, GetExt,
     DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::TaskContext;
+use datafusion_expr::dml::InsertOp;
+use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
-use bytes::{BufMut, BytesMut};
+use bytes::Bytes;
 use hashbrown::HashMap;
 use log::debug;
 use object_store::buffered::BufWriter;
@@ -69,9 +73,7 @@ use parquet::arrow::arrow_writer::{
 use parquet::arrow::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, AsyncArrowWriter,
 };
-#[allow(deprecated)]
-use parquet::file::footer::{decode_footer, decode_metadata};
-use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
+use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::format::FileMetaData;
@@ -79,12 +81,17 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinSet;
 
-use crate::datasource::physical_plan::parquet::ParquetExecBuilder;
+use crate::datasource::physical_plan::parquet::{
+    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
+};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use futures::{StreamExt, TryStreamExt};
+use futures::future::BoxFuture;
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
+use parquet::arrow::async_reader::MetadataFetch;
+use parquet::errors::ParquetError;
 
 /// Initial writing buffer size. Note this is just a size hint for efficiency. It
 /// will grow beyond the set value if needed.
@@ -247,11 +254,27 @@ impl ParquetFormat {
         self.options.global.schema_force_view_types
     }
 
-    /// If true, will use view types (StringView and BinaryView).
-    ///
-    /// Refer to [`Self::force_view_types`].
+    /// If true, will use view types. See [`Self::force_view_types`] for details
     pub fn with_force_view_types(mut self, use_views: bool) -> Self {
         self.options.global.schema_force_view_types = use_views;
+        self
+    }
+
+    /// Return `true` if binary types will be read as strings.
+    ///
+    /// If this returns true, DataFusion will instruct the parquet reader
+    /// to read binary columns such as `Binary` or `BinaryView` as the
+    /// corresponding string type such as `Utf8` or `LargeUtf8`.
+    /// The parquet reader has special optimizations for `Utf8` and `LargeUtf8`
+    /// validation, and such queries are significantly faster than reading
+    /// binary columns and then casting to string columns.
+    pub fn binary_as_string(&self) -> bool {
+        self.options.global.binary_as_string
+    }
+
+    /// If true, will read binary types as strings. See [`Self::binary_as_string`] for details
+    pub fn with_binary_as_string(mut self, binary_as_string: bool) -> Self {
+        self.options.global.binary_as_string = binary_as_string;
         self
     }
 }
@@ -344,6 +367,12 @@ impl FileFormat for ParquetFormat {
             Schema::try_merge(schemas)
         }?;
 
+        let schema = if self.binary_as_string() {
+            transform_binary_to_string(&schema)
+        } else {
+            schema
+        };
+
         let schema = if self.force_view_types() {
             transform_schema_to_view(&schema)
         } else {
@@ -401,7 +430,7 @@ impl FileFormat for ParquetFormat {
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if conf.overwrite {
+        if conf.insert_op != InsertOp::Append {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
         }
 
@@ -414,6 +443,54 @@ impl FileFormat for ParquetFormat {
             sink_schema,
             order_requirements,
         )) as _)
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        file_schema: &Schema,
+        table_schema: &Schema,
+        filters: &[&Expr],
+    ) -> Result<FilePushdownSupport> {
+        if !self.options().global.pushdown_filters {
+            return Ok(FilePushdownSupport::NoSupport);
+        }
+
+        let all_supported = filters.iter().all(|filter| {
+            can_expr_be_pushed_down_with_schemas(filter, file_schema, table_schema)
+        });
+
+        Ok(if all_supported {
+            FilePushdownSupport::Supported
+        } else {
+            FilePushdownSupport::NotSupportedForFilter
+        })
+    }
+}
+
+/// [`MetadataFetch`] adapter for reading bytes from an [`ObjectStore`]
+struct ObjectStoreFetch<'a> {
+    store: &'a dyn ObjectStore,
+    meta: &'a ObjectMeta,
+}
+
+impl<'a> ObjectStoreFetch<'a> {
+    fn new(store: &'a dyn ObjectStore, meta: &'a ObjectMeta) -> Self {
+        Self { store, meta }
+    }
+}
+
+impl<'a> MetadataFetch for ObjectStoreFetch<'a> {
+    fn fetch(
+        &mut self,
+        range: Range<usize>,
+    ) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+        async {
+            self.store
+                .get_range(&self.meta.location, range)
+                .await
+                .map_err(ParquetError::from)
+        }
+        .boxed()
     }
 }
 
@@ -428,60 +505,14 @@ pub async fn fetch_parquet_metadata(
     meta: &ObjectMeta,
     size_hint: Option<usize>,
 ) -> Result<ParquetMetaData> {
-    if meta.size < 8 {
-        return exec_err!("file size of {} is less than footer", meta.size);
-    }
+    let file_size = meta.size;
+    let fetch = ObjectStoreFetch::new(store, meta);
 
-    // If a size hint is provided, read more than the minimum size
-    // to try and avoid a second fetch.
-    let footer_start = if let Some(size_hint) = size_hint {
-        meta.size.saturating_sub(size_hint)
-    } else {
-        meta.size - 8
-    };
-
-    let suffix = store
-        .get_range(&meta.location, footer_start..meta.size)
-        .await?;
-
-    let suffix_len = suffix.len();
-
-    let mut footer = [0; 8];
-    footer.copy_from_slice(&suffix[suffix_len - 8..suffix_len]);
-
-    #[allow(deprecated)]
-    let length = decode_footer(&footer)?;
-
-    if meta.size < length + 8 {
-        return exec_err!(
-            "file size of {} is less than footer + metadata {}",
-            meta.size,
-            length + 8
-        );
-    }
-
-    // Did not fetch the entire file metadata in the initial read, need to make a second request
-    if length > suffix_len - 8 {
-        let metadata_start = meta.size - length - 8;
-        let remaining_metadata = store
-            .get_range(&meta.location, metadata_start..footer_start)
-            .await?;
-
-        let mut metadata = BytesMut::with_capacity(length);
-
-        metadata.put(remaining_metadata.as_ref());
-        metadata.put(&suffix[..suffix_len - 8]);
-
-        #[allow(deprecated)]
-        Ok(decode_metadata(metadata.as_ref())?)
-    } else {
-        let metadata_start = meta.size - length - 8;
-
-        #[allow(deprecated)]
-        Ok(decode_metadata(
-            &suffix[metadata_start - footer_start..suffix_len - 8],
-        )?)
-    }
+    ParquetMetaDataReader::new()
+        .with_prefetch_hint(size_hint)
+        .load_and_finish(fetch, file_size)
+        .await
+        .map_err(DataFusionError::from)
 }
 
 /// Read and parse the schema of the Parquet file at location `path`
@@ -544,6 +575,10 @@ pub fn statistics_from_parquet_meta_calc(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
+    if let Some(merged) = coerce_file_schema_to_string_type(&table_schema, &file_schema) {
+        file_schema = merged;
+    }
+
     if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &file_schema) {
         file_schema = merged;
     }
@@ -703,13 +738,14 @@ impl ParquetSink {
                 .iter()
                 .map(|(s, _)| s)
                 .collect();
-            Arc::new(Schema::new(
+            Arc::new(Schema::new_with_metadata(
                 schema
                     .fields()
                     .iter()
                     .filter(|f| !partition_names.contains(&f.name()))
                     .map(|f| (**f).clone())
                     .collect::<Vec<_>>(),
+                schema.metadata().clone(),
             ))
         } else {
             self.config.output_schema().clone()
@@ -2249,7 +2285,7 @@ mod tests {
             table_paths: vec![ListingTableUrl::parse("file:///")?],
             output_schema: schema.clone(),
             table_partition_cols: vec![],
-            overwrite: true,
+            insert_op: InsertOp::Overwrite,
             keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
@@ -2344,7 +2380,7 @@ mod tests {
             table_paths: vec![ListingTableUrl::parse("file:///")?],
             output_schema: schema.clone(),
             table_partition_cols: vec![("a".to_string(), DataType::Utf8)], // add partitioning
-            overwrite: true,
+            insert_op: InsertOp::Overwrite,
             keep_partition_by_columns: false,
         };
         let parquet_sink = Arc::new(ParquetSink::new(
@@ -2427,7 +2463,7 @@ mod tests {
                 table_paths: vec![ListingTableUrl::parse("file:///")?],
                 output_schema: schema.clone(),
                 table_partition_cols: vec![],
-                overwrite: true,
+                insert_op: InsertOp::Overwrite,
                 keep_partition_by_columns: false,
             };
             let parquet_sink = Arc::new(ParquetSink::new(
