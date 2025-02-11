@@ -40,11 +40,13 @@ async-compression = { version = "0.4.0", features = [
     "zstd",
     "tokio",
 ], optional = true }
+async-trait = { workspace = true }
 bytes = { workspace = true }
 bzip2 = { version = "0.5.0", optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
+datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
@@ -56,6 +58,7 @@ glob = "0.3.0"
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
+rand = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 url = { workspace = true }
@@ -63,7 +66,6 @@ xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
-async-trait = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
