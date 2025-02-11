@@ -716,6 +716,7 @@ fn get_valid_types(
                 if current_types.len() != 1 {
                     return Ok(vec![vec![]]);
                 }
+
                 match &current_types[0] {
                     DataType::Map(_, _) => vec![vec![current_types[0].clone()]],
                     _ => vec![vec![]],
