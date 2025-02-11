@@ -16,9 +16,8 @@
 // under the License.
 
 use arrow::array::builder::{Int32Builder, StringBuilder};
-use arrow::datatypes::{Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;

@@ -20,7 +20,7 @@
 use crate::error::{_schema_err, add_possible_columns_to_diag};
 use crate::utils::{parse_identifiers_normalized, quote_identifier};
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
-use arrow_schema::{Field, FieldRef};
+use arrow::datatypes::{Field, FieldRef};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
@@ -373,8 +373,7 @@ impl fmt::Display for Column {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::DataType;
-    use arrow_schema::SchemaBuilder;
+    use arrow::datatypes::{DataType, SchemaBuilder};
     use std::sync::Arc;
 
     fn create_qualified_schema(qualifier: &str, names: Vec<&str>) -> Result<DFSchema> {

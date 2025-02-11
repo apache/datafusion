@@ -38,7 +38,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 abi_stable = "0.11.3"
 arrow = { workspace = true, features = ["ffi"] }
-arrow-schema = { workspace = true }
 async-ffi = { version = "0.5.0", features = ["abi_stable"] }
 async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false }

@@ -19,7 +19,7 @@ use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColum
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
 use arrow::array::{cast::AsArray, Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
-use arrow_schema::DataType;
+use arrow::datatypes::DataType;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use itertools::izip;
 use std::iter;
@@ -212,8 +212,7 @@ mod tests {
 
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
     use arrow::array::{ArrayRef, Int64Array, NullBufferBuilder};
-    use arrow::datatypes::Int64Type;
-    use arrow_schema::DataType;
+    use arrow::datatypes::{DataType, Int64Type};
 
     use super::GroupColumn;
 

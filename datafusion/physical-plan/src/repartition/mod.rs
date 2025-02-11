@@ -1600,7 +1600,8 @@ mod tests {
 
 #[cfg(test)]
 mod test {
-    use arrow_schema::{DataType, Field, Schema, SortOptions};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
     use crate::memory::MemorySourceConfig;

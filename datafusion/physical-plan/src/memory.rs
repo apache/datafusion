@@ -34,8 +34,7 @@ use crate::projection::{
 use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
-use arrow::datatypes::SchemaRef;
-use arrow_schema::Schema;
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
     internal_err, plan_err, project_schema, Constraints, Result, ScalarValue,
 };
@@ -971,7 +970,8 @@ mod memory_exec_tests {
     use crate::source::DataSourceExec;
     use crate::ExecutionPlan;
 
-    use arrow_schema::{DataType, Field, Schema, SortOptions};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -1144,7 +1144,7 @@ mod tests {
     use crate::expressions::lit;
     use crate::test::{self, make_partition};
 
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::assert_batches_eq;
     use datafusion_common::stats::{ColumnStatistics, Precision};
     use futures::StreamExt;

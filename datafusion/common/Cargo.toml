@@ -52,7 +52,6 @@ apache-avro = { version = "0.17", default-features = false, features = [
 ], optional = true }
 arrow = { workspace = true }
 arrow-ipc = { workspace = true }
-arrow-schema = { workspace = true }
 base64 = "0.22.1"
 half = { workspace = true }
 hashbrown = { workspace = true }

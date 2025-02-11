@@ -28,8 +28,8 @@ use crate::datasource::physical_plan::{
 use crate::error::Result;
 
 use arrow::buffer::Buffer;
+use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
-use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -321,7 +321,7 @@ impl FileOpener for ArrowOpener {
                         footer_buf[..footer_len].try_into().unwrap(),
                     )
                     .map_err(|err| {
-                        arrow_schema::ArrowError::ParseError(format!(
+                        arrow::error::ArrowError::ParseError(format!(
                             "Unable to get root as footer: {err:?}"
                         ))
                     })?;

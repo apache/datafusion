@@ -23,8 +23,7 @@ use arrow::array::types::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow::array::{downcast_primitive, ArrayRef, RecordBatch};
-use arrow_schema::TimeUnit;
-use arrow_schema::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use datafusion_common::Result;
 
 use datafusion_expr::EmitTo;

@@ -18,9 +18,8 @@
 //! `ARRAY_AGG` aggregate implementation: [`ArrayAgg`]
 
 use arrow::array::{new_empty_array, Array, ArrayRef, AsArray, ListArray, StructArray};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, Fields};
 
-use arrow_schema::{Field, Fields};
 use datafusion_common::cast::as_list_array;
 use datafusion_common::utils::{get_row_at_idx, SingleRowListArrayBuilder};
 use datafusion_common::{exec_err, ScalarValue};
@@ -604,7 +603,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::Int64Array;
-    use arrow_schema::SortOptions;
+    use arrow::compute::SortOptions;
 
     use datafusion_common::utils::get_row_at_idx;
     use datafusion_common::{Result, ScalarValue};

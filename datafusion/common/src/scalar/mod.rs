@@ -55,10 +55,9 @@ use arrow::datatypes::{
     Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
     IntervalYearMonthType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type, DECIMAL128_MAX_PRECISION,
+    UInt8Type, UnionFields, UnionMode, DECIMAL128_MAX_PRECISION,
 };
 use arrow::util::display::{array_value_to_string, ArrayFormatter, FormatOptions};
-use arrow_schema::{UnionFields, UnionMode};
 
 use crate::format::DEFAULT_CAST_OPTIONS;
 use half::f16;
@@ -3979,9 +3978,9 @@ mod tests {
     use arrow::array::{types::Float64Type, NullBufferBuilder};
     use arrow::buffer::{Buffer, OffsetBuffer};
     use arrow::compute::{is_null, kernels};
+    use arrow::datatypes::Fields;
     use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
-    use arrow_schema::Fields;
     use chrono::NaiveDate;
     use rand::Rng;
 

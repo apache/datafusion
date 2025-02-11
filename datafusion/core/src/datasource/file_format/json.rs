@@ -43,11 +43,10 @@ use crate::physical_plan::{
 };
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::Schema;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::error::ArrowError;
 use arrow::json;
 use arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
-use arrow_schema::ArrowError;
 use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
@@ -438,9 +437,9 @@ mod tests {
     use crate::test::object_store::local_unpartitioned_file;
 
     use arrow::compute::concat_batches;
+    use arrow::datatypes::{DataType, Field};
     use arrow::json::ReaderBuilder;
     use arrow::util::pretty;
-    use arrow_schema::{DataType, Field};
     use datafusion_common::cast::as_int64_array;
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_batches_eq, internal_err};
