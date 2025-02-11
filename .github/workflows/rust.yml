@@ -352,8 +352,8 @@ jobs:
         uses: ./.github/actions/setup-windows-builder
       - name: Configure Fast Compilation Flags
         run: |
-          echo "RUSTFLAGS=-C target-cpu=native -C opt-level=3 -C lto=thin -C codegen-units=1" >> $env:GITHUB_ENV
-          echo "CARGO_PROFILE_RELEASE_LTO=true" >> $env:GITHUB_ENV
+          echo "RUSTFLAGS=-C target-cpu=native -C opt-level=3 -C codegen-units=1 -C debuginfo=line-tables-only -C incremental=false" >> $env:GITHUB_ENV
+          echo "CARGO_PROFILE_RELEASE_LTO=thin" >> $env:GITHUB_ENV
           echo "CARGO_PROFILE_RELEASE_PANIC=abort" >> $env:GITHUB_ENV
       - name: Run tests (excluding doctests)
         shell: bash
