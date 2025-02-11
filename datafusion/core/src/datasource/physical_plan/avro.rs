@@ -265,8 +265,8 @@ impl FileSource for AvroSource {
 #[cfg(feature = "avro")]
 mod private {
     use super::*;
-    use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
     use crate::datasource::physical_plan::FileMeta;
+    use crate::datasource::physical_plan::{FileOpenFuture, FileOpener};
 
     use bytes::Buf;
     use futures::StreamExt;
