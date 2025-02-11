@@ -38,6 +38,7 @@ datafusion = { workspace = true, features = [
     "crypto_expressions",
     "datetime_expressions",
     "encoding_expressions",
+    "nested_expressions",
     "parquet",
     "recursive_protection",
     "regex_expressions",
