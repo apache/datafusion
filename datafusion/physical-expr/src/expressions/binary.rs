@@ -795,41 +795,43 @@ pub fn similar_to(
 
 fn evaluate_statistics_logical(
     op: &Operator,
-    left_stat: &StatisticsV2,
-    right_stat: &StatisticsV2,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
 ) -> Result<StatisticsV2> {
-    match (left_stat, right_stat) {
-        (Bernoulli(lb), Bernoulli(rb)) => {
-            if *op == Operator::And {
-                match (lb.p_value().is_null(), rb.p_value().is_null()) {
-                    (false, false) => StatisticsV2::new_bernoulli(
-                        lb.p_value().mul_checked(rb.p_value())?,
-                    ),
-                    (false, true) if lb.p_value().eq(get_zero()) => Ok(left_stat.clone()),
-                    (true, false) if rb.p_value().eq(get_zero()) => {
-                        Ok(right_stat.clone())
-                    }
-                    _ => StatisticsV2::new_bernoulli(ScalarValue::Float64(None)),
+    if let (Bernoulli(lb), Bernoulli(rb)) = (left, right) {
+        let left_p = lb.p_value();
+        let right_p = rb.p_value();
+        let dt = left_p.data_type();
+        let zero = ScalarValue::new_zero(&dt)?;
+        let one = ScalarValue::new_one(&dt)?;
+        match op {
+            Operator::And => match (left_p.is_null(), right_p.is_null()) {
+                (false, false) => {
+                    StatisticsV2::new_bernoulli(left_p.mul_checked(right_p)?)
                 }
-            } else if *op == Operator::Or {
-                match (lb.p_value().is_null(), rb.p_value().is_null()) {
-                    (false, false) => {
-                        let p_mul_q = lb.p_value().mul_checked(rb.p_value())?;
-                        let p_plus_q = lb.p_value().add_checked(rb.p_value())?;
-                        let or_value = p_plus_q.sub_checked(p_mul_q)?;
-                        StatisticsV2::new_bernoulli(or_value)
-                    }
-                    (false, true) if lb.p_value().eq(get_one()) => Ok(left_stat.clone()),
-                    (true, false) if rb.p_value().eq(get_one()) => Ok(right_stat.clone()),
-                    _ => StatisticsV2::new_bernoulli(ScalarValue::Float64(None)),
+                (false, true) if left_p.eq(&zero) => Ok(left.clone()),
+                (true, false) if right_p.eq(&zero) => Ok(right.clone()),
+                _ => StatisticsV2::new_bernoulli(ScalarValue::try_from(&dt)?),
+            },
+            Operator::Or => match (left_p.is_null(), right_p.is_null()) {
+                (false, false) => {
+                    let sum = left_p.add_checked(right_p)?;
+                    let product = left_p.mul_checked(right_p)?;
+                    let or_success = sum.sub_checked(product)?;
+                    StatisticsV2::new_bernoulli(or_success)
                 }
-            } else {
+                (false, true) if left_p.eq(&one) => Ok(left.clone()),
+                (true, false) if right_p.eq(&one) => Ok(right.clone()),
+                _ => StatisticsV2::new_bernoulli(ScalarValue::try_from(&dt)?),
+            },
+            _ => {
                 not_impl_err!("Statistical evaluation only supports AND and OR operators")
             }
         }
-        (_, _) => internal_err!(
+    } else {
+        internal_err!(
             "Logical operators are only compatible with `Bernoulli` distributions"
-        ),
+        )
     }
 }
 
