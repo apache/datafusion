@@ -348,8 +348,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-windows-builder
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
       - name: Configure Fast Compilation Flags
         run: |
           echo "RUSTFLAGS=-C target-cpu=native -C opt-level=1 -C codegen-units=32 -C debuginfo=line-tables-only -C incremental=false" >> $env:GITHUB_ENV
