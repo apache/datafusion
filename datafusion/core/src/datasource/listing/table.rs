@@ -39,8 +39,7 @@ use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
 use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
 
-use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
-use arrow_schema::Schema;
+use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::{
     config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
     SchemaExt, ToDFSchema,
@@ -1205,8 +1204,8 @@ mod tests {
     };
     use datafusion_physical_plan::collect;
 
+    use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::SortOptions;
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};

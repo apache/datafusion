@@ -644,7 +644,8 @@ mod tests {
     use crate::test;
 
     use crate::source::DataSourceExec;
-    use arrow_schema::{DataType, SortOptions};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};

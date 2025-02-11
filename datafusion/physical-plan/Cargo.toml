@@ -42,7 +42,6 @@ path = "src/lib.rs"
 ahash = { workspace = true }
 arrow = { workspace = true }
 arrow-ord = { workspace = true }
-arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }

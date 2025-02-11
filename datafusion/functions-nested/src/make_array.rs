@@ -27,8 +27,11 @@ use arrow::array::{
     MutableArrayData, NullArray, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow_schema::DataType::{List, Null};
-use arrow_schema::{DataType, Field};
+use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    DataType::{List, Null},
+    Field,
+};
 use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::binary::{

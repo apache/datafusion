@@ -398,8 +398,7 @@ mod tests {
         TimestampNanosecondArray,
     };
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::SchemaRef;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{assert_batches_eq, assert_contains, DataFusionError};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::config::SessionConfig;

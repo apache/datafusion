@@ -586,7 +586,7 @@ mod tests {
         BinaryArray, BooleanArray, Float32Array, Int32Array, Int64Array, RecordBatch,
         StringArray, UInt64Array,
     };
-    use arrow_schema::{Field, Schema};
+    use arrow::datatypes::{Field, Schema};
 
     use crate::datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapterFactory,

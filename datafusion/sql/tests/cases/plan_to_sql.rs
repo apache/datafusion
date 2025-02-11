@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::{assert_contains, DFSchema, DFSchemaRef, Result, TableReference};
 use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,

@@ -23,9 +23,9 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
+use arrow::compute::SortOptions;
 use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};

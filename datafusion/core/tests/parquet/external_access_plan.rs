@@ -23,8 +23,8 @@ use std::sync::Arc;
 use crate::parquet::utils::MetricsFinder;
 use crate::parquet::{create_data_batch, Scenario};
 
+use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::SchemaRef;
 use datafusion::common::Result;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::{ParquetAccessPlan, RowGroupAccess};

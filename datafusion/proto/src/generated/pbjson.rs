@@ -97,7 +97,7 @@ impl serde::Serialize for AggregateExecNode {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
+        S: serde::Serializer, 
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;

@@ -30,8 +30,9 @@ use crate::{
 };
 
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-use arrow_schema::SchemaBuilder;
+use arrow::datatypes::{
+    DataType, Field, FieldRef, Fields, Schema, SchemaBuilder, SchemaRef,
+};
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -56,7 +57,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 ///
 /// ```rust
 /// use datafusion_common::{DFSchema, Column};
-/// use arrow_schema::{DataType, Field, Schema};
+/// use arrow::datatypes::{DataType, Field, Schema};
 ///
 /// let arrow_schema = Schema::new(vec![
 ///    Field::new("c1", DataType::Int32, false),
@@ -77,7 +78,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 ///
 /// ```rust
 /// use datafusion_common::{DFSchema, Column};
-/// use arrow_schema::{DataType, Field, Schema};
+/// use arrow::datatypes::{DataType, Field, Schema};
 ///
 /// let arrow_schema = Schema::new(vec![
 ///    Field::new("c1", DataType::Int32, false),
@@ -94,8 +95,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 ///
 /// ```rust
 /// use datafusion_common::DFSchema;
-/// use arrow_schema::Schema;
-/// use arrow::datatypes::Field;
+/// use arrow::datatypes::{Schema, Field};
 /// use std::collections::HashMap;
 ///
 /// let df_schema = DFSchema::from_unqualified_fields(vec![

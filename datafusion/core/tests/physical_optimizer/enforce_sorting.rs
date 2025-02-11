@@ -30,7 +30,7 @@ use crate::physical_optimizer::test_utils::{
 
 use datafusion_physical_plan::displayable;
 use arrow::compute::SortOptions;
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::{col, Column, NotExpr};

@@ -30,8 +30,7 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::{partition, SortColumn, SortOptions};
-use arrow::datatypes::{Field, SchemaRef};
-use arrow_schema::DataType;
+use arrow::datatypes::{DataType, Field, SchemaRef};
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;

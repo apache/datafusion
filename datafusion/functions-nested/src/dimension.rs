@@ -20,15 +20,17 @@
 use arrow::array::{
     Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait, UInt64Array,
 };
-use arrow::datatypes::{DataType, UInt64Type};
+use arrow::datatypes::{
+    DataType,
+    DataType::{FixedSizeList, LargeList, List, UInt64},
+    Field, UInt64Type,
+};
 use std::any::Any;
 
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, plan_err, Result};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
-use arrow_schema::DataType::{FixedSizeList, LargeList, List, UInt64};
-use arrow_schema::Field;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
