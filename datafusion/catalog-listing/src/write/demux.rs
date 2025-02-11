@@ -22,10 +22,10 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::datasource::listing::ListingTableUrl;
-use crate::datasource::physical_plan::FileSinkConfig;
-use crate::error::Result;
-use crate::physical_plan::SendableRecordBatchStream;
+use crate::url::ListingTableUrl;
+use crate::write::FileSinkConfig;
+use datafusion_common::error::Result;
+use datafusion_physical_plan::SendableRecordBatchStream;
 
 use arrow::array::{
     builder::UInt64Builder, cast::AsArray, downcast_dictionary_array, RecordBatch,
