@@ -540,11 +540,6 @@ fn type_union_resolution_coercion(
             match type_union_resolution_coercion(value_type, other_type) {
                 // Dict with View type is redundant, use value type instead
                 Some(DataType::Utf8View) => Some(DataType::Utf8View),
-                Some(DataType::BinaryView) => Some(DataType::BinaryView),
-                Some(DataType::ListView(field)) => Some(DataType::ListView(field)),
-                Some(DataType::LargeListView(field)) => {
-                    Some(DataType::LargeListView(field))
-                }
                 Some(new_value_type) => Some(DataType::Dictionary(
                     index_type.clone(),
                     Box::new(new_value_type),
@@ -600,6 +595,7 @@ fn type_union_resolution_coercion(
                 .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
                 .or_else(|| string_coercion(lhs_type, rhs_type))
                 .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
+                .or_else(|| binary_coercion(lhs_type, rhs_type))
         }
     }
 }
@@ -1296,6 +1292,12 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
         (List(lhs_field), List(rhs_field) | FixedSizeList(rhs_field, _))
         | (FixedSizeList(lhs_field, _), List(rhs_field)) => {
             Some(List(coerce_list_children(lhs_field, rhs_field)?))
+        }
+        (ListView(lhs_field), ListView(rhs_field)) => {
+            Some(ListView(coerce_list_children(lhs_field, rhs_field)?))
+        }
+        (LargeListView(lhs_field), LargeListView(rhs_field)) => {
+            Some(LargeListView(coerce_list_children(lhs_field, rhs_field)?))
         }
         _ => None,
     }
