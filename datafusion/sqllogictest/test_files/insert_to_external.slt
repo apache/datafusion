@@ -60,6 +60,7 @@ STORED AS parquet
 LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned/'
 PARTITIONED BY (b);
 
+#query error here because PARTITIONED BY (b) will make the b nullable to false
 query error
 insert into dictionary_encoded_parquet_partitioned
 select * from dictionary_encoded_values
@@ -80,6 +81,7 @@ STORED AS arrow
 LOCATION 'test_files/scratch/insert_to_external/arrow_dict_partitioned/'
 PARTITIONED BY (b);
 
+#query error here because PARTITIONED BY (b) will make the b nullable to false
 query error
 insert into dictionary_encoded_arrow_partitioned
 select * from dictionary_encoded_values
