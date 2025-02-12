@@ -23,12 +23,12 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
+use arrow::datatypes::SchemaRef;
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use arrow::datatypes::SchemaRef;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
