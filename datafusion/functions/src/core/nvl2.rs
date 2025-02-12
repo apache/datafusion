@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::take_function_args;
 use arrow::array::Array;
 use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, utils::take_function_args, Result};
 use datafusion_expr::{
     type_coercion::binary::comparison_coercion, ColumnarValue, Documentation,
     ScalarUDFImpl, Signature, Volatility,
