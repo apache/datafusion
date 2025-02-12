@@ -294,26 +294,41 @@ impl UniformDistribution {
         self.interval.data_type()
     }
 
+    /// Computes the mean value of this distribution. In case of improper
+    /// distributions (i.e. when the range is unbounded), the function returns
+    /// a `NULL` `ScalarValue`.
     pub fn mean(&self) -> Result<ScalarValue> {
-        // TODO: Can we ensure that this always returns a real number data type?
+        // TODO: Should we ensure that this always returns a real number data type?
         let dt = self.data_type();
         let two = ScalarValue::from(2).cast_to(&dt)?;
-        self.interval
+        let result = self
+            .interval
             .lower()
             .add_checked(self.interval.upper())?
-            .div(two)
+            .div(two);
+        debug_assert!(
+            !self.interval.is_unbounded() || result.as_ref().is_ok_and(|r| r.is_null())
+        );
+        result
     }
 
     pub fn median(&self) -> Result<ScalarValue> {
         self.mean()
     }
 
+    /// Computes the variance value of this distribution. In case of improper
+    /// distributions (i.e. when the range is unbounded), the function returns
+    /// a `NULL` `ScalarValue`.
     pub fn variance(&self) -> Result<ScalarValue> {
-        // TODO: Can we ensure that this always returns a real number data type?
+        // TODO: Should we ensure that this always returns a real number data type?
         let width = self.interval.width()?;
         let dt = width.data_type();
         let twelve = ScalarValue::from(12).cast_to(&dt)?;
-        width.mul_checked(&width)?.div(twelve)
+        let result = width.mul_checked(&width)?.div(twelve);
+        debug_assert!(
+            !self.interval.is_unbounded() || result.as_ref().is_ok_and(|r| r.is_null())
+        );
+        result
     }
 
     pub fn range(&self) -> &Interval {
@@ -362,7 +377,7 @@ impl ExponentialDistribution {
     }
 
     pub fn mean(&self) -> Result<ScalarValue> {
-        // TODO: Can we ensure that this always returns a real number data type?
+        // TODO: Should we ensure that this always returns a real number data type?
         let one = ScalarValue::new_one(&self.data_type())?;
         let tail_mean = one.div(&self.rate)?;
         if self.positive_tail {
@@ -373,7 +388,7 @@ impl ExponentialDistribution {
     }
 
     pub fn median(&self) -> Result<ScalarValue> {
-        // TODO: Can we ensure that this always returns a real number data type?
+        // TODO: Should we ensure that this always returns a real number data type?
         let ln_two = ScalarValue::from(LN_2).cast_to(&self.data_type())?;
         let tail_median = ln_two.div(&self.rate)?;
         if self.positive_tail {
@@ -384,7 +399,7 @@ impl ExponentialDistribution {
     }
 
     pub fn variance(&self) -> Result<ScalarValue> {
-        // TODO: Can we ensure that this always returns a real number data type?
+        // TODO: Should we ensure that this always returns a real number data type?
         let one = ScalarValue::new_one(&self.data_type())?;
         let rate_squared = self.rate.mul_checked(&self.rate)?;
         one.div(rate_squared)
@@ -465,20 +480,30 @@ impl BernoulliDistribution {
         &self.p
     }
 
+    /// Computes the median value of this distribution. In case of an unknown
+    /// success probability, the function returns a `NULL` `ScalarValue`.
     pub fn median(&self) -> Result<ScalarValue> {
         let dt = self.data_type();
-        let one = ScalarValue::new_one(&dt)?;
-        if one.sub_checked(&self.p)?.lt(&self.p) {
-            ScalarValue::new_one(&dt)
+        if self.p.is_null() {
+            ScalarValue::try_from(&dt)
         } else {
-            ScalarValue::new_zero(&dt)
+            let one = ScalarValue::new_one(&dt)?;
+            if one.sub_checked(&self.p)?.lt(&self.p) {
+                ScalarValue::new_one(&dt)
+            } else {
+                ScalarValue::new_zero(&dt)
+            }
         }
     }
 
+    /// Computes the variance value of this distribution. In case of an unknown
+    /// success probability, the function returns a `NULL` `ScalarValue`.
     pub fn variance(&self) -> Result<ScalarValue> {
         let dt = self.data_type();
         let one = ScalarValue::new_one(&dt)?;
-        one.sub_checked(&self.p)?.mul_checked(&self.p)
+        let result = one.sub_checked(&self.p)?.mul_checked(&self.p);
+        debug_assert!(!self.p.is_null() || result.as_ref().is_ok_and(|r| r.is_null()));
+        result
     }
 
     pub fn range(&self) -> Interval {

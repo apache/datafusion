@@ -413,6 +413,11 @@ impl Interval {
         lower_type
     }
 
+    /// Checks if the interval is unbounded (on either side).
+    pub fn is_unbounded(&self) -> bool {
+        self.lower.is_null() || self.upper.is_null()
+    }
+
     /// Casts this interval to `data_type` using `cast_options`.
     pub fn cast_to(
         &self,
@@ -870,9 +875,10 @@ impl Interval {
         }
     }
 
-    /// Compute the width of this interval; i.e. the difference between its
-    /// bounds. If the underlying data type doesn't support subtraction, this
-    /// function will return an error.
+    /// Computes the width of this interval; i.e. the difference between its
+    /// bounds. For unbounded intervals, this function will return a `NULL`
+    /// `ScalarValue` If the underlying data type doesn't support subtraction,
+    /// this function will return an error.
     pub fn width(&self) -> Result<ScalarValue> {
         let dt = self.data_type();
         let width_dt =

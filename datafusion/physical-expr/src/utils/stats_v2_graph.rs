@@ -249,8 +249,11 @@ pub fn create_bernoulli_from_comparison(
                     }
                 }
                 Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
-                    // TODO: We can handle inequality operators and calculate a `p` value
-                    //       instead of falling back to an unknown Bernoulli distribution.
+                    // TODO: We can handle inequality operators and calculate a
+                    // `p` value instead of falling back to an unknown Bernoulli
+                    // distribution. Note that the strict and non-strict inequalities
+                    // may require slightly different logic in case of real vs.
+                    // integral data types.
                 }
                 _ => {}
             }
@@ -289,18 +292,19 @@ pub fn new_unknown_from_binary_expr(
     )
 }
 
-/// Computes a mean value for a given binary operator and two statistics.
-/// The result is calculated based on the operator type for any statistics kind.
+/// Computes the mean value for the result of the given binary operation on
+/// two statistics.
 pub fn compute_mean(
     op: &Operator,
-    left_stat: &StatisticsV2,
-    right_stat: &StatisticsV2,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
 ) -> Result<ScalarValue> {
-    let (left_mean, right_mean) = (left_stat.mean()?, right_stat.mean()?);
+    let (left_mean, right_mean) = (left.mean()?, right.mean()?);
 
     match op {
         Operator::Plus => left_mean.add_checked(right_mean),
         Operator::Minus => left_mean.sub_checked(right_mean),
+        // Note the independence assumption below:
         Operator::Multiply => left_mean.mul_checked(right_mean),
         Operator::Divide => {
             // TODO: We can calculate the mean for division when we know the
@@ -316,51 +320,55 @@ pub fn compute_mean(
     }
 }
 
-/// Computes a median value for a given binary operator and two statistics.
-/// The median is calculable only between:
-/// [`Uniform`] and [`Uniform`] distributions,
-/// [`Gaussian`] and [`Gaussian`] distributions,
-/// and only for addition/subtraction.
+/// Computes the median value for the result of the given binary operation on
+/// two statistics. Currently, the median is calculable only for addition and
+/// subtraction operations on:
+/// - [`Uniform`] and [`Uniform`] distributions, and
+/// - [`Gaussian`] and [`Gaussian`] distributions.
 pub fn compute_median(
     op: &Operator,
-    left_stat: &StatisticsV2,
-    right_stat: &StatisticsV2,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
 ) -> Result<ScalarValue> {
-    let (left_median, right_median) = (left_stat.median()?, right_stat.median()?);
-    let target_type = StatisticsV2::target_type(&[&left_median, &right_median])?;
-
-    match (left_stat, right_stat) {
-        (Uniform(_), Uniform(_)) => {
-            if left_median.is_null() || right_median.is_null() {
-                Ok(ScalarValue::try_from(target_type)?)
-            } else {
-                match op {
-                    Operator::Plus => left_median.add_checked(right_median),
-                    Operator::Minus => left_median.sub_checked(right_median),
-                    _ => Ok(ScalarValue::try_from(target_type)?),
-                }
+    match (left, right) {
+        (Uniform(lu), Uniform(ru)) => {
+            let (left_median, right_median) = (lu.median()?, ru.median()?);
+            // Under the independence assumption, the result is a symmetric
+            // triangular distribution, so we can simply add/subtract the
+            // median values:
+            match op {
+                Operator::Plus => return left_median.add_checked(right_median),
+                Operator::Minus => return left_median.sub_checked(right_median),
+                _ => {}
             }
         }
+        // Under the independence assumption, the result is another Gaussian
+        // distribution, so we can simply add/subtract the median values:
         (Gaussian(lg), Gaussian(rg)) => match op {
-            Operator::Plus => lg.mean().add_checked(rg.mean()),
-            Operator::Minus => lg.mean().sub_checked(rg.mean()),
-            _ => Ok(ScalarValue::try_from(target_type)?),
+            Operator::Plus => return lg.mean().add_checked(rg.mean()),
+            Operator::Minus => return lg.mean().sub_checked(rg.mean()),
+            _ => {}
         },
-        // Any
-        _ => Ok(ScalarValue::try_from(target_type)?),
+        // Fall back to an unknown median value for other cases:
+        _ => {}
     }
+
+    let (left_median, right_median) = (left.median()?, right.median()?);
+    let target_type = StatisticsV2::target_type(&[&left_median, &right_median])?;
+    ScalarValue::try_from(target_type)
 }
 
-/// Computes a variance value for a given binary operator and two statistics.
+/// Computes the variance value for the result of the given binary operation on
+/// two statistics.
 pub fn compute_variance(
     op: &Operator,
-    left_stat: &StatisticsV2,
-    right_stat: &StatisticsV2,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
 ) -> Result<ScalarValue> {
-    let (left_variance, right_variance) = (left_stat.variance()?, right_stat.variance()?);
+    let (left_variance, right_variance) = (left.variance()?, right.variance()?);
     let target_type = StatisticsV2::target_type(&[&left_variance, &right_variance])?;
 
-    match (left_stat, right_stat) {
+    match (left, right) {
         (Uniform { .. }, Uniform { .. }) => {
             match op {
                 Operator::Plus | Operator::Minus => {
@@ -381,7 +389,7 @@ pub fn compute_variance(
             }
         }
         (Uniform(u), Exponential(e)) | (Exponential(e), Uniform(u)) => {
-            let (left_variance, right_variance) = (left_stat.mean()?, right_stat.mean()?);
+            let (left_variance, right_variance) = (left.mean()?, right.mean()?);
             let target_type =
                 StatisticsV2::target_type(&[&left_variance, &right_variance])?;
 
