@@ -27,9 +27,7 @@ use arrow_array::ArrowNativeTypeOp;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr_common::operator::Operator;
-use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-    Gaussian, Uniform, Unknown,
-};
+use datafusion_physical_expr_common::stats_v2::StatisticsV2::{Gaussian, Uniform};
 use datafusion_physical_expr_common::stats_v2::{get_one, get_zero, StatisticsV2};
 
 use log::debug;
@@ -48,7 +46,7 @@ pub struct ExprStatisticGraphNode {
 impl ExprStatisticGraphNode {
     /// Creates a DAEG node from DataFusion's [`ExprTreeNode`] object. Literals are creating
     /// [`Uniform`] distribution kind of statistic with definite, singleton intervals.
-    /// Otherwise, create [`Unknown`] statistic with an unbounded interval, by default.
+    /// Otherwise, create `Unknown` statistic with an unbounded interval, by default.
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
         let expr = Arc::clone(&node.expr);
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
@@ -82,7 +80,7 @@ impl ExprStatisticGraphNode {
         })
     }
 
-    /// Creates a new graph node with [`Unknown`] statistic.
+    /// Creates a new graph node with `Unknown` statistic.
     fn new_unknown(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> Result<Self> {
         Ok(ExprStatisticGraphNode {
             expr,
@@ -277,7 +275,7 @@ pub fn create_bernoulli_from_comparison(
     }
 }
 
-/// Creates a new statistic with [`Unknown`] distribution, and tries to compute
+/// Creates a new statistic with `Unknown` distribution, and tries to compute
 /// mean, median and variance if possible.
 pub fn new_unknown_from_binary_expr(
     op: &Operator,
@@ -288,7 +286,7 @@ pub fn new_unknown_from_binary_expr(
         compute_mean(op, left, right)?,
         compute_median(op, left, right)?,
         compute_variance(op, left, right)?,
-        compute_range(op, left, right)?,
+        apply_operator(op, &left.range()?, &right.range()?)?,
     )
 }
 
@@ -409,39 +407,6 @@ pub fn compute_variance(
     ScalarValue::try_from(target_type)
 }
 
-/// Computes range based on input statistics, where it is possible to compute.
-/// Otherwise, returns an unbounded interval.
-pub fn compute_range(
-    op: &Operator,
-    left_stat: &StatisticsV2,
-    right_stat: &StatisticsV2,
-) -> Result<Interval> {
-    let (left_range, right_range) = (left_stat.range()?, right_stat.range()?);
-    match (left_stat, right_stat) {
-        (Uniform(_), Uniform(_))
-        | (Uniform(_), Unknown(_))
-        | (Unknown(_), Uniform(_))
-        | (Unknown(_), Unknown(_)) => match op {
-            Operator::Plus
-            | Operator::Minus
-            | Operator::Multiply
-            | Operator::Gt
-            | Operator::GtEq
-            | Operator::Lt
-            | Operator::LtEq => apply_operator(op, &left_range, &right_range),
-            Operator::Eq => {
-                if let Some(intersection) = left_range.intersect(right_range)? {
-                    Ok(intersection)
-                } else {
-                    Interval::make_zero(&left_stat.data_type())
-                }
-            }
-            _ => Interval::make_unbounded(&DataType::Float64),
-        },
-        (_, _) => Interval::make_unbounded(&DataType::Float64),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -449,8 +414,8 @@ mod tests {
     use crate::expressions::{binary, try_cast, BinaryExpr, Column};
     use crate::intervals::cp_solver::PropagationResult;
     use crate::utils::stats_v2_graph::{
-        compute_mean, compute_median, compute_range, compute_variance, get_one,
-        ExprStatisticGraph,
+        compute_mean, compute_median, compute_variance, create_bernoulli_from_comparison,
+        get_one, new_unknown_from_binary_expr, ExprStatisticGraph,
     };
 
     use arrow_schema::{DataType, Field, Schema};
@@ -571,7 +536,7 @@ mod tests {
                 StatisticsV2::new_unknown(
                     mean.clone(),
                     mean.clone(),
-                    ScalarValue::Null,
+                    Float64(None),
                     a.clone(),
                 )?,
                 StatisticsV2::new_uniform(b.clone())?,
@@ -581,7 +546,7 @@ mod tests {
                 StatisticsV2::new_unknown(
                     mean.clone(),
                     mean.clone(),
-                    ScalarValue::Null,
+                    Float64(None),
                     b.clone(),
                 )?,
             ),
@@ -589,32 +554,35 @@ mod tests {
                 StatisticsV2::new_unknown(
                     mean.clone(),
                     mean.clone(),
-                    ScalarValue::Null,
+                    Float64(None),
                     a.clone(),
                 )?,
                 StatisticsV2::new_unknown(
                     mean.clone(),
                     mean.clone(),
-                    ScalarValue::Null,
+                    Float64(None),
                     b.clone(),
                 )?,
             ),
         ] {
-            // range
-            for op in [Plus, Minus, Multiply, Gt, GtEq, Lt, LtEq] {
+            for op in [Plus, Minus, Multiply] {
                 assert_eq!(
-                    compute_range(&op, &stat_a, &stat_b)?,
+                    new_unknown_from_binary_expr(&op, &stat_a, &stat_b)?.range()?,
                     apply_operator(&op, a, b)?,
                     "Failed for {:?} {op} {:?}",
                     stat_a,
                     stat_b
                 );
             }
-
-            assert_eq!(
-                compute_range(&Eq, &stat_a, &stat_b)?,
-                Interval::make(Some(0.0), Some(12.0))?,
-            );
+            for op in [Gt, GtEq, Lt, LtEq, Eq] {
+                assert_eq!(
+                    create_bernoulli_from_comparison(&op, &stat_a, &stat_b)?.range()?,
+                    apply_operator(&op, a, b)?,
+                    "Failed for {:?} {op} {:?}",
+                    stat_a,
+                    stat_b
+                );
+            }
         }
 
         Ok(())
