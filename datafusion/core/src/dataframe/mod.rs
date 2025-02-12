@@ -1801,7 +1801,8 @@ impl DataFrame {
             .iter()
             .map(|(qualifier, field)| {
                 if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                    col(Column::from((qualifier, field))).alias(new_name)
+                    col(Column::from((qualifier, field)))
+                        .alias_qualified(qualifier.cloned(), new_name)
                 } else {
                     col(Column::from((qualifier, field)))
                 }

@@ -835,7 +835,8 @@ impl LogicalPlanBuilder {
         column: impl Into<Column>,
     ) -> Result<Column> {
         let column = column.into();
-        if column.relation.is_some() { // column is already normalized
+        if column.relation.is_some() {
+            // column is already normalized
             return Ok(column);
         }
 
