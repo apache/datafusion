@@ -192,17 +192,17 @@ unused_qualifications = "deny"
 
 # temporary patch until 54.2.0 is released
 [patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "688c46413f82f5fe40587cd5b5e8e856b6236cc0" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "7cad409308d4a5e7ea251c66ec18e39a41f86ef5" }
 
 
