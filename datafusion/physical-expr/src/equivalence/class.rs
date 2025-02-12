@@ -755,12 +755,11 @@ impl Display for EquivalenceGroup {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::equivalence::tests::create_test_params;
     use crate::expressions::{binary, col, lit, BinaryExpr, Literal};
+    use arrow::datatypes::{DataType, Field, Schema};
 
-    use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::Operator;
 
