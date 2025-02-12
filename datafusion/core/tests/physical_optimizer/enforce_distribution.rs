@@ -367,7 +367,6 @@ macro_rules! plans_matches_expected {
 /// * `FIRST_ENFORCE_DIST` -
 ///     true: (EnforceDistribution, EnforceDistribution,  EnforceSorting)
 ///     false: else runs (EnforceSorting, EnforceDistribution, EnforceDistribution)
-/// * `PREFER_EXISTING_SORT` (optional) - if true, will not repartition / resort data if it is already sorted
 /// * `TARGET_PARTITIONS` (optional) - number of partitions to repartition to
 /// * `REPARTITION_FILE_SCANS` (optional) - if true, will repartition file scans
 /// * `REPARTITION_FILE_MIN_SIZE` (optional) - minimum file size to repartition

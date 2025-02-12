@@ -3220,9 +3220,6 @@ WITH ORDER (a ASC NULLS FIRST, b ASC, c ASC)
 LOCATION '../core/tests/data/window_2.csv'
 OPTIONS ('format.has_header' 'true');
 
-statement ok
-set datafusion.optimizer.prefer_existing_sort = true;
-
 # sort merge join should propagate ordering equivalence of the left side
 # for inner join. Hence final requirement rn1 ASC is already satisfied at
 # the end of SortMergeJoinExec.
@@ -3290,9 +3287,6 @@ physical_plan
 10)----------ProjectionExec: expr=[a0@0 as a0, a@1 as a, b@2 as b, c@3 as c, d@4 as d, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@5 as rn1]
 11)------------BoundedWindowAggExec: wdw=[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
 12)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, a, b, c, d], output_ordering=[a@1 ASC, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST], file_type=csv, has_header=true
-
-statement ok
-set datafusion.optimizer.prefer_existing_sort = false;
 
 # SortMergeJoin should add ordering equivalences of
 # right table as lexicographical append to the global ordering
@@ -3475,10 +3469,6 @@ physical_plan
 statement ok
 set datafusion.execution.target_partitions = 2;
 
-# use bounded variants
-statement ok
-set datafusion.optimizer.prefer_existing_sort = true;
-
 query TT
 EXPLAIN SELECT l.a, LAST_VALUE(r.b ORDER BY r.a ASC NULLS FIRST) as last_col1
 FROM annotated_data as l
@@ -3563,9 +3553,6 @@ set datafusion.optimizer.prefer_hash_join = true;
 
 statement ok
 set datafusion.execution.target_partitions = 2;
-
-statement ok
-set datafusion.optimizer.prefer_existing_sort = false;
 
 statement ok
 drop table annotated_data;

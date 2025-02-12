@@ -5476,9 +5476,6 @@ LOCATION '../../testing/data/csv/aggregate_test_100.csv'
 WITH ORDER (c1)
 OPTIONS ('format.has_header' 'true');
 
-statement ok
-set datafusion.optimizer.prefer_existing_sort = true;
-
 query TT
 EXPLAIN SELECT c1, SUM(c9) OVER(PARTITION BY c1) as sum_c9 FROM aggregate_test_100_ordered ORDER BY c1, sum_c9;
 ----

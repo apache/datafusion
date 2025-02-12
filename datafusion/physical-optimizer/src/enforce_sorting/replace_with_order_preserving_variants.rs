@@ -25,12 +25,11 @@ use crate::utils::{
     is_coalesce_partitions, is_repartition, is_sort, is_sort_preserving_merge,
 };
 
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{EmissionType, RequiredInputOrdering};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
@@ -238,16 +237,17 @@ pub fn replace_with_order_preserving_variants(
     // `SortExec` from the plan. If this flag is `false`, this replacement
     // should only be made to fix the pipeline (streaming).
     is_spm_better: bool,
-    config: &ConfigOptions,
 ) -> Result<Transformed<OrderPreservationContext>> {
     update_children(&mut requirements);
     if !(is_sort(&requirements.plan) && requirements.children[0].data) {
         return Ok(Transformed::no(requirements));
     }
+    let requirement = requirements.plan.required_input_ordering()[0].clone();
 
     // For unbounded cases, we replace with the order-preserving variant in any
     // case, as doing so helps fix the pipeline. Also replace if config allows.
-    let use_order_preserving_variant = config.optimizer.prefer_existing_sort
+    let use_order_preserving_variant = (requirement.is_some()
+        && matches!(requirement.unwrap(), RequiredInputOrdering::Hard(_)))
         || (requirements.plan.boundedness().is_unbounded()
             && requirements.plan.pipeline_behavior() == EmissionType::Final);
 

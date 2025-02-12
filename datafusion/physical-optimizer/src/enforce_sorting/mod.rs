@@ -184,7 +184,6 @@ impl PhysicalOptimizerRule for EnforceSorting {
                     plan_with_pipeline_fixer,
                     false,
                     true,
-                    config,
                 )
             })
             .data()?;
@@ -400,7 +399,7 @@ fn analyze_immediate_sort_removal(
     mut node: PlanWithCorrespondingSort,
 ) -> Transformed<PlanWithCorrespondingSort> {
     let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() else {
-        return Transformed::no(node)
+        return Transformed::no(node);
     };
     let sort_input = sort_exec.input();
     // Check if the sort is unnecessary
@@ -410,7 +409,7 @@ fn analyze_immediate_sort_removal(
             .output_ordering()
             .unwrap_or(LexOrdering::empty()),
     ) {
-        return Transformed::no(node)
+        return Transformed::no(node);
     };
     node.plan = if !sort_exec.preserve_partitioning()
         && sort_input.output_partitioning().partition_count() > 1
@@ -432,11 +431,7 @@ fn analyze_immediate_sort_removal(
                 .partition_count()
                 == 1
             {
-                Arc::new(GlobalLimitExec::new(
-                    Arc::clone(sort_input),
-                    0,
-                    Some(fetch),
-                ))
+                Arc::new(GlobalLimitExec::new(Arc::clone(sort_input), 0, Some(fetch)))
             } else {
                 Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
             }
