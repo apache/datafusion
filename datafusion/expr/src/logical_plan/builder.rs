@@ -1090,7 +1090,7 @@ impl LogicalPlanBuilder {
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        self._aggregate(group_expr, aggr_expr, true)
+        self.aggregate_inner(group_expr, aggr_expr, true)
     }
 
     pub fn aggregate_without_implicit_group_by_exprs(
@@ -1098,22 +1098,23 @@ impl LogicalPlanBuilder {
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        self._aggregate(group_expr, aggr_expr, false)
+        self.aggregate_inner(group_expr, aggr_expr, false)
     }
 
-    fn _aggregate(
+    fn aggregate_inner(
         self,
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
         include_implicit_group_by_exprs: bool,
     ) -> Result<Self> {
-        let mut group_expr = normalize_cols(group_expr, &self.plan)?;
+        let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
 
-        if include_implicit_group_by_exprs {
-            group_expr =
-                add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
-        }
+        let group_expr = if include_implicit_group_by_exprs {
+            add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?
+        } else {
+            group_expr
+        };
 
         Aggregate::try_new(self.plan, group_expr, aggr_expr)
             .map(LogicalPlan::Aggregate)
