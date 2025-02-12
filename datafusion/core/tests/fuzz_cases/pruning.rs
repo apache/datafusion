@@ -17,8 +17,8 @@
 
 use std::sync::{Arc, OnceLock};
 
-use arrow_array::{Array, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema};
+use arrow::array::{Array, RecordBatch, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use bytes::{BufMut, Bytes, BytesMut};
 use datafusion::{
     datasource::{

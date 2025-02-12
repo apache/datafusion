@@ -393,12 +393,12 @@ mod tests {
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
 
-    use arrow::array::{ArrayRef, Int32Array, StringArray, TimestampNanosecondArray};
+    use arrow::array::{
+        ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray,
+        TimestampNanosecondArray,
+    };
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::Int64Array;
-    use arrow_schema::SchemaRef;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{assert_batches_eq, assert_contains, DataFusionError};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::config::SessionConfig;

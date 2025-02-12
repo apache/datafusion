@@ -21,9 +21,9 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
+use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
 use arrow::compute::{can_cast_types, cast};
-use arrow_array::{new_null_array, RecordBatch, RecordBatchOptions};
-use arrow_schema::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::plan_err;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -434,10 +434,9 @@ mod tests {
     use std::sync::Arc;
 
     use crate::assert_batches_sorted_eq;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::array::{Int32Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use arrow_array::{Int32Array, StringArray};
-    use arrow_schema::{DataType, SchemaRef};
     use object_store::path::Path;
     use object_store::ObjectMeta;
 

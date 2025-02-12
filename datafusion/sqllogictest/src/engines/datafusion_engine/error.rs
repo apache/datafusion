@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::error::ArrowError;
-use datafusion_common::DataFusionError;
+use datafusion::error::DataFusionError;
 use sqllogictest::TestError;
 use sqlparser::parser::ParserError;
 use thiserror::Error;

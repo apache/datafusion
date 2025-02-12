@@ -21,8 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
-use arrow_schema::TimeUnit::Nanosecond;
-use arrow_schema::*;
+use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
@@ -551,6 +550,19 @@ fn plan_delete() {
 Dml: op=[Delete] table=[person]
   Filter: id = Int64(1)
     TableScan: person
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_delete_quoted_identifier_case_sensitive() {
+    let sql =
+        "DELETE FROM \"SomeCatalog\".\"SomeSchema\".\"UPPERCASE_test\" WHERE \"Id\" = 1";
+    let plan = r#"
+Dml: op=[Delete] table=[SomeCatalog.SomeSchema.UPPERCASE_test]
+  Filter: Id = Int64(1)
+    TableScan: SomeCatalog.SomeSchema.UPPERCASE_test
     "#
     .trim();
     quick_test(sql, plan);

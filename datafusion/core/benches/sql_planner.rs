@@ -23,8 +23,8 @@ extern crate datafusion;
 mod data_utils;
 
 use crate::criterion::Criterion;
+use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, Fields, Schema};
-use arrow_array::{ArrayRef, RecordBatch};
 use criterion::Bencher;
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;

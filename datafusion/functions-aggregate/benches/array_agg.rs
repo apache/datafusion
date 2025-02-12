@@ -20,9 +20,8 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
 };
-use arrow::datatypes::Int64Type;
+use arrow::datatypes::{Field, Int64Type};
 use arrow::util::bench_util::create_primitive_array;
-use arrow_schema::Field;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;

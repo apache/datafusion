@@ -31,7 +31,7 @@ use crate::datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 
-use arrow_schema::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::Statistics;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -196,7 +196,7 @@ use object_store::ObjectStore;
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::{Schema, SchemaRef};
+/// # use arrow::datatypes::{Schema, SchemaRef};
 /// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
@@ -585,5 +585,8 @@ impl FileSource for ParquetSource {
                 write!(f, "{}{}", predicate_string, pruning_predicate_string)
             }
         }
+    }
+    fn supports_repartition(&self, _config: &FileScanConfig) -> bool {
+        true
     }
 }

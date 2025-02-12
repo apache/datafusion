@@ -28,8 +28,8 @@ use crate::datasource::physical_plan::{
 use crate::error::Result;
 
 use arrow::buffer::Buffer;
+use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
-use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -256,6 +256,10 @@ impl FileSource for ArrowSource {
     fn file_type(&self) -> &str {
         "arrow"
     }
+
+    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
+        !(config.file_compression_type.is_compressed() || config.new_lines_in_values)
+    }
 }
 
 /// The struct arrow that implements `[FileOpener]` trait
@@ -317,7 +321,7 @@ impl FileOpener for ArrowOpener {
                         footer_buf[..footer_len].try_into().unwrap(),
                     )
                     .map_err(|err| {
-                        arrow_schema::ArrowError::ParseError(format!(
+                        arrow::error::ArrowError::ParseError(format!(
                             "Unable to get root as footer: {err:?}"
                         ))
                     })?;

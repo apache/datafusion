@@ -19,7 +19,7 @@
 
 use std::vec;
 
-use arrow_schema::{
+use arrow::datatypes::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::tree_node::{
@@ -650,8 +650,7 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
 mod tests {
     use std::{ops::Add, sync::Arc};
 
-    use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-    use arrow_schema::Fields;
+    use arrow::datatypes::{DataType as ArrowDataType, Field, Fields, Schema};
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
         col, lit, unnest, ColumnUnnestList, EmptyRelation, LogicalPlan,

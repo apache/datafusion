@@ -24,8 +24,11 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::ArrowNativeType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List};
-use arrow_schema::{DataType, FieldRef};
+use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    DataType::{FixedSizeList, LargeList, List},
+    FieldRef,
+};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{
@@ -239,7 +242,7 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         null_builder.finish(),
     )?))
 }

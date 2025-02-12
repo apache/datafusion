@@ -27,8 +27,8 @@ use std::{cmp::Ordering, collections::BinaryHeap, sync::Arc};
 use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
-use arrow_array::{Array, ArrayRef, RecordBatch};
-use arrow_schema::SchemaRef;
+use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::datatypes::SchemaRef;
 use datafusion_common::HashMap;
 use datafusion_common::Result;
 use datafusion_execution::{
@@ -647,10 +647,8 @@ impl RecordBatchStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int32Array;
+    use arrow::array::{Float64Array, Int32Array, RecordBatch};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::Float64Array;
 
     /// This test ensures the size calculation is correct for RecordBatches with multiple columns.
     #[test]

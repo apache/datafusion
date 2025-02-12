@@ -78,8 +78,6 @@ pub struct BoundedWindowAggExec {
     window_expr: Vec<Arc<dyn WindowExpr>>,
     /// Schema after the window is run
     schema: SchemaRef,
-    /// Partition Keys
-    pub partition_keys: Vec<Arc<dyn PhysicalExpr>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Describes how the input is ordered relative to the partition keys
@@ -93,6 +91,8 @@ pub struct BoundedWindowAggExec {
     ordered_partition_by_indices: Vec<usize>,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
+    /// If `can_rerepartition` is false, partition_keys is always empty.
+    can_repartition: bool,
 }
 
 impl BoundedWindowAggExec {
@@ -100,8 +100,8 @@ impl BoundedWindowAggExec {
     pub fn try_new(
         window_expr: Vec<Arc<dyn WindowExpr>>,
         input: Arc<dyn ExecutionPlan>,
-        partition_keys: Vec<Arc<dyn PhysicalExpr>>,
         input_order_mode: InputOrderMode,
+        can_repartition: bool,
     ) -> Result<Self> {
         let schema = create_schema(&input.schema(), &window_expr)?;
         let schema = Arc::new(schema);
@@ -128,11 +128,11 @@ impl BoundedWindowAggExec {
             input,
             window_expr,
             schema,
-            partition_keys,
             metrics: ExecutionPlanMetricsSet::new(),
             input_order_mode,
             ordered_partition_by_indices,
             cache,
+            can_repartition,
         })
     }
 
@@ -209,6 +209,23 @@ impl BoundedWindowAggExec {
             input.boundedness(),
         )
     }
+
+    pub fn partition_keys(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        if !self.can_repartition {
+            vec![]
+        } else {
+            let all_partition_keys = self
+                .window_expr()
+                .iter()
+                .map(|expr| expr.partition_by().to_vec())
+                .collect::<Vec<_>>();
+
+            all_partition_keys
+                .into_iter()
+                .min_by_key(|s| s.len())
+                .unwrap_or_else(Vec::new)
+        }
+    }
 }
 
 impl DisplayAs for BoundedWindowAggExec {
@@ -269,11 +286,11 @@ impl ExecutionPlan for BoundedWindowAggExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        if self.partition_keys.is_empty() {
+        if self.partition_keys().is_empty() {
             debug!("No partition defined for BoundedWindowAggExec!!!");
             vec![Distribution::SinglePartition]
         } else {
-            vec![Distribution::HashPartitioned(self.partition_keys.clone())]
+            vec![Distribution::HashPartitioned(self.partition_keys().clone())]
         }
     }
 
@@ -288,8 +305,8 @@ impl ExecutionPlan for BoundedWindowAggExec {
         Ok(Arc::new(BoundedWindowAggExec::try_new(
             self.window_expr.clone(),
             Arc::clone(&children[0]),
-            self.partition_keys.clone(),
             self.input_order_mode.clone(),
+            self.can_repartition,
         )?))
     }
 
@@ -1181,9 +1198,12 @@ mod tests {
     };
     use crate::{execute_stream, get_plan_string, ExecutionPlan};
 
-    use arrow_array::builder::{Int64Builder, UInt64Builder};
-    use arrow_array::RecordBatch;
-    use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+    use arrow::array::{
+        builder::{Int64Builder, UInt64Builder},
+        RecordBatch,
+    };
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{
         assert_batches_eq, exec_datafusion_err, Result, ScalarValue,
     };
@@ -1327,8 +1347,8 @@ mod tests {
                 false,
             )?],
             input,
-            partitionby_exprs,
             input_order_mode,
+            true,
         )?))
     }
 
@@ -1528,7 +1548,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
-            vec![Arc::new(arrow_array::Int32Array::from(vec![1, 2, 3]))],
+            vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
         let memory_exec = MemorySourceConfig::try_new_exec(
@@ -1608,8 +1628,8 @@ mod tests {
         let physical_plan = BoundedWindowAggExec::try_new(
             window_exprs,
             memory_exec,
-            vec![],
             InputOrderMode::Sorted,
+            true,
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
 

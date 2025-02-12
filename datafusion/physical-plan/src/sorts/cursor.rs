@@ -17,15 +17,14 @@
 
 use std::cmp::Ordering;
 
-use arrow::buffer::ScalarBuffer;
-use arrow::buffer::{Buffer, OffsetBuffer};
+use arrow::array::{
+    types::ByteArrayType, Array, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait,
+    PrimitiveArray,
+};
+use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::SortOptions;
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::Rows;
-use arrow_array::types::ByteArrayType;
-use arrow_array::{
-    Array, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait, PrimitiveArray,
-};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 /// A comparable collection of values for use with [`Cursor`]

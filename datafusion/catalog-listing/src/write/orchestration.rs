@@ -23,10 +23,10 @@ use std::sync::Arc;
 
 use super::demux::DemuxedStreamReceiver;
 use super::{create_writer, BatchSerializer};
-use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::error::Result;
+use crate::file_compression_type::FileCompressionType;
+use datafusion_common::error::Result;
 
-use arrow_array::RecordBatch;
+use arrow::array::RecordBatch;
 use datafusion_common::{internal_datafusion_err, internal_err, DataFusionError};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -237,7 +237,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
 /// Orchestrates multipart put of a dynamic number of output files from a single input stream
 /// for any statelessly serialized file type. That is, any file type for which each [RecordBatch]
 /// can be serialized independently of all other [RecordBatch]s.
-pub(crate) async fn spawn_writer_tasks_and_join(
+pub async fn spawn_writer_tasks_and_join(
     context: &Arc<TaskContext>,
     serializer: Arc<dyn BatchSerializer>,
     compression: FileCompressionType,

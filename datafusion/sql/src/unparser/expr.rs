@@ -26,15 +26,16 @@ use std::vec;
 
 use super::dialect::IntervalStyle;
 use super::Unparser;
-use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
-use arrow::util::display::array_value_to_string;
-use arrow_array::types::{
-    ArrowTemporalType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+use arrow::array::{
+    types::{
+        ArrowTemporalType, Time32MillisecondType, Time32SecondType,
+        Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
+    },
+    ArrayRef, Date32Array, Date64Array, PrimitiveArray,
 };
-use arrow_array::{ArrayRef, Date32Array, Date64Array, PrimitiveArray};
-use arrow_schema::DataType;
+use arrow::datatypes::{DataType, Decimal128Type, Decimal256Type, DecimalType};
+use arrow::util::display::array_value_to_string;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
     ScalarValue,
@@ -1646,10 +1647,8 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{any::Any, sync::Arc, vec};
 
-    use arrow::datatypes::{Field, Schema};
-    use arrow::datatypes::{Int32Type, TimeUnit};
-    use arrow_array::{LargeListArray, ListArray};
-    use arrow_schema::DataType::Int8;
+    use arrow::array::{LargeListArray, ListArray};
+    use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
