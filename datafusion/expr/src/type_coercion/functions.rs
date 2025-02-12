@@ -703,7 +703,7 @@ fn get_valid_types(
         TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
         TypeSignature::ArraySignature(ref function_signature) => match function_signature {
             ArrayFunctionSignature::Array { arguments, array_coercion, } => {
-                array_valid_types(function_name, current_types, arguments.inner(), array_coercion.as_ref())?
+                array_valid_types(function_name, current_types, arguments, array_coercion.as_ref())?
             }
             ArrayFunctionSignature::RecursiveArray => {
                 if current_types.len() != 1 {

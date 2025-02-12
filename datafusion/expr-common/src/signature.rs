@@ -230,7 +230,7 @@ pub enum ArrayFunctionSignature {
     /// A function takes at least one List/LargeList/FixedSizeList argument.
     Array {
         /// A full list of the arguments accepted by this function.
-        arguments: ArrayFunctionArguments,
+        arguments: Vec<ArrayFunctionArgument>,
         /// Additional information about how array arguments should be coerced.
         array_coercion: Option<ListCoercion>,
     },
@@ -246,7 +246,13 @@ impl Display for ArrayFunctionSignature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ArrayFunctionSignature::Array { arguments, .. } => {
-                write!(f, "{arguments}")
+                for (idx, argument) in arguments.iter().enumerate() {
+                    write!(f, "{argument}")?;
+                    if idx != arguments.len() - 1 {
+                        write!(f, ", ")?;
+                    }
+                }
+                Ok(())
             }
             ArrayFunctionSignature::RecursiveArray => {
                 write!(f, "recursive_array")
@@ -255,44 +261,6 @@ impl Display for ArrayFunctionSignature {
                 write!(f, "map_array")
             }
         }
-    }
-}
-
-/// A wrapper around a vec of [`ArrayFunctionArgument`], to ensure that the vec has at least one
-/// array element.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub struct ArrayFunctionArguments {
-    /// A full list of the arguments accepted by a function.
-    arguments: Vec<ArrayFunctionArgument>,
-}
-
-impl ArrayFunctionArguments {
-    /// Returns an error if there are no [`ArrayFunctionArgument::Array`] arguments.
-    pub fn new(arguments: Vec<ArrayFunctionArgument>) -> Result<Self, &'static str> {
-        if !arguments
-            .iter()
-            .any(|arg| *arg == ArrayFunctionArgument::Array)
-        {
-            Err("missing array argument")
-        } else {
-            Ok(Self { arguments })
-        }
-    }
-
-    pub fn inner(&self) -> &[ArrayFunctionArgument] {
-        self.arguments.as_slice()
-    }
-}
-
-impl Display for ArrayFunctionArguments {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (idx, argument) in self.arguments.iter().enumerate() {
-            write!(f, "{argument}")?;
-            if idx != self.arguments.len() - 1 {
-                write!(f, ", ")?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -622,11 +590,10 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
-                    arguments: ArrayFunctionArguments::new(vec![
+                    arguments: vec![
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
-                    ])
-                    .expect("contains array"),
+                    ],
                     array_coercion,
                 },
             ),
@@ -641,20 +608,18 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::OneOf(vec![
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
-                    arguments: ArrayFunctionArguments::new(vec![
+                    arguments: vec![
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
-                    ])
-                    .expect("contains array"),
+                    ],
                     array_coercion: array_coercion.clone(),
                 }),
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
-                    arguments: ArrayFunctionArguments::new(vec![
+                    arguments: vec![
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
                         ArrayFunctionArgument::Index,
-                    ])
-                    .expect("contains array"),
+                    ],
                     array_coercion,
                 }),
             ]),
@@ -669,11 +634,10 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
-                    arguments: ArrayFunctionArguments::new(vec![
+                    arguments: vec![
                         ArrayFunctionArgument::Element,
                         ArrayFunctionArgument::Array,
-                    ])
-                    .expect("contains array"),
+                    ],
                     array_coercion,
                 },
             ),
@@ -688,11 +652,10 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
-                    arguments: ArrayFunctionArguments::new(vec![
+                    arguments: vec![
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Index,
-                    ])
-                    .expect("contains array"),
+                    ],
                     array_coercion,
                 },
             ),
@@ -704,10 +667,7 @@ impl Signature {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
-                    arguments: ArrayFunctionArguments::new(vec![
-                        ArrayFunctionArgument::Array,
-                    ])
-                    .expect("contains array"),
+                    arguments: vec![ArrayFunctionArgument::Array],
                     array_coercion,
                 },
             ),
