@@ -306,8 +306,8 @@ impl RunOpt {
             .config()
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
-
-        let ctx = SessionContext::new_with_config(config);
+        let rt_builder = self.common.runtime_env_builder()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
 
         // register tables
         self.register_tables(&ctx).await?;
@@ -515,6 +515,8 @@ mod tests {
             iterations: 1,
             partitions: Some(2),
             batch_size: 8192,
+            mem_pool_type: "fair".to_string(),
+            memory_limit: None,
             debug: false,
         };
         let opt = RunOpt {
@@ -548,6 +550,8 @@ mod tests {
             iterations: 1,
             partitions: Some(2),
             batch_size: 8192,
+            mem_pool_type: "fair".to_string(),
+            memory_limit: None,
             debug: false,
         };
         let opt = RunOpt {
