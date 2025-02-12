@@ -243,14 +243,6 @@ impl SessionConfig {
         self.options.optimizer.repartition_sorts
     }
 
-    /// Prefer existing sort (true) or maximize parallelism (false). See
-    /// [prefer_existing_sort] for more details
-    ///
-    /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
-    pub fn prefer_existing_sort(&self) -> bool {
-        self.options.optimizer.prefer_existing_sort
-    }
-
     /// Are statistics collected during execution?
     pub fn collect_statistics(&self) -> bool {
         self.options.execution.collect_statistics
@@ -318,15 +310,6 @@ impl SessionConfig {
     /// Enables or disables the use of per-partition sorting to improve parallelism
     pub fn with_repartition_sorts(mut self, enabled: bool) -> Self {
         self.options.optimizer.repartition_sorts = enabled;
-        self
-    }
-
-    /// Prefer existing sort (true) or maximize parallelism (false). See
-    /// [prefer_existing_sort] for more details
-    ///
-    /// [prefer_existing_sort]: datafusion_common::config::OptimizerOptions::prefer_existing_sort
-    pub fn with_prefer_existing_sort(mut self, enabled: bool) -> Self {
-        self.options.optimizer.prefer_existing_sort = enabled;
         self
     }
 
