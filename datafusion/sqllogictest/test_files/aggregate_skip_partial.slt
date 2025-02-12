@@ -220,10 +220,38 @@ set datafusion.execution.batch_size = 4;
 
 # Inserting into nullable table with batch_size specified above
 # to prevent creation on single in-memory batch
+
+# Test error case: the error case is expected here, as the table c5 is not nullable
+# and the query tries to insert a nullable value
 statement ok
 CREATE TABLE aggregate_test_100_null (
   c2  TINYINT NOT NULL,
   c5  INT NOT NULL,
+  c3  SMALLINT,
+  c11 FLOAT
+);
+
+statement error
+INSERT INTO aggregate_test_100_null
+SELECT
+  c2,
+  c5,
+  CASE WHEN c1 = 'e' THEN NULL ELSE c3 END as c3,
+  CASE WHEN c1 = 'a' THEN NULL ELSE c11 END as c11
+FROM aggregate_test_100;
+----
+DataFusion error: Internal error: Inserting query must have the same schema nullability as the table. Expected table field 'c5' nullability: false, got field: 'c5', nullability: true.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
+
+statement ok
+drop table aggregate_test_100_null;
+
+# Test successful insert case which c5 is nullable
+statement ok
+CREATE TABLE aggregate_test_100_null (
+  c2  TINYINT NOT NULL,
+  c5  INT,
   c3  SMALLINT,
   c11 FLOAT
 );
@@ -506,7 +534,7 @@ SELECT
   avg(c11) FILTER (WHERE c2 != 5)
 FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
 ----
-a 2.5 0.449071887467    
+a 2.5 0.449071887467
 b 2.642857142857 0.445486298629
 c 2.421052631579 0.422882117723
 d 2.125 0.518706191331

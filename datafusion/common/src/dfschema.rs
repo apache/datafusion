@@ -23,7 +23,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result, _plan_err, _schema_err};
+use crate::error::{DataFusionError, Result, _internal_err, _plan_err, _schema_err};
 use crate::{
     field_not_found, unqualified_field_not_found, Column, FunctionalDependencies,
     SchemaError, TableReference,
@@ -1002,12 +1002,12 @@ pub trait SchemaExt {
     /// It works the same as [`DFSchema::equivalent_names_and_types`].
     fn equivalent_names_and_types(&self, other: &Self) -> bool;
 
-    /// Returns true if the two schemas have the same qualified named
-    /// fields with logically equivalent data types. Returns false otherwise.
+    /// Returns nothing if the two schemas have the same qualified named
+    /// fields with logically equivalent data types. Returns internal error otherwise.
     ///
     /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
     /// equivalence checking.
-    fn logically_equivalent_names_and_types(&self, other: &Self) -> bool;
+    fn logically_equivalent_names_and_types(&self, other: &Self) -> Result<()>;
 }
 
 impl SchemaExt for Schema {
@@ -1028,21 +1028,40 @@ impl SchemaExt for Schema {
             })
     }
 
-    fn logically_equivalent_names_and_types(&self, other: &Self) -> bool {
+    fn logically_equivalent_names_and_types(&self, other: &Self) -> Result<()> {
         if self.fields().len() != other.fields().len() {
-            return false;
+            _internal_err!(
+                "Inserting query must have the same schema length as the table. \
+            Expected table schema length: {}, got: {}",
+                self.fields().len(),
+                other.fields().len()
+            )
+        } else {
+            self.fields()
+                .iter()
+                .zip(other.fields().iter())
+                .try_for_each(|(f1, f2)| {
+                    if !f1.is_nullable() && f2.is_nullable() {
+                        _internal_err!(
+                            "Inserting query must have the same schema nullability as the table. \
+                            Expected table field '{}' nullability: {}, got field: '{}', nullability: {}",
+                            f1.name(),
+                            f1.is_nullable(),
+                            f2.name(),
+                            f2.is_nullable())
+                    } else if f1.name() != f2.name() || !DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type()) {
+                        _internal_err!(
+                            "Inserting query schema mismatch: Expected table field '{}' with type {:?}, \
+                            but got '{}' with type {:?}.",
+                            f1.name(),
+                            f1.data_type(),
+                            f2.name(),
+                            f2.data_type())
+                    } else {
+                        Ok(())
+                    }
+                })
         }
-
-        self.fields()
-            .iter()
-            .zip(other.fields().iter())
-            .all(|(f1, f2)| {
-                f1.name() == f2.name()
-                    && DFSchema::datatype_is_logically_equal(
-                        f1.data_type(),
-                        f2.data_type(),
-                    )
-            })
     }
 }
 
