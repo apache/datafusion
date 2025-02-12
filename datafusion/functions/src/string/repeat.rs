@@ -26,9 +26,9 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
+use datafusion_common::types::{logical_int64, logical_string, NativeType};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_common::types::{logical_int64, logical_string, NativeType};
 use datafusion_expr::{ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
