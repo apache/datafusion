@@ -268,12 +268,13 @@ fn replace_with_partial_sort(
 /// **Steps**
 /// 1. Checks if the plan is either `SortExec`/`SortPreservingMergeExec`/`CoalescePartitionsExec` otherwise does nothing
 /// 2. If the plan is a `SortExec` or a final `SortPreservingMergeExec` (output partitioning is 1)
-///     2.1. Check for `CoalescePartitionsExec` in children, when found check if it can be removed, if so remove. (see `remove_bottleneck_in_subplanæ)
-///     2.2. Remove the current plan
-///     2.3. If the plan is satisfying the ordering requirements, add a `SortExec`
-///     2.4. Add a SPM above the plan and return
+///     2.1. Check for `CoalescePartitionsExec` in children, when found check if it can be removed (with possible `RepartitionExec`s)
+///         if so remove. (see `remove_bottleneck_in_subplan`)
+///     2.2. If the plan is satisfying the ordering requirements, add a `SortExec`
+///     2.3. Add an SPM above the plan and return
 /// 3. If the plan is a `CoalescePartitionsExec`
-///     3.1.
+///     3.1. Check if it can be removed (with possible `RepartitionExec`s)
+///         if so remove (see `remove_bottleneck_in_subplan`)
 pub fn parallelize_sorts(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<Transformed<PlanWithCorrespondingCoalescePartitions>> {

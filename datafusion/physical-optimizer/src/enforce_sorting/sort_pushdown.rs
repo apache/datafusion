@@ -72,6 +72,7 @@ pub fn assign_initial_requirements(node: &mut SortPushDown) {
     }
 }
 
+/// Tried to push down the sort requirements as far as possible, if decides a `SortExec` is unnecessary removes it.
 pub fn pushdown_sorts(sort_pushdown: SortPushDown) -> Result<SortPushDown> {
     let mut new_node = pushdown_sorts_helper(sort_pushdown)?;
     while new_node.tnr == TreeNodeRecursion::Stop {
