@@ -38,8 +38,7 @@ use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
 use arrow::array::{Array, RecordBatch};
-use arrow::datatypes::{DataType, Schema};
-use arrow_schema::SchemaRef;
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;

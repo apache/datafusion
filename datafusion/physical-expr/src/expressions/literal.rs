@@ -27,7 +27,7 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
