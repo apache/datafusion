@@ -27,7 +27,9 @@ use arrow::datatypes::{
     i256, ArrowNativeType, DataType, Decimal128Type, Decimal256Type, DecimalType, Field,
     Float64Type, UInt64Type,
 };
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
+};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{avg_return_type, coerce_avg_type};
 use datafusion_expr::utils::format_state_name;
@@ -247,10 +249,8 @@ impl AggregateUDFImpl for Avg {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!("{} expects exactly one argument.", self.name());
-        }
-        coerce_avg_type(self.name(), arg_types)
+        let [args] = take_function_args(self.name(), arg_types)?;
+        coerce_avg_type(self.name(), std::slice::from_ref(args))
     }
 
     fn documentation(&self) -> Option<&Documentation> {

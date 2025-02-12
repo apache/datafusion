@@ -27,7 +27,7 @@ use arrow::datatypes::{
 use datafusion_common::cast::{
     as_generic_list_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
@@ -143,25 +143,22 @@ impl ScalarUDFImpl for Flatten {
 
 /// Flatten SQL function
 pub fn flatten_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("flatten expects one argument");
-    }
+    let [array] = take_function_args("flatten", args)?;
 
-    let array_type = args[0].data_type();
-    match array_type {
+    match array.data_type() {
         List(_) => {
-            let list_arr = as_list_array(&args[0])?;
+            let list_arr = as_list_array(&array)?;
             let flattened_array = flatten_internal::<i32>(list_arr.clone(), None)?;
             Ok(Arc::new(flattened_array) as ArrayRef)
         }
         LargeList(_) => {
-            let list_arr = as_large_list_array(&args[0])?;
+            let list_arr = as_large_list_array(&array)?;
             let flattened_array = flatten_internal::<i64>(list_arr.clone(), None)?;
             Ok(Arc::new(flattened_array) as ArrayRef)
         }
-        Null => Ok(Arc::clone(&args[0])),
+        Null => Ok(Arc::clone(array)),
         _ => {
-            exec_err!("flatten does not support type '{array_type:?}'")
+            exec_err!("flatten does not support type '{:?}'", array.data_type())
         }
     }
 }

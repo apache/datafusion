@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::take_function_args;
 use arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
