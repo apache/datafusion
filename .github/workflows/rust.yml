@@ -382,6 +382,9 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-macos-aarch64-builder
+      - name: TEMPORARY CLEAN ACTION
+        shell: bash
+        run: cargo clean
       - name: Run tests (excluding doctests)
         shell: bash
         run: cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
