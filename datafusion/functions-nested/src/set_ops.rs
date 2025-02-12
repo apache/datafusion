@@ -254,7 +254,7 @@ pub(super) struct ArrayDistinct {
 impl ArrayDistinct {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable, None),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec!["list_distinct".to_string()],
         }
     }

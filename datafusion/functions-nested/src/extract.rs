@@ -118,7 +118,7 @@ impl Default for ArrayElement {
 impl ArrayElement {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_index(Volatility::Immutable, None),
+            signature: Signature::array_and_index(Volatility::Immutable),
             aliases: vec![
                 String::from("array_extract"),
                 String::from("list_element"),
@@ -674,10 +674,15 @@ pub(super) struct ArrayPopFront {
 impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(
-                Volatility::Immutable,
-                Some(ListCoercion::FixedSizedListToList),
-            ),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_pop_front")],
         }
     }
@@ -777,10 +782,15 @@ pub(super) struct ArrayPopBack {
 impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(
-                Volatility::Immutable,
-                Some(ListCoercion::FixedSizedListToList),
-            ),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_pop_back")],
         }
     }
@@ -881,7 +891,7 @@ pub(super) struct ArrayAnyValue {
 impl ArrayAnyValue {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable, None),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_any_value")],
         }
     }

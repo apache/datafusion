@@ -77,7 +77,7 @@ impl Default for ArrayDims {
 impl ArrayDims {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable, None),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec!["list_dims".to_string()],
         }
     }
@@ -157,7 +157,7 @@ pub(super) struct ArrayNdims {
 impl ArrayNdims {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable, None),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![String::from("list_ndims")],
         }
     }

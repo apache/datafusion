@@ -583,10 +583,7 @@ impl Signature {
         }
     }
     /// Specialized Signature for ArrayAppend and similar functions
-    pub fn array_and_element(
-        volatility: Volatility,
-        array_coercion: Option<ListCoercion>,
-    ) -> Self {
+    pub fn array_and_element(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
@@ -594,17 +591,14 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
                     ],
-                    array_coercion,
+                    array_coercion: None,
                 },
             ),
             volatility,
         }
     }
     /// Specialized Signature for Array functions with an optional index
-    pub fn array_and_element_and_optional_index(
-        volatility: Volatility,
-        array_coercion: Option<ListCoercion>,
-    ) -> Self {
+    pub fn array_and_element_and_optional_index(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::OneOf(vec![
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
@@ -612,7 +606,7 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
                     ],
-                    array_coercion: array_coercion.clone(),
+                    array_coercion: None,
                 }),
                 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                     arguments: vec![
@@ -620,35 +614,15 @@ impl Signature {
                         ArrayFunctionArgument::Element,
                         ArrayFunctionArgument::Index,
                     ],
-                    array_coercion,
+                    array_coercion: None,
                 }),
             ]),
             volatility,
         }
     }
-    /// Specialized Signature for ArrayPrepend and similar functions
-    pub fn element_and_array(
-        volatility: Volatility,
-        array_coercion: Option<ListCoercion>,
-    ) -> Self {
-        Signature {
-            type_signature: TypeSignature::ArraySignature(
-                ArrayFunctionSignature::Array {
-                    arguments: vec![
-                        ArrayFunctionArgument::Element,
-                        ArrayFunctionArgument::Array,
-                    ],
-                    array_coercion,
-                },
-            ),
-            volatility,
-        }
-    }
+
     /// Specialized Signature for ArrayElement and similar functions
-    pub fn array_and_index(
-        volatility: Volatility,
-        array_coercion: Option<ListCoercion>,
-    ) -> Self {
+    pub fn array_and_index(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
@@ -656,19 +630,19 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Index,
                     ],
-                    array_coercion,
+                    array_coercion: None,
                 },
             ),
             volatility,
         }
     }
     /// Specialized Signature for ArrayEmpty and similar functions
-    pub fn array(volatility: Volatility, array_coercion: Option<ListCoercion>) -> Self {
+    pub fn array(volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
                     arguments: vec![ArrayFunctionArgument::Array],
-                    array_coercion,
+                    array_coercion: None,
                 },
             ),
             volatility,

@@ -94,7 +94,7 @@ impl Default for ArrayHas {
 impl ArrayHas {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(Volatility::Immutable, None),
+            signature: Signature::array_and_element(Volatility::Immutable),
             aliases: vec![
                 String::from("list_has"),
                 String::from("array_contains"),

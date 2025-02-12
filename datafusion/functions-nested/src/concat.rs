@@ -34,7 +34,8 @@ use datafusion_common::{
     utils::{list_ndims, take_function_args},
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -81,10 +82,18 @@ impl Default for ArrayAppend {
 impl ArrayAppend {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array_and_element(
-                Volatility::Immutable,
-                Some(ListCoercion::FixedSizedListToList),
-            ),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Element,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![
                 String::from("list_append"),
                 String::from("array_push_back"),
@@ -169,10 +178,18 @@ impl Default for ArrayPrepend {
 impl ArrayPrepend {
     pub fn new() -> Self {
         Self {
-            signature: Signature::element_and_array(
-                Volatility::Immutable,
-                Some(ListCoercion::FixedSizedListToList),
-            ),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Array,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![
                 String::from("list_prepend"),
                 String::from("array_push_front"),

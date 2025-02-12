@@ -71,7 +71,7 @@ impl Default for ArrayEmpty {
 impl ArrayEmpty {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable, None),
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec!["array_empty".to_string(), "list_empty".to_string()],
         }
     }
