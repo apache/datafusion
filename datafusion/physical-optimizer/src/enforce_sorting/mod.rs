@@ -391,60 +391,64 @@ pub fn ensure_sorting(
     update_sort_ctx_children(requirements, false).map(Transformed::yes)
 }
 
-/// Analyzes a given [`SortExec`] (`plan`) to determine whether its input
-/// already has a finer ordering than it enforces.
+/// Analyzes if there are any immediate sort removals by checking the `SortExec`s
+/// and their ordering requirement satisfactions with children
+/// If the sort is unnecessary, either replaces it with `SortPreservingMergeExec`/`LimitExec`
+/// or removes the `SortExec`.
+/// Otherwise returns the original plan
 fn analyze_immediate_sort_removal(
     mut node: PlanWithCorrespondingSort,
 ) -> Transformed<PlanWithCorrespondingSort> {
-    if let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() {
-        let sort_input = sort_exec.input();
-        // If this sort is unnecessary, we should remove it:
-        if sort_input.equivalence_properties().ordering_satisfy(
-            sort_exec
+    let Some(sort_exec) = node.plan.as_any().downcast_ref::<SortExec>() else {
+        return Transformed::no(node)
+    };
+    let sort_input = sort_exec.input();
+    // Check if the sort is unnecessary
+    if !sort_input.equivalence_properties().ordering_satisfy(
+        sort_exec
+            .properties()
+            .output_ordering()
+            .unwrap_or(LexOrdering::empty()),
+    ) {
+        return Transformed::no(node)
+    };
+    node.plan = if !sort_exec.preserve_partitioning()
+        && sort_input.output_partitioning().partition_count() > 1
+    {
+        // Replace the sort with a sort-preserving merge:
+        let expr = LexOrdering::new(sort_exec.expr().to_vec());
+        Arc::new(
+            SortPreservingMergeExec::new(expr, Arc::clone(sort_input))
+                .with_fetch(sort_exec.fetch()),
+        ) as _
+    } else {
+        // Remove the sort:
+        node.children = node.children.swap_remove(0).children;
+        if let Some(fetch) = sort_exec.fetch() {
+            // If the sort has a fetch, we need to add a limit:
+            if sort_exec
                 .properties()
-                .output_ordering()
-                .unwrap_or(LexOrdering::empty()),
-        ) {
-            node.plan = if !sort_exec.preserve_partitioning()
-                && sort_input.output_partitioning().partition_count() > 1
+                .output_partitioning()
+                .partition_count()
+                == 1
             {
-                // Replace the sort with a sort-preserving merge:
-                let expr = LexOrdering::new(sort_exec.expr().to_vec());
-                Arc::new(
-                    SortPreservingMergeExec::new(expr, Arc::clone(sort_input))
-                        .with_fetch(sort_exec.fetch()),
-                ) as _
+                Arc::new(GlobalLimitExec::new(
+                    Arc::clone(sort_input),
+                    0,
+                    Some(fetch),
+                ))
             } else {
-                // Remove the sort:
-                node.children = node.children.swap_remove(0).children;
-                if let Some(fetch) = sort_exec.fetch() {
-                    // If the sort has a fetch, we need to add a limit:
-                    if sort_exec
-                        .properties()
-                        .output_partitioning()
-                        .partition_count()
-                        == 1
-                    {
-                        Arc::new(GlobalLimitExec::new(
-                            Arc::clone(sort_input),
-                            0,
-                            Some(fetch),
-                        ))
-                    } else {
-                        Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
-                    }
-                } else {
-                    Arc::clone(sort_input)
-                }
-            };
-            for child in node.children.iter_mut() {
-                child.data = false;
+                Arc::new(LocalLimitExec::new(Arc::clone(sort_input), fetch))
             }
-            node.data = false;
-            return Transformed::yes(node);
+        } else {
+            Arc::clone(sort_input)
         }
+    };
+    for child in node.children.iter_mut() {
+        child.data = false;
     }
-    Transformed::no(node)
+    node.data = false;
+    Transformed::yes(node)
 }
 
 /// Adjusts a [`WindowAggExec`] or a [`BoundedWindowAggExec`] to determine
