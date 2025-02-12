@@ -935,10 +935,10 @@ impl Interval {
     /// This method computes the arithmetic negation of the interval, reflecting
     /// it about the origin of the number line. This operation swaps and negates
     /// the lower and upper bounds of the interval.
-    pub fn arithmetic_negate(self) -> Result<Self> {
+    pub fn arithmetic_negate(&self) -> Result<Self> {
         Ok(Self {
-            lower: self.upper().clone().arithmetic_negate()?,
-            upper: self.lower().clone().arithmetic_negate()?,
+            lower: self.upper.arithmetic_negate()?,
+            upper: self.lower.arithmetic_negate()?,
         })
     }
 }

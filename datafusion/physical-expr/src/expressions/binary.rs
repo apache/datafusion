@@ -492,11 +492,8 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
-    fn evaluate_statistics(
-        &self,
-        children_stats: &[&StatisticsV2],
-    ) -> Result<StatisticsV2> {
-        let (left, right) = (children_stats[0], children_stats[1]);
+    fn evaluate_statistics(&self, children: &[&StatisticsV2]) -> Result<StatisticsV2> {
+        let (left, right) = (children[0], children[1]);
 
         if self.op.is_numerical_operators() {
             // We might be able to construct the output statistics more accurately,
@@ -528,14 +525,10 @@ impl PhysicalExpr for BinaryExpr {
 
     fn propagate_statistics(
         &self,
-        parent_stat: &StatisticsV2,
-        children_stats: &[&StatisticsV2],
+        parent: &StatisticsV2,
+        children: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
-        let (li, ri, pi) = (
-            children_stats[0].range()?,
-            children_stats[1].range()?,
-            parent_stat.range()?,
-        );
+        let (li, ri, pi) = (children[0].range()?, children[1].range()?, parent.range()?);
         let Some(propagated_children) = self.propagate_constraints(&pi, &[&li, &ri])?
         else {
             return Ok(None);
@@ -543,7 +536,7 @@ impl PhysicalExpr for BinaryExpr {
         Some(
             propagated_children
                 .into_iter()
-                .zip(children_stats)
+                .zip(children)
                 .map(|(child_interval, old_stat)| {
                     if child_interval.data_type().eq(&DataType::Boolean) {
                         let dt = old_stat.data_type();

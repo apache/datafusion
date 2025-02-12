@@ -35,9 +35,8 @@ use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
 };
-use datafusion_physical_expr_common::stats_v2::StatisticsV2;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-    Bernoulli, Exponential, Gaussian, Uniform, Unknown,
+    self, Bernoulli, Exponential, Gaussian, Uniform, Unknown,
 };
 
 /// Negative expression
@@ -93,8 +92,7 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let arg = self.arg.evaluate(batch)?;
-        match arg {
+        match self.arg.evaluate(batch)? {
             ColumnarValue::Array(array) => {
                 let result = neg_wrapping(array.as_ref())?;
                 Ok(ColumnarValue::Array(result))
@@ -120,10 +118,7 @@ impl PhysicalExpr for NegativeExpr {
     /// It replaces the upper and lower bounds after multiplying them with -1.
     /// Ex: `(a, b]` => `[-b, -a)`
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        Interval::try_new(
-            children[0].upper().arithmetic_negate()?,
-            children[0].lower().arithmetic_negate()?,
-        )
+        children[0].arithmetic_negate()
     }
 
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
@@ -134,57 +129,48 @@ impl PhysicalExpr for NegativeExpr {
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
         let child_interval = children[0];
-        let negated_interval = Interval::try_new(
-            interval.upper().arithmetic_negate()?,
-            interval.lower().arithmetic_negate()?,
-        )?;
+        let negated_interval = interval.arithmetic_negate()?;
 
         Ok(child_interval
             .intersect(negated_interval)?
             .map(|result| vec![result]))
     }
 
-    fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
-        debug_assert_eq!(stats.len(), 1);
-        match stats[0] {
-            Uniform(uni) => {
-                StatisticsV2::new_uniform(self.evaluate_bounds(&[uni.range()])?)
-            }
-            Exponential(e) => Ok(StatisticsV2::new_exponential(
+    fn evaluate_statistics(&self, children: &[&StatisticsV2]) -> Result<StatisticsV2> {
+        debug_assert_eq!(children.len(), 1);
+        match children[0] {
+            Uniform(u) => StatisticsV2::new_uniform(u.range().arithmetic_negate()?),
+            Exponential(e) => StatisticsV2::new_exponential(
                 e.rate().clone(),
                 e.offset().arithmetic_negate()?,
                 !e.positive_tail(),
-            )?),
-            Gaussian(g) => Ok(StatisticsV2::new_gaussian(
+            ),
+            Gaussian(g) => StatisticsV2::new_gaussian(
                 g.mean().arithmetic_negate()?,
                 g.variance().clone(),
-            )?),
+            ),
             Bernoulli(_) => {
-                internal_err!("NegativeExpr cannot operate on Boolean datatype")
+                internal_err!("NegativeExpr cannot operate on Boolean datatypes")
             }
-            Unknown(unk) => StatisticsV2::new_unknown(
-                unk.mean().arithmetic_negate()?,
-                unk.median().arithmetic_negate()?,
-                unk.variance().clone(),
-                self.evaluate_bounds(&[unk.range()])?,
+            Unknown(u) => StatisticsV2::new_unknown(
+                u.mean().arithmetic_negate()?,
+                u.median().arithmetic_negate()?,
+                u.variance().clone(),
+                u.range().arithmetic_negate()?,
             ),
         }
     }
 
     fn propagate_statistics(
         &self,
-        parent_stat: &StatisticsV2,
-        children_stat: &[&StatisticsV2],
+        parent: &StatisticsV2,
+        children: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
-        debug_assert_eq!(
-            children_stat.len(),
-            1,
-            "NegativeExpr should have only one child"
-        );
-        let parent_range = parent_stat.range()?;
-        let child_range = children_stat[0].range()?;
-        match parent_stat {
-            Uniform(_) | Unknown(_) => match children_stat[0] {
+        debug_assert_eq!(children.len(), 1);
+        let parent_range = parent.range()?;
+        let child_range = children[0].range()?;
+        match parent {
+            Uniform(_) | Unknown(_) => match children[0] {
                 Uniform(_) | Unknown(_) => {
                     if let Some(propagated) =
                         self.propagate_constraints(&parent_range, &[&child_range])?

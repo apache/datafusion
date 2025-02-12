@@ -141,15 +141,15 @@ impl PhysicalExpr for NotExpr {
 
     fn propagate_statistics(
         &self,
-        parent_stat: &StatisticsV2,
-        children_stat: &[&StatisticsV2],
+        parent: &StatisticsV2,
+        children: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
-        debug_assert_eq!(children_stat.len(), 1, "NotExpr should have only one child");
+        debug_assert_eq!(children.len(), 1, "NotExpr should have only one child");
         // https://github.com/apache/datafusion/blob/85fbde2661bdb462fc498dc18f055c44f229604c/datafusion/expr/src/expr.rs#L241
         let err_msg = "NotExpr cannot used with non-boolean datatypes";
 
-        match parent_stat {
-            Bernoulli(parent) => match &children_stat[0] {
+        match parent {
+            Bernoulli(parent) => match &children[0] {
                 Bernoulli(child) => {
                     if parent.range() == Interval::CERTAINLY_TRUE {
                         if child.range() == Interval::CERTAINLY_TRUE {

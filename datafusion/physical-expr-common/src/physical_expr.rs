@@ -160,8 +160,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// (and conservative) return value.
     fn propagate_statistics(
         &self,
-        _parent_stat: &StatisticsV2,
-        _children_stat: &[&StatisticsV2],
+        _parent: &StatisticsV2,
+        _children: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
         Ok(Some(vec![]))
     }
