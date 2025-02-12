@@ -295,6 +295,7 @@ impl UniformDistribution {
     }
 
     pub fn mean(&self) -> Result<ScalarValue> {
+        // TODO: Can we ensure that this always returns a real number data type?
         let dt = self.data_type();
         let two = ScalarValue::from(2).cast_to(&dt)?;
         self.interval
@@ -308,6 +309,7 @@ impl UniformDistribution {
     }
 
     pub fn variance(&self) -> Result<ScalarValue> {
+        // TODO: Can we ensure that this always returns a real number data type?
         let width = self.interval.width()?;
         let dt = width.data_type();
         let twelve = ScalarValue::from(12).cast_to(&dt)?;
@@ -360,6 +362,7 @@ impl ExponentialDistribution {
     }
 
     pub fn mean(&self) -> Result<ScalarValue> {
+        // TODO: Can we ensure that this always returns a real number data type?
         let one = ScalarValue::new_one(&self.data_type())?;
         let tail_mean = one.div(&self.rate)?;
         if self.positive_tail {
@@ -370,6 +373,7 @@ impl ExponentialDistribution {
     }
 
     pub fn median(&self) -> Result<ScalarValue> {
+        // TODO: Can we ensure that this always returns a real number data type?
         let ln_two = ScalarValue::from(LN_2).cast_to(&self.data_type())?;
         let tail_median = ln_two.div(&self.rate)?;
         if self.positive_tail {
@@ -380,6 +384,7 @@ impl ExponentialDistribution {
     }
 
     pub fn variance(&self) -> Result<ScalarValue> {
+        // TODO: Can we ensure that this always returns a real number data type?
         let one = ScalarValue::new_one(&self.data_type())?;
         let rate_squared = self.rate.mul_checked(&self.rate)?;
         one.div(rate_squared)
