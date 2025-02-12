@@ -27,8 +27,8 @@ use crate::datasource::data_source::FileSource;
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
-use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
 use crate::datasource::physical_plan::FileMeta;
+use crate::datasource::physical_plan::{FileOpenFuture, FileOpener};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 

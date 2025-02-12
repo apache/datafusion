@@ -51,6 +51,7 @@ pub use avro::AvroSource;
 pub use csv::{CsvExec, CsvExecBuilder};
 pub use csv::{CsvOpener, CsvSource};
 pub use datafusion_catalog_listing::file_groups::FileGroupPartitioner;
+pub use datafusion_catalog_listing::file_meta::FileMeta;
 pub use datafusion_catalog_listing::file_sink_config::*;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
@@ -61,7 +62,7 @@ use futures::StreamExt;
 pub use json::NdJsonExec;
 pub use json::{JsonOpener, JsonSource};
 use log::debug;
-use object_store::{path::Path, GetOptions, GetRange, ObjectMeta, ObjectStore};
+use object_store::{path::Path, GetOptions, GetRange, ObjectStore};
 use std::{
     fmt::{Debug, Formatter, Result as FmtResult},
     ops::Range,
@@ -217,36 +218,6 @@ where
         format_element(element, f)?;
     }
     Ok(())
-}
-
-/// A single file or part of a file that should be read, along with its schema, statistics
-pub struct FileMeta {
-    /// Path for the file (e.g. URL, filesystem path, etc)
-    pub object_meta: ObjectMeta,
-    /// An optional file range for a more fine-grained parallel execution
-    pub range: Option<FileRange>,
-    /// An optional field for user defined per object metadata
-    pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
-    /// Size hint for the metadata of this file
-    pub metadata_size_hint: Option<usize>,
-}
-
-impl FileMeta {
-    /// The full path to the object
-    pub fn location(&self) -> &Path {
-        &self.object_meta.location
-    }
-}
-
-impl From<ObjectMeta> for FileMeta {
-    fn from(object_meta: ObjectMeta) -> Self {
-        Self {
-            object_meta,
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
-        }
-    }
 }
 
 /// The various listing tables does not attempt to read all files
@@ -490,6 +461,7 @@ mod tests {
         StringArray, UInt64Array,
     };
     use arrow::datatypes::{DataType, Field, Schema};
+    use object_store::ObjectMeta;
 
     use crate::datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapterFactory,

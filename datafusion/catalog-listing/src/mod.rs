@@ -20,7 +20,10 @@
 
 pub mod file_compression_type;
 pub mod file_groups;
+pub mod file_meta;
+pub mod file_scan_config;
 pub mod file_sink_config;
+pub mod file_stream;
 pub mod helpers;
 pub mod url;
 pub mod write;
