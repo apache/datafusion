@@ -19,17 +19,43 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, AsArray, ListArray, NullBufferBuilder,
+    PrimitiveArray,
 };
 use arrow::datatypes::{Field, Int64Type};
-use arrow::util::bench_util::create_primitive_array;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::Accumulator;
 use datafusion_functions_aggregate::array_agg::ArrayAggAccumulator;
 
 use arrow::buffer::OffsetBuffer;
-use arrow::util::test_util::seedable_rng;
 use rand::distributions::{Distribution, Standard};
-use rand::Rng;
+use rand::prelude::StdRng;
+use rand::{Rng, SeedableRng};
+
+/// Seedable rng for reproducibility, copied from arrow-rs
+fn seedable_rng() -> StdRng {
+    StdRng::seed_from_u64(42)
+}
+
+/// Create a primitive array of a given size and null density
+///
+/// copied from arrow-rs
+fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+    Standard: Distribution<T::Native>,
+{
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                Some(rng.gen())
+            }
+        })
+        .collect()
+}
 
 fn merge_batch_bench(c: &mut Criterion, name: &str, values: ArrayRef) {
     let list_item_data_type = values.as_list::<i32>().values().data_type().clone();
