@@ -1711,11 +1711,11 @@ fn build_like_match(
     Some(combined)
 }
 
-// For predicate `col NOT LIKE 'foo%'`, we rewrite it as `(col_min NOT LIKE 'foo%' OR col_max NOT LIKE 'foo%')`. If both col_min and col_max have the prefix foo, we skip the entire row group (as we can be certain that all data in this row group has the prefix foo).
+// For predicate `col NOT LIKE 'const_prefix%'`, we rewrite it as `(col_min NOT LIKE 'const_prefix%' OR col_max NOT LIKE 'const_prefix%')`. If both col_min and col_max have the prefix const_prefix, we skip the entire row group (as we can be certain that all data in this row group has the prefix const_prefix).
 fn build_not_like_match(
     expr_builder: &mut PruningExpressionBuilder<'_>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    // col NOT LIKE 'prefix%' ->  !(col_min LIKE 'prefix%' && col_max LIKE 'prefix%') -> (col_min NOT LIKE 'prefix%' || col_max NOT LIKE 'prefix%')
+    // col NOT LIKE 'const_prefix%' -> !(col_min LIKE 'const_prefix%' && col_max LIKE 'const_prefix%') -> (col_min NOT LIKE 'const_prefix%' || col_max NOT LIKE 'const_prefix%')
 
     let min_column_expr = expr_builder.min_column_expr()?;
     let max_column_expr = expr_builder.max_column_expr()?;
@@ -1726,27 +1726,21 @@ fn build_not_like_match(
         plan_datafusion_err!("cannot extract literal from NOT LIKE expression")
     })?;
 
-    let chars: Vec<char> = pattern.chars().collect();
-    for i in 0..chars.len() - 1 {
-        // Check if current char is a wildcard and is not escaped with backslash
-        if (chars[i] == '%' || chars[i] == '_') && (i == 0 || chars[i - 1] != '\\') {
-            // Example: For pattern "foo%bar", the row group might include values like
-            // ["foobar", "food", "foodbar"], making it unsafe to prune.
-            // Even if the min/max values in the group (e.g., "foobar" and "foodbar")
-            // match the pattern, intermediate values like "food" may not
-            // match the full pattern "foo%bar", making pruning unsafe.
-            // (truncate foo%bar to foo% have same problem)
-            return Err(plan_datafusion_err!(
-                "NOT LIKE expressions with unescaped wildcards ('%' or '_') at the beginning or middle of the pattern are not supported"
-            ));
-        }
-    }
+    let (const_prefix, remaining) = split_constant_prefix(pattern);
+    if const_prefix.is_empty() || remaining != "%" {
+        // we can not handle `%` at the beginning or in the middle of the pattern
+        // Example: For pattern "foo%bar", the row group might include values like
+        // ["foobar", "food", "foodbar"], making it unsafe to prune.
+        // Even if the min/max values in the group (e.g., "foobar" and "foodbar")
+        // match the pattern, intermediate values like "food" may not
+        // match the full pattern "foo%bar", making pruning unsafe.
+        // (truncate foo%bar to foo% have same problem)
 
-    if chars.last() == Some(&'_') && (chars.len() > 1 && chars[chars.len() - 2] != '\\') {
+        // we can not handle pattern containing `_`
         // Example: For pattern "foo_", row groups might contain ["fooa", "fooaa", "foob"],
         // which means not every row is guaranteed to match the pattern.
         return Err(plan_datafusion_err!(
-            "NOT LIKE expressions with unescaped '_' at the end of the pattern are not supported"
+            "NOT LIKE expressions only support constant_prefix+wildcard`%`"
         ));
     }
 
@@ -1769,6 +1763,22 @@ fn build_not_like_match(
         Operator::Or,
         max_col_not_like_expr,
     )))
+}
+
+/// Returns unescaped constant prefix of a LIKE pattern (possibly empty) and the remaining pattern (possibly empty)
+fn split_constant_prefix(pattern: &str) -> (&str, &str) {
+    let char_indices = pattern.char_indices().collect::<Vec<_>>();
+    for i in 0..char_indices.len() {
+        let (idx, char) = char_indices[i];
+        if char == '%' || char == '_' {
+            if i != 0 && char_indices[i - 1].1 == '\\' {
+                // ecsaped by `\`
+                continue;
+            }
+            return (&pattern[..idx], &pattern[idx..]);
+        }
+    }
+    (pattern, "")
 }
 
 /// Increment a UTF8 string by one, returning `None` if it can't be incremented.
@@ -4195,32 +4205,6 @@ mod tests {
             true,
             // s1 ["M", "M"] ==> some rows could pass (must keep)
             true,
-            // s1 [NULL, NULL]  ==> unknown (must keep)
-            true,
-            // s1 ["A", NULL]  ==> some rows could pass (must keep)
-            true,
-            // s1 ["", "A"]  ==> some rows could pass (must keep)
-            true,
-            // s1 ["", ""]  ==> some rows could pass (must keep)
-            true,
-            // s1 ["AB", "A\u{10ffff}\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
-            true,
-            // s1 ["A\u{10ffff}\u{10ffff}", "A\u{10ffff}\u{10ffff}"]  ==> some rows could pass (must keep)
-            true,
-        ];
-        prune_with_expr(expr, &schema, &statistics, expected_ret);
-
-        let expr = col("s1").not_like(lit("M"));
-        #[rustfmt::skip]
-        let expected_ret = &[
-            // s1 ["A", "Z"] ==> some rows could pass (must keep)
-            true,
-            // s1 ["A", "L"] ==> some rows could pass (must keep)
-            true,
-            // s1 ["N", "Z"] ==> some rows could pass (must keep)
-            true,
-            // s1 ["M", "M"] ==> no row match
-            false,
             // s1 [NULL, NULL]  ==> unknown (must keep)
             true,
             // s1 ["A", NULL]  ==> some rows could pass (must keep)
