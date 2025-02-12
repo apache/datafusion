@@ -4501,7 +4501,7 @@ mod tests {
                 &StatisticsV2::new_unknown(
                     left_mean.clone(),
                     left_med.clone(),
-                    ScalarValue::Null,
+                    ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
                 &StatisticsV2::new_uniform(right_interval.clone())?,

@@ -28,7 +28,7 @@ use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
-    Exponential, Gaussian, Uniform, Unknown,
+    Gaussian, Uniform, Unknown,
 };
 use datafusion_physical_expr_common::stats_v2::{get_one, get_zero, StatisticsV2};
 
@@ -302,22 +302,26 @@ pub fn compute_mean(
     let (left_mean, right_mean) = (left.mean()?, right.mean()?);
 
     match op {
-        Operator::Plus => left_mean.add_checked(right_mean),
-        Operator::Minus => left_mean.sub_checked(right_mean),
+        Operator::Plus => return left_mean.add_checked(right_mean),
+        Operator::Minus => return left_mean.sub_checked(right_mean),
         // Note the independence assumption below:
-        Operator::Multiply => left_mean.mul_checked(right_mean),
+        Operator::Multiply => return left_mean.mul_checked(right_mean),
+        // TODO: We can calculate the mean for division when we support reciprocals,
+        // or know the distributions of the operands. For details, see:
+        //
+        // <https://en.wikipedia.org/wiki/Algebra_of_random_variables>
+        // <https://stats.stackexchange.com/questions/185683/distribution-of-ratio-between-two-independent-uniform-random-variables>
         Operator::Divide => {
-            // TODO: We can calculate the mean for division when we know the
-            //       distributions of the operands. For example, see:
-            //
-            // <https://stats.stackexchange.com/questions/185683/distribution-of-ratio-between-two-independent-uniform-random-variables>
-            Ok(ScalarValue::Null)
+            // Fall back to an unknown mean value for division:
+            debug!("Division is not yet supported for mean calculations");
         }
+        // Fall back to an unknown mean value for other cases:
         _ => {
             debug!("Unsupported operator {op} for mean calculations");
-            Ok(ScalarValue::Null)
         }
     }
+    let target_type = StatisticsV2::target_type(&[&left_mean, &right_mean])?;
+    ScalarValue::try_from(target_type)
 }
 
 /// Computes the median value for the result of the given binary operation on
@@ -339,6 +343,7 @@ pub fn compute_median(
             match op {
                 Operator::Plus => return left_median.add_checked(right_median),
                 Operator::Minus => return left_median.sub_checked(right_median),
+                // Fall back to an unknown median value for other cases:
                 _ => {}
             }
         }
@@ -347,6 +352,7 @@ pub fn compute_median(
         (Gaussian(lg), Gaussian(rg)) => match op {
             Operator::Plus => return lg.mean().add_checked(rg.mean()),
             Operator::Minus => return lg.mean().sub_checked(rg.mean()),
+            // Fall back to an unknown median value for other cases:
             _ => {}
         },
         // Fall back to an unknown median value for other cases:
@@ -366,82 +372,41 @@ pub fn compute_variance(
     right: &StatisticsV2,
 ) -> Result<ScalarValue> {
     let (left_variance, right_variance) = (left.variance()?, right.variance()?);
-    let target_type = StatisticsV2::target_type(&[&left_variance, &right_variance])?;
 
-    match (left, right) {
-        (Uniform { .. }, Uniform { .. }) => {
-            match op {
-                Operator::Plus | Operator::Minus => {
-                    left_variance.add_checked(right_variance)
-                }
-                Operator::Multiply => {
-                    // TODO: the formula is giga-giant, skipping for now.
-                    debug!(
-                        "Multiply operator is not supported for variance computation yet"
-                    );
-                    ScalarValue::try_from(target_type)
-                }
-                _ => {
-                    // Note: mod and div are not supported for any distribution combination pair
-                    debug!("Operator {op} cannot be supported for variance computation");
-                    ScalarValue::try_from(target_type)
-                }
-            }
+    match op {
+        // Note the independence assumption below:
+        Operator::Plus => return left_variance.add_checked(right_variance),
+        // Note the independence assumption below:
+        Operator::Minus => return left_variance.add_checked(right_variance),
+        // Note the independence assumption below:
+        Operator::Multiply => {
+            // For more details, along with an explanation of the formula below, see:
+            //
+            // <https://en.wikipedia.org/wiki/Distribution_of_the_product_of_two_random_variables>
+            let (left_mean, right_mean) = (left.mean()?, right.mean()?);
+            let left_mean_sq = left_mean.mul_checked(&left_mean)?;
+            let right_mean_sq = right_mean.mul_checked(&right_mean)?;
+            let left_sos = left_variance.add_checked(&left_mean_sq)?;
+            let right_sos = right_variance.add_checked(&right_mean_sq)?;
+            let pos = left_mean_sq.mul_checked(right_mean_sq)?;
+            return left_sos.mul_checked(right_sos)?.sub_checked(pos);
         }
-        (Uniform(u), Exponential(e)) | (Exponential(e), Uniform(u)) => {
-            let (left_variance, right_variance) = (left.mean()?, right.mean()?);
-            let target_type =
-                StatisticsV2::target_type(&[&left_variance, &right_variance])?;
-
-            match op {
-                Operator::Plus | Operator::Minus => {
-                    left_variance.add_checked(right_variance)
-                }
-                Operator::Multiply => {
-                    // (5 * lower^2 + 2 * lower * upper + 5 * upper^2) / 12 * λ^2
-                    let five = &ScalarValue::Float64(Some(5.));
-                    // 5 * lower^2
-                    let interval_lower_sq = u
-                        .range()
-                        .lower()
-                        .mul_checked(u.range().lower())?
-                        .cast_to(&DataType::Float64)?
-                        .mul_checked(five)?;
-                    // 5 * upper^2
-                    let interval_upper_sq = u
-                        .range()
-                        .upper()
-                        .mul_checked(u.range().upper())?
-                        .cast_to(&DataType::Float64)?
-                        .mul_checked(five)?;
-                    // 2 * lower * upper
-                    let middle = u
-                        .range()
-                        .upper()
-                        .mul_checked(u.range().lower())?
-                        .cast_to(&DataType::Float64)?
-                        .mul_checked(ScalarValue::Float64(Some(2.)))?;
-
-                    let numerator = interval_lower_sq
-                        .add_checked(interval_upper_sq)?
-                        .add_checked(middle)?
-                        .cast_to(&DataType::Float64)?;
-
-                    let f_rate = &e.rate().cast_to(&DataType::Float64)?;
-                    let denominator = ScalarValue::Float64(Some(12.))
-                        .mul_checked(f_rate.mul(f_rate)?)?;
-
-                    numerator.div(denominator)
-                }
-                _ => {
-                    // Note: mod and div are not supported for any distribution combination pair
-                    debug!("Unsupported operator {op} for variance computation");
-                    ScalarValue::try_from(target_type)
-                }
-            }
+        // TODO: We can calculate the variance for division when we support reciprocals,
+        // or know the distributions of the operands. For details, see:
+        //
+        // <https://en.wikipedia.org/wiki/Algebra_of_random_variables>
+        // <https://stats.stackexchange.com/questions/185683/distribution-of-ratio-between-two-independent-uniform-random-variables>
+        Operator::Divide => {
+            // Fall back to an unknown variance value for division:
+            debug!("Division is not yet supported for variance calculations");
         }
-        (_, _) => ScalarValue::try_from(target_type),
+        // Fall back to an unknown variance value for other cases:
+        _ => {
+            debug!("Unsupported operator {op} for variance calculations");
+        }
     }
+    let target_type = StatisticsV2::target_type(&[&left_variance, &right_variance])?;
+    ScalarValue::try_from(target_type)
 }
 
 /// Computes range based on input statistics, where it is possible to compute.
