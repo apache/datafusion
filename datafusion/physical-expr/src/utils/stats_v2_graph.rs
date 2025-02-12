@@ -23,6 +23,7 @@ use crate::physical_expr::PhysicalExpr;
 use crate::utils::{build_dag, ExprTreeNode};
 
 use arrow::datatypes::{DataType, Schema};
+use arrow_array::ArrowNativeTypeOp;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr_common::operator::Operator;
@@ -208,62 +209,44 @@ impl ExprStatisticGraph {
     }
 }
 
-/// Creates a new statistic with [`Unknown`] distribution, and tries to compute
-/// mean, median and variance if possible.
-pub fn new_unknown_from_binary_expr(
-    op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
-) -> Result<StatisticsV2> {
-    StatisticsV2::new_unknown(
-        compute_mean(op, left, right)?,
-        compute_median(op, left, right)?,
-        compute_variance(op, left, right)?,
-        compute_range(op, left, right)?,
-    )
-}
-
 /// Creates a new statistic with `Bernoulli` distribution by computing the
-/// resulting probability. Expects `op` to be a comparison operator, with `left`
-/// and `right` having numeric, continuous distributions.
+/// resulting probability. Expects `op` to be a comparison operator, with
+/// `left` and `right` having numeric distributions. The resulting distribution
+/// has the `Float64` data type.
 pub fn create_bernoulli_from_comparison(
     op: &Operator,
     left: &StatisticsV2,
     right: &StatisticsV2,
 ) -> Result<StatisticsV2> {
-    let (li, ri) = (left.range()?, right.range()?);
     match (left, right) {
-        (Uniform(_), Uniform(_)) => {
+        (Uniform(left), Uniform(right)) => {
             match op {
                 Operator::Eq | Operator::NotEq => {
-                    return if let Some(intersection) = li.intersect(&ri)? {
-                        let union = li.union(&ri)?;
-                        let union_width = union.width()?;
-                        // We know that the intersection and the union have the same data types,
-                        // it is sufficient to check one of them:
-                        let p = if union_width.data_type().is_integer() {
-                            intersection
-                                .width()?
-                                .cast_to(&DataType::Float64)?
-                                .div(union_width.cast_to(&DataType::Float64)?)?
-                        } else {
-                            intersection.width()?.div(union_width)?
-                        };
-                        if op == &Operator::Eq {
-                            StatisticsV2::new_bernoulli(p)
-                        } else {
-                            let one = ScalarValue::new_one(&li.data_type())?;
-                            StatisticsV2::new_bernoulli(one.sub(p)?)
+                    let (li, ri) = (left.range(), right.range());
+                    if let Some(intersection) = li.intersect(ri)? {
+                        // If the ranges are not disjoint, calculate the probability
+                        // of equality using cardinalities:
+                        if let (Some(lc), Some(rc), Some(ic)) = (
+                            li.cardinality(),
+                            ri.cardinality(),
+                            intersection.cardinality(),
+                        ) {
+                            // Avoid overflow by widening the type temporarily:
+                            let pairs = ((lc as u128) * (rc as u128)) as f64;
+                            let p = (ic as f64).div_checked(pairs)?;
+                            return if op == &Operator::Eq {
+                                StatisticsV2::new_bernoulli(ScalarValue::from(p))
+                            } else {
+                                StatisticsV2::new_bernoulli(ScalarValue::from(1.0 - p))
+                            };
                         }
                     } else if op == &Operator::Eq {
-                        StatisticsV2::new_bernoulli(ScalarValue::new_zero(
-                            &li.data_type(),
-                        )?)
+                        // If the ranges are disjoint, probability of equality is 0.
+                        return StatisticsV2::new_bernoulli(ScalarValue::from(0.0));
                     } else {
-                        StatisticsV2::new_bernoulli(ScalarValue::new_one(
-                            &li.data_type(),
-                        )?)
-                    };
+                        // If the ranges are disjoint, probability of not-equality is 1.
+                        return StatisticsV2::new_bernoulli(ScalarValue::from(1.0));
+                    }
                 }
                 Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
                     // TODO: We can handle inequality operators and calculate a `p` value
@@ -278,16 +261,32 @@ pub fn create_bernoulli_from_comparison(
         }
         _ => {}
     }
+    let (li, ri) = (left.range()?, right.range()?);
     let range_evaluation = apply_operator(op, &li, &ri)?;
     if range_evaluation.eq(&Interval::CERTAINLY_FALSE) {
-        StatisticsV2::new_bernoulli(ScalarValue::new_zero(&li.data_type())?)
+        StatisticsV2::new_bernoulli(ScalarValue::from(0.0))
     } else if range_evaluation.eq(&Interval::CERTAINLY_TRUE) {
-        StatisticsV2::new_bernoulli(ScalarValue::new_one(&li.data_type())?)
+        StatisticsV2::new_bernoulli(ScalarValue::from(1.0))
     } else if range_evaluation.eq(&Interval::UNCERTAIN) {
-        StatisticsV2::new_bernoulli(ScalarValue::try_from(&li.data_type())?)
+        StatisticsV2::new_bernoulli(ScalarValue::try_from(&DataType::Float64)?)
     } else {
         internal_err!("This function must be called with a comparison operator")
     }
+}
+
+/// Creates a new statistic with [`Unknown`] distribution, and tries to compute
+/// mean, median and variance if possible.
+pub fn new_unknown_from_binary_expr(
+    op: &Operator,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
+) -> Result<StatisticsV2> {
+    StatisticsV2::new_unknown(
+        compute_mean(op, left, right)?,
+        compute_median(op, left, right)?,
+        compute_variance(op, left, right)?,
+        compute_range(op, left, right)?,
+    )
 }
 
 /// Computes a mean value for a given binary operator and two statistics.

@@ -180,7 +180,8 @@ impl StatisticsV2 {
         }
     }
 
-    /// Returns the data type of the statistical parameters.
+    /// Returns the data type of the statistical parameters comprising this
+    /// distribution.
     pub fn data_type(&self) -> DataType {
         match &self {
             Uniform(u) => u.data_type(),

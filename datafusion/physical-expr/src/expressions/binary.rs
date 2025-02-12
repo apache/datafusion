@@ -519,7 +519,7 @@ impl PhysicalExpr for BinaryExpr {
             };
         } else if self.op.supports_propagation() {
             // If we are handling comparison operators, we expect (and can only
-            // operate on) numeric, continuous distributions.
+            // operate on) numeric distributions.
             return create_bernoulli_from_comparison(&self.op, left, right);
         }
         // Fall back to an unknown distribution with only summary statistics:
@@ -4552,8 +4552,8 @@ mod tests {
     #[test]
     fn test_evaluate_statistics_bernoulli() -> Result<()> {
         let schema = &Schema::new(vec![
-            Field::new("a", DataType::Float64, false),
-            Field::new("b", DataType::Float64, false),
+            Field::new("a", DataType::Int64, false),
+            Field::new("b", DataType::Int64, false),
         ]);
         let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
         let b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
@@ -4570,24 +4570,20 @@ mod tests {
             schema,
         )?);
 
-        let left_stat =
-            &StatisticsV2::new_uniform(Interval::make(Some(0.0), Some(6.0))?)?;
-        let right_stat =
-            &StatisticsV2::new_uniform(Interval::make(Some(4.0), Some(10.0))?)?;
+        let left_stat = &StatisticsV2::new_uniform(Interval::make(Some(0), Some(6))?)?;
+        let right_stat = &StatisticsV2::new_uniform(Interval::make(Some(4), Some(10))?)?;
 
-        // Intervals: (0, 6], (6, 10].
-        // The intersection is [4,6], so the probability of value being selected from
-        // the intersection segment is 20%, or 0.2 as Bernoulli.
+        // Intervals: [0, 6], [4, 10].
+        // The intersection is [4, 6], so the probability of equality is 3 / 49.
         assert_eq!(
             eq.evaluate_statistics(&[left_stat, right_stat])?,
-            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.2)))?
+            StatisticsV2::new_bernoulli(ScalarValue::from(3.0 / 49.0))?
         );
 
-        // The intersection is [4,6], so the probability of value NOT being selected from
-        // the intersection segment is 80%, or 0.8 as Bernoulli.
+        // The probability of not equality is 1 - 3 / 49 = 46 / 49.
         assert_eq!(
             neq.evaluate_statistics(&[left_stat, right_stat])?,
-            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.8)))?
+            StatisticsV2::new_bernoulli(ScalarValue::from(46.0 / 49.0))?
         );
 
         Ok(())
