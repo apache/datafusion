@@ -621,7 +621,7 @@ impl DataFusionError {
         DiagnosticsIterator { head: self }.next()
     }
 
-    /// Return an iterator this [`DataFusionError`] and any other
+    /// Return an iterator over this [`DataFusionError`] and any other
     /// [`DataFusionError`]s in a [`DataFusionError::Collection`].
     ///
     /// Sometimes DataFusion is able to collect multiple errors in a SQL query
