@@ -588,8 +588,7 @@ mod test {
         DefaultSchemaAdapterFactory, SchemaAdapterFactory,
     };
 
-    use arrow::datatypes::Field;
-    use arrow_schema::{Fields, TimeUnit::Nanosecond};
+    use arrow::datatypes::{Field, Fields, TimeUnit::Nanosecond};
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::{Count, Time};

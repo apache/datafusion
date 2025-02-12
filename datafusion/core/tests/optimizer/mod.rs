@@ -22,8 +22,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
-use arrow_schema::{Fields, SchemaBuilder};
+use arrow::datatypes::{
+    DataType, Field, Fields, Schema, SchemaBuilder, SchemaRef, TimeUnit,
+};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{plan_err, DFSchema, Result, ScalarValue, TableReference};

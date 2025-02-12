@@ -24,8 +24,8 @@ use std::sync::{Arc, LazyLock};
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
 use arrow::array::{ArrayRef, DictionaryArray, RecordBatch};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
-use arrow_schema::SortOptions;
 use datafusion::assert_batches_eq;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;

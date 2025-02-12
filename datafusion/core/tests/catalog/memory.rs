@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::Schema;
+use arrow::datatypes::Schema;
 use datafusion::catalog::CatalogProvider;
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::listing::{

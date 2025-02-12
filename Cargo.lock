@@ -223,8 +223,8 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "snap",
- "strum",
- "strum_macros",
+ "strum 0.26.3",
+ "strum_macros 0.26.4",
  "thiserror 1.0.69",
  "typed-builder",
  "uuid",
@@ -453,7 +453,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "105f01ec0090259e9a33a9263ec18ff223ab91a0ea9fbc18042f7e38005142f6"
 dependencies = [
  "bitflags 2.8.0",
- "serde",
 ]
 
 [[package]]
@@ -1113,7 +1112,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5430e3be710b68d984d1391c854eb431a9d548640711faa54eecb1df93db91cc"
 dependencies = [
  "borsh-derive",
- "cfg_aliases 0.2.1",
+ "cfg_aliases",
 ]
 
 [[package]]
@@ -1267,12 +1266,6 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "cfg_aliases"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd16c4719339c4530435d38e511904438d07cce7950afa3718a84ac36c10e89e"
-
-[[package]]
-name = "cfg_aliases"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
@@ -1402,9 +1395,9 @@ dependencies = [
 
 [[package]]
 name = "cmake"
-version = "0.1.53"
+version = "0.1.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e24a03c8b52922d68a1589ad61032f2c1aa5a8158d2aa0d93c6e9534944bbad6"
+checksum = "e7caa3f9de89ddbe2c607f4101924c5abec803763ae9534e4f4d7d8f84aa81f0"
 dependencies = [
  "cc",
 ]
@@ -1730,17 +1723,18 @@ dependencies = [
  "arrow",
  "arrow-ipc",
  "arrow-schema",
- "async-compression",
  "async-trait",
  "bytes",
  "bzip2 0.5.0",
  "chrono",
  "criterion",
  "ctor",
+ "dashmap",
  "datafusion-catalog",
  "datafusion-catalog-listing",
  "datafusion-common",
  "datafusion-common-runtime",
+ "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions",
@@ -1749,6 +1743,7 @@ dependencies = [
  "datafusion-functions-table",
  "datafusion-functions-window",
  "datafusion-functions-window-common",
+ "datafusion-macros",
  "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
@@ -1759,10 +1754,9 @@ dependencies = [
  "env_logger",
  "flate2",
  "futures",
- "glob",
  "itertools 0.14.0",
  "log",
- "nix 0.29.0",
+ "nix",
  "num-traits",
  "object_store",
  "parking_lot",
@@ -1772,13 +1766,13 @@ dependencies = [
  "rand_distr",
  "regex",
  "rstest",
+ "serde",
  "serde_json",
  "sqlparser",
  "sysinfo",
  "tempfile",
  "test-utils",
  "tokio",
- "tokio-util",
  "url",
  "uuid",
  "xz2",
@@ -1822,7 +1816,6 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "parking_lot",
- "sqlparser",
  "tokio",
 ]
 
@@ -1831,25 +1824,32 @@ name = "datafusion-catalog-listing"
 version = "45.0.0"
 dependencies = [
  "arrow",
- "arrow-schema",
  "async-compression",
  "async-trait",
+ "bytes",
+ "bzip2 0.5.0",
  "chrono",
  "datafusion-catalog",
  "datafusion-common",
+ "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "flate2",
  "futures",
  "glob",
  "itertools 0.14.0",
  "log",
  "object_store",
+ "rand 0.8.5",
  "tempfile",
  "tokio",
+ "tokio-util",
  "url",
+ "xz2",
+ "zstd",
 ]
 
 [[package]]
@@ -1887,7 +1887,6 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-ipc",
- "arrow-schema",
  "base64 0.22.1",
  "chrono",
  "half",
@@ -1934,7 +1933,7 @@ dependencies = [
  "futures",
  "log",
  "mimalloc",
- "nix 0.28.0",
+ "nix",
  "object_store",
  "prost",
  "tempfile",
@@ -2001,7 +2000,6 @@ version = "45.0.0"
 dependencies = [
  "abi_stable",
  "arrow",
- "arrow-schema",
  "async-ffi",
  "async-trait",
  "datafusion",
@@ -2031,7 +2029,6 @@ dependencies = [
  "datafusion-expr",
  "datafusion-expr-common",
  "datafusion-macros",
- "hashbrown 0.14.5",
  "hex",
  "itertools 0.14.0",
  "log",
@@ -2050,7 +2047,6 @@ version = "45.0.0"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
- "arrow-schema",
  "criterion",
  "datafusion-common",
  "datafusion-doc",
@@ -2085,7 +2081,6 @@ version = "45.0.0"
 dependencies = [
  "arrow",
  "arrow-ord",
- "arrow-schema",
  "criterion",
  "datafusion-common",
  "datafusion-doc",
@@ -2178,7 +2173,6 @@ version = "45.0.0"
 dependencies = [
  "ahash 0.8.11",
  "arrow",
- "arrow-schema",
  "criterion",
  "datafusion-common",
  "datafusion-expr",
@@ -2214,7 +2208,6 @@ name = "datafusion-physical-optimizer"
 version = "45.0.0"
 dependencies = [
  "arrow",
- "arrow-schema",
  "datafusion-common",
  "datafusion-execution",
  "datafusion-expr",
@@ -2223,13 +2216,9 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
- "futures",
  "itertools 0.14.0",
  "log",
  "recursive",
- "rstest",
- "tokio",
- "url",
 ]
 
 [[package]]
@@ -2285,7 +2274,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
- "strum",
+ "strum 0.27.0",
  "tokio",
 ]
 
@@ -2307,7 +2296,6 @@ name = "datafusion-sql"
 version = "45.0.0"
 dependencies = [
  "arrow",
- "arrow-schema",
  "bigdecimal",
  "ctor",
  "datafusion-common",
@@ -2337,9 +2325,6 @@ dependencies = [
  "chrono",
  "clap 4.5.28",
  "datafusion",
- "datafusion-catalog",
- "datafusion-common",
- "datafusion-common-runtime",
  "env_logger",
  "futures",
  "half",
@@ -2386,23 +2371,14 @@ dependencies = [
  "chrono",
  "console_error_panic_hook",
  "datafusion",
- "datafusion-catalog",
  "datafusion-common",
- "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-expr-common",
- "datafusion-functions",
- "datafusion-functions-aggregate",
- "datafusion-functions-aggregate-common",
- "datafusion-functions-table",
  "datafusion-optimizer",
  "datafusion-physical-expr",
- "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "datafusion-sql",
  "getrandom 0.2.15",
- "parquet",
  "tokio",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -2632,7 +2608,6 @@ version = "0.1.0"
 dependencies = [
  "abi_stable",
  "arrow",
- "arrow-schema",
  "datafusion",
  "datafusion-ffi",
  "ffi_module_interface",
@@ -3832,25 +3807,13 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab2156c4fce2f8df6c499cc1c763e4394b7482525bf2a9701c9d79d215f519e4"
-dependencies = [
- "bitflags 2.8.0",
- "cfg-if",
- "cfg_aliases 0.1.1",
- "libc",
-]
-
-[[package]]
-name = "nix"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
 dependencies = [
  "bitflags 2.8.0",
  "cfg-if",
- "cfg_aliases 0.2.1",
+ "cfg_aliases",
  "libc",
 ]
 
@@ -4667,7 +4630,7 @@ version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c40286217b4ba3a71d644d752e6a0b71f13f1b6a2c5311acfcbe0c2418ed904"
 dependencies = [
- "cfg_aliases 0.2.1",
+ "cfg_aliases",
  "libc",
  "once_cell",
  "socket2",
@@ -5215,7 +5178,7 @@ dependencies = [
  "libc",
  "log",
  "memchr",
- "nix 0.29.0",
+ "nix",
  "radix_trie",
  "unicode-segmentation",
  "unicode-width 0.2.0",
@@ -5649,9 +5612,9 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
 name = "stacker"
-version = "0.1.17"
+version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "799c883d55abdb5e98af1a7b3f23b9b6de8ecada0ecac058672d7635eb48ca7b"
+checksum = "1d08feb8f695b465baed819b03c128dc23f57a694510ab1f06c77f763975685e"
 dependencies = [
  "cc",
  "cfg-if",
@@ -5735,8 +5698,14 @@ name = "strum"
 version = "0.26.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
+
+[[package]]
+name = "strum"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce1475c515a4f03a8a7129bb5228b81a781a86cb0b3fbbc19e1c556d491a401f"
 dependencies = [
- "strum_macros",
+ "strum_macros 0.27.0",
 ]
 
 [[package]]
@@ -5744,6 +5713,19 @@ name = "strum_macros"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.98",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9688894b43459159c82bfa5a5fa0435c19cbe3c9b427fa1dd7b1ce0c279b18a7"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -5764,9 +5746,9 @@ dependencies = [
 
 [[package]]
 name = "substrait"
-version = "0.53.0"
+version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef201e3234acdb66865840012c0b9c3d04269b74416fb6285cd480b01718c2f9"
+checksum = "9a71f43d785f205cd4a685f6cb245a0f0a5be20fbaee956a172e80574f5e8eda"
 dependencies = [
  "heck 0.5.0",
  "pbjson",
@@ -6188,9 +6170,9 @@ checksum = "0dd7358ecb8fc2f8d014bf86f6f638ce72ba252a2c3a2572f2a795f1d23efb41"
 
 [[package]]
 name = "toml_edit"
-version = "0.22.23"
+version = "0.22.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02a8b472d1a3d7c18e2d61a489aee3453fd9031c33e4f55bd533f4a7adca1bee"
+checksum = "17b4795ff5edd201c7cd6dca065ae59972ce77d1b80fa0a84d94950ece7d1474"
 dependencies = [
  "indexmap 2.7.1",
  "toml_datetime",
@@ -6999,9 +6981,9 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "winnow"
-version = "0.7.1"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86e376c75f4f43f44db463cf729e0d3acbf954d13e22c51e26e4c264b4ab545f"
+checksum = "59690dea168f2198d1a3b0cac23b8063efcd11012f10ae4698f284808c8ef603"
 dependencies = [
  "memchr",
 ]

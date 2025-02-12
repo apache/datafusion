@@ -23,7 +23,7 @@
 
 use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
 use arrow::compute::{can_cast_types, cast};
-use arrow_schema::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::plan_err;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -435,9 +435,8 @@ mod tests {
 
     use crate::assert_batches_sorted_eq;
     use arrow::array::{Int32Array, StringArray};
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::{DataType, SchemaRef};
     use object_store::path::Path;
     use object_store::ObjectMeta;
 

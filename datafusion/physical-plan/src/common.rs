@@ -253,7 +253,7 @@ impl IPCWriter {
 
 /// Checks if the given projection is valid for the given schema.
 pub fn can_project(
-    schema: &arrow_schema::SchemaRef,
+    schema: &arrow::datatypes::SchemaRef,
     projection: Option<&Vec<usize>>,
 ) -> Result<()> {
     match projection {
@@ -263,7 +263,7 @@ pub fn can_project(
                 .max()
                 .is_some_and(|&i| i >= schema.fields().len())
             {
-                Err(arrow_schema::ArrowError::SchemaError(format!(
+                Err(arrow::error::ArrowError::SchemaError(format!(
                     "project index {} out of bounds, max field {}",
                     columns.iter().max().unwrap(),
                     schema.fields().len()

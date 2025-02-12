@@ -19,15 +19,15 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{
-    BinaryType, BinaryViewType, BooleanType, ByteArrayType, ByteViewType, Date32Type,
-    Date64Type, Decimal128Type, Decimal256Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
-    IntervalYearMonthType, LargeBinaryType, LargeUtf8Type, StringViewType,
-    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type, Utf8Type,
+    BinaryType, BinaryViewType, BooleanType, ByteArrayType, ByteViewType, DataType,
+    Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field, Float32Type,
+    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, LargeBinaryType,
+    LargeUtf8Type, Schema, StringViewType, Time32MillisecondType, Time32SecondType,
+    Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type, Utf8Type,
 };
-use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result};
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;

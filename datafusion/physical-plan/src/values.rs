@@ -233,7 +233,7 @@ mod tests {
     use crate::expressions::lit;
     use crate::test::{self, make_partition};
 
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::stats::{ColumnStatistics, Precision};
 
     #[tokio::test]

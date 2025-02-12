@@ -34,9 +34,8 @@ use arrow::array::{
     },
     ArrayRef, Date32Array, Date64Array, PrimitiveArray,
 };
-use arrow::datatypes::{Decimal128Type, Decimal256Type, DecimalType};
+use arrow::datatypes::{DataType, Decimal128Type, Decimal256Type, DecimalType};
 use arrow::util::display::array_value_to_string;
-use arrow_schema::DataType;
 use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, Result,
     ScalarValue,
@@ -1649,8 +1648,7 @@ mod tests {
     use std::{any::Any, sync::Arc, vec};
 
     use arrow::array::{LargeListArray, ListArray};
-    use arrow::datatypes::{Field, Int32Type, Schema, TimeUnit};
-    use arrow_schema::DataType::Int8;
+    use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
     use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;

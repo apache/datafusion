@@ -18,9 +18,12 @@
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
+pub mod file_compression_type;
 pub mod file_groups;
+pub mod file_sink_config;
 pub mod helpers;
 pub mod url;
+pub mod write;
 use chrono::TimeZone;
 use datafusion_common::Result;
 use datafusion_common::{ScalarValue, Statistics};

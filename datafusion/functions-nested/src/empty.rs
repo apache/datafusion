@@ -19,8 +19,10 @@
 
 use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, BooleanArray, OffsetSizeTrait};
-use arrow_schema::DataType;
-use arrow_schema::DataType::{Boolean, FixedSizeList, LargeList, List};
+use arrow::datatypes::{
+    DataType,
+    DataType::{Boolean, FixedSizeList, LargeList, List},
+};
 use datafusion_common::cast::as_generic_list_array;
 use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{

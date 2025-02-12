@@ -21,9 +21,7 @@ use arrow::array::{
     make_array, Array, ArrayRef, Capacities, ListArray, MapArray, MutableArrayData,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::DataType;
-use arrow_schema::Field;
-
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{cast::as_map_array, exec_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,

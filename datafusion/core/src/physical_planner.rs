@@ -508,7 +508,7 @@ impl DefaultPhysicalPlanner {
                 // the column name rather than column name + explicit data type.
                 let table_partition_cols = partition_by
                     .iter()
-                    .map(|s| (s.to_string(), arrow_schema::DataType::Null))
+                    .map(|s| (s.to_string(), arrow::datatypes::DataType::Null))
                     .collect::<Vec<_>>();
 
                 let keep_partition_by_columns = match source_option_tuples

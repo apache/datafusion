@@ -21,7 +21,7 @@ use super::{
 };
 use crate::error::{Result, _internal_err};
 use arrow::compute::can_cast_types;
-use arrow_schema::{
+use arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
 };
 use std::{fmt::Display, sync::Arc};
@@ -126,7 +126,7 @@ pub enum NativeType {
     /// nevertheless correct).
     ///
     /// ```
-    /// # use arrow_schema::{DataType, TimeUnit};
+    /// # use arrow::datatypes::{DataType, TimeUnit};
     /// DataType::Timestamp(TimeUnit::Second, None);
     /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
