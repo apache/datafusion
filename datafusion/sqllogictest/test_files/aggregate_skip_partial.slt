@@ -240,8 +240,7 @@ SELECT
   CASE WHEN c1 = 'a' THEN NULL ELSE c11 END as c11
 FROM aggregate_test_100;
 ----
-DataFusion error: Internal error: Inserting query must have the same schema nullability as the table. Expected table field 'c5' nullability: false, got field: 'c5', nullability: true.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+DataFusion error: Error during planning: Inserting query must have the same schema nullability as the table. Expected table field 'c5' nullability: false, got field: 'c5', nullability: true
 
 
 statement ok

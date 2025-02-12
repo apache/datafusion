@@ -296,8 +296,11 @@ insert into table_without_values(field1) values(3);
 1
 
 # insert NULL values for the missing column (field1), but column is non-nullable
-statement error DataFusion error: Error during planning: Inserting query must have the same schema nullability as the table\. Expected table field 'field1' nullability: false, got field: 'field1', nullability: true
+statement error
 insert into table_without_values(field2) values(300);
+----
+DataFusion error: Error during planning: Inserting query must have the same schema nullability as the table. Expected table field 'field1' nullability: false, got field: 'field1', nullability: true
+
 
 statement error Invalid argument error: Column 'column1' is declared as non-nullable but contains null values
 insert into table_without_values values(NULL, 300);
@@ -368,8 +371,11 @@ insert into test_column_defaults values(1, 10, 100, 'ABC', now())
 ----
 1
 
-statement error DataFusion error: Error during planning: Inserting query must have the same schema nullability as the table\. Expected table field 'b' nullability: false, got field: 'b', nullability: true
+statement error
 insert into test_column_defaults(a) values(2)
+----
+DataFusion error: Error during planning: Inserting query must have the same schema nullability as the table. Expected table field 'b' nullability: false, got field: 'b', nullability: true
+
 
 query I
 insert into test_column_defaults(b) values(20)
