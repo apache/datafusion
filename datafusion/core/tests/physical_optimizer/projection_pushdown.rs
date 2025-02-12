@@ -41,6 +41,7 @@ use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::joins::{
@@ -650,7 +651,7 @@ fn test_output_req_after_projection() -> Result<()> {
     let csv = create_simple_csv_exec();
     let sort_req: Arc<dyn ExecutionPlan> = Arc::new(OutputRequirementExec::new(
         csv.clone(),
-        Some(LexRequirement::new(vec![
+        Some(RequiredInputOrdering::Hard(LexRequirement::new(vec![
             PhysicalSortRequirement {
                 expr: Arc::new(Column::new("b", 1)),
                 options: Some(SortOptions::default()),
@@ -663,7 +664,7 @@ fn test_output_req_after_projection() -> Result<()> {
                 )),
                 options: Some(SortOptions::default()),
             },
-        ])),
+        ]))),
         Distribution::HashPartitioned(vec![
             Arc::new(Column::new("a", 0)),
             Arc::new(Column::new("b", 1)),
@@ -696,7 +697,7 @@ fn test_output_req_after_projection() -> Result<()> {
         ];
 
     assert_eq!(get_plan_string(&after_optimize), expected);
-    let expected_reqs = LexRequirement::new(vec![
+    let expected_reqs = RequiredInputOrdering::Hard(LexRequirement::new(vec![
         PhysicalSortRequirement {
             expr: Arc::new(Column::new("b", 2)),
             options: Some(SortOptions::default()),
@@ -709,7 +710,7 @@ fn test_output_req_after_projection() -> Result<()> {
             )),
             options: Some(SortOptions::default()),
         },
-    ]);
+    ]));
     assert_eq!(
         after_optimize
             .as_any()

@@ -20,6 +20,7 @@
 use std::borrow::Borrow;
 use std::sync::Arc;
 
+use crate::execution_plan::RequiredInputOrdering;
 use crate::{
     expressions::PhysicalSortExpr, ExecutionPlan, ExecutionPlanProperties,
     InputOrderMode, PhysicalExpr,
@@ -275,7 +276,8 @@ pub(crate) fn calc_requirements<
 >(
     partition_by_exprs: impl IntoIterator<Item = T>,
     orderby_sort_exprs: impl IntoIterator<Item = S>,
-) -> Option<LexRequirement> {
+    is_soft_requirements: bool,
+) -> Option<RequiredInputOrdering> {
     let mut sort_reqs = LexRequirement::new(
         partition_by_exprs
             .into_iter()
@@ -293,8 +295,12 @@ pub(crate) fn calc_requirements<
             ));
         }
     }
-    // Convert empty result to None. Otherwise wrap result inside Some()
-    (!sort_reqs.is_empty()).then_some(sort_reqs)
+
+    if is_soft_requirements {
+        (!sort_reqs.is_empty()).then_some(RequiredInputOrdering::Soft(sort_reqs))
+    } else {
+        (!sort_reqs.is_empty()).then_some(RequiredInputOrdering::Hard(sort_reqs))
+    }
 }
 
 /// This function calculates the indices such that when partition by expressions reordered with the indices
@@ -624,21 +630,35 @@ mod tests {
                 orderbys.push(PhysicalSortExpr { expr, options });
             }
 
-            let mut expected: Option<LexRequirement> = None;
-            for (col_name, reqs) in expected_params {
-                let options = reqs.map(|(descending, nulls_first)| SortOptions {
-                    descending,
-                    nulls_first,
-                });
-                let expr = col(col_name, &schema)?;
-                let res = PhysicalSortRequirement::new(expr, options);
-                if let Some(expected) = &mut expected {
-                    expected.push(res);
-                } else {
-                    expected = Some(LexRequirement::new(vec![res]));
+            for is_soft in [true, false] {
+                let mut expected: Option<LexRequirement> = None;
+                for (col_name, reqs) in expected_params.clone() {
+                    let options = reqs.map(|(descending, nulls_first)| SortOptions {
+                        descending,
+                        nulls_first,
+                    });
+                    let expr = col(col_name, &schema)?;
+                    let res = PhysicalSortRequirement::new(expr, options);
+                    if let Some(expected) = &mut expected {
+                        expected.push(res);
+                    } else {
+                        expected = Some(LexRequirement::new(vec![res]));
+                    }
                 }
+                let expected_result = if let Some(expected) = expected {
+                    if is_soft {
+                        Some(RequiredInputOrdering::Soft(expected))
+                    } else {
+                        Some(RequiredInputOrdering::Hard(expected))
+                    }
+                } else {
+                    None
+                };
+                assert_eq!(
+                    calc_requirements(partitionbys.clone(), orderbys.clone(), is_soft),
+                    expected_result
+                );
             }
-            assert_eq!(calc_requirements(partitionbys, orderbys), expected);
         }
         Ok(())
     }

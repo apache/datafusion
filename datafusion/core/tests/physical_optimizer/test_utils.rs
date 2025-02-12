@@ -38,7 +38,6 @@ use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{expressions, PhysicalExpr};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -47,6 +46,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{JoinFilter, JoinOn};
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
@@ -400,8 +400,9 @@ impl ExecutionPlan for RequirementsTestExec {
         self.input.properties()
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
-        let requirement = LexRequirement::from(self.required_input_ordering.clone());
+    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
+        let requirement =
+            RequiredInputOrdering::from(self.required_input_ordering.clone());
         vec![Some(requirement)]
     }
 

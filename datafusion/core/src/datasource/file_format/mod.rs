@@ -53,7 +53,7 @@ use datafusion_physical_expr::PhysicalExpr;
 use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use file_compression_type::FileCompressionType;
 use futures::stream::BoxStream;
 use futures::{ready, Stream, StreamExt};
@@ -140,7 +140,7 @@ pub trait FileFormat: Send + Sync + Debug {
         _input: Arc<dyn ExecutionPlan>,
         _state: &dyn Session,
         _conf: FileSinkConfig,
-        _order_requirements: Option<LexRequirement>,
+        _order_requirements: Option<RequiredInputOrdering>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         not_impl_err!("Writer not implemented for this format")
     }

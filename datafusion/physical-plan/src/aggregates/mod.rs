@@ -25,7 +25,7 @@ use crate::aggregates::{
     no_grouping::AggregateStream, row_hash::GroupedHashAggregateStream,
     topk_stream::GroupedTopKAggregateStream,
 };
-use crate::execution_plan::{CardinalityEffect, EmissionType};
+use crate::execution_plan::{CardinalityEffect, EmissionType, RequiredInputOrdering};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::get_field_metadata;
 use crate::windows::get_ordered_partition_by_indices;
@@ -370,7 +370,7 @@ pub struct AggregateExec {
     pub input_schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    required_input_ordering: Option<LexRequirement>,
+    required_input_ordering: Option<RequiredInputOrdering>,
     /// Describes how the input is ordered relative to the group by columns
     input_order_mode: InputOrderMode,
     cache: PlanProperties,
@@ -502,8 +502,8 @@ impl AggregateExec {
         let group_expr_mapping =
             ProjectionMapping::try_new(&group_by.expr, &input.schema())?;
 
-        let required_input_ordering =
-            (!new_requirement.is_empty()).then_some(new_requirement);
+        let required_input_ordering = (!new_requirement.is_empty())
+            .then_some(RequiredInputOrdering::Soft(new_requirement));
 
         let cache = Self::compute_properties(
             &input,
@@ -635,8 +635,8 @@ impl AggregateExec {
             return false;
         }
         // ensure no ordering is required on the input
-        if self.required_input_ordering()[0].is_some() {
-            return false;
+        if let Some(requirement) = self.required_input_ordering()[0].clone() {
+            return matches!(requirement, RequiredInputOrdering::Hard(_));
         }
         true
     }
@@ -822,7 +822,7 @@ impl ExecutionPlan for AggregateExec {
         }
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         vec![self.required_input_ordering.clone()]
     }
 

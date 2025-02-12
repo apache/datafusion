@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
+use crate::execution_plan::RequiredInputOrdering;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
@@ -38,7 +39,7 @@ use crate::{
     ExecutionPlanProperties, InputOrderMode, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics, WindowExpr,
 };
-use ahash::RandomState;
+
 use arrow::compute::take_record_batch;
 use arrow::{
     array::{Array, ArrayRef, RecordBatchOptions, UInt32Builder},
@@ -61,8 +62,9 @@ use datafusion_physical_expr::window::{
     PartitionBatches, PartitionKey, PartitionWindowAggStates, WindowState,
 };
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use ahash::RandomState;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use hashbrown::hash_table::HashTable;
@@ -275,14 +277,14 @@ impl ExecutionPlan for BoundedWindowAggExec {
         vec![&self.input]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         let partition_bys = self.window_expr()[0].partition_by();
         let order_keys = self.window_expr()[0].order_by();
         let partition_bys = self
             .ordered_partition_by_indices
             .iter()
             .map(|idx| &partition_bys[*idx]);
-        vec![calc_requirements(partition_bys, order_keys.iter())]
+        vec![calc_requirements(partition_bys, order_keys.iter(), true)]
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {

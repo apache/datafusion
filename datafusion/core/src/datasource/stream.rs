@@ -35,6 +35,7 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{CreateExternalTable, Expr, SortExpr, TableType};
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
@@ -357,7 +358,9 @@ impl TableProvider for StreamTable {
                 let schema = self.0.source.schema();
                 let orders = create_ordering(schema, std::slice::from_ref(x))?;
                 let ordering = orders.into_iter().next().unwrap();
-                Some(ordering.into_iter().map(Into::into).collect())
+                Some(RequiredInputOrdering::Hard(
+                    ordering.into_iter().map(Into::into).collect(),
+                ))
             }
             None => None,
         };

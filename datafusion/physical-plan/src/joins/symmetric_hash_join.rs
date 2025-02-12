@@ -33,7 +33,9 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use crate::common::SharedMemoryReservation;
-use crate::execution_plan::{boundedness_from_children, emission_type_from_children};
+use crate::execution_plan::{
+    boundedness_from_children, emission_type_from_children, RequiredInputOrdering,
+};
 use crate::joins::hash_join::{equal_rows_arr, update_hash};
 use crate::joins::stream_join_utils::{
     calculate_filter_expr_intervals, combine_two_batches,
@@ -416,16 +418,18 @@ impl ExecutionPlan for SymmetricHashJoinExec {
         }
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         vec![
             self.left_sort_exprs
                 .as_ref()
                 .cloned()
-                .map(LexRequirement::from),
+                .map(LexRequirement::from)
+                .map(RequiredInputOrdering::Hard),
             self.right_sort_exprs
                 .as_ref()
                 .cloned()
-                .map(LexRequirement::from),
+                .map(LexRequirement::from)
+                .map(RequiredInputOrdering::Hard),
         ]
     }
 

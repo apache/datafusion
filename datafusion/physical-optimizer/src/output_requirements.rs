@@ -31,6 +31,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Result, Statistics};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, LexRequirement, PhysicalSortRequirement};
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::projection::{
     make_with_child, update_expr, ProjectionExec,
 };
@@ -94,7 +95,7 @@ enum RuleMode {
 #[derive(Debug)]
 pub struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
-    order_requirement: Option<LexRequirement>,
+    order_requirement: Option<RequiredInputOrdering>,
     dist_requirement: Distribution,
     cache: PlanProperties,
 }
@@ -102,7 +103,7 @@ pub struct OutputRequirementExec {
 impl OutputRequirementExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        requirements: Option<LexRequirement>,
+        requirements: Option<RequiredInputOrdering>,
         dist_requirement: Distribution,
     ) -> Self {
         let cache = Self::compute_properties(&input);
@@ -168,7 +169,7 @@ impl ExecutionPlan for OutputRequirementExec {
         vec![&self.input]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         vec![self.order_requirement.clone()]
     }
 
@@ -207,7 +208,7 @@ impl ExecutionPlan for OutputRequirementExec {
         let mut updated_sort_reqs = LexRequirement::new(vec![]);
         // None or empty_vec can be treated in the same way.
         if let Some(reqs) = &self.required_input_ordering()[0] {
-            for req in &reqs.inner {
+            for req in reqs.lex_requirement().inner.clone() {
                 let Some(new_expr) = update_expr(&req.expr, projection.expr(), false)?
                 else {
                     return Ok(None);
@@ -238,7 +239,8 @@ impl ExecutionPlan for OutputRequirementExec {
             .map(|input| {
                 OutputRequirementExec::new(
                     input,
-                    (!updated_sort_reqs.is_empty()).then_some(updated_sort_reqs),
+                    (!updated_sort_reqs.is_empty())
+                        .then_some(RequiredInputOrdering::Hard(updated_sort_reqs)),
                     dist_req,
                 )
             })
@@ -309,13 +311,13 @@ fn require_top_ordering_helper(
         // Therefore; we check the sort expression field of the SortExec to assign the requirements.
         let req_ordering = sort_exec.expr();
         let req_dist = sort_exec.required_input_distribution()[0].clone();
-        let reqs = LexRequirement::from(req_ordering.clone());
+        let reqs = RequiredInputOrdering::from(req_ordering.clone());
         Ok((
             Arc::new(OutputRequirementExec::new(plan, Some(reqs), req_dist)) as _,
             true,
         ))
     } else if let Some(spm) = plan.as_any().downcast_ref::<SortPreservingMergeExec>() {
-        let reqs = LexRequirement::from(spm.expr().clone());
+        let reqs = RequiredInputOrdering::from(spm.expr().clone());
         Ok((
             Arc::new(OutputRequirementExec::new(
                 plan,
@@ -325,7 +327,11 @@ fn require_top_ordering_helper(
             true,
         ))
     } else if plan.maintains_input_order()[0]
-        && plan.required_input_ordering()[0].is_none()
+        && (plan.required_input_ordering()[0].is_none()
+            || matches!(
+                plan.required_input_ordering()[0].clone().unwrap(),
+                RequiredInputOrdering::Soft(_)
+            ))
     {
         // Keep searching for a `SortExec` as long as ordering is maintained,
         // and on-the-way operators do not themselves require an ordering.

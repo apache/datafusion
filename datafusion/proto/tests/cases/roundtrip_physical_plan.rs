@@ -65,6 +65,7 @@ use datafusion::physical_plan::aggregates::{
 };
 use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion::physical_plan::expressions::{
     binary, cast, col, in_list, like, lit, BinaryExpr, Column, NotExpr, PhysicalSortExpr,
 };
@@ -1309,7 +1310,7 @@ fn roundtrip_json_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        Some(sort_order),
+        Some(RequiredInputOrdering::Hard(sort_order)),
     )))
 }
 
@@ -1334,13 +1335,15 @@ fn roundtrip_csv_sink() -> Result<()> {
         file_sink_config,
         CsvWriterOptions::new(WriterBuilder::default(), CompressionTypeVariant::ZSTD),
     ));
-    let sort_order = LexRequirement::new(vec![PhysicalSortRequirement::new(
-        Arc::new(Column::new("plan_type", 0)),
-        Some(SortOptions {
-            descending: true,
-            nulls_first: false,
-        }),
-    )]);
+    let sort_order = RequiredInputOrdering::Hard(LexRequirement::new(vec![
+        PhysicalSortRequirement::new(
+            Arc::new(Column::new("plan_type", 0)),
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+        ),
+    ]));
 
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
@@ -1400,7 +1403,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
     roundtrip_test(Arc::new(DataSinkExec::new(
         input,
         data_sink,
-        Some(sort_order),
+        Some(RequiredInputOrdering::Hard(sort_order)),
     )))
 }
 

@@ -20,6 +20,7 @@ use std::sync::Arc;
 use datafusion_physical_expr::LexRequirement;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -55,15 +56,15 @@ pub fn add_sort_above<T: Clone + Default>(
 /// requirement is already satisfied no `SortExec` is added.
 pub fn add_sort_above_with_check<T: Clone + Default>(
     node: PlanContext<T>,
-    sort_requirements: LexRequirement,
+    sort_requirements: RequiredInputOrdering,
     fetch: Option<usize>,
 ) -> PlanContext<T> {
     if !node
         .plan
         .equivalence_properties()
-        .ordering_satisfy_requirement(&sort_requirements)
+        .ordering_satisfy_requirement(sort_requirements.lex_requirement())
     {
-        add_sort_above(node, sort_requirements, fetch)
+        add_sort_above(node, sort_requirements.lex_requirement().clone(), fetch)
     } else {
         node
     }

@@ -40,7 +40,6 @@ use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::{
     expressions::binary, expressions::lit, LexOrdering, PhysicalSortExpr,
 };
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion_physical_optimizer::output_requirements::OutputRequirements;
@@ -49,7 +48,7 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
-use datafusion_physical_plan::execution_plan::ExecutionPlan;
+use datafusion_physical_plan::execution_plan::{ExecutionPlan, RequiredInputOrdering};
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::JoinOn;
@@ -128,11 +127,11 @@ impl ExecutionPlan for SortRequiredExec {
     }
 
     // model that it requires the output ordering of its input
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         if self.expr.is_empty() {
             vec![None]
         } else {
-            vec![Some(LexRequirement::from(self.expr.clone()))]
+            vec![Some(RequiredInputOrdering::from(self.expr.clone()))]
         }
     }
 
@@ -334,7 +333,6 @@ fn sort_required_exec_with_req(
 fn ensure_distribution_helper(
     plan: Arc<dyn ExecutionPlan>,
     target_partitions: usize,
-    prefer_existing_sort: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let distribution_context = DistributionContext::new_default(plan);
     let mut config = ConfigOptions::new();
@@ -342,7 +340,6 @@ fn ensure_distribution_helper(
     config.optimizer.enable_round_robin_repartition = true;
     config.optimizer.repartition_file_scans = false;
     config.optimizer.repartition_file_min_size = 1024;
-    config.optimizer.prefer_existing_sort = prefer_existing_sort;
     ensure_distribution(distribution_context, &config).map(|item| item.data.plan)
 }
 
@@ -377,29 +374,24 @@ macro_rules! plans_matches_expected {
 /// * `PREFER_EXISTING_UNION` (optional) - if true, will not attempt to convert Union to Interleave
 macro_rules! assert_optimized {
     ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr) => {
-        assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, false, 10, false, 1024, false);
+        assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, 10, false, 1024, false);
     };
 
-    ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $PREFER_EXISTING_SORT: expr) => {
-        assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, $PREFER_EXISTING_SORT, 10, false, 1024, false);
+    ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $PREFER_EXISTING_UNION: expr) => {
+        assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, 10, false, 1024, $PREFER_EXISTING_UNION);
     };
 
-    ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $PREFER_EXISTING_SORT: expr, $PREFER_EXISTING_UNION: expr) => {
-        assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, $PREFER_EXISTING_SORT, 10, false, 1024, $PREFER_EXISTING_UNION);
+    ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr) => {
+        assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, $TARGET_PARTITIONS, $REPARTITION_FILE_SCANS, $REPARTITION_FILE_MIN_SIZE, false);
     };
 
-    ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $PREFER_EXISTING_SORT: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr) => {
-        assert_optimized!($EXPECTED_LINES, $PLAN, $FIRST_ENFORCE_DIST, $PREFER_EXISTING_SORT, $TARGET_PARTITIONS, $REPARTITION_FILE_SCANS, $REPARTITION_FILE_MIN_SIZE, false);
-    };
-
-    ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $PREFER_EXISTING_SORT: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr, $PREFER_EXISTING_UNION: expr) => {
+    ($EXPECTED_LINES: expr, $PLAN: expr, $FIRST_ENFORCE_DIST: expr, $TARGET_PARTITIONS: expr, $REPARTITION_FILE_SCANS: expr, $REPARTITION_FILE_MIN_SIZE: expr, $PREFER_EXISTING_UNION: expr) => {
         let expected_lines: Vec<&str> = $EXPECTED_LINES.iter().map(|s| *s).collect();
 
         let mut config = ConfigOptions::new();
         config.execution.target_partitions = $TARGET_PARTITIONS;
         config.optimizer.repartition_file_scans = $REPARTITION_FILE_SCANS;
         config.optimizer.repartition_file_min_size = $REPARTITION_FILE_MIN_SIZE;
-        config.optimizer.prefer_existing_sort = $PREFER_EXISTING_SORT;
         config.optimizer.prefer_existing_union = $PREFER_EXISTING_UNION;
         // Use a small batch size, to trigger RoundRobin in tests
         config.execution.batch_size = 1;
@@ -1048,7 +1040,6 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
     let bottom_left_join = ensure_distribution_helper(
         hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
         10,
-        true,
     )?;
 
     // Projection(a as A, a as AA, b as B, c as C)
@@ -1079,7 +1070,6 @@ fn reorder_join_keys_to_left_input() -> Result<()> {
     let bottom_right_join = ensure_distribution_helper(
         hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
         10,
-        true,
     )?;
 
     // Join on (B == b1 and C == c and AA = a1)
@@ -1182,7 +1172,6 @@ fn reorder_join_keys_to_right_input() -> Result<()> {
     let bottom_left_join = ensure_distribution_helper(
         hash_join_exec(left.clone(), right.clone(), &join_on, &JoinType::Inner),
         10,
-        true,
     )?;
 
     // Projection(a as A, a as AA, b as B, c as C)
@@ -1213,7 +1202,6 @@ fn reorder_join_keys_to_right_input() -> Result<()> {
     let bottom_right_join = ensure_distribution_helper(
         hash_join_exec(left, right.clone(), &join_on, &JoinType::Inner),
         10,
-        true,
     )?;
 
     // Join on (B == b1 and C == c and AA = a1)
@@ -1385,7 +1373,7 @@ fn multi_smj_joins() -> Result<()> {
                     "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
             ],
         };
-        assert_optimized!(expected, top_join.clone(), true, true);
+        assert_optimized!(expected, top_join.clone(), true);
 
         let expected_first_sort_enforcement = match join_type {
             // Should include 6 RepartitionExecs (3 hash, 3 round-robin), 3 SortExecs
@@ -1439,7 +1427,7 @@ fn multi_smj_joins() -> Result<()> {
                 "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
             ],
         };
-        assert_optimized!(expected_first_sort_enforcement, top_join, false, true);
+        assert_optimized!(expected_first_sort_enforcement, top_join, false);
 
         match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
@@ -1496,7 +1484,7 @@ fn multi_smj_joins() -> Result<()> {
                     // this match arm cannot be reached
                     _ => unreachable!()
                 };
-                assert_optimized!(expected, top_join.clone(), true, true);
+                assert_optimized!(expected, top_join.clone(), true);
 
                 let expected_first_sort_enforcement = match join_type {
                     // Should include 6 RepartitionExecs (3 of them preserves order) and 3 SortExecs
@@ -1542,7 +1530,7 @@ fn multi_smj_joins() -> Result<()> {
                     // this match arm cannot be reached
                     _ => unreachable!()
                 };
-                assert_optimized!(expected_first_sort_enforcement, top_join, false, true);
+                assert_optimized!(expected_first_sort_enforcement, top_join, false);
             }
             _ => {}
         }
@@ -1616,7 +1604,7 @@ fn smj_join_key_ordering() -> Result<()> {
         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
     ];
-    assert_optimized!(expected, join.clone(), true, true);
+    assert_optimized!(expected, join.clone(), true);
 
     let expected_first_sort_enforcement = &[
         "SortMergeJoin: join_type=Inner, on=[(b3@1, b2@1), (a3@0, a2@0)]",
@@ -1642,7 +1630,7 @@ fn smj_join_key_ordering() -> Result<()> {
         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
     ];
-    assert_optimized!(expected_first_sort_enforcement, join, false, true);
+    assert_optimized!(expected_first_sort_enforcement, join, false);
 
     Ok(())
 }
@@ -1674,17 +1662,6 @@ fn merge_does_not_need_sort() -> Result<()> {
         "DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
     assert_optimized!(expected, exec, true);
-
-    // In this case preserving ordering through order preserving operators is not desirable
-    // (according to flag: PREFER_EXISTING_SORT)
-    // hence in this case ordering lost during CoalescePartitionsExec and re-introduced with
-    // SortExec at the top.
-    let expected = &[
-        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "CoalescePartitionsExec",
-        "CoalesceBatchesExec: target_batch_size=4096",
-        "DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
     assert_optimized!(expected, exec, false);
 
     Ok(())
@@ -1769,8 +1746,6 @@ fn union_not_to_interleave() -> Result<()> {
         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
     ];
-    // no sort in the plan but since we need it as a parameter, make it default false
-    let prefer_existing_sort = false;
     let first_enforce_distribution = true;
     let prefer_existing_union = true;
 
@@ -1778,14 +1753,12 @@ fn union_not_to_interleave() -> Result<()> {
         expected,
         plan.clone(),
         first_enforce_distribution,
-        prefer_existing_sort,
         prefer_existing_union
     );
     assert_optimized!(
         expected,
         plan,
         !first_enforce_distribution,
-        prefer_existing_sort,
         prefer_existing_union
     );
 
@@ -1992,12 +1965,6 @@ fn repartition_ignores_sort_preserving_merge() -> Result<()> {
     ];
 
     assert_optimized!(expected, plan.clone(), true);
-
-    let expected = &[
-        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        "CoalescePartitionsExec",
-        "DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
     assert_optimized!(expected, plan, false);
 
     Ok(())
@@ -2023,14 +1990,6 @@ fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
     ];
 
     assert_optimized!(expected, plan.clone(), true);
-
-    let expected = &[
-        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        "CoalescePartitionsExec",
-        "UnionExec",
-        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
     assert_optimized!(expected, plan, false);
 
     Ok(())
@@ -2058,8 +2017,8 @@ fn repartition_does_not_destroy_sort() -> Result<()> {
         "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet",
     ];
 
-    assert_optimized!(expected, plan.clone(), true, true);
-    assert_optimized!(expected, plan, false, true);
+    assert_optimized!(expected, plan.clone(), true);
+    assert_optimized!(expected, plan, false);
 
     Ok(())
 }
@@ -2312,8 +2271,8 @@ fn parallelization_single_partition() -> Result<()> {
         "AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
-    assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
+    assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+    assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
 
     Ok(())
 }
@@ -2342,7 +2301,6 @@ fn parallelization_multiple_files() -> Result<()> {
         expected,
         plan,
         true,
-        true,
         target_partitions,
         true,
         repartition_size,
@@ -2359,7 +2317,6 @@ fn parallelization_multiple_files() -> Result<()> {
     assert_optimized!(
         expected,
         plan,
-        true,
         true,
         target_partitions,
         true,
@@ -2415,7 +2372,7 @@ fn parallelization_compressed_csv() -> Result<()> {
             .new_exec(),
             vec![("a".to_string(), "a".to_string())],
         );
-        assert_optimized!(expected, plan, true, false, 2, true, 10, false);
+        assert_optimized!(expected, plan, true, 2, true, 10, false);
     }
     Ok(())
 }
@@ -2440,8 +2397,8 @@ fn parallelization_two_partitions() -> Result<()> {
         // Plan already has two partitions
         "DataSourceExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    assert_optimized!(expected_parquet, plan_parquet, true, false, 2, true, 10);
-    assert_optimized!(expected_csv, plan_csv, true, false, 2, true, 10);
+    assert_optimized!(expected_parquet, plan_parquet, true, 2, true, 10);
+    assert_optimized!(expected_csv, plan_csv, true, 2, true, 10);
     Ok(())
 }
 
@@ -2465,8 +2422,8 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
         // Multiple source files splitted across partitions
         "DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    assert_optimized!(expected_parquet, plan_parquet, true, false, 4, true, 10);
-    assert_optimized!(expected_csv, plan_csv, true, false, 4, true, 10);
+    assert_optimized!(expected_parquet, plan_parquet, true, 4, true, 10);
+    assert_optimized!(expected_csv, plan_csv, true, 4, true, 10);
 
     Ok(())
 }
@@ -2838,9 +2795,8 @@ fn remove_unnecessary_spm_after_filter() -> Result<()> {
         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c@2 ASC",
         "DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
-    // last flag sets config.optimizer.PREFER_EXISTING_SORT
-    assert_optimized!(expected, physical_plan.clone(), true, true);
-    assert_optimized!(expected, physical_plan, false, true);
+    assert_optimized!(expected, physical_plan.clone(), true);
+    assert_optimized!(expected, physical_plan, false);
 
     Ok(())
 }
@@ -2861,9 +2817,8 @@ fn preserve_ordering_through_repartition() -> Result<()> {
         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=d@3 ASC",
         "DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet",
     ];
-    // last flag sets config.optimizer.PREFER_EXISTING_SORT
-    assert_optimized!(expected, physical_plan.clone(), true, true);
-    assert_optimized!(expected, physical_plan, false, true);
+    assert_optimized!(expected, physical_plan.clone(), true);
+    assert_optimized!(expected, physical_plan, false);
 
     Ok(())
 }
@@ -2880,21 +2835,12 @@ fn do_not_preserve_ordering_through_repartition() -> Result<()> {
 
     let expected = &[
         "SortPreservingMergeExec: [a@0 ASC]",
-        "SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
         "FilterExec: c@2 = 0",
-        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC",
         "DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
 
     assert_optimized!(expected, physical_plan.clone(), true);
-
-    let expected = &[
-        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "CoalescePartitionsExec",
-        "FilterExec: c@2 = 0",
-        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-        "DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
     assert_optimized!(expected, physical_plan, false);
 
     Ok(())
@@ -2915,7 +2861,7 @@ fn no_need_for_sort_after_filter() -> Result<()> {
         "CoalescePartitionsExec",
         // Since after this stage c is constant. c@2 ASC ordering is already satisfied.
         "FilterExec: c@2 = 0",
-        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c@2 ASC",
         "DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
     assert_optimized!(expected, physical_plan.clone(), true);
@@ -2948,15 +2894,6 @@ fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
     ];
 
     assert_optimized!(expected, physical_plan.clone(), true);
-
-    let expected = &[
-        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "CoalescePartitionsExec",
-        "SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-        "FilterExec: c@2 = 0",
-        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-        "DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
     assert_optimized!(expected, physical_plan, false);
 
     Ok(())
@@ -3013,7 +2950,6 @@ fn do_not_put_sort_when_input_is_invalid() -> Result<()> {
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
-    config.optimizer.prefer_existing_sort = false;
     let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
     assert_plan_txt!(expected, dist_plan);
 
@@ -3050,7 +2986,6 @@ fn put_sort_when_input_is_valid() -> Result<()> {
     let mut config = ConfigOptions::new();
     config.execution.target_partitions = 10;
     config.optimizer.enable_round_robin_repartition = true;
-    config.optimizer.prefer_existing_sort = false;
     let dist_plan = EnforceDistribution::new().optimize(physical_plan, &config)?;
     assert_plan_txt!(expected, dist_plan);
 
@@ -3074,8 +3009,8 @@ fn do_not_add_unnecessary_hash() -> Result<()> {
         "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
     // Make sure target partition number is 1. In this case hash repartition is unnecessary
-    assert_optimized!(expected, physical_plan.clone(), true, false, 1, false, 1024);
-    assert_optimized!(expected, physical_plan, false, false, 1, false, 1024);
+    assert_optimized!(expected, physical_plan.clone(), true, 1, false, 1024);
+    assert_optimized!(expected, physical_plan, false, 1, false, 1024);
 
     Ok(())
 }
@@ -3104,8 +3039,8 @@ fn do_not_add_unnecessary_hash2() -> Result<()> {
         "DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
     // Make sure target partition number is larger than 2 (e.g partition number at the source).
-    assert_optimized!(expected, physical_plan.clone(), true, false, 4, false, 1024);
-    assert_optimized!(expected, physical_plan, false, false, 4, false, 1024);
+    assert_optimized!(expected, physical_plan.clone(), true, 4, false, 1024);
+    assert_optimized!(expected, physical_plan, false, 4, false, 1024);
 
     Ok(())
 }

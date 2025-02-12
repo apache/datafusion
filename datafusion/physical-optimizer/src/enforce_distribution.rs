@@ -47,7 +47,7 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::execution_plan::{EmissionType, RequiredInputOrdering};
 use datafusion_physical_plan::joins::{
     CrossJoinExec, HashJoinExec, PartitionMode, SortMergeJoinExec,
 };
@@ -1178,12 +1178,6 @@ pub fn ensure_distribution(
             dist_context.plan.pipeline_behavior(),
             EmissionType::Incremental | EmissionType::Both
         );
-    // Use order preserving variants either of the conditions true
-    // - it is desired according to config
-    // - when plan is unbounded
-    // - when it is pipeline friendly (can incrementally produce results)
-    let order_preserving_variants_desirable =
-        unbounded_and_pipeline_friendly || config.optimizer.prefer_existing_sort;
 
     // Remove unnecessary repartition from the physical plan if any
     let DistributionContext {
@@ -1286,7 +1280,17 @@ pub fn ensure_distribution(
                 let ordering_satisfied = child
                     .plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(&required_input_ordering);
+                    .ordering_satisfy_requirement(
+                        required_input_ordering.lex_requirement(),
+                    );
+
+                // Use order preserving variants either of the conditions true
+                // - it is desired according to requirement
+                // - when plan is unbounded
+                // - when it is pipeline friendly (can incrementally produce results)
+                // - when the requirement is not optional
+                let order_preserving_variants_desirable = unbounded_and_pipeline_friendly
+                    || matches!(required_input_ordering, RequiredInputOrdering::Hard(_));
                 if (!ordering_satisfied || !order_preserving_variants_desirable)
                     && child.data
                 {

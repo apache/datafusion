@@ -171,7 +171,7 @@ fn plan_with_order_breaking_variants(
                 || !required_ordering.is_some_and(|required_ordering| {
                     node.plan
                         .equivalence_properties()
-                        .ordering_satisfy_requirement(&required_ordering)
+                        .ordering_satisfy_requirement(required_ordering.lex_requirement())
                 }))
         {
             plan_with_order_breaking_variants(node)
@@ -209,10 +209,6 @@ fn plan_with_order_breaking_variants(
 ///
 /// If this replacement is helpful for removing a `SortExec`, it updates the plan.
 /// Otherwise, it leaves the plan unchanged.
-///
-/// NOTE: This optimizer sub-rule will only produce sort-preserving `RepartitionExec`s
-/// if the query is bounded or if the config option `prefer_existing_sort` is
-/// set to `true`.
 ///
 /// The algorithm flow is simply like this:
 /// 1. Visit nodes of the physical plan bottom-up and look for `SortExec` nodes.

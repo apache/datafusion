@@ -32,6 +32,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::PhysicalSortRequirement;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
     calculate_join_output_ordering, ColumnIndex,
@@ -52,7 +53,7 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// [`EnforceSorting`]: crate::enforce_sorting::EnforceSorting
 #[derive(Default, Clone)]
 pub struct ParentRequirements {
-    ordering_requirement: Option<LexRequirement>,
+    ordering_requirement: Option<RequiredInputOrdering>,
     fetch: Option<usize>,
 }
 
@@ -95,7 +96,7 @@ fn pushdown_sorts_helper(
         .unwrap_or_default();
     let satisfy_parent = plan
         .equivalence_properties()
-        .ordering_satisfy_requirement(&parent_reqs);
+        .ordering_satisfy_requirement(parent_reqs.lex_requirement());
 
     if is_sort(plan) {
         let sort_fetch = plan.fetch();
@@ -103,6 +104,7 @@ fn pushdown_sorts_helper(
             .output_ordering()
             .cloned()
             .map(LexRequirement::from)
+            .map(RequiredInputOrdering::Hard)
             .unwrap_or_default();
         if !satisfy_parent {
             // Make sure this `SortExec` satisfies parent requirements:
@@ -116,7 +118,8 @@ fn pushdown_sorts_helper(
             }
             let fetch = requirements.data.fetch.or(sort_fetch);
             requirements = requirements.children.swap_remove(0);
-            requirements = add_sort_above(requirements, sort_reqs, fetch);
+            requirements =
+                add_sort_above(requirements, sort_reqs.lex_requirement().clone(), fetch);
         };
 
         // We can safely get the 0th index as we are dealing with a `SortExec`.
@@ -168,7 +171,8 @@ fn pushdown_sorts_helper(
             .clone()
             .unwrap_or_default();
         let fetch = requirements.data.fetch;
-        requirements = add_sort_above(requirements, sort_reqs, fetch);
+        requirements =
+            add_sort_above(requirements, sort_reqs.lex_requirement().clone(), fetch);
         assign_initial_requirements(&mut requirements);
     }
     Ok(Transformed::yes(requirements))
@@ -176,8 +180,8 @@ fn pushdown_sorts_helper(
 
 fn pushdown_requirement_to_children(
     plan: &Arc<dyn ExecutionPlan>,
-    parent_required: &LexRequirement,
-) -> Result<Option<Vec<Option<LexRequirement>>>> {
+    parent_required: &RequiredInputOrdering,
+) -> Result<Option<Vec<Option<RequiredInputOrdering>>>> {
     let maintains_input_order = plan.maintains_input_order();
     if is_window(plan) {
         let required_input_ordering = plan.required_input_ordering();
@@ -187,15 +191,18 @@ fn pushdown_requirement_to_children(
         match determine_children_requirement(parent_required, &request_child, child_plan)
         {
             RequirementsCompatibility::Satisfy => {
-                let req = (!request_child.is_empty())
-                    .then(|| LexRequirement::new(request_child.to_vec()));
+                let req = (!request_child.is_empty()).then(|| {
+                    RequiredInputOrdering::Hard(LexRequirement::new(
+                        request_child.to_vec(),
+                    ))
+                });
                 Ok(Some(vec![req]))
             }
             RequirementsCompatibility::Compatible(adjusted) => Ok(Some(vec![adjusted])),
             RequirementsCompatibility::NonCompatible => Ok(None),
         }
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
-        let sort_req = LexRequirement::from(
+        let sort_req = RequiredInputOrdering::from(
             sort_exec
                 .properties()
                 .output_ordering()
@@ -205,12 +212,13 @@ fn pushdown_requirement_to_children(
         if sort_exec
             .properties()
             .eq_properties
-            .requirements_compatible(parent_required, &sort_req)
+            .requirements_compatible(
+                parent_required.lex_requirement(),
+                sort_req.lex_requirement(),
+            )
         {
             debug_assert!(!parent_required.is_empty());
-            Ok(Some(vec![Some(LexRequirement::new(
-                parent_required.to_vec(),
-            ))]))
+            Ok(Some(vec![Some(parent_required.clone())]))
         } else {
             Ok(None)
         }
@@ -233,10 +241,11 @@ fn pushdown_requirement_to_children(
         if plan
             .properties()
             .eq_properties
-            .requirements_compatible(parent_required, &output_req)
+            .requirements_compatible(parent_required.lex_requirement(), &output_req)
         {
-            let req = (!parent_required.is_empty())
-                .then(|| LexRequirement::new(parent_required.to_vec()));
+            let req = (!parent_required.is_empty()).then(|| {
+                RequiredInputOrdering::Hard(LexRequirement::new(parent_required.to_vec()))
+            });
             Ok(Some(vec![req]))
         } else {
             Ok(None)
@@ -249,7 +258,8 @@ fn pushdown_requirement_to_children(
     } else if let Some(smj) = plan.as_any().downcast_ref::<SortMergeJoinExec>() {
         // If the current plan is SortMergeJoinExec
         let left_columns_len = smj.left().schema().fields().len();
-        let parent_required_expr = LexOrdering::from(parent_required.clone());
+        let parent_required_expr =
+            LexOrdering::from(parent_required.lex_requirement().clone());
         match expr_source_side(
             parent_required_expr.as_ref(),
             smj.join_type(),
@@ -257,19 +267,21 @@ fn pushdown_requirement_to_children(
         ) {
             Some(JoinSide::Left) => try_pushdown_requirements_to_join(
                 smj,
-                parent_required,
+                parent_required.lex_requirement(),
                 parent_required_expr.as_ref(),
                 JoinSide::Left,
             ),
             Some(JoinSide::Right) => {
                 let right_offset =
                     smj.schema().fields.len() - smj.right().schema().fields.len();
-                let new_right_required =
-                    shift_right_required(parent_required, right_offset)?;
+                let new_right_required = shift_right_required(
+                    parent_required.lex_requirement(),
+                    right_offset,
+                )?;
                 let new_right_required_expr = LexOrdering::from(new_right_required);
                 try_pushdown_requirements_to_join(
                     smj,
-                    parent_required,
+                    parent_required.lex_requirement(),
                     new_right_required_expr.as_ref(),
                     JoinSide::Right,
                 )
@@ -285,14 +297,14 @@ fn pushdown_requirement_to_children(
         || plan.as_any().is::<FilterExec>()
         // TODO: Add support for Projection push down
         || plan.as_any().is::<ProjectionExec>()
-        || pushdown_would_violate_requirements(parent_required, plan.as_ref())
+        || pushdown_would_violate_requirements(parent_required.lex_requirement(), plan.as_ref())
     {
         // If the current plan is a leaf node or can not maintain any of the input ordering, can not pushed down requirements.
         // For RepartitionExec, we always choose to not push down the sort requirements even the RepartitionExec(input_partition=1) could maintain input ordering.
         // Pushing down is not beneficial
         Ok(None)
     } else if is_sort_preserving_merge(plan) {
-        let new_ordering = LexOrdering::from(parent_required.clone());
+        let new_ordering = LexOrdering::from(parent_required.lex_requirement().clone());
         let mut spm_eqs = plan.equivalence_properties().clone();
         // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
         spm_eqs = spm_eqs.with_reorder(new_ordering);
@@ -304,8 +316,9 @@ fn pushdown_requirement_to_children(
         } else {
             // Can push-down through SortPreservingMergeExec, because parent requirement is finer
             // than SortPreservingMergeExec output ordering.
-            let req = (!parent_required.is_empty())
-                .then(|| LexRequirement::new(parent_required.to_vec()));
+            let req = (!parent_required.is_empty()).then(|| {
+                RequiredInputOrdering::Hard(LexRequirement::new(parent_required.to_vec()))
+            });
             Ok(Some(vec![req]))
         }
     } else if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
@@ -333,6 +346,7 @@ fn pushdown_would_violate_requirements(
             // check if the plan's requirements would still e satisfied if we pushed
             // down the parent requirements
             child_required
+                .lex_requirement()
                 .iter()
                 .zip(parent_required.iter())
                 .all(|(c, p)| !c.compatible(p))
@@ -345,24 +359,25 @@ fn pushdown_would_violate_requirements(
 /// - If parent requirements are more specific, push down parent requirements.
 /// - If they are not compatible, need to add a sort.
 fn determine_children_requirement(
-    parent_required: &LexRequirement,
-    request_child: &LexRequirement,
+    parent_required: &RequiredInputOrdering,
+    request_child: &RequiredInputOrdering,
     child_plan: &Arc<dyn ExecutionPlan>,
 ) -> RequirementsCompatibility {
-    if child_plan
-        .equivalence_properties()
-        .requirements_compatible(request_child, parent_required)
-    {
+    if child_plan.equivalence_properties().requirements_compatible(
+        request_child.lex_requirement(),
+        parent_required.lex_requirement(),
+    ) {
         // Child requirements are more specific, no need to push down.
         RequirementsCompatibility::Satisfy
-    } else if child_plan
-        .equivalence_properties()
-        .requirements_compatible(parent_required, request_child)
-    {
+    } else if child_plan.equivalence_properties().requirements_compatible(
+        parent_required.lex_requirement(),
+        request_child.lex_requirement(),
+    ) {
         // Parent requirements are more specific, adjust child's requirements
         // and push down the new requirements:
-        let adjusted = (!parent_required.is_empty())
-            .then(|| LexRequirement::new(parent_required.to_vec()));
+        let adjusted = (!parent_required.lex_requirement().is_empty()).then(|| {
+            RequiredInputOrdering::Hard(LexRequirement::new(parent_required.to_vec()))
+        });
         RequirementsCompatibility::Compatible(adjusted)
     } else {
         RequirementsCompatibility::NonCompatible
@@ -374,7 +389,7 @@ fn try_pushdown_requirements_to_join(
     parent_required: &LexRequirement,
     sort_expr: &LexOrdering,
     push_side: JoinSide,
-) -> Result<Option<Vec<Option<LexRequirement>>>> {
+) -> Result<Option<Vec<Option<RequiredInputOrdering>>>> {
     let left_eq_properties = smj.left().equivalence_properties();
     let right_eq_properties = smj.right().equivalence_properties();
     let mut smj_required_orderings = smj.required_input_ordering();
@@ -387,9 +402,9 @@ fn try_pushdown_requirements_to_join(
         JoinSide::Left => {
             let left_eq_properties =
                 left_eq_properties.clone().with_reorder(sort_expr.clone());
-            if left_eq_properties
-                .ordering_satisfy_requirement(&left_requirement.unwrap_or_default())
-            {
+            if left_eq_properties.ordering_satisfy_requirement(
+                left_requirement.unwrap_or_default().lex_requirement(),
+            ) {
                 // After re-ordering requirement is still satisfied
                 (sort_expr, right_ordering)
             } else {
@@ -399,9 +414,9 @@ fn try_pushdown_requirements_to_join(
         JoinSide::Right => {
             let right_eq_properties =
                 right_eq_properties.clone().with_reorder(sort_expr.clone());
-            if right_eq_properties
-                .ordering_satisfy_requirement(&right_requirement.unwrap_or_default())
-            {
+            if right_eq_properties.ordering_satisfy_requirement(
+                right_requirement.unwrap_or_default().lex_requirement(),
+            ) {
                 // After re-ordering requirement is still satisfied
                 (left_ordering, sort_expr)
             } else {
@@ -427,7 +442,7 @@ fn try_pushdown_requirements_to_join(
     let should_pushdown = smj_eqs.ordering_satisfy_requirement(parent_required);
     Ok(should_pushdown.then(|| {
         let mut required_input_ordering = smj.required_input_ordering();
-        let new_req = Some(LexRequirement::from(sort_expr.clone()));
+        let new_req = Some(RequiredInputOrdering::from(sort_expr.clone()));
         match push_side {
             JoinSide::Left => {
                 required_input_ordering[0] = new_req;
@@ -532,9 +547,9 @@ fn shift_right_required(
 /// pushed down, `Ok(None)` if not. On error, returns a `Result::Err`.
 fn handle_custom_pushdown(
     plan: &Arc<dyn ExecutionPlan>,
-    parent_required: &LexRequirement,
+    parent_required: &RequiredInputOrdering,
     maintains_input_order: Vec<bool>,
-) -> Result<Option<Vec<Option<LexRequirement>>>> {
+) -> Result<Option<Vec<Option<RequiredInputOrdering>>>> {
     // If there's no requirement from the parent or the plan has no children, return early
     if parent_required.is_empty() || plan.children().is_empty() {
         return Ok(None);
@@ -542,6 +557,7 @@ fn handle_custom_pushdown(
 
     // Collect all unique column indices used in the parent-required sorting expression
     let all_indices: HashSet<usize> = parent_required
+        .lex_requirement()
         .iter()
         .flat_map(|order| {
             collect_columns(&order.expr)
@@ -584,6 +600,7 @@ fn handle_custom_pushdown(
             .sum::<usize>();
         // Transform the parent-required expression for the child schema by adjusting columns
         let updated_parent_req = parent_required
+            .lex_requirement()
             .iter()
             .map(|req| {
                 let child_schema = plan.children()[maintained_child_idx].schema();
@@ -609,7 +626,10 @@ fn handle_custom_pushdown(
             .iter()
             .map(|&maintains_order| {
                 if maintains_order {
-                    Some(LexRequirement::new(updated_parent_req.clone()))
+                    Some(
+                        parent_required
+                            .with_updated_requirements(updated_parent_req.clone()),
+                    )
                 } else {
                     None
                 }
@@ -626,8 +646,8 @@ fn handle_custom_pushdown(
 // for join type: Inner, Right, RightSemi, RightAnti
 fn handle_hash_join(
     plan: &HashJoinExec,
-    parent_required: &LexRequirement,
-) -> Result<Option<Vec<Option<LexRequirement>>>> {
+    parent_required: &RequiredInputOrdering,
+) -> Result<Option<Vec<Option<RequiredInputOrdering>>>> {
     // If there's no requirement from the parent or the plan has no children
     // or the join type is not Inner, Right, RightSemi, RightAnti, return early
     if parent_required.is_empty() || !plan.maintains_input_order()[1] {
@@ -636,6 +656,7 @@ fn handle_hash_join(
 
     // Collect all unique column indices used in the parent-required sorting expression
     let all_indices: HashSet<usize> = parent_required
+        .lex_requirement()
         .iter()
         .flat_map(|order| {
             collect_columns(&order.expr)
@@ -662,6 +683,7 @@ fn handle_hash_join(
     if all_from_right_child {
         // Transform the parent-required expression for the child schema by adjusting columns
         let updated_parent_req = parent_required
+            .lex_requirement()
             .iter()
             .map(|req| {
                 let child_schema = plan.children()[1].schema();
@@ -685,7 +707,7 @@ fn handle_hash_join(
         // Populating with the updated requirements for children that maintain order
         Ok(Some(vec![
             None,
-            Some(LexRequirement::new(updated_parent_req)),
+            Some(parent_required.with_updated_requirements(updated_parent_req)),
         ]))
     } else {
         Ok(None)
@@ -724,7 +746,7 @@ enum RequirementsCompatibility {
     /// Requirements satisfy
     Satisfy,
     /// Requirements compatible
-    Compatible(Option<LexRequirement>),
+    Compatible(Option<RequiredInputOrdering>),
     /// Requirements not compatible
     NonCompatible,
 }

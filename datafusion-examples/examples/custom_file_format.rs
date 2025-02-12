@@ -23,8 +23,8 @@ use arrow::{
 };
 use datafusion::datasource::data_source::FileSource;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion::{
     catalog::Session,
     common::{GetExt, Statistics},
@@ -123,7 +123,7 @@ impl FileFormat for TSVFileFormat {
         input: Arc<dyn ExecutionPlan>,
         state: &dyn Session,
         conf: FileSinkConfig,
-        order_requirements: Option<LexRequirement>,
+        order_requirements: Option<RequiredInputOrdering>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.csv_file_format
             .create_writer_physical_plan(input, state, conf, order_requirements)

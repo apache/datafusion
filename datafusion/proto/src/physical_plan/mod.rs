@@ -42,6 +42,7 @@ use datafusion::physical_plan::analyze::AnalyzeExec;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::filter::FilterExec;
@@ -1071,6 +1072,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             extension_codec,
                         )
                         .map(LexRequirement::from)
+                        .map(RequiredInputOrdering::Hard)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
@@ -1100,6 +1102,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                             extension_codec,
                         )
                         .map(LexRequirement::from)
+                        .map(RequiredInputOrdering::Hard)
                     })
                     .transpose()?;
                 Ok(Arc::new(DataSinkExec::new(
@@ -1136,6 +1139,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 extension_codec,
                             )
                             .map(LexRequirement::from)
+                            .map(RequiredInputOrdering::Hard)
                         })
                         .transpose()?;
                     Ok(Arc::new(DataSinkExec::new(
@@ -1992,6 +1996,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             let sort_order = match exec.sort_order() {
                 Some(requirements) => {
                     let expr = requirements
+                        .lex_requirement()
                         .iter()
                         .map(|requirement| {
                             let expr: PhysicalSortExpr = requirement.to_owned().into();

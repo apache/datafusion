@@ -34,7 +34,9 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::execution_plan::{boundedness_from_children, EmissionType};
+use crate::execution_plan::{
+    boundedness_from_children, EmissionType, RequiredInputOrdering,
+};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     build_join_schema, check_join_is_valid, estimate_join_statistics,
@@ -70,7 +72,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use futures::{Stream, StreamExt};
 
@@ -398,10 +400,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         ]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         vec![
-            Some(LexRequirement::from(self.left_sort_exprs.clone())),
-            Some(LexRequirement::from(self.right_sort_exprs.clone())),
+            Some(RequiredInputOrdering::from(self.left_sort_exprs.clone())),
+            Some(RequiredInputOrdering::from(self.right_sort_exprs.clone())),
         ]
     }
 

@@ -48,7 +48,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{exec_err, Constraints, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_expr_common::sort_expr::{
+    LexRequirement, PhysicalSortRequirement,
+};
 
 use futures::stream::{StreamExt, TryStreamExt};
 use tokio::task::JoinSet;
@@ -136,7 +138,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// NOTE that checking `!is_empty()` does **not** check for a
     /// required input ordering. Instead, the correct check is that at
     /// least one entry must be `Some`
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         vec![None; self.children().len()]
     }
 
@@ -1049,6 +1051,65 @@ pub enum CardinalityEffect {
     LowerEqual,
     /// The operator may produce more output rows than it receives input rows
     GreaterEqual,
+}
+
+/// Represents the plan's input ordering requirement
+#[derive(Debug, Clone, PartialEq)]
+pub enum RequiredInputOrdering {
+    /// The operator can not work without this ordering
+    Hard(LexRequirement),
+    /// The operator can benefit from the ordering if provided
+    /// but if not provided it can also work
+    Soft(LexRequirement),
+}
+
+impl Default for RequiredInputOrdering {
+    fn default() -> Self {
+        RequiredInputOrdering::Hard(LexRequirement::default())
+    }
+}
+
+impl From<LexOrdering> for RequiredInputOrdering {
+    fn from(ordering: LexOrdering) -> Self {
+        RequiredInputOrdering::Hard(LexRequirement::from(ordering))
+    }
+}
+
+impl RequiredInputOrdering {
+    pub fn lex_requirement(&self) -> &LexRequirement {
+        match self {
+            RequiredInputOrdering::Hard(lex) => lex,
+            RequiredInputOrdering::Soft(lex) => lex,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lex_requirement().is_empty()
+    }
+
+    pub fn to_vec(&self) -> Vec<PhysicalSortRequirement> {
+        self.lex_requirement().to_vec()
+    }
+
+    pub fn with_updated_requirements(
+        &self,
+        requirement: Vec<PhysicalSortRequirement>,
+    ) -> Self {
+        match self {
+            RequiredInputOrdering::Hard(_) => {
+                RequiredInputOrdering::Hard(LexRequirement::new(requirement))
+            }
+            RequiredInputOrdering::Soft(_) => {
+                RequiredInputOrdering::Soft(LexRequirement::new(requirement))
+            }
+        }
+    }
+
+    pub fn push(&self, requirement: PhysicalSortRequirement) -> Self {
+        let mut requirements = self.lex_requirement().clone();
+        requirements.push(requirement);
+        self.with_updated_requirements(requirements.to_vec())
+    }
 }
 
 #[cfg(test)]

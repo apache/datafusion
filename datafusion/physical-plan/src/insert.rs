@@ -26,6 +26,7 @@ use super::{
     execute_input_stream, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
+use crate::execution_plan::RequiredInputOrdering;
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::ExecutionPlanProperties;
@@ -38,7 +39,6 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 
 use async_trait::async_trait;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::StreamExt;
 
 /// `DataSink` implements writing streams of [`RecordBatch`]es to
@@ -90,7 +90,7 @@ pub struct DataSinkExec {
     /// Schema describing the structure of the output data.
     count_schema: SchemaRef,
     /// Optional required sort order for output data.
-    sort_order: Option<LexRequirement>,
+    sort_order: Option<RequiredInputOrdering>,
     cache: PlanProperties,
 }
 
@@ -105,7 +105,7 @@ impl DataSinkExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         sink: Arc<dyn DataSink>,
-        sort_order: Option<LexRequirement>,
+        sort_order: Option<RequiredInputOrdering>,
     ) -> Self {
         let count_schema = make_count_schema();
         let cache = Self::create_schema(&input, count_schema);
@@ -129,7 +129,7 @@ impl DataSinkExec {
     }
 
     /// Optional sort order for output data
-    pub fn sort_order(&self) -> &Option<LexRequirement> {
+    pub fn sort_order(&self) -> &Option<RequiredInputOrdering> {
         &self.sort_order
     }
 
@@ -184,10 +184,10 @@ impl ExecutionPlan for DataSinkExec {
         vec![Distribution::SinglePartition; self.children().len()]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<LexRequirement>> {
+    fn required_input_ordering(&self) -> Vec<Option<RequiredInputOrdering>> {
         // The required input ordering is set externally (e.g. by a `ListingTable`).
         // Otherwise, there is no specific requirement (i.e. `sort_expr` is `None`).
-        vec![self.sort_order.as_ref().cloned()]
+        vec![self.sort_order.clone()]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

@@ -59,6 +59,7 @@ use datafusion_common::Result;
 use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
@@ -274,7 +275,7 @@ pub fn parallelize_sorts(
     {
         // Take the initial sort expressions and requirements
         let (sort_exprs, fetch) = get_sort_exprs(&requirements.plan)?;
-        let sort_reqs = LexRequirement::from(sort_exprs.clone());
+        let sort_reqs = RequiredInputOrdering::from(sort_exprs.clone());
         let sort_exprs = sort_exprs.clone();
 
         // If there is a connection between a `CoalescePartitionsExec` and a
@@ -347,12 +348,12 @@ pub fn ensure_sorting(
 
         if let Some(required) = required_ordering {
             let eq_properties = child.plan.equivalence_properties();
-            if !eq_properties.ordering_satisfy_requirement(&required) {
+            if !eq_properties.ordering_satisfy_requirement(required.lex_requirement()) {
                 // Make sure we preserve the ordering requirements:
                 if physical_ordering.is_some() {
                     child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 }
-                child = add_sort_above(child, required, None);
+                child = add_sort_above(child, required.lex_requirement().clone(), None);
                 child = update_sort_ctx_children(child, true)?;
             }
         } else if physical_ordering.is_none()
@@ -485,7 +486,7 @@ fn adjust_window_sort_removal(
 
         // Satisfy the ordering requirement so that the window can run:
         let mut child_node = window_tree.children.swap_remove(0);
-        child_node = add_sort_above(child_node, reqs, None);
+        child_node = add_sort_above(child_node, reqs.lex_requirement().clone(), None);
         let child_plan = Arc::clone(&child_node.plan);
         window_tree.children.push(child_node);
 
