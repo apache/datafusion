@@ -4471,7 +4471,7 @@ mod tests {
     #[test]
     fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
-        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let a = Arc::new(Column::new("a", 0)) as _;
         let b = lit(ScalarValue::Float64(Some(12.0)));
 
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
@@ -4485,7 +4485,7 @@ mod tests {
             ScalarValue::Float64(Some(24.0)),
         );
 
-        for child in [
+        for children in [
             vec![
                 &StatisticsV2::new_uniform(left_interval.clone())?,
                 &StatisticsV2::new_uniform(right_interval.clone())?,
@@ -4534,8 +4534,8 @@ mod tests {
                 let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
                 // TODO: to think, if maybe we want to handcraft the expected value...
                 assert_eq!(
-                    expr.evaluate_statistics(&child)?,
-                    new_unknown_from_binary_expr(&op, child[0], child[1])?
+                    expr.evaluate_statistics(&children)?,
+                    new_unknown_from_binary_expr(&op, children[0], children[1])?
                 );
             }
         }
@@ -4548,15 +4548,15 @@ mod tests {
             Field::new("a", DataType::Int64, false),
             Field::new("b", DataType::Int64, false),
         ]);
-        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-        let b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
-        let eq: Arc<dyn PhysicalExpr> = Arc::new(binary_expr(
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = Arc::new(Column::new("b", 1)) as _;
+        let eq = Arc::new(binary_expr(
             Arc::clone(&a),
             Operator::Eq,
             Arc::clone(&b),
             schema,
         )?);
-        let neq: Arc<dyn PhysicalExpr> = Arc::new(binary_expr(
+        let neq = Arc::new(binary_expr(
             Arc::clone(&a),
             Operator::NotEq,
             Arc::clone(&b),
@@ -4585,13 +4585,13 @@ mod tests {
     #[test]
     fn test_propagate_statistics_combination_of_range_holders_arithmetic() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
-        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let a = Arc::new(Column::new("a", 0)) as _;
         let b = lit(ScalarValue::Float64(Some(12.0)));
 
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(12.0), Some(36.0))?;
 
-        let parent = StatisticsV2::new_uniform(Interval::make(Some(-432.), Some(432.))?);
+        let parent = StatisticsV2::new_uniform(Interval::make(Some(-432.), Some(432.))?)?;
         let children = vec![
             vec![
                 StatisticsV2::new_uniform(left_interval.clone())?,
@@ -4639,14 +4639,11 @@ mod tests {
         ];
 
         for child_view in children {
-            let child_veiw = child_view.iter().collect::<Vec<_>>();
+            let child_view = child_view.iter().collect::<Vec<_>>();
             for op in &ops {
                 let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
                 assert_eq!(
-                    expr.propagate_statistics(
-                        parent.as_ref().unwrap(),
-                        child_veiw.as_slice()
-                    )?,
+                    expr.propagate_statistics(&parent, child_view.as_slice())?,
                     Some(vec![
                         StatisticsV2::new_from_interval(&left_interval)?,
                         StatisticsV2::new_from_interval(&right_interval)?
@@ -4660,7 +4657,7 @@ mod tests {
     #[test]
     fn test_propagate_statistics_combination_of_range_holders_comparison() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
-        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let a = Arc::new(Column::new("a", 0)) as _;
         let b = lit(ScalarValue::Float64(Some(12.0)));
 
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
