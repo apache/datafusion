@@ -264,6 +264,16 @@ fn replace_with_partial_sort(
 /// ```
 /// by following connections from [`CoalescePartitionsExec`]s to [`SortExec`]s.
 /// By performing sorting in parallel, we can increase performance in some scenarios.
+///
+/// **Steps**
+/// 1. Checks if the plan is either `SortExec`/`SortPreservingMergeExec`/`CoalescePartitionsExec` otherwise does nothing
+/// 2. If the plan is a `SortExec` or a final `SortPreservingMergeExec` (output partitioning is 1)
+///     2.1. Check for `CoalescePartitionsExec` in children, when found check if it can be removed, if so remove. (see `remove_bottleneck_in_subplanæ)
+///     2.2. Remove the current plan
+///     2.3. If the plan is satisfying the ordering requirements, add a `SortExec`
+///     2.4. Add a SPM above the plan and return
+/// 3. If the plan is a `CoalescePartitionsExec`
+///     3.1.
 pub fn parallelize_sorts(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<Transformed<PlanWithCorrespondingCoalescePartitions>> {
@@ -326,6 +336,20 @@ pub fn parallelize_sorts(
 
 /// This function enforces sorting requirements and makes optimizations without
 /// violating these requirements whenever possible.
+///
+/// **Steps**
+/// 1. Analyze if there are any immediate removals of `SortExec`s if so, removes them (see `analyze_immediate_sort_removal`)
+/// 2. For each child of the plan, if the plan requires input ordering
+///     2.1. Checks if ordering is satisfied with the child, if it's not satisfied
+///         2.1.1. If the child has output ordering, removes the unnecessary `SortExec`
+///         2.1.2. Adds sort above the child plan
+///     2.2 (Plan not requires input ordering)
+///         2.2.1 Checks if the `SortExec` is neutralized in the plan, if so removes it.
+/// 3. Check and modify window operator
+///     3.1.  Checks if the plan is a window operator, and connected with a sort.
+///         If so, either tries to update the window definition or removes unnecessary `SortExec`s (see `adjust_window_sort_removal`)
+/// 4. Check and remove possibly unnecessary SPM
+///     4.1. Checks if the plan is SPM and child 1 output partitions, if so decides this SPM is unnecessary and removes it from the plan.
 pub fn ensure_sorting(
     mut requirements: PlanWithCorrespondingSort,
 ) -> Result<Transformed<PlanWithCorrespondingSort>> {
