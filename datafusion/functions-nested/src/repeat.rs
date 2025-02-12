@@ -18,16 +18,18 @@
 //! [`ScalarUDFImpl`] definitions for array_repeat function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Capacities, MutableArrayData};
+use arrow::array::{
+    new_null_array, Array, ArrayRef, Capacities, GenericListArray, ListArray,
+    MutableArrayData, OffsetSizeTrait, UInt64Array,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute;
 use arrow::compute::cast;
-use arrow_array::{
-    new_null_array, Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait,
-    UInt64Array,
+use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    DataType::{LargeList, List},
+    Field,
 };
-use arrow_schema::DataType::{LargeList, List};
-use arrow_schema::{DataType, Field};
 use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
@@ -220,7 +222,7 @@ fn general_repeat<O: OffsetSizeTrait>(
             }
 
             let data = mutable.freeze();
-            arrow_array::make_array(data)
+            arrow::array::make_array(data)
         };
         new_values.push(repeated_array);
     }
@@ -277,7 +279,7 @@ fn general_list_repeat<O: OffsetSizeTrait>(
                 }
 
                 let data = mutable.freeze();
-                let repeated_array = arrow_array::make_array(data);
+                let repeated_array = arrow::array::make_array(data);
 
                 let list_arr = GenericListArray::<O>::try_new(
                     Arc::new(Field::new_list_field(value_type.clone(), true)),

@@ -108,11 +108,11 @@ query error
 select avg(c1, c12) from aggregate_test_100;
 
 # AggregateFunction with wrong argument type
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to regr_slope function: coercion from
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'regr_slope' function: coercion from
 select regr_slope(1, '2');
 
 # WindowFunction using AggregateFunction wrong signature
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to regr_slope function: coercion from
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'regr_slope' function: coercion from
 select
 c9,
 regr_slope(c11, '2') over () as min1
@@ -120,7 +120,7 @@ from aggregate_test_100
 order by c9
 
 # WindowFunction wrong signature
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to nth_value function: coercion from \[Int32, Int64, Int64\] to the signature OneOf\(\[Any\(0\), Any\(1\), Any\(2\)\]\) failed
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'nth_value' function: coercion from \[Int32, Int64, Int64\] to the signature OneOf\(\[Any\(0\), Any\(1\), Any\(2\)\]\) failed
 select
 c9,
 nth_value(c5, 2, 3) over (order by c9) as nv1
@@ -148,7 +148,7 @@ SELECT
 query error DataFusion error: Arrow error: Cast error: Cannot cast string 'foo' to value of Int64 type
 create table foo as values (1), ('foo');
 
-query error No function matches
+query error user-defined coercion failed
 select 1 group by substr('');
 
 # Error in filter should be reported
@@ -161,3 +161,27 @@ create table records (timestamp timestamp, value float) as values (
     '2021-01-01 00:00:00', 1.0,
     '2021-01-01 00:00:00', 2.0
 );
+
+statement ok
+CREATE TABLE tab0(col0 INTEGER, col1 INTEGER, col2 INTEGER);
+
+statement ok
+INSERT INTO tab0 VALUES(83,0,38);
+
+query error DataFusion error: Arrow error: Divide by zero error
+SELECT DISTINCT - 84 FROM tab0 AS cor0 WHERE NOT + 96 / + col1 <= NULL GROUP BY col1, col0;
+
+statement ok
+create table a(timestamp int, birthday int, ts int, tokens int, amp int, staamp int);
+
+query error DataFusion error: Schema error: No field named timetamp\. Did you mean 'a\.timestamp'\?\.
+select timetamp from a;
+
+query error DataFusion error: Schema error: No field named dadsada\. Valid fields are a\.timestamp, a\.birthday, a\.ts, a\.tokens, a\.amp, a\.staamp\.
+select dadsada from a;
+
+query error DataFusion error: Schema error: No field named ammp\. Did you mean 'a\.amp'\?\.
+select ammp from a;
+
+statement ok
+drop table a;

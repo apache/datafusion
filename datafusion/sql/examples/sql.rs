@@ -17,7 +17,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow_schema::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{plan_err, Result, TableReference};

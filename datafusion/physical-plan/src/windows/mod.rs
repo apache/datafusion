@@ -25,8 +25,7 @@ use crate::{
     InputOrderMode, PhysicalExpr,
 };
 
-use arrow::datatypes::Schema;
-use arrow_schema::{DataType, Field, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
     PartitionEvaluator, ReversedUDWF, WindowFrame, WindowFunctionDefinition, WindowUDF,
@@ -425,8 +424,8 @@ pub fn get_best_fitting_window(
         Ok(Some(Arc::new(BoundedWindowAggExec::try_new(
             window_expr,
             Arc::clone(input),
-            physical_partition_keys.to_vec(),
             input_order_mode,
+            !physical_partition_keys.is_empty(),
         )?) as _))
     } else if input_order_mode != InputOrderMode::Sorted {
         // For `WindowAggExec` to work correctly PARTITION BY columns should be sorted.
@@ -438,7 +437,7 @@ pub fn get_best_fitting_window(
         Ok(Some(Arc::new(WindowAggExec::try_new(
             window_expr,
             Arc::clone(input),
-            physical_partition_keys.to_vec(),
+            !physical_partition_keys.is_empty(),
         )?) as _))
     }
 }
@@ -663,7 +662,7 @@ mod tests {
                 false,
             )?],
             blocking_exec,
-            vec![],
+            false,
         )?);
 
         let fut = collect(window_agg_exec, task_ctx);

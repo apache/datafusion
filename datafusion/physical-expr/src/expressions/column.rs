@@ -23,10 +23,9 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 use arrow::{
-    datatypes::{DataType, Schema},
+    datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
-use arrow_schema::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::ColumnarValue;

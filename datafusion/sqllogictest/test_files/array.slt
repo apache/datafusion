@@ -1191,7 +1191,7 @@ from arrays_values_without_nulls;
 ## array_element (aliases: array_extract, list_extract, list_element)
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: array_element does not support zero arguments
+query error DataFusion error: Error during planning: 'array_element' does not support zero arguments
 select array_element();
 
 # array_element error
@@ -1850,15 +1850,11 @@ select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), 0,
 [] []
 
 # array_slice scalar function #11 (with NULL-NULL)
-query ??
+query error
 select array_slice(make_array(1, 2, 3, 4, 5), NULL), array_slice(make_array('h', 'e', 'l', 'l', 'o'), NULL);
-----
-NULL NULL
 
-query ??
+query error
 select array_slice(arrow_cast(make_array(1, 2, 3, 4, 5), 'LargeList(Int64)'), NULL), array_slice(arrow_cast(make_array('h', 'e', 'l', 'l', 'o'), 'LargeList(Utf8)'), NULL);
-----
-NULL NULL
 
 # array_slice scalar function #12 (with zero and negative number)
 query ??
@@ -2074,7 +2070,7 @@ select array_slice(a, -1, 2, 1), array_slice(a, -1, 2),
 [6.0] [6.0] [] []
 
 # Testing with empty arguments should result in an error
-query error DataFusion error: Error during planning: array_slice does not support zero arguments
+query error DataFusion error: Error during planning: 'array_slice' does not support zero arguments
 select array_slice();
 
 query error Failed to coerce arguments

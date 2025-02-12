@@ -29,7 +29,7 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 
-use arrow_schema::{DataType, Fields};
+use arrow::datatypes::{DataType, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
@@ -1711,12 +1711,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
         let schema = (*table_source.schema()).clone();
         let schema = DFSchema::try_from(schema)?;
-        let scan = LogicalPlanBuilder::scan(
-            object_name_to_string(&table_name),
-            table_source,
-            None,
-        )?
-        .build()?;
+        let scan =
+            LogicalPlanBuilder::scan(table_ref.clone(), table_source, None)?.build()?;
         let mut planner_context = PlannerContext::new();
 
         let source = match predicate_expr {
@@ -1897,6 +1893,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let column_index = table_schema
                         .index_of_column_by_name(None, &c)
                         .ok_or_else(|| unqualified_field_not_found(&c, &table_schema))?;
+
                     if value_indices[column_index].is_some() {
                         return schema_err!(SchemaError::DuplicateUnqualifiedField {
                             name: c,
@@ -1937,6 +1934,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Projection
         let mut planner_context =
             PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
+        planner_context.set_table_schema(Some(DFSchemaRef::new(
+            DFSchema::from_unqualified_fields(fields.clone(), Default::default())?,
+        )));
         let source = self.query_to_plan(*source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {
             plan_err!("Column count doesn't match insert query!")?;

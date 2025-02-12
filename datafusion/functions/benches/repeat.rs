@@ -159,6 +159,29 @@ fn criterion_benchmark(c: &mut Criterion) {
         );
 
         group.finish();
+
+        // REPEAT overflow
+        let repeat_times = 1073741824;
+        let mut group = c.benchmark_group(format!("repeat {} times", repeat_times));
+        group.sampling_mode(SamplingMode::Flat);
+        group.sample_size(10);
+        group.measurement_time(Duration::from_secs(10));
+
+        let args = create_args::<i32>(size, 2, repeat_times, false);
+        group.bench_function(
+            format!(
+                "repeat_string overflow [size={}, repeat_times={}]",
+                size, repeat_times
+            ),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(repeat.invoke_batch(&args, size))
+                })
+            },
+        );
+
+        group.finish();
     }
 }
 

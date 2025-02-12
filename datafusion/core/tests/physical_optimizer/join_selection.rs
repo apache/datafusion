@@ -22,9 +22,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::JoinSide;
 use datafusion_common::{stats::Precision, ColumnStatistics, JoinType, ScalarValue};

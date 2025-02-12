@@ -127,7 +127,7 @@ supports additional statements and commands:
 
 Show configuration options
 
-```SQL
+```sql
 > show all;
 
 +-------------------------------------------------+---------+
@@ -163,7 +163,7 @@ Show specific configuration option
 
 - Set configuration options
 
-```SQL
+```sql
 > SET datafusion.execution.batch_size to 1024;
 ```
 

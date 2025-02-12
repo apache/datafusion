@@ -90,16 +90,16 @@ drop table  case_insensitive_test
 statement ok
 CREATE TABLE test("Column1" string) AS VALUES ('content1');
 
-statement error DataFusion error: Schema error: No field named column1. Valid fields are test\."Column1"\.
+statement error DataFusion error: Schema error: No field named column1\. Did you mean 'test\.Column1'\?\.
 SELECT COLumn1 from test
 
-statement error DataFusion error: Schema error: No field named column1. Valid fields are test\."Column1"\.
+statement error DataFusion error: Schema error: No field named column1\. Did you mean 'test\.Column1'\?\.
 SELECT Column1 from test
 
-statement error DataFusion error: Schema error: No field named column1. Valid fields are test\."Column1"\.
+statement error DataFusion error: Schema error: No field named column1\. Did you mean 'test\.Column1'\?\.
 SELECT column1 from test
 
-statement error DataFusion error: Schema error: No field named column1. Valid fields are test\."Column1"\.
+statement error DataFusion error: Schema error: No field named column1\. Did you mean 'test\.Column1'\?\.
 SELECT "column1" from test
 
 statement ok
