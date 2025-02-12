@@ -19,8 +19,9 @@
 
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
+    arrow_datafusion_err, exec_err, internal_err, Result,
 };
 use datafusion_common::{exec_datafusion_err, DataFusionError};
 use std::any::Any;
@@ -181,7 +182,7 @@ fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
     if args.len() != 2 {
         return exec_err!("arrow_cast needs 2 arguments, {} provided", args.len());
     }
-    let Expr::Literal(ScalarValue::Utf8(Some(val))) = &args[1] else {
+    let Expr::Literal(LogicalScalar::Utf8(Some(val))) = &args[1] else {
         return exec_err!(
             "arrow_cast requires its second argument to be a constant string, got {:?}",
             &args[1]

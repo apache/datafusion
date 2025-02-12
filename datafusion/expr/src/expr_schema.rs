@@ -28,8 +28,7 @@ use crate::{utils, LogicalPlan, Projection, Subquery, WindowFunctionDefinition};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, TableReference,
+    not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema, Result, ScalarValue, TableReference
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -429,10 +428,11 @@ impl ExprSchemable for Expr {
                 let arguments = args
                     .iter()
                     .map(|e| match e {
-                        Expr::Literal(sv) => Some(sv),
+                        Expr::Literal(sv) => Some(ScalarValue::from(sv)),
                         _ => None,
                     })
                     .collect::<Vec<_>>();
+                let arguments = arguments.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
                 let args = ReturnTypeArgs {
                     arg_types: &new_data_types,
                     scalar_arguments: &arguments,
@@ -606,11 +606,11 @@ mod tests {
     use super::*;
     use crate::{col, lit};
 
-    use datafusion_common::{internal_err, DFSchema, ScalarValue};
+    use datafusion_common::{internal_err, scalar::LogicalScalar, DFSchema};
 
     macro_rules! test_is_expr_nullable {
         ($EXPR_TYPE:ident) => {{
-            let expr = lit(ScalarValue::Null).$EXPR_TYPE();
+            let expr = lit(LogicalScalar::Null).$EXPR_TYPE();
             assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
         }};
     }
@@ -645,7 +645,7 @@ mod tests {
         assert!(!expr.nullable(&get_schema(false)).unwrap());
         assert!(expr.nullable(&get_schema(true)).unwrap());
 
-        let null = lit(ScalarValue::Int32(None));
+        let null = lit(LogicalScalar::Int32(None));
 
         let expr = col("foo").between(null.clone(), lit(2));
         assert!(expr.nullable(&get_schema(false)).unwrap());
@@ -673,7 +673,7 @@ mod tests {
             .nullable(&get_schema(false).with_error_on_nullable(true))
             .is_err());
 
-        let null = lit(ScalarValue::Int32(None));
+        let null = lit(LogicalScalar::Int32(None));
         let expr = col("foo").in_list(vec![null, lit(1)], false);
         assert!(expr.nullable(&get_schema(false)).unwrap());
 
@@ -694,7 +694,7 @@ mod tests {
         assert!(!expr.nullable(&get_schema(false)).unwrap());
         assert!(expr.nullable(&get_schema(true)).unwrap());
 
-        let expr = col("foo").like(lit(ScalarValue::Utf8(None)));
+        let expr = col("foo").like(lit(LogicalScalar::Utf8(None)));
         assert!(expr.nullable(&get_schema(false)).unwrap());
     }
 

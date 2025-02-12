@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::datatypes::Field;
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::Result;
 use datafusion_common::{Column, DFSchema, ScalarValue, TableReference};
 use datafusion_expr::expr::ScalarFunction;
@@ -77,7 +78,7 @@ impl ExprPlanner for CoreFunctionPlanner {
 
         // Iterate over nested_names and create nested get_field expressions
         for nested_name in nested_names {
-            let get_field_args = vec![expr, lit(ScalarValue::from(nested_name.clone()))];
+            let get_field_args = vec![expr, lit(LogicalScalar::from(nested_name.clone()))];
             expr = Expr::ScalarFunction(ScalarFunction::new_udf(
                 crate::core::get_field(),
                 get_field_args,

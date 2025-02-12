@@ -260,6 +260,7 @@ pub(crate) mod tests {
 
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::scalar::LogicalScalar;
     use datafusion_common::{exec_err, DataFusionError, ScalarValue};
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
@@ -421,7 +422,7 @@ pub(crate) mod tests {
             binary(
                 cast(col("2", &schema)?, &schema, DataType::Int64)?,
                 Operator::Plus,
-                lit(ScalarValue::Int64(Some(10))),
+                lit(LogicalScalar::Int64(Some(10))),
                 &schema,
             )?,
             &schema,
@@ -505,9 +506,9 @@ pub(crate) mod tests {
         let schema_big = Arc::new(Schema::new(vec![int_field, dict_field]));
         let pred = in_list(
             Arc::new(Column::new_with_schema("id", &schema_big).unwrap()),
-            vec![lit(ScalarValue::Dictionary(
+            vec![lit(LogicalScalar::Dictionary(
                 Box::new(DataType::Int32),
-                Box::new(ScalarValue::from("2")),
+                Box::new(LogicalScalar::from("2")),
             ))],
             &false,
             &schema_big,
@@ -518,9 +519,9 @@ pub(crate) mod tests {
 
         let expected = in_list(
             Arc::new(Column::new_with_schema("id", &schema_small).unwrap()),
-            vec![lit(ScalarValue::Dictionary(
+            vec![lit(LogicalScalar::Dictionary(
                 Box::new(DataType::Int32),
-                Box::new(ScalarValue::from("2")),
+                Box::new(LogicalScalar::from("2")),
             ))],
             &false,
             &schema_small,

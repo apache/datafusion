@@ -574,12 +574,14 @@ pub fn case(
 mod tests {
     use super::*;
 
+    use crate::expressions::literal::lit_v2;
     use crate::expressions::{binary, cast, col, lit, BinaryExpr};
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::plan_err;
+    use datafusion_common::scalar::LogicalScalar;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
@@ -653,7 +655,7 @@ mod tests {
 
         // CASE a when 0 THEN float64(null) ELSE 25.0 / cast(a, float64)  END
         let when1 = lit(0i32);
-        let then1 = lit(ScalarValue::Float64(None));
+        let then1 = lit(LogicalScalar::Float64(None));
         let else_value = binary(
             lit(25.0f64),
             Operator::Divide,
@@ -727,7 +729,7 @@ mod tests {
         let schema = batch.schema();
 
         // CASE a WHEN NULL THEN 0 WHEN a THEN 123 ELSE 999 END
-        let when1 = lit(ScalarValue::Utf8(None));
+        let when1 = lit(LogicalScalar::Utf8(None));
         let then1 = lit(0i32);
         let when2 = col("a", &schema)?;
         let then2 = lit(123i32);

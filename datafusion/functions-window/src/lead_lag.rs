@@ -21,7 +21,9 @@ use crate::utils::{get_scalar_value_from_args, get_signed_integer};
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_expr::lit;
 use datafusion_expr::window_doc_sections::DOC_SECTION_ANALYTICAL;
 use datafusion_expr::{
     Documentation, Literal, PartitionEvaluator, ReversedUDWF, Signature, TypeSignature,
@@ -63,12 +65,14 @@ get_or_init_udwf!(
 pub fn lag(
     arg: datafusion_expr::Expr,
     shift_offset: Option<i64>,
-    default_value: Option<ScalarValue>,
+    default_value: Option<LogicalScalar>,
 ) -> datafusion_expr::Expr {
     let shift_offset_lit = shift_offset
         .map(|v| v.lit())
-        .unwrap_or(ScalarValue::Null.lit());
-    let default_lit = default_value.unwrap_or(ScalarValue::Null).lit();
+        .unwrap_or(LogicalScalar::Null.lit());
+
+    let default_lit = default_value.unwrap_or(LogicalScalar::Null);
+    let default_lit = lit(default_lit);
 
     lag_udwf().call(vec![arg, shift_offset_lit, default_lit])
 }
@@ -82,12 +86,14 @@ pub fn lag(
 pub fn lead(
     arg: datafusion_expr::Expr,
     shift_offset: Option<i64>,
-    default_value: Option<ScalarValue>,
+    default_value: Option<LogicalScalar>,
 ) -> datafusion_expr::Expr {
     let shift_offset_lit = shift_offset
         .map(|v| v.lit())
-        .unwrap_or(ScalarValue::Null.lit());
-    let default_lit = default_value.unwrap_or(ScalarValue::Null).lit();
+        .unwrap_or(LogicalScalar::Null.lit());
+
+    let default_lit = default_value.unwrap_or(LogicalScalar::Null);
+    let default_lit = lit(default_lit);
 
     lead_udwf().call(vec![arg, shift_offset_lit, default_lit])
 }

@@ -354,6 +354,7 @@ mod test {
     use super::*;
     use crate::{col, lit, Cast};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::scalar::LogicalScalar;
     use datafusion_common::tree_node::TreeNodeRewriter;
     use datafusion_common::ScalarValue;
 
@@ -381,7 +382,7 @@ mod test {
         // rewrites all "foo" string literals to "bar"
         let transformer = |expr: Expr| -> Result<Transformed<Expr>> {
             match expr {
-                Expr::Literal(ScalarValue::Utf8(Some(utf8_val))) => {
+                Expr::Literal(LogicalScalar::Utf8(Some(utf8_val))) => {
                     let utf8_val = if utf8_val == "foo" {
                         "bar".to_string()
                     } else {

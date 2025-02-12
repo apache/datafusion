@@ -37,7 +37,8 @@ use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{plan_err, Column, Result, ScalarValue, TableReference};
+use datafusion_common::scalar::LogicalScalar;
+use datafusion_common::{plan_err, Column, Result, TableReference};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use sqlparser::ast::NullTreatment;
@@ -699,17 +700,17 @@ impl WindowUDFImpl for SimpleWindowUDF {
 
 pub fn interval_year_month_lit(value: &str) -> Expr {
     let interval = parse_interval_year_month(value).ok();
-    Expr::Literal(ScalarValue::IntervalYearMonth(interval))
+    Expr::Literal(LogicalScalar::IntervalYearMonth(interval))
 }
 
 pub fn interval_datetime_lit(value: &str) -> Expr {
     let interval = parse_interval_day_time(value).ok();
-    Expr::Literal(ScalarValue::IntervalDayTime(interval))
+    Expr::Literal(LogicalScalar::IntervalDayTime(interval))
 }
 
 pub fn interval_month_day_nano_lit(value: &str) -> Expr {
     let interval = parse_interval_month_day_nano(value).ok();
-    Expr::Literal(ScalarValue::IntervalMonthDayNano(interval))
+    Expr::Literal(LogicalScalar::IntervalMonthDayNano(interval))
 }
 
 /// Extensions for configuring [`Expr::AggregateFunction`] or [`Expr::WindowFunction`]

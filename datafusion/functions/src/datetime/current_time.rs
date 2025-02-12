@@ -18,6 +18,7 @@
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Time64;
 use arrow::datatypes::TimeUnit::Nanosecond;
+use datafusion_common::scalar::LogicalScalar;
 use std::any::Any;
 
 use datafusion_common::{internal_err, Result, ScalarValue};
@@ -96,7 +97,7 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         let now_ts = info.execution_props().query_execution_start_time;
         let nano = now_ts.timestamp_nanos_opt().map(|ts| ts % 86400000000000);
         Ok(ExprSimplifyResult::Simplified(Expr::Literal(
-            ScalarValue::Time64Nanosecond(nano),
+            LogicalScalar::Time64Nanosecond(nano),
         )))
     }
 

@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::error::{_plan_datafusion_err, _plan_err};
-use crate::{Result, ScalarValue};
+use crate::scalar::LogicalScalar;
+use crate::Result;
 use arrow::datatypes::DataType;
 use std::collections::HashMap;
 
@@ -24,9 +25,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub enum ParamValues {
     /// For positional query parameters, like `SELECT * FROM test WHERE a > $1 AND b = $2`
-    List(Vec<ScalarValue>),
+    List(Vec<LogicalScalar>),
     /// For named query parameters, like `SELECT * FROM test WHERE a > $foo AND b = $goo`
-    Map(HashMap<String, ScalarValue>),
+    Map(HashMap<String, LogicalScalar>),
 }
 
 impl ParamValues {
@@ -65,7 +66,7 @@ impl ParamValues {
         }
     }
 
-    pub fn get_placeholders_with_values(&self, id: &str) -> Result<ScalarValue> {
+    pub fn get_placeholders_with_values(&self, id: &str) -> Result<LogicalScalar> {
         match self {
             ParamValues::List(list) => {
                 if id.is_empty() {
@@ -97,29 +98,29 @@ impl ParamValues {
     }
 }
 
-impl From<Vec<ScalarValue>> for ParamValues {
-    fn from(value: Vec<ScalarValue>) -> Self {
+impl From<Vec<LogicalScalar>> for ParamValues {
+    fn from(value: Vec<LogicalScalar>) -> Self {
         Self::List(value)
     }
 }
 
-impl<K> From<Vec<(K, ScalarValue)>> for ParamValues
+impl<K> From<Vec<(K, LogicalScalar)>> for ParamValues
 where
     K: Into<String>,
 {
-    fn from(value: Vec<(K, ScalarValue)>) -> Self {
-        let value: HashMap<String, ScalarValue> =
+    fn from(value: Vec<(K, LogicalScalar)>) -> Self {
+        let value: HashMap<String, LogicalScalar> =
             value.into_iter().map(|(k, v)| (k.into(), v)).collect();
         Self::Map(value)
     }
 }
 
-impl<K> From<HashMap<K, ScalarValue>> for ParamValues
+impl<K> From<HashMap<K, LogicalScalar>> for ParamValues
 where
     K: Into<String>,
 {
-    fn from(value: HashMap<K, ScalarValue>) -> Self {
-        let value: HashMap<String, ScalarValue> =
+    fn from(value: HashMap<K, LogicalScalar>) -> Self {
+        let value: HashMap<String, LogicalScalar> =
             value.into_iter().map(|(k, v)| (k.into(), v)).collect();
         Self::Map(value)
     }

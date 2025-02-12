@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::simplify_expressions::ExprSimplifier;
 
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -480,9 +481,9 @@ fn agg_exprs_evaluation_result_on_empty_batch(
                 let new_expr = match expr {
                     Expr::AggregateFunction(expr::AggregateFunction { func, .. }) => {
                         if func.name() == "count" {
-                            Transformed::yes(Expr::Literal(ScalarValue::Int64(Some(0))))
+                            Transformed::yes(Expr::Literal(LogicalScalar::Int64(Some(0))))
                         } else {
-                            Transformed::yes(Expr::Literal(ScalarValue::Null))
+                            Transformed::yes(Expr::Literal(LogicalScalar::Null))
                         }
                     }
                     _ => Transformed::no(expr),
@@ -496,7 +497,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
         let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
-        if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
+        if matches!(result_expr, Expr::Literal(LogicalScalar::Int64(_))) {
             expr_result_map_for_count_bug
                 .insert(e.schema_name().to_string(), result_expr);
         }
@@ -576,10 +577,10 @@ fn filter_exprs_evaluation_result_on_empty_batch(
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {
             // evaluate to false or null on empty batch, no need to pull up
-            Expr::Literal(ScalarValue::Null)
-            | Expr::Literal(ScalarValue::Boolean(Some(false))) => None,
+            Expr::Literal(LogicalScalar::Null)
+            | Expr::Literal(LogicalScalar::Boolean(Some(false))) => None,
             // evaluate to true on empty batch, need to pull up the expr
-            Expr::Literal(ScalarValue::Boolean(Some(true))) => {
+            Expr::Literal(LogicalScalar::Boolean(Some(true))) => {
                 for (name, exprs) in input_expr_result_map_for_count_bug {
                     expr_result_map_for_count_bug.insert(name.clone(), exprs.clone());
                 }
@@ -594,7 +595,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
                             Box::new(result_expr.clone()),
                             Box::new(input_expr.clone()),
                         )],
-                        else_expr: Some(Box::new(Expr::Literal(ScalarValue::Null))),
+                        else_expr: Some(Box::new(Expr::Literal(LogicalScalar::Null))),
                     });
                     let expr_key = new_expr.schema_name().to_string();
                     expr_result_map_for_count_bug.insert(expr_key, new_expr);

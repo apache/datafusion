@@ -30,6 +30,7 @@ use arrow::datatypes::{
     MIN_DECIMAL128_FOR_EACH_PRECISION, MIN_DECIMAL256_FOR_EACH_PRECISION,
 };
 use datafusion_common::rounding::{alter_fp_rounding_mode, next_down, next_up};
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::{internal_err, Result, ScalarValue};
 
 macro_rules! get_extreme_value {
@@ -1641,6 +1642,24 @@ impl From<ScalarValue> for NullableInterval {
                 values: Interval {
                     lower: value.clone(),
                     upper: value,
+                },
+            }
+        }
+    }
+}
+
+impl From<LogicalScalar> for NullableInterval {
+    /// Create an interval that represents a single value.
+    fn from(value: LogicalScalar) -> Self {
+        if value.is_null() {
+            Self::Null {
+                datatype: value.data_type(),
+            }
+        } else {
+            Self::NotNull {
+                values: Interval {
+                    lower: ScalarValue::from(value.clone()),
+                    upper: ScalarValue::from(value),
                 },
             }
         }

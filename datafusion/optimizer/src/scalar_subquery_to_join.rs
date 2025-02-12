@@ -26,6 +26,7 @@ use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -356,7 +357,7 @@ fn build_join(
                         ),
                         (
                             Box::new(Expr::Not(Box::new(filter.clone()))),
-                            Box::new(Expr::Literal(ScalarValue::Null)),
+                            Box::new(Expr::Literal(LogicalScalar::Null)),
                         ),
                     ],
                     else_expr: Some(Box::new(Expr::Column(Column::new_unqualified(

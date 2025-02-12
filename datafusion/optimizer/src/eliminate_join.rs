@@ -18,6 +18,7 @@
 //! [`EliminateJoin`] rewrites `INNER JOIN` with `true`/`null`
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::JoinType::Inner;
@@ -54,7 +55,7 @@ impl OptimizerRule for EliminateJoin {
         match plan {
             LogicalPlan::Join(join) if join.join_type == Inner && join.on.is_empty() => {
                 match join.filter {
-                    Some(Expr::Literal(ScalarValue::Boolean(Some(false)))) => Ok(
+                    Some(Expr::Literal(LogicalScalar::Boolean(Some(false)))) => Ok(
                         Transformed::yes(LogicalPlan::EmptyRelation(EmptyRelation {
                             produce_one_row: false,
                             schema: join.schema,

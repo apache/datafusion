@@ -20,10 +20,11 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
+use datafusion_common::scalar::LogicalScalar;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 
 use crate::utils::make_scalar_function;
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Like};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -111,20 +112,10 @@ impl ScalarUDFImpl for StartsWithFunc {
             //   2. 'ja\%'        (escape special char '%')
             //   3. 'ja\%%'       (add suffix for starts_with)
             let like_expr = match scalar_value {
-                ScalarValue::Utf8(Some(pattern)) => {
+                LogicalScalar::Utf8(Some(pattern)) => {
                     let escaped_pattern = pattern.replace("%", "\\%");
                     let like_pattern = format!("{}%", escaped_pattern);
-                    Expr::Literal(ScalarValue::Utf8(Some(like_pattern)))
-                }
-                ScalarValue::LargeUtf8(Some(pattern)) => {
-                    let escaped_pattern = pattern.replace("%", "\\%");
-                    let like_pattern = format!("{}%", escaped_pattern);
-                    Expr::Literal(ScalarValue::LargeUtf8(Some(like_pattern)))
-                }
-                ScalarValue::Utf8View(Some(pattern)) => {
-                    let escaped_pattern = pattern.replace("%", "\\%");
-                    let like_pattern = format!("{}%", escaped_pattern);
-                    Expr::Literal(ScalarValue::Utf8View(Some(like_pattern)))
+                    Expr::Literal(LogicalScalar::Utf8(Some(like_pattern)))
                 }
                 _ => return Ok(ExprSimplifyResult::Original(args)),
             };
