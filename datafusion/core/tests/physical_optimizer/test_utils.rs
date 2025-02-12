@@ -28,9 +28,10 @@ use arrow::record_batch::RecordBatch;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
-use datafusion_common::{JoinType, Result};
+use datafusion_common::{ColumnStatistics, JoinType, Result, Statistics};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
@@ -100,6 +101,44 @@ pub fn schema() -> SchemaRef {
         Field::new("d", DataType::Int32, true),
         Field::new("e", DataType::Boolean, true),
     ]))
+}
+
+fn int64_stats() -> ColumnStatistics {
+    ColumnStatistics {
+        null_count: Precision::Absent,
+        sum_value: Precision::Absent,
+        max_value: Precision::Exact(1_000_000.into()),
+        min_value: Precision::Exact(0.into()),
+        distinct_count: Precision::Absent,
+    }
+}
+
+fn column_stats() -> Vec<ColumnStatistics> {
+    vec![
+        int64_stats(), // a
+        int64_stats(), // b
+        int64_stats(), // c
+        ColumnStatistics::default(),
+        ColumnStatistics::default(),
+    ]
+}
+
+/// Create parquet datasource exec using schema from [`schema`].
+pub(crate) fn parquet_exec_with_stats() -> Arc<DataSourceExec> {
+    let mut statistics = Statistics::new_unknown(&schema());
+    statistics.num_rows = Precision::Inexact(10);
+    statistics.column_statistics = column_stats();
+
+    let config = FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        schema(),
+        Arc::new(ParquetSource::new(Default::default())),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), 10000))
+    .with_statistics(statistics);
+    assert_eq!(config.statistics.num_rows, Precision::Inexact(10));
+
+    config.new_exec()
 }
 
 pub fn create_test_schema() -> Result<SchemaRef> {
@@ -573,6 +612,30 @@ pub fn build_group_by(input_schema: &SchemaRef, columns: Vec<String>) -> Physica
         group_by_expr.push((col(column, input_schema).unwrap(), column.to_string()));
     }
     PhysicalGroupBy::new_single(group_by_expr.clone())
+}
+
+pub(crate) fn single_partitioned_aggregate(
+    input: Arc<dyn ExecutionPlan>,
+    alias_pairs: Vec<(String, String)>,
+) -> Arc<dyn ExecutionPlan> {
+    let schema = schema();
+    let group_by = alias_pairs
+        .iter()
+        .map(|(column, alias)| (col(column, &input.schema()).unwrap(), alias.to_string()))
+        .collect::<Vec<_>>();
+    let group_by = PhysicalGroupBy::new_single(group_by);
+
+    Arc::new(
+        AggregateExec::try_new(
+            AggregateMode::SinglePartitioned,
+            group_by,
+            vec![],
+            vec![],
+            input,
+            schema,
+        )
+        .unwrap(),
+    )
 }
 
 pub fn assert_plan_matches_expected(
