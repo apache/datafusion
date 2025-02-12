@@ -118,7 +118,7 @@ impl State {
 
 impl GroupOrderingPartial {
     pub fn try_new(
-        input_schema: &Schema,
+        _input_schema: &Schema,
         order_indices: &[usize],
         ordering: &LexOrdering,
     ) -> Result<Self> {
