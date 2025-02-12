@@ -1918,9 +1918,20 @@ dependencies = [
  "apache-avro",
  "arrow",
  "arrow-schema",
+ "async-trait",
+ "bytes",
+ "datafusion",
+ "datafusion-catalog",
+ "datafusion-catalog-listing",
  "datafusion-common",
+ "datafusion-physical-expr",
+ "futures",
  "num-traits",
+ "object_store",
+ "rstest",
  "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]

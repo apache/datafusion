@@ -28,7 +28,8 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-default = ["apache-avro", "num-traits", "datafusion-common/avro"]
+avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
+default = ["avro"]
 
 [dependencies]
 arrow = { workspace = true }
@@ -36,9 +37,24 @@ arrow-schema = { workspace = true }
 apache-avro = { version = "0.17", optional = true }
 num-traits = { version = "0.2", optional = true }
 datafusion-common = { workspace = true }
+datafusion-catalog-listing = { workspace = true }
+datafusion = { workspace = true }
+async-trait = { workspace = true }
+datafusion-catalog = { workspace = true }
+datafusion-physical-expr = { workspace = true }
+object_store = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+rstest = { workspace = true }
+url = { workspace = true }
+
+
+
+
 
 [lints]
 workspace = true
