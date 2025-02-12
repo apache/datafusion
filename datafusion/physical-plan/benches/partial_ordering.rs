@@ -23,15 +23,13 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion_physical_expr::{expressions::col, LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::aggregates::order::GroupOrderingPartial;
 
-
-
 const BATCH_SIZE: usize = 8192;
 
 fn create_test_arrays(num_columns: usize) -> Vec<ArrayRef> {
     (0..num_columns)
         .map(|i| {
             Arc::new(Int32Array::from_iter_values(
-                (0..BATCH_SIZE as i32).map(|x| x * (i + 1) as i32)
+                (0..BATCH_SIZE as i32).map(|x| x * (i + 1) as i32),
             )) as ArrayRef
         })
         .collect()
@@ -61,10 +59,14 @@ fn bench_new_groups(c: &mut Criterion) {
         group.bench_function(format!("order_indices_{}", num_columns), |b| {
             let batch_group_values = create_test_arrays(num_columns);
             let group_indices: Vec<usize> = (0..BATCH_SIZE).collect();
-            
+
             b.iter(|| {
-                let mut ordering = GroupOrderingPartial::try_new(&schema, &order_indices, &ordering).unwrap();
-                ordering.new_groups(&batch_group_values, &group_indices, BATCH_SIZE).unwrap();
+                let mut ordering =
+                    GroupOrderingPartial::try_new(&schema, &order_indices, &ordering)
+                        .unwrap();
+                ordering
+                    .new_groups(&batch_group_values, &group_indices, BATCH_SIZE)
+                    .unwrap();
             });
         });
     }

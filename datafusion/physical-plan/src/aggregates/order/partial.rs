@@ -16,9 +16,9 @@
 // under the License.
 
 use arrow::array::ArrayRef;
-use arrow_ord::partition::partition;
 use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
+use arrow_ord::partition::partition;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
