@@ -208,38 +208,45 @@ impl PhysicalOptimizerRule for EnforceSorting {
     }
 }
 
+/// Only interested with `SortExec`s and their unbounded children.
+/// If the plan is not a `SortExec` or its child is not unbounded, returns the original plan.
+/// Otherwise, by checking the requirement satisfaction searches for a replacement chance.
+/// If there's one replaces the `SortExec` plan with a PartialSortExec
 fn replace_with_partial_sort(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let plan_any = plan.as_any();
-    if let Some(sort_plan) = plan_any.downcast_ref::<SortExec>() {
-        let child = Arc::clone(sort_plan.children()[0]);
-        if !child.boundedness().is_unbounded() {
-            return Ok(plan);
-        }
+    let Some(sort_plan) = plan_any.downcast_ref::<SortExec>() else {
+        return Ok(plan);
+    };
 
-        // here we're trying to find the common prefix for sorted columns that is required for the
-        // sort and already satisfied by the given ordering
-        let child_eq_properties = child.equivalence_properties();
-        let sort_req = LexRequirement::from(sort_plan.expr().clone());
+    // It's safe to get first child of the SortExec
+    let child = Arc::clone(sort_plan.children()[0]);
+    if !child.boundedness().is_unbounded() {
+        return Ok(plan);
+    }
 
-        let mut common_prefix_length = 0;
-        while child_eq_properties.ordering_satisfy_requirement(&LexRequirement {
-            inner: sort_req[0..common_prefix_length + 1].to_vec(),
-        }) {
-            common_prefix_length += 1;
-        }
-        if common_prefix_length > 0 {
-            return Ok(Arc::new(
-                PartialSortExec::new(
-                    LexOrdering::new(sort_plan.expr().to_vec()),
-                    Arc::clone(sort_plan.input()),
-                    common_prefix_length,
-                )
-                .with_preserve_partitioning(sort_plan.preserve_partitioning())
-                .with_fetch(sort_plan.fetch()),
-            ));
-        }
+    // Here we're trying to find the common prefix for sorted columns that is required for the
+    // sort and already satisfied by the given ordering
+    let child_eq_properties = child.equivalence_properties();
+    let sort_req = LexRequirement::from(sort_plan.expr().clone());
+
+    let mut common_prefix_length = 0;
+    while child_eq_properties.ordering_satisfy_requirement(&LexRequirement {
+        inner: sort_req[0..common_prefix_length + 1].to_vec(),
+    }) {
+        common_prefix_length += 1;
+    }
+    if common_prefix_length > 0 {
+        return Ok(Arc::new(
+            PartialSortExec::new(
+                LexOrdering::new(sort_plan.expr().to_vec()),
+                Arc::clone(sort_plan.input()),
+                common_prefix_length,
+            )
+            .with_preserve_partitioning(sort_plan.preserve_partitioning())
+            .with_fetch(sort_plan.fetch()),
+        ));
     }
     Ok(plan)
 }
