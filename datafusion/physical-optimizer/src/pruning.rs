@@ -1711,7 +1711,11 @@ fn build_like_match(
     Some(combined)
 }
 
-// For predicate `col NOT LIKE 'const_prefix%'`, we rewrite it as `(col_min NOT LIKE 'const_prefix%' OR col_max NOT LIKE 'const_prefix%')`. If both col_min and col_max have the prefix const_prefix, we skip the entire row group (as we can be certain that all data in this row group has the prefix const_prefix).
+// For predicate `col NOT LIKE 'const_prefix%'`, we rewrite it as `(col_min NOT LIKE 'const_prefix%' OR col_max NOT LIKE 'const_prefix%')`. 
+//
+// The intuition is that if both `col_min` and `col_max` begin with `const_prefix` that means
+// **all** data in this row group begins with `const_prefix` as well (and therefore the predicate
+// looking for rows that don't begin with `const_prefix` can never be true)
 fn build_not_like_match(
     expr_builder: &mut PruningExpressionBuilder<'_>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
