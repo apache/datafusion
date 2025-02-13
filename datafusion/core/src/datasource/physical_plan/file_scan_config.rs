@@ -35,7 +35,7 @@ use datafusion_common::{ColumnStatistics, Constraints, Statistics};
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
 
 use crate::datasource::data_source::FileSource;
-pub use datafusion_catalog_datasource::file_scan_config::*;
+pub use datafusion_datasource::file_scan_config::*;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::display::{display_orderings, ProjectSchemaDisplay};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;

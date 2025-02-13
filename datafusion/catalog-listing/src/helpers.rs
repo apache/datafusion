@@ -21,10 +21,10 @@ use std::mem;
 use std::sync::Arc;
 
 use datafusion_catalog::Session;
-use datafusion_catalog_datasource::ListingTableUrl;
-use datafusion_catalog_datasource::PartitionedFile;
 use datafusion_common::internal_err;
 use datafusion_common::{HashMap, Result, ScalarValue};
+use datafusion_datasource::ListingTableUrl;
+use datafusion_datasource::PartitionedFile;
 use datafusion_expr::{BinaryExpr, Operator};
 
 use arrow::{

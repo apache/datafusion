@@ -31,8 +31,8 @@ version.workspace = true
 arrow = { workspace = true }
 async-trait = { workspace = true }
 datafusion-catalog = { workspace = true }
-datafusion-catalog-datasource = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
+datafusion-datasource = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }

@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "datafusion-catalog-datasource"
-description = "datafusion-catalog-datasource"
+name = "datafusion-datasource"
+description = "datafusion-datasource"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -70,5 +70,5 @@ tempfile = { workspace = true }
 workspace = true
 
 [lib]
-name = "datafusion_catalog_datasource"
+name = "datafusion_datasource"
 path = "src/mod.rs"
