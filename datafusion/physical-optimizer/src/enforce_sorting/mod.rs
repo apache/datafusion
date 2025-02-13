@@ -219,10 +219,10 @@ impl PhysicalOptimizerRule for EnforceSorting {
     }
 }
 
-/// Only interested with `SortExec`s and their unbounded children.
-/// If the plan is not a `SortExec` or its child is not unbounded, returns the original plan.
+/// Only interested with [`SortExec`]s and their unbounded children.
+/// If the plan is not a [`SortExec`] or its child is not unbounded, returns the original plan.
 /// Otherwise, by checking the requirement satisfaction searches for a replacement chance.
-/// If there's one replaces the `SortExec` plan with a PartialSortExec
+/// If there's one replaces the [`SortExec`] plan with a [`PartialSortExec`]
 fn replace_with_partial_sort(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -278,14 +278,14 @@ fn replace_with_partial_sort(
 /// By performing sorting in parallel, we can increase performance in some scenarios.
 ///
 /// **Steps**
-/// 1. Checks if the plan is either `SortExec`/`SortPreservingMergeExec`/`CoalescePartitionsExec` otherwise does nothing
-/// 2. If the plan is a `SortExec` or a final `SortPreservingMergeExec` (output partitioning is 1)
-///     2.1. Check for `CoalescePartitionsExec` in children, when found check if it can be removed (with possible `RepartitionExec`s)
+/// 1. Checks if the plan is either [`SortExec`]/[`SortPreservingMergeExec`]/[`CoalescePartitionsExec`] otherwise does nothing
+/// 2. If the plan is a [`SortExec`] or a final `[SortPreservingMergeExec` (output partitioning is 1)
+///     2.1. Check for [`CoalescePartitionsExec`] in children, when found check if it can be removed (with possible [`RepartitionExec`]s)
 ///         if so remove. (see `remove_bottleneck_in_subplan`)
 ///     2.2. If the plan is satisfying the ordering requirements, add a `SortExec`
 ///     2.3. Add an SPM above the plan and return
-/// 3. If the plan is a `CoalescePartitionsExec`
-///     3.1. Check if it can be removed (with possible `RepartitionExec`s)
+/// 3. If the plan is a [`CoalescePartitionsExec`]
+///     3.1. Check if it can be removed (with possible [`RepartitionExec`]s)
 ///         if so remove (see `remove_bottleneck_in_subplan`)
 pub fn parallelize_sorts(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
@@ -351,7 +351,7 @@ pub fn parallelize_sorts(
 /// violating these requirements whenever possible.
 ///
 /// **Steps**
-/// 1. Analyze if there are any immediate removals of `SortExec`s if so, removes them (see `analyze_immediate_sort_removal`)
+/// 1. Analyze if there are any immediate removals of [`SortExec`]s if so, removes them (see `analyze_immediate_sort_removal`)
 /// 2. For each child of the plan, if the plan requires input ordering
 ///     2.1. Checks if ordering is satisfied with the child, if it's not satisfied
 ///         2.1.1. If the child has output ordering, removes the unnecessary `SortExec`
@@ -360,7 +360,7 @@ pub fn parallelize_sorts(
 ///         2.2.1 Checks if the `SortExec` is neutralized in the plan, if so removes it.
 /// 3. Check and modify window operator
 ///     3.1.  Checks if the plan is a window operator, and connected with a sort.
-///         If so, either tries to update the window definition or removes unnecessary `SortExec`s (see `adjust_window_sort_removal`)
+///         If so, either tries to update the window definition or removes unnecessary [`SortExec`]s (see `adjust_window_sort_removal`)
 /// 4. Check and remove possibly unnecessary SPM
 ///     4.1. Checks if the plan is SPM and child 1 output partitions, if so decides this SPM is unnecessary and removes it from the plan.
 pub fn ensure_sorting(
@@ -429,9 +429,9 @@ pub fn ensure_sorting(
 
 /// Analyzes if there are any immediate sort removals by checking the `SortExec`s
 /// and their ordering requirement satisfactions with children
-/// If the sort is unnecessary, either replaces it with `SortPreservingMergeExec`/`LimitExec`
-/// or removes the `SortExec`.
-/// Otherwise returns the original plan
+/// If the sort is unnecessary, either replaces it with [`SortPreservingMergeExec`]/`[LimitExec`]
+/// or removes the [`SortExec`].
+/// Otherwise, returns the original plan
 fn analyze_immediate_sort_removal(
     mut node: PlanWithCorrespondingSort,
 ) -> Transformed<PlanWithCorrespondingSort> {
