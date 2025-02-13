@@ -24,7 +24,8 @@ use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::types::{LogicalTypeRef, NativeType};
+use datafusion_common::internal_err;
+use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -254,6 +255,56 @@ impl TypeSignatureClass {
             TypeSignatureClass::Integer => {
                 vec![DataType::Int64]
             }
+        }
+    }
+
+    /// Does the specified `NativeType` match this type signature class?
+    pub fn matches_native_type(
+        self: &TypeSignatureClass,
+        logical_type: &NativeType,
+    ) -> bool {
+        if logical_type == &NativeType::Null {
+            return true;
+        }
+
+        match self {
+            TypeSignatureClass::Native(t) if t.native() == logical_type => true,
+            TypeSignatureClass::Timestamp if logical_type.is_timestamp() => true,
+            TypeSignatureClass::Time if logical_type.is_time() => true,
+            TypeSignatureClass::Interval if logical_type.is_interval() => true,
+            TypeSignatureClass::Duration if logical_type.is_duration() => true,
+            TypeSignatureClass::Integer if logical_type.is_integer() => true,
+            _ => false,
+        }
+    }
+
+    /// What type would `origin_type` be casted to when casting to the specified native type?
+    pub fn default_casted_type(
+        &self,
+        native_type: &NativeType,
+        origin_type: &DataType,
+    ) -> datafusion_common::Result<DataType> {
+        match self {
+            TypeSignatureClass::Native(logical_type) => {
+                logical_type.native().default_cast_for(origin_type)
+            }
+            // If the given type is already a timestamp, we don't change the unit and timezone
+            TypeSignatureClass::Timestamp if native_type.is_timestamp() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Time if native_type.is_time() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Interval if native_type.is_interval() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Duration if native_type.is_duration() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Integer if native_type.is_integer() => {
+                Ok(origin_type.to_owned())
+            }
+            _ => internal_err!("May miss the matching logic in `matches_native_type`"),
         }
     }
 }
