@@ -35,3 +35,4 @@ SQL Reference
    special_functions
    sql_status
    write_options
+   prepared_statements
