@@ -456,7 +456,7 @@ impl TypeSignature {
 
     /// Return example acceptable types for this `TypeSignature`'
     ///
-    /// Returns a Vec<DataType> for each argument to the function
+    /// Returns a `Vec<DataType>` for each argument to the function
     ///
     /// This is used for `information_schema` and can be used to generate
     /// documentation or error messages.
