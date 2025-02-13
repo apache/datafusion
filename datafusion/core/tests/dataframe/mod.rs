@@ -5289,8 +5289,7 @@ async fn test_insert_into_checking() -> Result<()> {
 
     // There are three cases we need to check
     // 1. The len of the schema of the plan and the schema of the table should be the same
-    // 2. The nullable flag of the schema of the plan and the schema of the table should be the same
-    // 3. The datatype of the schema of the plan and the schema of the table should be the same
+    // 2. The datatype of the schema of the plan and the schema of the table should be the same
 
     // Test case 1:
     let write_df = session_ctx.sql("values (1, 2), (3, 4)").await.unwrap();
@@ -5308,22 +5307,6 @@ async fn test_insert_into_checking() -> Result<()> {
         }
     }
 
-    // Test case 2:
-    let write_df = session_ctx.sql("values (null), (12)").await.unwrap();
-
-    match write_df
-        .write_table("t", DataFrameWriteOptions::new())
-        .await
-    {
-        Ok(_) => {}
-        Err(e) => {
-            assert_contains!(
-                e.to_string(),
-                "Inserting query must have the same schema nullability as the table."
-            );
-        }
-    }
-
     // Setting nullable to true
     // Make sure the nullable check go through
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
@@ -5334,7 +5317,7 @@ async fn test_insert_into_checking() -> Result<()> {
     let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
     session_ctx.register_table("t", initial_table.clone())?;
 
-    // Test case 3:
+    // Test case 2:
     let write_df = session_ctx.sql("values ('a123'), ('b456')").await.unwrap();
 
     match write_df

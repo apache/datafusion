@@ -61,16 +61,17 @@ LOCATION 'test_files/scratch/insert_to_external/parquet_types_partitioned/'
 PARTITIONED BY (b);
 
 #query error here because PARTITIONED BY (b) will make the b nullable to false
-query error
+query I
 insert into dictionary_encoded_parquet_partitioned
 select * from dictionary_encoded_values
 ----
-DataFusion error: Error during planning: Inserting query must have the same schema nullability as the table. Expected table field 'b' nullability: false, got field: 'b', nullability: true
-
+2
 
 query TT
 select * from dictionary_encoded_parquet_partitioned order by (a);
 ----
+a foo
+b bar
 
 statement ok
 CREATE EXTERNAL TABLE dictionary_encoded_arrow_partitioned(
@@ -82,12 +83,11 @@ LOCATION 'test_files/scratch/insert_to_external/arrow_dict_partitioned/'
 PARTITIONED BY (b);
 
 #query error here because PARTITIONED BY (b) will make the b nullable to false
-query error
+query I
 insert into dictionary_encoded_arrow_partitioned
 select * from dictionary_encoded_values
 ----
-DataFusion error: Error during planning: Inserting query must have the same schema nullability as the table. Expected table field 'b' nullability: false, got field: 'b', nullability: true
-
+2
 
 statement ok
 CREATE EXTERNAL TABLE dictionary_encoded_arrow_test_readback(
@@ -99,10 +99,13 @@ LOCATION 'test_files/scratch/insert_to_external/arrow_dict_partitioned/b=bar/';
 query T
 select * from dictionary_encoded_arrow_test_readback;
 ----
+b
 
 query TT
 select * from dictionary_encoded_arrow_partitioned order by (a);
 ----
+a foo
+b bar
 
 
 # test_insert_into
@@ -545,7 +548,7 @@ insert into table_without_values(field1) values(3);
 statement error
 insert into table_without_values(field2) values(300);
 ----
-DataFusion error: Error during planning: Inserting query must have the same schema nullability as the table. Expected table field 'field1' nullability: false, got field: 'field1', nullability: true
+DataFusion error: Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
 
 
 statement error Invalid argument error: Column 'column1' is declared as non-nullable but contains null values
@@ -586,7 +589,7 @@ insert into test_column_defaults values(1, 10, 100, 'ABC', now())
 statement error
 insert into test_column_defaults(a) values(2)
 ----
-DataFusion error: Error during planning: Inserting query must have the same schema nullability as the table. Expected table field 'b' nullability: false, got field: 'b', nullability: true
+DataFusion error: Execution error: Invalid batch column at '1' has null but schema specifies non-nullable
 
 
 query I

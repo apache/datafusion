@@ -1041,16 +1041,7 @@ impl SchemaExt for Schema {
                 .iter()
                 .zip(other.fields().iter())
                 .try_for_each(|(f1, f2)| {
-                    // only check the case when the table field is not nullable and the insert data field is nullable
-                    if !f1.is_nullable() && f2.is_nullable() {
-                        _plan_err!(
-                            "Inserting query must have the same schema nullability as the table. \
-                            Expected table field '{}' nullability: {}, got field: '{}', nullability: {}",
-                            f1.name(),
-                            f1.is_nullable(),
-                            f2.name(),
-                            f2.is_nullable())
-                    } else if f1.name() != f2.name() || !DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type()) {
+                    if f1.name() != f2.name() || !DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type()) {
                         _plan_err!(
                             "Inserting query schema mismatch: Expected table field '{}' with type {:?}, \
                             but got '{}' with type {:?}.",
