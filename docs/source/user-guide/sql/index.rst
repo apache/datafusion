@@ -33,5 +33,4 @@ SQL Reference
    window_functions
    scalar_functions
    special_functions
-   sql_status
    write_options
