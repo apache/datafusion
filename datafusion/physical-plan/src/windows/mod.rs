@@ -18,6 +18,7 @@
 //! Physical expressions for window functions
 
 use std::borrow::Borrow;
+use std::iter;
 use std::sync::Arc;
 
 use crate::{
@@ -354,8 +355,22 @@ pub(crate) fn window_equivalence_properties(
             expr.as_any().downcast_ref::<PlainAggregateWindowExpr>()
         {
             let window_expr_index = window_expr_indices[i];
-            aggregate_udf_window_expr
-                .add_equal_orderings(&mut window_eq_properties, window_expr_index);
+            if aggregate_udf_window_expr
+                .get_window_frame()
+                .end_bound
+                .is_unbounded()
+                && aggregate_udf_window_expr.partition_by().is_empty()
+            {
+                window_eq_properties = window_eq_properties.with_constants(iter::once(
+                    ConstExpr::new(Arc::new(Column::new(
+                        expr.name(),
+                        i + input.schema().fields().len(),
+                    ))),
+                ))
+            } else {
+                aggregate_udf_window_expr
+                    .add_equal_orderings(&mut window_eq_properties, window_expr_index);
+            }
         }
         // TODO: SlidingAggregateWindowExpr cannot introduce a new ordering yet
         //       because we cannot determine whether the window's incoming elements
