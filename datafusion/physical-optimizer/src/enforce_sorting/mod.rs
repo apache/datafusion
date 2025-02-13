@@ -119,7 +119,7 @@ fn update_sort_ctx_children(
     }
 
     node.data = data;
-    node.update_plan_from_children()
+    Ok(node)
 }
 
 /// This object is used within the [`EnforceSorting`] rule to track the closest
