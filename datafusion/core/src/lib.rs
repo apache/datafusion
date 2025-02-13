@@ -922,6 +922,12 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/features.md",
+    user_guide_features
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/sql/aggregate_functions.md",
     user_guide_sql_aggregate_functions
 );
@@ -978,12 +984,6 @@ doc_comment::doctest!(
 doc_comment::doctest!(
     "../../../docs/source/user-guide/sql/special_functions.md",
     user_guide_sql_special_functions
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
-    "../../../docs/source/user-guide/sql/sql_status.md",
-    user_guide_sql_status
 );
 
 #[cfg(doctest)]
