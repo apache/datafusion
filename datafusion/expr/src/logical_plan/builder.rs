@@ -467,7 +467,7 @@ impl LogicalPlanBuilder {
         project(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
     }
 
-    /// Apply a projection without alias with validation
+    /// Apply a projection without alias with optional validation
     pub fn project_with_validation(
         self,
         expr: Vec<(impl Into<Expr>, bool)>,
@@ -1557,17 +1557,7 @@ pub fn project(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = impl Into<Expr>>,
 ) -> Result<LogicalPlan> {
-    let mut projected_expr = vec![];
-    for e in expr {
-        let e = e.into();
-        match e {
-            Expr::Wildcard { .. } => projected_expr.push(e),
-            _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
-        }
-    }
-    validate_unique_names("Projections", projected_expr.iter())?;
-
-    Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+    project_with_validation(plan, expr.into_iter().map(|e| (e, true)))
 }
 
 /// Create Projection. Similar to project except that the expressions
@@ -1582,12 +1572,12 @@ pub fn project_with_validation(
     expr: impl IntoIterator<Item = (impl Into<Expr>, bool)>,
 ) -> Result<LogicalPlan> {
     let mut projected_expr = vec![];
-    for (e, verify) in expr {
+    for (e, validate) in expr {
         let e = e.into();
         match e {
             Expr::Wildcard { .. } => projected_expr.push(e),
             _ => {
-                if verify {
+                if validate {
                     projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
                 } else {
                     projected_expr.push(e)

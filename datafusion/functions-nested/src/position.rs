@@ -37,7 +37,7 @@ use arrow::array::{
 use datafusion_common::cast::{
     as_generic_list_array, as_int64_array, as_large_list_array, as_list_array,
 };
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{exec_err, internal_err, utils::take_function_args, Result};
 use itertools::Itertools;
 
 use crate::utils::{compare_element_to_list, make_scalar_function};
@@ -293,20 +293,16 @@ impl ScalarUDFImpl for ArrayPositions {
 
 /// Array_positions SQL function
 pub fn array_positions_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_positions expects two arguments");
-    }
+    let [array, element] = take_function_args("array_positions", args)?;
 
-    let element = &args[1];
-
-    match &args[0].data_type() {
+    match &array.data_type() {
         List(_) => {
-            let arr = as_list_array(&args[0])?;
+            let arr = as_list_array(&array)?;
             crate::utils::check_datatypes("array_positions", &[arr.values(), element])?;
             general_positions::<i32>(arr, element)
         }
         LargeList(_) => {
-            let arr = as_large_list_array(&args[0])?;
+            let arr = as_large_list_array(&array)?;
             crate::utils::check_datatypes("array_positions", &[arr.values(), element])?;
             general_positions::<i64>(arr, element)
         }

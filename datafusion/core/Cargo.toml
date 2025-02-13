@@ -89,13 +89,12 @@ arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.5.0", optional = true }
+bzip2 = { version = "0.5.1", optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
-datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-functions = { workspace = true }
@@ -134,6 +133,7 @@ async-trait = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
 ctor = { workspace = true }
 dashmap = "6.1.0"
+datafusion-doc = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }

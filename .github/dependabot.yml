@@ -28,6 +28,12 @@ updates:
       # arrow is bumped manually
       - dependency-name: "arrow*"
         update-types: ["version-update:semver-major"]
+    groups:
+      proto:
+        applies-to: version-updates
+        patterns:
+          - "prost*"
+          - "pbjson*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

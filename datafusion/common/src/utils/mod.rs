@@ -22,7 +22,7 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_internal_datafusion_err, _internal_err};
+use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
 use crate::{DataFusionError, Result, ScalarValue};
 use arrow::array::{
     cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
@@ -903,6 +903,45 @@ pub fn get_available_parallelism() -> usize {
     available_parallelism()
         .unwrap_or(NonZero::new(1).expect("literal value `1` shouldn't be zero"))
         .get()
+}
+
+/// Converts a collection of function arguments into an fixed-size array of length N
+/// producing a reasonable error message in case of unexpected number of arguments.
+///
+/// # Example
+/// ```
+/// # use datafusion_common::Result;
+/// # use datafusion_common::utils::take_function_args;
+/// # use datafusion_common::ScalarValue;
+/// fn my_function(args: &[ScalarValue]) -> Result<()> {
+///   // function expects 2 args, so create a 2-element array
+///   let [arg1, arg2] = take_function_args("my_function", args)?;
+///   // ... do stuff..
+///   Ok(())
+/// }
+///
+/// // Calling the function with 1 argument produces an error:
+/// let args = vec![ScalarValue::Int32(Some(10))];
+/// let err = my_function(&args).unwrap_err();
+/// assert_eq!(err.to_string(), "Execution error: my_function function requires 2 arguments, got 1");
+/// // Calling the function with 2 arguments works great
+/// let args = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))];
+/// my_function(&args).unwrap();
+/// ```
+pub fn take_function_args<const N: usize, T>(
+    function_name: &str,
+    args: impl IntoIterator<Item = T>,
+) -> Result<[T; N]> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    args.try_into().map_err(|v: Vec<T>| {
+        _exec_datafusion_err!(
+            "{} function requires {} {}, got {}",
+            function_name,
+            N,
+            if N == 1 { "argument" } else { "arguments" },
+            v.len()
+        )
+    })
 }
 
 #[cfg(test)]
