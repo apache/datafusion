@@ -345,6 +345,7 @@ mod tests {
             batch_size: 8192,
             mem_pool_type: "fair".to_string(),
             memory_limit: None,
+            sort_spill_reservation_bytes: None,
             debug: false,
         };
         let opt = RunOpt {
@@ -380,6 +381,7 @@ mod tests {
             batch_size: 8192,
             mem_pool_type: "fair".to_string(),
             memory_limit: None,
+            sort_spill_reservation_bytes: None,
             debug: false,
         };
         let opt = RunOpt {

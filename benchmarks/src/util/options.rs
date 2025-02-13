@@ -53,6 +53,11 @@ pub struct CommonOpt {
     #[structopt(long = "memory-limit", parse(try_from_str = parse_memory_limit))]
     pub memory_limit: Option<usize>,
 
+    /// The amount of memory to reserve for sort spill operations. DataFusion's default value will be used
+    /// if not specified.
+    #[structopt(long = "sort-spill-reservation-bytes", parse(try_from_str = parse_memory_limit))]
+    pub sort_spill_reservation_bytes: Option<usize>,
+
     /// Activate debug mode to see more details
     #[structopt(short, long)]
     pub debug: bool,
@@ -66,11 +71,16 @@ impl CommonOpt {
 
     /// Modify the existing config appropriately
     pub fn update_config(&self, config: SessionConfig) -> SessionConfig {
-        config
+        let mut config = config
             .with_target_partitions(
                 self.partitions.unwrap_or(get_available_parallelism()),
             )
-            .with_batch_size(self.batch_size)
+            .with_batch_size(self.batch_size);
+        if let Some(sort_spill_reservation_bytes) = self.sort_spill_reservation_bytes {
+            config =
+                config.with_sort_spill_reservation_bytes(sort_spill_reservation_bytes);
+        }
+        config
     }
 
     /// Return an appropriately configured `RuntimeEnvBuilder`
