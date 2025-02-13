@@ -17,6 +17,16 @@
 
 //! Physical expressions for window functions
 
+mod bounded_window_agg_exec;
+mod utils;
+mod window_agg_exec;
+
+pub use bounded_window_agg_exec::BoundedWindowAggExec;
+pub use datafusion_physical_expr::window::{
+    PlainAggregateWindowExpr, StandardWindowExpr, WindowExpr,
+};
+pub use window_agg_exec::WindowAggExec;
+
 use std::borrow::Borrow;
 use std::iter;
 use std::sync::Arc;
@@ -27,33 +37,25 @@ use crate::{
 };
 
 use arrow::datatypes::Schema;
-use arrow_schema::{DataType, Field, SchemaRef};
+use arrow_schema::{DataType, Field, SchemaRef, SortOptions};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
     PartitionEvaluator, ReversedUDWF, WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
+use datafusion_functions_window_common::expr::ExpressionArgs;
+use datafusion_functions_window_common::field::WindowUDFFieldArgs;
+use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
+use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{
     reverse_order_bys,
     window::{SlidingAggregateWindowExpr, StandardWindowFunctionExpr},
     ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
-use itertools::Itertools;
-
-mod bounded_window_agg_exec;
-mod utils;
-mod window_agg_exec;
-
-pub use bounded_window_agg_exec::BoundedWindowAggExec;
-use datafusion_functions_window_common::expr::ExpressionArgs;
-use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
-use datafusion_physical_expr::expressions::Column;
-pub use datafusion_physical_expr::window::{
-    PlainAggregateWindowExpr, StandardWindowExpr, WindowExpr,
-};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-pub use window_agg_exec::WindowAggExec;
+use futures::StreamExt;
+
+use itertools::{iproduct, Itertools};
 
 /// Build field from window function and add it into schema
 pub fn schema_add_window_field(
@@ -367,6 +369,43 @@ pub(crate) fn window_equivalence_properties(
                         i + input.schema().fields().len(),
                     ))),
                 ))
+            } else if aggregate_udf_window_expr
+                .get_window_frame()
+                .end_bound
+                .is_unbounded()
+            {
+                let mut partition_by_order = vec![];
+                for order in aggregate_udf_window_expr.partition_by() {
+                    let all_orders_at_current_level =
+                        all_possible_sort_options(Arc::clone(order));
+                    partition_by_order.push(all_orders_at_current_level);
+                }
+                let all_orders_cartesian =
+                    partition_by_order.into_iter().multi_cartesian_product();
+                let mut all_lexs = all_orders_cartesian
+                    .into_iter()
+                    .map(|inner| LexOrdering::new(inner))
+                    .collect::<Vec<_>>();
+                all_lexs.retain(|lex| window_eq_properties.ordering_satisfy(lex));
+                let mut new_lexs = vec![];
+                for lex in all_lexs.iter() {
+                    let existing = lex.clone().to_vec();
+                    let new_partial_consts = all_possible_sort_options(Arc::new(
+                        Column::new(expr.name(), i + input.schema().fields().len()),
+                    ));
+                    let new_with_partial_consts = new_partial_consts
+                        .into_iter()
+                        .map(|partial| {
+                            let mut existing = existing.clone();
+                            existing.push(partial);
+                            existing
+                        })
+                        .collect::<Vec<_>>();
+                    for new in new_with_partial_consts {
+                        new_lexs.push(LexOrdering::new(new));
+                    }
+                }
+                window_eq_properties.add_new_orderings(new_lexs);
             } else {
                 aggregate_udf_window_expr
                     .add_equal_orderings(&mut window_eq_properties, window_expr_index);
@@ -512,6 +551,15 @@ pub fn get_window_mode(
         }
     }
     None
+}
+
+fn all_possible_sort_options(expr: Arc<dyn PhysicalExpr>) -> Vec<PhysicalSortExpr> {
+    vec![
+        PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
+        PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, true)),
+        PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(true, false)),
+        PhysicalSortExpr::new(expr, SortOptions::new(true, true)),
+    ]
 }
 
 #[cfg(test)]
