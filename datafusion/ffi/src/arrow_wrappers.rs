@@ -71,7 +71,7 @@ pub struct WrappedArray {
 }
 
 impl TryFrom<WrappedArray> for ArrayRef {
-    type Error = arrow_schema::ArrowError;
+    type Error = arrow::error::ArrowError;
 
     fn try_from(value: WrappedArray) -> Result<Self, Self::Error> {
         let data = unsafe { from_ffi(value.array, &value.schema.0)? };

@@ -21,7 +21,7 @@
 mod tests {
 
     use abi_stable::library::RootModule;
-    use arrow::array::record_batch;
+    use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
     use datafusion::logical_expr::ScalarUDF;
     use datafusion::prelude::{col, SessionContext};
@@ -168,10 +168,10 @@ mod tests {
         let result = df.collect().await?;
 
         let expected = record_batch!(
-            ("a", Int32, [-5, -4, -3, -2, -1]),
-            ("b", Float64, [-5., -4., -3., -2., -1.]),
-            ("abs_a", Int32, [5, 4, 3, 2, 1]),
-            ("abs_b", Float64, [5., 4., 3., 2., 1.])
+            ("a", Int32, vec![-5, -4, -3, -2, -1]),
+            ("b", Float64, vec![-5., -4., -3., -2., -1.]),
+            ("abs_a", Int32, vec![5, 4, 3, 2, 1]),
+            ("abs_b", Float64, vec![5., 4., 3., 2., 1.])
         )?;
 
         assert!(result.len() == 1);

@@ -18,8 +18,8 @@
 use std::num::NonZeroUsize;
 
 use abi_stable::{std_types::RVec, StableAbi};
+use arrow::datatypes::DataType;
 use arrow::ffi::FFI_ArrowSchema;
-use arrow_schema::DataType;
 use datafusion::{
     error::DataFusionError,
     logical_expr::{
@@ -151,11 +151,11 @@ pub enum FFI_TypeSignature {
 
 pub fn vec_datatype_to_rvec_wrapped(
     data_types: &[DataType],
-) -> std::result::Result<RVec<WrappedSchema>, arrow_schema::ArrowError> {
+) -> std::result::Result<RVec<WrappedSchema>, arrow::error::ArrowError> {
     Ok(data_types
         .iter()
         .map(FFI_ArrowSchema::try_from)
-        .collect::<Result<Vec<_>, arrow_schema::ArrowError>>()?
+        .collect::<Result<Vec<_>, arrow::error::ArrowError>>()?
         .into_iter()
         .map(WrappedSchema)
         .collect())
@@ -163,7 +163,7 @@ pub fn vec_datatype_to_rvec_wrapped(
 
 pub fn rvec_wrapped_to_vec_datatype(
     data_types: &RVec<WrappedSchema>,
-) -> std::result::Result<Vec<DataType>, arrow_schema::ArrowError> {
+) -> std::result::Result<Vec<DataType>, arrow::error::ArrowError> {
     data_types
         .iter()
         .map(|d| DataType::try_from(&d.0))

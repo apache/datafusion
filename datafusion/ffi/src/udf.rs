@@ -21,11 +21,12 @@ use abi_stable::{
     std_types::{RResult, RString, RVec},
     StableAbi,
 };
+use arrow::datatypes::DataType;
 use arrow::{
     array::ArrayRef,
+    error::ArrowError,
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
-use arrow_schema::{ArrowError, DataType};
 use datafusion::error::DataFusionError;
 use datafusion::{
     error::Result,
