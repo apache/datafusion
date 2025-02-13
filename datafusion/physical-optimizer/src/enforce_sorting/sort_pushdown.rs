@@ -191,7 +191,20 @@ fn pushdown_requirement_to_children(
                     .then(|| LexRequirement::new(request_child.to_vec()));
                 Ok(Some(vec![req]))
             }
-            RequirementsCompatibility::Compatible(adjusted) => Ok(Some(vec![adjusted])),
+            RequirementsCompatibility::Compatible(mut adjusted) => {
+                adjusted = adjusted.map(|adj| {
+                    let mut new = adj.to_vec();
+                    new.retain(|req| {
+                        req.expr
+                            .as_any()
+                            .downcast_ref::<Column>()
+                            .map(|col| col.index() < child_plan.schema().fields().len())
+                            .unwrap_or(true)
+                    });
+                    LexRequirement::new(new)
+                });
+                Ok(Some(vec![adjusted]))
+            }
             RequirementsCompatibility::NonCompatible => Ok(None),
         }
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
