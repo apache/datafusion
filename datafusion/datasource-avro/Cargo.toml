@@ -33,7 +33,6 @@ default = ["avro"]
 
 [dependencies]
 arrow = { workspace = true }
-arrow-schema = { workspace = true }
 apache-avro = { version = "0.17", optional = true }
 num-traits = { version = "0.2", optional = true }
 datafusion-common = { workspace = true }
@@ -42,6 +41,7 @@ datafusion = { workspace = true }
 async-trait = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-physical-plan = { workspace = true }
 object_store = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }

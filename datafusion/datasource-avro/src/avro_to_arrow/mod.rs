@@ -18,15 +18,13 @@
 //! This module contains code for reading [Avro] data into `RecordBatch`es
 //!
 //! [Avro]: https://avro.apache.org/docs/1.2.0/
-
 mod arrow_array_reader;
-mod reader;
+pub mod reader;
 mod schema;
 
-use arrow_schema::Schema;
-use datafusion_common::error::Result;
-pub use reader::{Reader, ReaderBuilder};
-pub use schema::to_arrow_schema;
+use arrow::datatypes::Schema;
+use datafusion_common::Result;
+use schema::to_arrow_schema;
 use std::io::Read;
 
 /// Read Avro schema given a reader

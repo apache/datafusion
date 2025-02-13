@@ -45,7 +45,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use datafusion_common::arrow_err;
-use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use num_traits::NumCast;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -1071,7 +1071,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::avro_to_arrow::{Reader, ReaderBuilder};
+    use crate::avro_to_arrow::reader::{Reader, ReaderBuilder};
     use arrow::array::Array;
     use arrow::datatypes::DataType;
     use arrow::datatypes::{Field, TimeUnit};

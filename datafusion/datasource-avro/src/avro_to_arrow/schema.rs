@@ -24,7 +24,7 @@ use arrow::datatypes::{Field, UnionFields};
 use datafusion_common::arrow::datatypes::{
     DataType, IntervalUnit, Schema, TimeUnit, UnionMode,
 };
-use datafusion_common::error::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 

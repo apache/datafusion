@@ -22,26 +22,27 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use datafusion_catalog_listing::file_compression_type::FileCompressionType;
-use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::file_format::FileFormatFactory;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::physical_plan::AvroSource;
-use datafusion::datasource::file_format::FileScanConfig;
-use datafusion_common::error::Result;
-use datafusion::physical_plan::ExecutionPlan;
-use crate::physical_plan::Statistics;
 
 use datafusion::datasource::data_source::FileSource;
-use arrow::datatypes::Schema;
-use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
+use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::file_format::FileFormatFactory;
+use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion_catalog::Session;
+use datafusion_catalog_listing::file_compression_type::FileCompressionType;
+use datafusion_common::error::Result;
 use datafusion_common::internal_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::GetExt;
+use datafusion_common::Statistics;
 use datafusion_common::DEFAULT_AVRO_EXTENSION;
 use datafusion_physical_expr::PhysicalExpr;
+use datafusion_physical_plan::ExecutionPlan;
+
+use arrow::datatypes::Schema;
+use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
 #[derive(Default)]
@@ -162,13 +163,12 @@ impl FileFormat for AvroFormat {
 }
 
 #[cfg(test)]
-#[cfg(feature = "avro")]
 mod tests {
     use super::*;
-    use datafusion::datasource::file_format::test_util::scan_format;
+    use crate::test_util::scan_format;
+    use arrow::array::{as_string_array, Array};
     use datafusion::physical_plan::collect;
     use datafusion::prelude::{SessionConfig, SessionContext};
-    use arrow::array::{as_string_array, Array};
     use datafusion_common::cast::{
         as_binary_array, as_boolean_array, as_float32_array, as_float64_array,
         as_int32_array, as_timestamp_microsecond_array,
@@ -515,30 +515,5 @@ mod tests {
         let store_root = format!("{testdata}/avro");
         let format = AvroFormat {};
         scan_format(state, &format, &store_root, file_name, projection, limit).await
-    }
-}
-
-#[cfg(test)]
-#[cfg(not(feature = "avro"))]
-mod tests {
-    use super::*;
-
-    use datafusion::prelude::SessionContext;
-
-    #[tokio::test]
-    async fn test() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let state = session_ctx.state();
-        let format = AvroFormat {};
-        let testdata = datafusion::test_util::arrow_test_data();
-        let filename = "avro/alltypes_plain.avro";
-        let result = scan_format(&state, &format, &testdata, filename, None, None).await;
-        assert!(matches!(
-            result,
-            Err(DataFusionError::NotImplemented(msg))
-            if msg == *"cannot read avro schema without the 'avro' feature enabled"
-        ));
-
-        Ok(())
     }
 }

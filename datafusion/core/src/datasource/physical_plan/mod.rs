@@ -21,7 +21,7 @@ mod arrow_file;
 mod avro;
 mod csv;
 mod file_scan_config;
-mod file_stream;
+pub mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;

@@ -1917,7 +1917,6 @@ version = "45.0.0"
 dependencies = [
  "apache-avro",
  "arrow",
- "arrow-schema",
  "async-trait",
  "bytes",
  "datafusion",
@@ -1925,6 +1924,7 @@ dependencies = [
  "datafusion-catalog-listing",
  "datafusion-common",
  "datafusion-physical-expr",
+ "datafusion-physical-plan",
  "futures",
  "num-traits",
  "object_store",

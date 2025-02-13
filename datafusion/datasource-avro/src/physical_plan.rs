@@ -21,21 +21,19 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use datafusion::datasource::physical_plan::{FileOpener, FileScanConfig};
-#[cfg(feature = "avro")]
-use crate::avro_to_arrow::Reader as AvroReader;
+use crate::avro_to_arrow::reader::Reader as AvroReader;
 use datafusion::datasource::data_source::FileSource;
+use datafusion::datasource::physical_plan::{FileOpener, FileScanConfig};
 use datafusion_common::error::Result;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraints, Statistics};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use datafusion::physical_expr_common::sort_expr::LexOrdering;
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion::physical_plan::source::DataSourceExec;
-use datafusion::physical_plan::{
+use datafusion_common::{Constraints, Statistics};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
 
@@ -265,7 +263,9 @@ impl FileSource for AvroSource {
 #[cfg(feature = "avro")]
 mod private {
     use super::*;
-    use datafusion::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
+    use datafusion::datasource::physical_plan::file_stream::{
+        FileOpenFuture, FileOpener,
+    };
     use datafusion::datasource::physical_plan::FileMeta;
 
     use bytes::Buf;
@@ -341,11 +341,11 @@ mod private {
 }
 
 #[cfg(test)]
-#[cfg(feature = "avro")]
 mod tests {
     use super::*;
+    use crate::format::AvroFormat;
     use arrow::datatypes::{DataType, Field, SchemaBuilder};
-    use datafusion::datasource::file_format::{avro::AvroFormat, FileFormat};
+    use datafusion::datasource::file_format::FileFormat;
     use datafusion::datasource::listing::PartitionedFile;
     use datafusion::datasource::object_store::ObjectStoreUrl;
     use datafusion::prelude::SessionContext;
@@ -525,7 +525,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let state = session_ctx.state();
 
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/alltypes_plain.avro");
         let object_store = Arc::new(LocalFileSystem::new()) as _;
         let object_store_url = ObjectStoreUrl::local_filesystem();

@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::arrow_array_reader::AvroArrowArrayReader;
+use crate::avro_to_arrow::arrow_array_reader::AvroArrowArrayReader;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::error::Result;
+use datafusion_common::Result;
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -58,7 +58,7 @@ impl ReaderBuilder {
     /// ```
     /// use std::fs::File;
     ///
-    /// use datafusion_datasource_avro::avro_to_arrow::{Reader, ReaderBuilder};
+    /// use datafusion_datasource_avro::avro_to_arrow::reader::{Reader, ReaderBuilder};
     ///
     /// fn example() -> Reader<'static, File> {
     ///     let file = File::open("test/data/basic.avro").unwrap();

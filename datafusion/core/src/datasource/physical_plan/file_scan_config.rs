@@ -477,8 +477,9 @@ impl FileScanConfig {
         )
     }
 
-    #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
-    pub(crate) fn projected_file_column_names(&self) -> Option<Vec<String>> {
+    #[cfg_attr(not(feature = "avro"), allow(unused))]
+    /// Only used by avro
+    pub fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()
                 .filter(|col_idx| **col_idx < self.file_schema.fields().len())
