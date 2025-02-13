@@ -156,6 +156,18 @@ fn update_coalesce_ctx_children(
 /// whether we elect to transform [`CoalescePartitionsExec`] + [`SortExec`] cascades
 /// into [`SortExec`] + [`SortPreservingMergeExec`] cascades, which enables us to
 /// perform sorting in parallel.
+///
+/// Optimizer consists of 5 main parts which work sequentially
+/// 1. `ensure_sorting` Responsible for removing unnecessary [`SortExec`]s, [`SortPreservingMergeExec`]s
+///     adjusting window operators, etc.
+/// 2. `parallelize_sorts` (Depends on the repartition_sorts configuration) Responsible to identify
+///     and remove unnecessary partition unifier operators such as [`SortPreservingMergeExec`], [`CoalescePartitionsExec`]
+///     follows [`SortExec`]s does possible simplifications.
+/// 3. `replace_with_order_preserving_variants` Replaces operators with order preserving variants, for example can merge
+///     a [`SortExec`] and a [`CoalescePartitionsExec`] into one [`SortPreservingMergeExec`] or [`SortExec`] + [`RepartitionExec`]
+///     into an order preserving [`RepartitionExec`], etc.
+/// 4. `sort_pushdown` Responsible to push down sort operators as deep as possible in the plan.
+/// 5. `replace_with_partial_sort` Checks if it's possible to replace [`SortExec`]s with [`PartialSortExec`] operators
 impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
         &self,
