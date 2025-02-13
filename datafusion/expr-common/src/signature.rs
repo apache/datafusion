@@ -591,7 +591,7 @@ impl Signature {
                         ArrayFunctionArgument::Array,
                         ArrayFunctionArgument::Element,
                     ],
-                    array_coercion: None,
+                    array_coercion: Some(ListCoercion::FixedSizedListToList),
                 },
             ),
             volatility,

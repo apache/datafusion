@@ -82,18 +82,7 @@ impl Default for ArrayAppend {
 impl ArrayAppend {
     pub fn new() -> Self {
         Self {
-            signature: Signature {
-                type_signature: TypeSignature::ArraySignature(
-                    ArrayFunctionSignature::Array {
-                        arguments: vec![
-                            ArrayFunctionArgument::Array,
-                            ArrayFunctionArgument::Element,
-                        ],
-                        array_coercion: Some(ListCoercion::FixedSizedListToList),
-                    },
-                ),
-                volatility: Volatility::Immutable,
-            },
+            signature: Signature::array_and_element(Volatility::Immutable),
             aliases: vec![
                 String::from("list_append"),
                 String::from("array_push_back"),
