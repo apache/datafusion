@@ -55,7 +55,7 @@ file system or remote object store as a named table which can be queried.
 
 The supported syntax is:
 
-```
+```sql
 CREATE [UNBOUNDED] EXTERNAL TABLE
 [ IF NOT EXISTS ]
 <TABLE_NAME>[ (<column_definition>) ]
@@ -185,7 +185,7 @@ OPTIONS ('has_header' 'true');
 
 Where `WITH ORDER` clause specifies the sort order:
 
-```
+```sql
 WITH ORDER (sort_expression1 [ASC | DESC] [NULLS { FIRST | LAST }]
          [, sort_expression2 [ASC | DESC] [NULLS { FIRST | LAST }] ...])
 ```
@@ -198,7 +198,7 @@ WITH ORDER (sort_expression1 [ASC | DESC] [NULLS { FIRST | LAST }]
 
 If data sources are already partitioned in Hive style, `PARTITIONED BY` can be used for partition pruning.
 
-```
+```text
 /mnt/nyctaxi/year=2022/month=01/tripdata.parquet
 /mnt/nyctaxi/year=2021/month=12/tripdata.parquet
 /mnt/nyctaxi/year=2021/month=11/tripdata.parquet

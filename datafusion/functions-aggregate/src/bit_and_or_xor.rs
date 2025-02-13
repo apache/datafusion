@@ -25,10 +25,9 @@ use std::mem::{size_of, size_of_val};
 use ahash::RandomState;
 use arrow::array::{downcast_integer, Array, ArrayRef, AsArray};
 use arrow::datatypes::{
-    ArrowNativeType, ArrowNumericType, DataType, Int16Type, Int32Type, Int64Type,
+    ArrowNativeType, ArrowNumericType, DataType, Field, Int16Type, Int32Type, Int64Type,
     Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use arrow_schema::Field;
 
 use datafusion_common::cast::as_list_array;
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};

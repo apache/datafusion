@@ -19,8 +19,8 @@ use std::hash::Hash;
 use std::{any::Any, sync::Arc};
 
 use crate::PhysicalExpr;
+use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::{DataType, Schema};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::datum::apply_cmp;
@@ -183,7 +183,7 @@ mod test {
     use super::*;
     use crate::expressions::col;
     use arrow::array::*;
-    use arrow_schema::Field;
+    use arrow::datatypes::Field;
     use datafusion_common::cast::as_boolean_array;
 
     macro_rules! test_like {

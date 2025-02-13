@@ -16,12 +16,12 @@
 // under the License.
 
 use arrow::array::{types::Int32Type, ListArray};
+use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
     array::{Int32Array, StringArray},
     record_batch::RecordBatch,
 };
-use arrow_schema::SchemaRef;
 use std::sync::Arc;
 
 use datafusion::error::Result;

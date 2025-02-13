@@ -28,8 +28,7 @@ use std::sync::{
 use arrow::array::{
     types::UInt64Type, AsArray, Int32Array, PrimitiveArray, StringArray, StructArray,
 };
-use arrow::datatypes::Fields;
-use arrow_schema::Schema;
+use arrow::datatypes::{Fields, Schema};
 
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;

@@ -21,12 +21,11 @@ use arrow::array::{
     Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
     NullBufferBuilder, OffsetSizeTrait,
 };
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 
 use arrow::buffer::OffsetBuffer;
-use arrow_schema::Field;
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -381,42 +380,36 @@ fn general_replace<O: OffsetSizeTrait>(
 }
 
 pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!("array_replace expects three arguments");
-    }
+    let [array, from, to] = take_function_args("array_replace", args)?;
 
     // replace at most one occurrence for each element
-    let arr_n = vec![1; args[0].len()];
-    let array = &args[0];
+    let arr_n = vec![1; array.len()];
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i32>(list_array, from, to, arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i64>(list_array, from, to, arr_n)
         }
         array_type => exec_err!("array_replace does not support type '{array_type:?}'."),
     }
 }
 
 pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 4 {
-        return exec_err!("array_replace_n expects four arguments");
-    }
+    let [array, from, to, max] = take_function_args("array_replace_n", args)?;
 
     // replace the specified number of occurrences
-    let arr_n = as_int64_array(&args[3])?.values().to_vec();
-    let array = &args[0];
+    let arr_n = as_int64_array(max)?.values().to_vec();
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i32>(list_array, from, to, arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i64>(list_array, from, to, arr_n)
         }
         array_type => {
             exec_err!("array_replace_n does not support type '{array_type:?}'.")
@@ -425,21 +418,18 @@ pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 pub(crate) fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!("array_replace_all expects three arguments");
-    }
+    let [array, from, to] = take_function_args("array_replace_all", args)?;
 
     // replace all occurrences (up to "i64::MAX")
-    let arr_n = vec![i64::MAX; args[0].len()];
-    let array = &args[0];
+    let arr_n = vec![i64::MAX; array.len()];
     match array.data_type() {
         DataType::List(_) => {
             let list_array = array.as_list::<i32>();
-            general_replace::<i32>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i32>(list_array, from, to, arr_n)
         }
         DataType::LargeList(_) => {
             let list_array = array.as_list::<i64>();
-            general_replace::<i64>(list_array, &args[1], &args[2], arr_n)
+            general_replace::<i64>(list_array, from, to, arr_n)
         }
         array_type => {
             exec_err!("array_replace_all does not support type '{array_type:?}'.")

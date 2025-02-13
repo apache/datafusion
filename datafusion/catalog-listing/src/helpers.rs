@@ -30,10 +30,9 @@ use datafusion_expr::{BinaryExpr, Operator};
 use arrow::{
     array::{Array, ArrayRef, AsArray, StringBuilder},
     compute::{and, cast, prep_null_mask_filter},
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Field, Fields, Schema},
     record_batch::RecordBatch,
 };
-use arrow_schema::Fields;
 use datafusion_expr::execution_props::ExecutionProps;
 use futures::stream::FuturesUnordered;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};

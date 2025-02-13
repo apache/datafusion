@@ -39,7 +39,7 @@ use arrow::array::{
     GenericStringArray, StringArrayType, StringViewArray,
 };
 use arrow::compute::cast;
-use arrow_schema::DataType::{
+use arrow::datatypes::DataType::{
     Dictionary, FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8, Utf8View,
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array};

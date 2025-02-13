@@ -28,7 +28,7 @@ use super::metrics::{BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuil
 use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::HashMap;
 use datafusion_common::Result;
 use datafusion_execution::{

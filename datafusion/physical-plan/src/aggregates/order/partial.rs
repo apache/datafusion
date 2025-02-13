@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::ArrayRef;
+use arrow::datatypes::Schema;
 use arrow::row::{OwnedRow, RowConverter, Rows, SortField};
-use arrow_schema::Schema;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;

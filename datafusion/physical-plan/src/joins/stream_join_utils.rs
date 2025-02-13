@@ -30,8 +30,7 @@ use arrow::array::{
     ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch,
 };
 use arrow::compute::concat_batches;
-use arrow::datatypes::ArrowNativeType;
-use arrow_schema::{Schema, SchemaRef};
+use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,

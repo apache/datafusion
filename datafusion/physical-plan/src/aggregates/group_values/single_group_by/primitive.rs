@@ -22,9 +22,8 @@ use arrow::array::{
     cast::AsArray, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType, NullBufferBuilder,
     PrimitiveArray,
 };
-use arrow::datatypes::i256;
+use arrow::datatypes::{i256, DataType};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::DataType;
 use datafusion_common::Result;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::EmitTo;

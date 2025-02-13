@@ -24,9 +24,9 @@ use arrow::array::{
     OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow_schema::{DataType, Field};
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -277,32 +277,26 @@ impl ScalarUDFImpl for ArrayRemoveAll {
 
 /// Array_remove SQL function
 pub fn array_remove_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_remove expects two arguments");
-    }
+    let [array, element] = take_function_args("array_remove", args)?;
 
-    let arr_n = vec![1; args[0].len()];
-    array_remove_internal(&args[0], &args[1], arr_n)
+    let arr_n = vec![1; array.len()];
+    array_remove_internal(array, element, arr_n)
 }
 
 /// Array_remove_n SQL function
 pub fn array_remove_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!("array_remove_n expects three arguments");
-    }
+    let [array, element, max] = take_function_args("array_remove_n", args)?;
 
-    let arr_n = as_int64_array(&args[2])?.values().to_vec();
-    array_remove_internal(&args[0], &args[1], arr_n)
+    let arr_n = as_int64_array(max)?.values().to_vec();
+    array_remove_internal(array, element, arr_n)
 }
 
 /// Array_remove_all SQL function
 pub fn array_remove_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_remove_all expects two arguments");
-    }
+    let [array, element] = take_function_args("array_remove_all", args)?;
 
-    let arr_n = vec![i64::MAX; args[0].len()];
-    array_remove_internal(&args[0], &args[1], arr_n)
+    let arr_n = vec![i64::MAX; array.len()];
+    array_remove_internal(array, element, arr_n)
 }
 
 fn array_remove_internal(
