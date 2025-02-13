@@ -92,6 +92,7 @@ bytes = { workspace = true }
 bzip2 = { version = "0.5.1", optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
+datafusion-catalog-datasource = { workspace = true }
 datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }

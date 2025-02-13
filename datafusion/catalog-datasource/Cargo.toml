@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "datafusion-catalog-listing"
-description = "datafusion-catalog-listing"
+name = "datafusion-catalog-datasource"
+description = "datafusion-catalog-datasource"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -45,7 +45,6 @@ bytes = { workspace = true }
 bzip2 = { version = "0.5.1", optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
-datafusion-catalog-datasource = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
@@ -73,5 +72,5 @@ tempfile = { workspace = true }
 workspace = true
 
 [lib]
-name = "datafusion_catalog_listing"
+name = "datafusion_catalog_datasource"
 path = "src/mod.rs"
