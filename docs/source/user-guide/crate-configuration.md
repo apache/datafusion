@@ -31,7 +31,7 @@ The `datafusion` crate has several [features] which can be specified in your `Ca
 to enable support for `avro` you can put the following in your `Cargo.toml`:
 
 ```toml
-datafusion = { version = "45", features = [avro] }
+datafusion = { version = "45", features = ["avro"] }
 ```
 
 [features]: https://doc.rust-lang.org/cargo/reference/features.html
