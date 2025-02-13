@@ -159,31 +159,6 @@ impl PhysicalExpr for NegativeExpr {
         }
     }
 
-    fn propagate_statistics(
-        &self,
-        parent: &StatisticsV2,
-        children: &[&StatisticsV2],
-    ) -> Result<Option<Vec<StatisticsV2>>> {
-        let parent_range = parent.range()?;
-        let child_range = children[0].range()?;
-        let Some(mut propagated) =
-            self.propagate_constraints(&parent_range, &[&child_range])?
-        else {
-            return Ok(None);
-        };
-        // TODO: Use Bayes rule to reconcile and update parent and children statistics.
-        // This will involve utilizing the independence assumption, and matching on
-        // distribution types. For now, we will simply create an unknown distribution
-        // if we can narrow the range. This loses information, but is a safe fallback.
-        if !propagated.is_empty() {
-            let interval = propagated.swap_remove(0);
-            if interval != child_range {
-                return Ok(Some(vec![StatisticsV2::new_from_interval(interval)?]));
-            }
-        }
-        Ok(Some(vec![]))
-    }
-
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties {

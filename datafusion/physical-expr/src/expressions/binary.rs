@@ -46,7 +46,6 @@ use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
     self, Bernoulli, Gaussian,
 };
 use datafusion_physical_expr_common::stats_v2::{combine_bernoullis, combine_gaussians};
-use itertools::izip;
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -522,47 +521,6 @@ impl PhysicalExpr for BinaryExpr {
         }
         // Fall back to an unknown distribution with only summary statistics:
         new_unknown_from_binary_expr(&self.op, left, right)
-    }
-
-    fn propagate_statistics(
-        &self,
-        parent: &StatisticsV2,
-        children: &[&StatisticsV2],
-    ) -> Result<Option<Vec<StatisticsV2>>> {
-        let children_ranges = children
-            .iter()
-            .map(|c| c.range())
-            .collect::<Result<Vec<_>>>()?;
-        let (li, ri, pi) = (&children_ranges[0], &children_ranges[1], parent.range()?);
-        let Some(propagated_children) = self.propagate_constraints(&pi, &[li, ri])?
-        else {
-            return Ok(None);
-        };
-        // TODO: Use Bayes rule to reconcile and update parent and children statistics.
-        // This will involve utilizing the independence assumption, and matching on
-        // distribution types. For now, we will simply create an unknown distribution
-        // if we can narrow the range. This loses information, but is a safe fallback.
-        izip!(propagated_children.into_iter(), children_ranges, children)
-            .map(|(new_interval, old_interval, child)| {
-                if new_interval == old_interval {
-                    // We weren't able to narrow the range, preserve the old statistics.
-                    Ok((*child).clone())
-                } else if new_interval.data_type().eq(&DataType::Boolean) {
-                    let dt = old_interval.data_type();
-                    let p = if new_interval.eq(&Interval::CERTAINLY_TRUE) {
-                        ScalarValue::new_one(&dt)
-                    } else if new_interval.eq(&Interval::CERTAINLY_FALSE) {
-                        ScalarValue::new_zero(&dt)
-                    } else {
-                        unreachable!("Given that we have a range reduction for a boolean interval, we should have certainty")
-                    }?;
-                    StatisticsV2::new_bernoulli(p)
-                } else {
-                    StatisticsV2::new_from_interval(new_interval)
-                }
-            })
-            .collect::<Result<_>>()
-            .map(Some)
     }
 
     /// For each operator, [`BinaryExpr`] has distinct rules.
