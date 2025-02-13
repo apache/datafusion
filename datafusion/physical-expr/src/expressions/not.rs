@@ -30,7 +30,6 @@ use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValu
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{self, Bernoulli};
-use datafusion_physical_expr_common::stats_v2::{get_one, get_zero};
 
 /// Not expression
 #[derive(Debug, Eq)]
@@ -120,22 +119,30 @@ impl PhysicalExpr for NotExpr {
         children[0].not()
     }
 
-    fn evaluate_statistics(&self, stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
-        debug_assert_eq!(stats.len(), 1);
-        match stats[0] {
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        children: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        let complemented_interval = interval.not()?;
+
+        Ok(children[0]
+            .intersect(complemented_interval)?
+            .map(|result| vec![result]))
+    }
+
+    fn evaluate_statistics(&self, children: &[&StatisticsV2]) -> Result<StatisticsV2> {
+        match children[0] {
             Bernoulli(b) => {
-                if b.p_value().eq(get_zero()) {
-                    StatisticsV2::new_bernoulli(get_one().clone())
-                } else if b.p_value().eq(get_one()) {
-                    StatisticsV2::new_bernoulli(get_zero().clone())
-                } else if b.p_value().is_null() {
-                    Ok(stats[0].clone())
+                let p_value = b.p_value();
+                if p_value.is_null() {
+                    Ok(children[0].clone())
                 } else {
-                    StatisticsV2::new_bernoulli(get_one().sub_checked(b.p_value())?)
+                    let one = ScalarValue::new_one(&p_value.data_type())?;
+                    StatisticsV2::new_bernoulli(one.sub_checked(p_value)?)
                 }
             }
-            // https://github.com/apache/datafusion/blob/85fbde2661bdb462fc498dc18f055c44f229604c/datafusion/expr/src/expr.rs#L241
-            _ => internal_err!("NotExpr cannot used with non-boolean datatypes"),
+            _ => internal_err!("NotExpr can only operate on Boolean datatypes"),
         }
     }
 
@@ -144,36 +151,31 @@ impl PhysicalExpr for NotExpr {
         parent: &StatisticsV2,
         children: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
-        debug_assert_eq!(children.len(), 1, "NotExpr should have only one child");
-        // https://github.com/apache/datafusion/blob/85fbde2661bdb462fc498dc18f055c44f229604c/datafusion/expr/src/expr.rs#L241
-        let err_msg = "NotExpr cannot used with non-boolean datatypes";
-
-        match parent {
-            Bernoulli(parent) => match &children[0] {
-                Bernoulli(child) => {
-                    if parent.range() == Interval::CERTAINLY_TRUE {
-                        if child.range() == Interval::CERTAINLY_TRUE {
-                            Ok(None)
-                        } else {
-                            Ok(Some(vec![StatisticsV2::new_bernoulli(
-                                get_zero().clone(),
-                            )?]))
-                        }
-                    } else if parent.range() == Interval::CERTAINLY_FALSE {
-                        if child.range() == Interval::CERTAINLY_FALSE {
-                            Ok(None)
-                        } else {
-                            Ok(Some(vec![StatisticsV2::new_bernoulli(
-                                get_one().clone(),
-                            )?]))
-                        }
+        match (parent, children[0]) {
+            (Bernoulli(parent), Bernoulli(child)) => {
+                let parent_range = parent.range();
+                let result = if parent_range == Interval::CERTAINLY_TRUE {
+                    if child.range() == Interval::CERTAINLY_TRUE {
+                        None
                     } else {
-                        Ok(Some(vec![]))
+                        Some(vec![StatisticsV2::new_bernoulli(ScalarValue::new_zero(
+                            &child.data_type(),
+                        )?)?])
                     }
-                }
-                _ => internal_err!("{}", err_msg),
-            },
-            _ => internal_err!("{}", err_msg),
+                } else if parent_range == Interval::CERTAINLY_FALSE {
+                    if child.range() == Interval::CERTAINLY_FALSE {
+                        None
+                    } else {
+                        Some(vec![StatisticsV2::new_bernoulli(ScalarValue::new_one(
+                            &child.data_type(),
+                        )?)?])
+                    }
+                } else {
+                    Some(vec![])
+                };
+                Ok(result)
+            }
+            _ => internal_err!("NotExpr can only operate on Boolean datatypes"),
         }
     }
 }
@@ -303,9 +305,9 @@ mod tests {
 
         assert!(expr
             .evaluate_statistics(&[&StatisticsV2::new_unknown(
-                ScalarValue::Null,
-                ScalarValue::Null,
-                ScalarValue::Null,
+                ScalarValue::UInt8(None),
+                ScalarValue::UInt8(None),
+                ScalarValue::UInt8(None),
                 Interval::make_unbounded(&DataType::UInt8)?
             )?])
             .is_err());
@@ -313,9 +315,9 @@ mod tests {
         // Unknown with non-boolean interval as range
         assert!(expr
             .evaluate_statistics(&[&StatisticsV2::new_unknown(
-                ScalarValue::Null,
                 ScalarValue::Float64(None),
-                ScalarValue::UInt32(None),
+                ScalarValue::Float64(None),
+                ScalarValue::Float64(None),
                 Interval::make_unbounded(&DataType::Float64)?
             )?])
             .is_err());

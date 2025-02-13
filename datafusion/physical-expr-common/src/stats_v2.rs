@@ -96,9 +96,9 @@ impl StatisticsV2 {
 
     /// Constructs a new [`Unknown`] statistics instance from the given range.
     /// Other parameters; mean, median and variance are initialized with null values.
-    pub fn new_from_interval(range: &Interval) -> Result<Self> {
+    pub fn new_from_interval(range: Interval) -> Result<Self> {
         let null = ScalarValue::try_from(range.data_type())?;
-        StatisticsV2::new_unknown(null.clone(), null.clone(), null, range.clone())
+        StatisticsV2::new_unknown(null.clone(), null.clone(), null, range)
     }
 
     /// Extracts the mean value of the given statistic, depending on its distribution:

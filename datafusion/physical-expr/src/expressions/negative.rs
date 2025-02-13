@@ -128,16 +128,14 @@ impl PhysicalExpr for NegativeExpr {
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        let child_interval = children[0];
         let negated_interval = interval.arithmetic_negate()?;
 
-        Ok(child_interval
+        Ok(children[0]
             .intersect(negated_interval)?
             .map(|result| vec![result]))
     }
 
     fn evaluate_statistics(&self, children: &[&StatisticsV2]) -> Result<StatisticsV2> {
-        debug_assert_eq!(children.len(), 1);
         match children[0] {
             Uniform(u) => StatisticsV2::new_uniform(u.range().arithmetic_negate()?),
             Exponential(e) => StatisticsV2::new_exponential(
@@ -166,24 +164,24 @@ impl PhysicalExpr for NegativeExpr {
         parent: &StatisticsV2,
         children: &[&StatisticsV2],
     ) -> Result<Option<Vec<StatisticsV2>>> {
-        debug_assert_eq!(children.len(), 1);
         let parent_range = parent.range()?;
         let child_range = children[0].range()?;
-        match parent {
-            Uniform(_) | Unknown(_) => match children[0] {
-                Uniform(_) | Unknown(_) => {
-                    if let Some(propagated) =
-                        self.propagate_constraints(&parent_range, &[&child_range])?
-                    {
-                        Ok(Some(vec![StatisticsV2::new_from_interval(&propagated[0])?]))
-                    } else {
-                        Ok(None)
-                    }
-                }
-                _ => Ok(None),
-            },
-            _ => Ok(None),
+        let Some(mut propagated) =
+            self.propagate_constraints(&parent_range, &[&child_range])?
+        else {
+            return Ok(None);
+        };
+        // TODO: Use Bayes rule to reconcile and update parent and children statistics.
+        // This will involve utilizing the independence assumption, and matching on
+        // distribution types. For now, we will simply create an unknown distribution
+        // if we can narrow the range. This loses information, but is a safe fallback.
+        if !propagated.is_empty() {
+            let interval = propagated.swap_remove(0);
+            if interval != child_range {
+                return Ok(Some(vec![StatisticsV2::new_from_interval(interval)?]));
+            }
         }
+        Ok(Some(vec![]))
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
@@ -369,19 +367,19 @@ mod tests {
         let children: Vec<Vec<StatisticsV2>> = vec![
             vec![StatisticsV2::new_uniform(original_child_interval.clone())?],
             vec![StatisticsV2::new_unknown(
-                ScalarValue::Float64(Some(0.5)),
-                ScalarValue::Float64(Some(0.5)),
-                ScalarValue::Null,
+                ScalarValue::Int32(Some(0)),
+                ScalarValue::Int32(Some(0)),
+                ScalarValue::Int32(None),
                 original_child_interval.clone(),
             )?],
         ];
 
         for child_view in children {
-            let ref_view: Vec<&StatisticsV2> = child_view.iter().collect();
-
+            let ref_view: Vec<_> = child_view.iter().collect();
             let actual = negative_expr.propagate_statistics(&parent, &ref_view)?;
-            let expected =
-                Some(vec![StatisticsV2::new_from_interval(&after_propagation)?]);
+            let expected = Some(vec![StatisticsV2::new_from_interval(
+                after_propagation.clone(),
+            )?]);
             assert_eq!(actual, expected);
         }
 

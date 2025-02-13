@@ -147,7 +147,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
 
     /// Computes the final statistic of the expression by combining the input statistics
     /// via a post-order, bottom-up traversal of the statistics graph.
-    fn evaluate_statistics(&self, _stats: &[&StatisticsV2]) -> Result<StatisticsV2> {
+    fn evaluate_statistics(&self, _children: &[&StatisticsV2]) -> Result<StatisticsV2> {
         not_impl_err!("Not implemented for {self}")
     }
 

@@ -27,8 +27,8 @@ use arrow_array::ArrowNativeTypeOp;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr_common::operator::Operator;
-use datafusion_physical_expr_common::stats_v2::StatisticsV2::{Gaussian, Uniform};
-use datafusion_physical_expr_common::stats_v2::{get_one, get_zero, StatisticsV2};
+use datafusion_physical_expr_common::stats_v2::StatisticsV2::{self, Gaussian, Uniform};
+use datafusion_physical_expr_common::stats_v2::{get_one, get_zero};
 
 use log::debug;
 use petgraph::adj::DefaultIx;
@@ -169,7 +169,7 @@ impl ExprStatisticGraph {
             else if interval != Interval::UNCERTAIN {
                 // This case is for numeric quantities
                 self.graph[self.root].statistics =
-                    StatisticsV2::new_from_interval(&interval)?;
+                    StatisticsV2::new_from_interval(interval)?;
             }
         } else {
             return Ok(PropagationResult::Infeasible);
