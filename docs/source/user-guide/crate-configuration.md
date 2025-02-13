@@ -25,7 +25,41 @@ control DataFusion's behavior.
 
 [configuration settings]: configs.md
 
-## Add latest non published DataFusion dependency
+## Crate features
+
+The `datafusion` crate has several [features] which can be specified in your `Cargo.toml`. For example
+to enable support for `avro` you can put the following in your `Cargo.toml`:
+
+```toml
+datafusion = { version = "45", features = [avro] }
+```
+
+[features]: https://doc.rust-lang.org/cargo/reference/features.html
+
+### Default features:
+
+- `nested_expressions`: functions for working with nested type function such as `array_to_string`
+- `compression`: reading files compressed with `xz2`, `bzip2`, `flate2`, and `zstd`
+- `crypto_expressions`: cryptographic functions such as `md5` and `sha256`
+- `datetime_expressions`: date and time functions such as `to_timestamp`
+- `encoding_expressions`: `encode` and `decode` functions
+- `parquet`: support for reading the [Apache Parquet] format
+- `regex_expressions`: regular expression functions, such as `regexp_match`
+- `unicode_expressions`: Include unicode aware functions such as `character_length`
+- `unparser`: enables support to reverse LogicalPlans back into SQL
+- `recursive_protection`: uses [recursive](https://docs.rs/recursive/latest/recursive/) for stack overflow protection.
+
+### Optional features:
+
+- `avro`: support for reading the [Apache Avro] format
+- `backtrace`: include backtrace information in error messages
+- `pyarrow`: conversions between PyArrow and DataFusion types
+- `serde`: enable arrow-schema's `serde` feature
+
+[apache avro]: https://avro.apache.org/
+[apache parquet]: https://parquet.apache.org/
+
+## Use latest non published DataFusion dependency
 
 DataFusion changes are published to `crates.io` according to the [release schedule](https://github.com/apache/datafusion/blob/main/dev/release/README.md#release-process)
 
