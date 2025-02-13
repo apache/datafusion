@@ -36,6 +36,10 @@ datafusion = { version = "45", features = [avro] }
 
 [features]: https://doc.rust-lang.org/cargo/reference/features.html
 
+You can always check the [Cargo.toml] file for the most up to date list of features.
+
+[cargo.toml]: https://github.com/apache/datafusion/blob/main/datafusion/core/Cargo.toml#L39
+
 ### Default features:
 
 - `nested_expressions`: functions for working with nested type function such as `array_to_string`
@@ -43,6 +47,8 @@ datafusion = { version = "45", features = [avro] }
 - `crypto_expressions`: cryptographic functions such as `md5` and `sha256`
 - `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
+- `math_expressions`: `sqrt` and other math functions
+- `string_expressions`: string functions such as `concat`
 - `parquet`: support for reading the [Apache Parquet] format
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
