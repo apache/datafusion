@@ -15,7 +15,4 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A table that uses the `ObjectStore` listing capability
-//! to get the list of files to process.
-
 pub mod helpers;
