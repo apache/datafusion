@@ -24,7 +24,8 @@ use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::types::{LogicalTypeRef, NativeType};
+use datafusion_common::internal_err;
+use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
 use indexmap::IndexSet;
 use itertools::Itertools;
 
@@ -225,6 +226,89 @@ impl Display for TypeSignatureClass {
     }
 }
 
+impl TypeSignatureClass {
+    /// Get example acceptable types for this `TypeSignatureClass`
+    ///
+    /// This is used for `information_schema` and can be used to generate
+    /// documentation or error messages.
+    fn get_example_types(&self) -> Vec<DataType> {
+        match self {
+            TypeSignatureClass::Native(l) => get_data_types(l.native()),
+            TypeSignatureClass::Timestamp => {
+                vec![
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                    DataType::Timestamp(
+                        TimeUnit::Nanosecond,
+                        Some(TIMEZONE_WILDCARD.into()),
+                    ),
+                ]
+            }
+            TypeSignatureClass::Time => {
+                vec![DataType::Time64(TimeUnit::Nanosecond)]
+            }
+            TypeSignatureClass::Interval => {
+                vec![DataType::Interval(IntervalUnit::DayTime)]
+            }
+            TypeSignatureClass::Duration => {
+                vec![DataType::Duration(TimeUnit::Nanosecond)]
+            }
+            TypeSignatureClass::Integer => {
+                vec![DataType::Int64]
+            }
+        }
+    }
+
+    /// Does the specified `NativeType` match this type signature class?
+    pub fn matches_native_type(
+        self: &TypeSignatureClass,
+        logical_type: &NativeType,
+    ) -> bool {
+        if logical_type == &NativeType::Null {
+            return true;
+        }
+
+        match self {
+            TypeSignatureClass::Native(t) if t.native() == logical_type => true,
+            TypeSignatureClass::Timestamp if logical_type.is_timestamp() => true,
+            TypeSignatureClass::Time if logical_type.is_time() => true,
+            TypeSignatureClass::Interval if logical_type.is_interval() => true,
+            TypeSignatureClass::Duration if logical_type.is_duration() => true,
+            TypeSignatureClass::Integer if logical_type.is_integer() => true,
+            _ => false,
+        }
+    }
+
+    /// What type would `origin_type` be casted to when casting to the specified native type?
+    pub fn default_casted_type(
+        &self,
+        native_type: &NativeType,
+        origin_type: &DataType,
+    ) -> datafusion_common::Result<DataType> {
+        match self {
+            TypeSignatureClass::Native(logical_type) => {
+                logical_type.native().default_cast_for(origin_type)
+            }
+            // If the given type is already a timestamp, we don't change the unit and timezone
+            TypeSignatureClass::Timestamp if native_type.is_timestamp() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Time if native_type.is_time() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Interval if native_type.is_interval() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Duration if native_type.is_duration() => {
+                Ok(origin_type.to_owned())
+            }
+            TypeSignatureClass::Integer if native_type.is_integer() => {
+                Ok(origin_type.to_owned())
+            }
+            _ => internal_err!("May miss the matching logic in `matches_native_type`"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum ArrayFunctionSignature {
     /// Specialized Signature for ArrayAppend and similar functions
@@ -365,18 +449,23 @@ impl TypeSignature {
         }
     }
 
-    /// This function is used specifically internally for `information_schema`
-    /// We suggest not to rely on this function
-    ///
-    /// Get all possible types for `information_schema` from the given `TypeSignature`
-    //
-    // TODO: Make this function private
+    #[deprecated(since = "0.46.0", note = "See get_example_types instead")]
     pub fn get_possible_types(&self) -> Vec<Vec<DataType>> {
+        self.get_example_types()
+    }
+
+    /// Return example acceptable types for this `TypeSignature`'
+    ///
+    /// Returns a `Vec<DataType>` for each argument to the function
+    ///
+    /// This is used for `information_schema` and can be used to generate
+    /// documentation or error messages.
+    pub fn get_example_types(&self) -> Vec<Vec<DataType>> {
         match self {
             TypeSignature::Exact(types) => vec![types.clone()],
             TypeSignature::OneOf(types) => types
                 .iter()
-                .flat_map(|type_sig| type_sig.get_possible_types())
+                .flat_map(|type_sig| type_sig.get_example_types())
                 .collect(),
             TypeSignature::Uniform(arg_count, types) => types
                 .iter()
@@ -387,15 +476,13 @@ impl TypeSignature {
                 .iter()
                 .map(|c| {
                     let mut all_types: IndexSet<DataType> =
-                        get_possible_types_from_signature_classes(&c.desired_type)
-                            .into_iter()
-                            .collect();
+                        c.desired_type.get_example_types().into_iter().collect();
 
                     if let Some(implicit_coercion) = &c.implicit_coercion {
                         let allowed_casts: Vec<DataType> = implicit_coercion
                             .allowed_source_types
                             .iter()
-                            .flat_map(get_possible_types_from_signature_classes)
+                            .flat_map(|t| t.get_example_types())
                             .collect();
                         all_types.extend(allowed_casts);
                     }
@@ -425,32 +512,6 @@ impl TypeSignature {
             | TypeSignature::VariadicAny
             | TypeSignature::ArraySignature(_)
             | TypeSignature::UserDefined => vec![],
-        }
-    }
-}
-
-fn get_possible_types_from_signature_classes(
-    signature_classes: &TypeSignatureClass,
-) -> Vec<DataType> {
-    match signature_classes {
-        TypeSignatureClass::Native(l) => get_data_types(l.native()),
-        TypeSignatureClass::Timestamp => {
-            vec![
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-                DataType::Timestamp(TimeUnit::Nanosecond, Some(TIMEZONE_WILDCARD.into())),
-            ]
-        }
-        TypeSignatureClass::Time => {
-            vec![DataType::Time64(TimeUnit::Nanosecond)]
-        }
-        TypeSignatureClass::Interval => {
-            vec![DataType::Interval(IntervalUnit::DayTime)]
-        }
-        TypeSignatureClass::Duration => {
-            vec![DataType::Duration(TimeUnit::Nanosecond)]
-        }
-        TypeSignatureClass::Integer => {
-            vec![DataType::Int64]
         }
     }
 }
@@ -822,14 +883,14 @@ mod tests {
     #[test]
     fn test_get_possible_types() {
         let type_signature = TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(possible_types, vec![vec![DataType::Int32, DataType::Int64]]);
 
         let type_signature = TypeSignature::OneOf(vec![
             TypeSignature::Exact(vec![DataType::Int32, DataType::Int64]),
             TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
         ]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![
@@ -843,7 +904,7 @@ mod tests {
             TypeSignature::Exact(vec![DataType::Float32, DataType::Float64]),
             TypeSignature::Exact(vec![DataType::Utf8]),
         ]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![
@@ -855,7 +916,7 @@ mod tests {
 
         let type_signature =
             TypeSignature::Uniform(2, vec![DataType::Float32, DataType::Int64]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![
@@ -868,7 +929,7 @@ mod tests {
             Coercion::new(TypeSignatureClass::Native(logical_string())),
             Coercion::new(TypeSignatureClass::Native(logical_int64())),
         ]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![
@@ -880,14 +941,14 @@ mod tests {
 
         let type_signature =
             TypeSignature::Variadic(vec![DataType::Int32, DataType::Int64]);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![vec![DataType::Int32], vec![DataType::Int64]]
         );
 
         let type_signature = TypeSignature::Numeric(2);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![
@@ -905,7 +966,7 @@ mod tests {
         );
 
         let type_signature = TypeSignature::String(2);
-        let possible_types = type_signature.get_possible_types();
+        let possible_types = type_signature.get_example_types();
         assert_eq!(
             possible_types,
             vec![

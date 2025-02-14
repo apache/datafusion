@@ -27,10 +27,7 @@ use datafusion_common::{
 };
 use datafusion_common::{types::LogicalType, utils::coerced_fixed_size_list_to_list};
 use datafusion_expr_common::{
-    signature::{
-        ArrayFunctionSignature, TypeSignatureClass, FIXED_SIZE_LIST_WILDCARD,
-        TIMEZONE_WILDCARD,
-    },
+    signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
     type_coercion::binary::comparison_coercion_numeric,
     type_coercion::binary::string_coercion,
 };
@@ -599,68 +596,11 @@ fn get_valid_types(
 
             let mut new_types = Vec::with_capacity(current_types.len());
             for (current_type, param) in current_types.iter().zip(param_types.iter()) {
-                let current_logical_type: NativeType = current_type.into();
+                let current_native_type: NativeType = current_type.into();
 
-                fn is_matched_type(
-                    target_type: &TypeSignatureClass,
-                    logical_type: &NativeType,
-                ) -> bool {
-                    if logical_type == &NativeType::Null {
-                        return true;
-                    }
-
-                    match target_type {
-                        TypeSignatureClass::Native(t) if t.native() == logical_type => {
-                            true
-                        }
-                        TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
-                            true
-                        }
-                        TypeSignatureClass::Time if logical_type.is_time() => true,
-                        TypeSignatureClass::Interval if logical_type.is_interval() => {
-                            true
-                        }
-                        TypeSignatureClass::Duration if logical_type.is_duration() => {
-                            true
-                        }
-                        TypeSignatureClass::Integer if logical_type.is_integer() => true,
-                        _ => false,
-                    }
-                }
-
-                fn default_casted_type(
-                    signature_class: &TypeSignatureClass,
-                    logical_type: &NativeType,
-                    origin_type: &DataType,
-                ) -> Result<DataType> {
-                    match signature_class {
-                        TypeSignatureClass::Native(logical_type) => {
-                            logical_type.native().default_cast_for(origin_type)
-                        }
-                        // If the given type is already a timestamp, we don't change the unit and timezone
-                        TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
-                            Ok(origin_type.to_owned())
-                        }
-                        TypeSignatureClass::Time if logical_type.is_time() => {
-                            Ok(origin_type.to_owned())
-                        }
-                        TypeSignatureClass::Interval if logical_type.is_interval() => {
-                            Ok(origin_type.to_owned())
-                        }
-                        TypeSignatureClass::Duration if logical_type.is_duration() => {
-                            Ok(origin_type.to_owned())
-                        }
-                        TypeSignatureClass::Integer if logical_type.is_integer() => {
-                            Ok(origin_type.to_owned())
-                        }
-                        _ => internal_err!("May miss the matching logic in `is_matched_type`"),
-                    }
-                }
-
-                if is_matched_type(&param.desired_type, &current_logical_type) {
-                    let casted_type = default_casted_type(
-                        &param.desired_type,
-                        &current_logical_type,
+                if param.desired_type.matches_native_type(&current_native_type) {
+                    let casted_type = param.desired_type.default_casted_type(
+                        &current_native_type,
                         current_type,
                     )?;
 
@@ -668,7 +608,7 @@ fn get_valid_types(
                 } else if param
                 .allowed_source_types()
                 .iter()
-                .any(|t| is_matched_type(t, &current_logical_type)) {
+                .any(|t| t.matches_native_type(&current_native_type)) {
                     // If the condition is met which means `implicit coercion`` is provided so we can safely unwrap
                     let default_casted_type = param.default_casted_type().unwrap();
                     let casted_type = default_casted_type.default_cast_for(current_type)?;
@@ -677,7 +617,7 @@ fn get_valid_types(
                     return internal_err!(
                         "Expect {} but received {}, DataType: {}",
                         param.desired_type,
-                        current_logical_type,
+                        current_native_type,
                         current_type
                     );
                 }
