@@ -553,7 +553,7 @@ pub enum Coercion {
     Implicit {
         desired_type: TypeSignatureClass,
         implicit_coercion: ImplicitCoercion,
-    }
+    },
 }
 
 impl Coercion {
@@ -570,20 +570,30 @@ impl Coercion {
         allowed_source_types: Vec<TypeSignatureClass>,
         default_casted_type: NativeType,
     ) -> Self {
-        Self::Implicit { desired_type, implicit_coercion: ImplicitCoercion { allowed_source_types, default_casted_type } }
+        Self::Implicit {
+            desired_type,
+            implicit_coercion: ImplicitCoercion {
+                allowed_source_types,
+                default_casted_type,
+            },
+        }
     }
 
     pub fn allowed_source_types(&self) -> &[TypeSignatureClass] {
         match self {
             Coercion::Exact { .. } => &[],
-            Coercion::Implicit { implicit_coercion, .. } => implicit_coercion.allowed_source_types.as_slice(),
+            Coercion::Implicit {
+                implicit_coercion, ..
+            } => implicit_coercion.allowed_source_types.as_slice(),
         }
     }
 
     pub fn default_casted_type(&self) -> Option<&NativeType> {
         match self {
             Coercion::Exact { .. } => None,
-            Coercion::Implicit { implicit_coercion, .. } => Some(&implicit_coercion.default_casted_type),
+            Coercion::Implicit {
+                implicit_coercion, ..
+            } => Some(&implicit_coercion.default_casted_type),
         }
     }
 
@@ -597,7 +607,9 @@ impl Coercion {
     pub fn implicit_coercion(&self) -> Option<&ImplicitCoercion> {
         match self {
             Coercion::Exact { .. } => None,
-            Coercion::Implicit { implicit_coercion, .. } => Some(implicit_coercion),
+            Coercion::Implicit {
+                implicit_coercion, ..
+            } => Some(implicit_coercion),
         }
     }
 }
