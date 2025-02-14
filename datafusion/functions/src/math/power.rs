@@ -193,13 +193,20 @@ mod tests {
 
     #[test]
     fn test_power_f64() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Float64Array::from(vec![2.0, 2.0, 3.0, 5.0]))), // base
-            ColumnarValue::Array(Arc::new(Float64Array::from(vec![3.0, 2.0, 4.0, 4.0]))), // exponent
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    2.0, 2.0, 3.0, 5.0,
+                ]))), // base
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    3.0, 2.0, 4.0, 4.0,
+                ]))), // exponent
+            ],
+            number_rows: 4,
+            return_type: &DataType::Float64,
+        };
         let result = PowerFunc::new()
-            .invoke_batch(&args, 4)
+            .invoke_with_args(args)
             .expect("failed to initialize function power");
 
         match result {
@@ -220,13 +227,16 @@ mod tests {
 
     #[test]
     fn test_power_i64() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
-            ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![2, 2, 3, 5]))), // base
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![3, 2, 4, 4]))), // exponent
+            ],
+            number_rows: 4,
+            return_type: &DataType::Int64,
+        };
         let result = PowerFunc::new()
-            .invoke_batch(&args, 4)
+            .invoke_with_args(args)
             .expect("failed to initialize function power");
 
         match result {

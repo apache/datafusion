@@ -138,9 +138,9 @@ mod test {
     use std::sync::Arc;
 
     use arrow::array::{Float32Array, Float64Array};
-
+    use arrow::datatypes::DataType;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use crate::math::signum::SignumFunc;
 
@@ -157,10 +157,13 @@ mod test {
             f32::INFINITY,
             f32::NEG_INFINITY,
         ]));
-        let batch_size = array.len();
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Array(array.clone())],
+            number_rows: array.len(),
+            return_type: &DataType::Float32,
+        };
         let result = SignumFunc::new()
-            .invoke_batch(&[ColumnarValue::Array(array)], batch_size)
+            .invoke_with_args(args)
             .expect("failed to initialize function signum");
 
         match result {
@@ -198,10 +201,13 @@ mod test {
             f64::INFINITY,
             f64::NEG_INFINITY,
         ]));
-        let batch_size = array.len();
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![ColumnarValue::Array(array.clone())],
+            number_rows: array.len(),
+            return_type: &DataType::Float64,
+        };
         let result = SignumFunc::new()
-            .invoke_batch(&[ColumnarValue::Array(array)], batch_size)
+            .invoke_with_args(args)
             .expect("failed to initialize function signum");
 
         match result {

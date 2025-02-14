@@ -264,34 +264,44 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_log_invalid_base_type() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Float64Array::from(vec![
-                10.0, 100.0, 1000.0, 10000.0,
-            ]))), // num
-            ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
-        let _ = LogFunc::new().invoke_batch(&args, 4);
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    10.0, 100.0, 1000.0, 10000.0,
+                ]))), // num
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![5, 10, 15, 20]))),
+            ],
+            number_rows: 4,
+            return_type: &DataType::Float64,
+        };
+        let _ = LogFunc::new().invoke_with_args(args);
     }
 
     #[test]
     fn test_log_invalid_value() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
-        let result = LogFunc::new().invoke_batch(&args, 1);
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Int64Array::from(vec![10]))), // num
+            ],
+            number_rows: 1,
+            return_type: &DataType::Float64,
+        };
+
+        let result = LogFunc::new().invoke_with_args(args);
         result.expect_err("expected error");
     }
 
     #[test]
     fn test_log_scalar_f32_unary() {
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0))), // num
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0))), // num
+            ],
+            number_rows: 1,
+            return_type: &DataType::Float32,
+        };
         let result = LogFunc::new()
-            .invoke_batch(&args, 1)
+            .invoke_with_args(args)
             .expect("failed to initialize function log");
 
         match result {
@@ -310,12 +320,15 @@ mod tests {
 
     #[test]
     fn test_log_scalar_f64_unary() {
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))), // num
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(10.0))), // num
+            ],
+            number_rows: 1,
+            return_type: &DataType::Float64,
+        };
         let result = LogFunc::new()
-            .invoke_batch(&args, 1)
+            .invoke_with_args(args)
             .expect("failed to initialize function log");
 
         match result {
@@ -334,13 +347,16 @@ mod tests {
 
     #[test]
     fn test_log_scalar_f32() {
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // num
-            ColumnarValue::Scalar(ScalarValue::Float32(Some(32.0))), // num
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(2.0))), // num
+                ColumnarValue::Scalar(ScalarValue::Float32(Some(32.0))), // num
+            ],
+            number_rows: 1,
+            return_type: &DataType::Float32,
+        };
         let result = LogFunc::new()
-            .invoke_batch(&args, 1)
+            .invoke_with_args(args)
             .expect("failed to initialize function log");
 
         match result {
@@ -359,13 +375,16 @@ mod tests {
 
     #[test]
     fn test_log_scalar_f64() {
-        let args = [
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // num
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))), // num
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(2.0))), // num
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(64.0))), // num
+            ],
+            number_rows: 1,
+            return_type: &DataType::Float64,
+        };
         let result = LogFunc::new()
-            .invoke_batch(&args, 1)
+            .invoke_with_args(args)
             .expect("failed to initialize function log");
 
         match result {
@@ -384,14 +403,17 @@ mod tests {
 
     #[test]
     fn test_log_f64_unary() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Float64Array::from(vec![
-                10.0, 100.0, 1000.0, 10000.0,
-            ]))), // num
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    10.0, 100.0, 1000.0, 10000.0,
+                ]))), // num
+            ],
+            number_rows: 4,
+            return_type: &DataType::Float64,
+        };
         let result = LogFunc::new()
-            .invoke_batch(&args, 4)
+            .invoke_with_args(args)
             .expect("failed to initialize function log");
 
         match result {
@@ -413,14 +435,17 @@ mod tests {
 
     #[test]
     fn test_log_f32_unary() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Float32Array::from(vec![
-                10.0, 100.0, 1000.0, 10000.0,
-            ]))), // num
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float32Array::from(vec![
+                    10.0, 100.0, 1000.0, 10000.0,
+                ]))), // num
+            ],
+            number_rows: 4,
+            return_type: &DataType::Float32,
+        };
         let result = LogFunc::new()
-            .invoke_batch(&args, 4)
+            .invoke_with_args(args)
             .expect("failed to initialize function log");
 
         match result {
@@ -442,15 +467,20 @@ mod tests {
 
     #[test]
     fn test_log_f64() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Float64Array::from(vec![2.0, 2.0, 3.0, 5.0]))), // base
-            ColumnarValue::Array(Arc::new(Float64Array::from(vec![
-                8.0, 4.0, 81.0, 625.0,
-            ]))), // num
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    2.0, 2.0, 3.0, 5.0,
+                ]))), // base
+                ColumnarValue::Array(Arc::new(Float64Array::from(vec![
+                    8.0, 4.0, 81.0, 625.0,
+                ]))), // num
+            ],
+            number_rows: 4,
+            return_type: &DataType::Float64,
+        };
         let result = LogFunc::new()
-            .invoke_batch(&args, 4)
+            .invoke_with_args(args)
             .expect("failed to initialize function log");
 
         match result {
@@ -472,15 +502,20 @@ mod tests {
 
     #[test]
     fn test_log_f32() {
-        let args = [
-            ColumnarValue::Array(Arc::new(Float32Array::from(vec![2.0, 2.0, 3.0, 5.0]))), // base
-            ColumnarValue::Array(Arc::new(Float32Array::from(vec![
-                8.0, 4.0, 81.0, 625.0,
-            ]))), // num
-        ];
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
+        let args = ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(Arc::new(Float32Array::from(vec![
+                    2.0, 2.0, 3.0, 5.0,
+                ]))), // base
+                ColumnarValue::Array(Arc::new(Float32Array::from(vec![
+                    8.0, 4.0, 81.0, 625.0,
+                ]))), // num
+            ],
+            number_rows: 4,
+            return_type: &DataType::Float32,
+        };
         let result = LogFunc::new()
-            .invoke_batch(&args, 4)
+            .invoke_with_args(args)
             .expect("failed to initialize function log");
 
         match result {
