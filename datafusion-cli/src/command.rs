@@ -19,7 +19,7 @@
 
 use crate::cli_context::CliSessionContext;
 use crate::exec::{exec_and_print, exec_from_lines};
-use crate::functions::{display_all_functions, Function};
+//use crate::functions::{display_all_functions, Function};
 use crate::print_format::PrintFormat;
 use crate::print_options::PrintOptions;
 use clap::ValueEnum;
@@ -102,7 +102,9 @@ impl Command {
                 Ok(())
             }
             Self::Quit => exec_err!("Unexpected quit, this should be handled outside"),
-            Self::ListFunctions => display_all_functions(),
+            Self::ListFunctions => unimplemented!(),
+            Self::SearchFunctions(function) => unimplemented!(),
+            /*
             Self::SearchFunctions(function) => {
                 if let Ok(func) = function.parse::<Function>() {
                     let details = func.function_details()?;
@@ -112,6 +114,8 @@ impl Command {
                     exec_err!("{function} is not a supported function")
                 }
             }
+
+             */
             Self::OutputFormat(_) => exec_err!(
                 "Unexpected change output format, this should be handled outside"
             ),

@@ -22,7 +22,7 @@ pub mod catalog;
 pub mod cli_context;
 pub mod command;
 pub mod exec;
-pub mod functions;
+//pub mod functions;
 pub mod helper;
 pub mod highlighter;
 pub mod object_storage;

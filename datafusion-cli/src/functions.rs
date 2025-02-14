@@ -315,7 +315,7 @@ fn fixed_len_byte_array_to_string(val: Option<&FixedLenByteArray>) -> Option<Str
             .unwrap_or_else(|_e| v.to_string())
     })
 }
-
+/*
 #[derive(Debug)]
 pub struct ParquetMetadataFunc {}
 
@@ -460,3 +460,6 @@ impl TableFunctionImpl for ParquetMetadataFunc {
         Ok(Arc::new(parquet_metadata))
     }
 }
+
+
+ */

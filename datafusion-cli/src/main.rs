@@ -27,7 +27,7 @@ use datafusion::execution::memory_pool::{FairSpillPool, GreedyMemoryPool, Memory
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_cli::catalog::DynamicObjectStoreCatalog;
-use datafusion_cli::functions::ParquetMetadataFunc;
+//use datafusion_cli::functions::ParquetMetadataFunc;
 use datafusion_cli::{
     exec,
     pool_type::PoolType,
@@ -179,7 +179,7 @@ async fn main_inner() -> Result<()> {
         ctx.state_weak_ref(),
     )));
     // register `parquet_metadata` table function to get metadata from parquet files
-    ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
+    //ctx.register_udtf("parquet_metadata", Arc::new(ParquetMetadataFunc {}));
 
     let mut print_options = PrintOptions {
         format: args.format,

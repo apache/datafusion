@@ -307,7 +307,7 @@ fn config_file_type_from_str(ext: &str) -> Option<ConfigFileType> {
     match ext.to_lowercase().as_str() {
         "csv" => Some(ConfigFileType::CSV),
         "json" => Some(ConfigFileType::JSON),
-        "parquet" => Some(ConfigFileType::PARQUET),
+        //"parquet" => Some(ConfigFileType::PARQUET),
         _ => None,
     }
 }

@@ -33,13 +33,12 @@ async-trait = { workspace = true }
 aws-config = "1.5.16"
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.29", features = ["derive", "cargo"] }
-datafusion = { workspace = true, features = [
+datafusion = { workspace = true,  default-features =  false, features = [
     "avro",
     "crypto_expressions",
     "datetime_expressions",
     "encoding_expressions",
     "nested_expressions",
-    "parquet",
     "recursive_protection",
     "regex_expressions",
     "unicode_expressions",
@@ -51,7 +50,7 @@ futures = { workspace = true }
 mimalloc = { version = "0.1", default-features = false }
 object_store = { workspace = true, features = ["aws", "gcp", "http"] }
 parking_lot = { workspace = true }
-parquet = { workspace = true, default-features = false }
+#parquet = { workspace = true, default-features = false }
 regex = { workspace = true }
 rustyline = "15.0"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot", "signal"] }
