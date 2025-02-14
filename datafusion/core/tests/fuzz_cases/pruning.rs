@@ -321,7 +321,7 @@ async fn execute_with_predicate(
             })
             .collect(),
     );
-    let exec = scan.new_exec();
+    let exec = scan.build();
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;
 
