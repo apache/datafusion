@@ -38,7 +38,6 @@ use crate::logical_expr::{
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
-use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::filter::FilterExec;
@@ -48,7 +47,6 @@ use crate::physical_plan::joins::{
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::recursive_query::RecursiveQueryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
@@ -58,6 +56,8 @@ use crate::physical_plan::{
     displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
     Partitioning, PhysicalExpr, WindowExpr,
 };
+use datafusion_datasource::empty::EmptyExec;
+use datafusion_datasource::recursive_query::RecursiveQueryExec;
 
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
@@ -68,6 +68,8 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
 };
+use datafusion_datasource::memory::MemorySourceConfig;
+use datafusion_datasource::placeholder_row::PlaceholderRowExec;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
     physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
@@ -83,8 +85,6 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
-use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
 
 use crate::schema_equivalence::schema_satisfied_by;

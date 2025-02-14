@@ -37,7 +37,7 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;

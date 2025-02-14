@@ -42,7 +42,7 @@ use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::DataFusionError;
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;

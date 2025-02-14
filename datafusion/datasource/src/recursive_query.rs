@@ -21,13 +21,13 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::{
+use super::work_table::{ReservedBatches, WorkTable, WorkTableExec};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    work_table::{ReservedBatches, WorkTable, WorkTableExec},
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::execution_plan::{Boundedness, EmissionType};
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -156,10 +156,10 @@ impl ExecutionPlan for RecursiveQueryExec {
         vec![false, false]
     }
 
-    fn required_input_distribution(&self) -> Vec<datafusion_physical_expr::Distribution> {
+    fn required_input_distribution(&self) -> Vec<datafusion_physical_plan::Distribution> {
         vec![
-            datafusion_physical_expr::Distribution::SinglePartition,
-            datafusion_physical_expr::Distribution::SinglePartition,
+            datafusion_physical_plan::Distribution::SinglePartition,
+            datafusion_physical_plan::Distribution::SinglePartition,
         ]
     }
 

@@ -18,13 +18,20 @@
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
+pub mod empty;
 pub mod file_compression_type;
 pub mod file_groups;
 pub mod file_meta;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
+pub mod memory;
+pub mod placeholder_row;
+pub mod recursive_query;
+pub mod source;
 pub mod url;
+pub mod values;
+pub mod work_table;
 pub mod write;
 use chrono::TimeZone;
 use datafusion_common::Result;

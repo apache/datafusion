@@ -22,16 +22,16 @@ use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::{
+use crate::source::{DataSource, DataSourceExec};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+};
+use datafusion_physical_plan::{
     common, ColumnarValue, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     Statistics,
 };
-use crate::execution_plan::{Boundedness, EmissionType};
-use crate::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
-};
-use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
