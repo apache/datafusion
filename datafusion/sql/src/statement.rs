@@ -1710,13 +1710,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
         let schema = table_source.schema().to_dfschema_ref()?;
-        let scan = LogicalPlanBuilder::scan(
-            //object_name_to_string(&table_name),
-            table_ref.clone(),
-            Arc::clone(&table_source),
-            None,
-        )?
-        .build()?;
+        let scan =
+            LogicalPlanBuilder::scan(table_ref.clone(), Arc::clone(&table_source), None)?
+                .build()?;
         let mut planner_context = PlannerContext::new();
 
         let source = match predicate_expr {
