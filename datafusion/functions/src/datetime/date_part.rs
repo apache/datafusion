@@ -97,8 +97,8 @@ impl DatePartFunc {
             signature: Signature::one_of(
                 vec![
                     TypeSignature::Coercible(vec![
-                        Coercion::new(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new_with_implicit_coercion(
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_implicit(
                             TypeSignatureClass::Timestamp,
                             // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
                             vec![TypeSignatureClass::Native(logical_string())],
@@ -106,20 +106,20 @@ impl DatePartFunc {
                         ),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion::new(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new(TypeSignatureClass::Native(logical_date())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_date())),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion::new(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new(TypeSignatureClass::Time),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Time),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion::new(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new(TypeSignatureClass::Interval),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Interval),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion::new(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new(TypeSignatureClass::Duration),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Duration),
                     ]),
                 ],
                 Volatility::Immutable,

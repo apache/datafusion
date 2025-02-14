@@ -476,9 +476,9 @@ impl TypeSignature {
                 .iter()
                 .map(|c| {
                     let mut all_types: IndexSet<DataType> =
-                        c.desired_type.get_example_types().into_iter().collect();
+                        c.desired_type().get_example_types().into_iter().collect();
 
-                    if let Some(implicit_coercion) = &c.implicit_coercion {
+                    if let Some(implicit_coercion) = c.implicit_coercion() {
                         let allowed_casts: Vec<DataType> = implicit_coercion
                             .allowed_source_types
                             .iter()
@@ -546,55 +546,66 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
 }
 
 #[derive(Debug, Clone, Eq, PartialOrd)]
-pub struct Coercion {
-    pub desired_type: TypeSignatureClass,
-    implicit_coercion: Option<ImplicitCoercion>,
+pub enum Coercion {
+    Exact {
+        desired_type: TypeSignatureClass,
+    },
+    Implicit {
+        desired_type: TypeSignatureClass,
+        implicit_coercion: ImplicitCoercion,
+    }
 }
 
 impl Coercion {
-    pub fn new(desired_type: TypeSignatureClass) -> Self {
-        Self {
-            desired_type,
-            implicit_coercion: None,
-        }
+    pub fn new_exact(desired_type: TypeSignatureClass) -> Self {
+        Self::Exact { desired_type }
     }
 
     /// Create a new coercion with implicit coercion rules.
     ///
     /// `allowed_source_types` defines the possible types that can be coerced to `desired_type`.
     /// `default_casted_type` is the default type to be used for coercion if we cast from other types via `allowed_source_types`.
-    pub fn new_with_implicit_coercion(
+    pub fn new_implicit(
         desired_type: TypeSignatureClass,
         allowed_source_types: Vec<TypeSignatureClass>,
         default_casted_type: NativeType,
     ) -> Self {
-        Self {
-            desired_type,
-            implicit_coercion: Some(ImplicitCoercion {
-                allowed_source_types,
-                default_casted_type,
-            }),
-        }
+        Self::Implicit { desired_type, implicit_coercion: ImplicitCoercion { allowed_source_types, default_casted_type } }
     }
 
     pub fn allowed_source_types(&self) -> &[TypeSignatureClass] {
-        self.implicit_coercion
-            .as_ref()
-            .map(|c| c.allowed_source_types.as_slice())
-            .unwrap_or_default()
+        match self {
+            Coercion::Exact { .. } => &[],
+            Coercion::Implicit { implicit_coercion, .. } => implicit_coercion.allowed_source_types.as_slice(),
+        }
     }
 
     pub fn default_casted_type(&self) -> Option<&NativeType> {
-        self.implicit_coercion
-            .as_ref()
-            .map(|c| &c.default_casted_type)
+        match self {
+            Coercion::Exact { .. } => None,
+            Coercion::Implicit { implicit_coercion, .. } => Some(&implicit_coercion.default_casted_type),
+        }
+    }
+
+    pub fn desired_type(&self) -> &TypeSignatureClass {
+        match self {
+            Coercion::Exact { desired_type } => desired_type,
+            Coercion::Implicit { desired_type, .. } => desired_type,
+        }
+    }
+
+    pub fn implicit_coercion(&self) -> Option<&ImplicitCoercion> {
+        match self {
+            Coercion::Exact { .. } => None,
+            Coercion::Implicit { implicit_coercion, .. } => Some(implicit_coercion),
+        }
     }
 }
 
 impl Display for Coercion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Coercion({}", self.desired_type)?;
-        if let Some(implicit_coercion) = &self.implicit_coercion {
+        write!(f, "Coercion({}", self.desired_type())?;
+        if let Some(implicit_coercion) = self.implicit_coercion() {
             write!(f, ", implicit_coercion={implicit_coercion}",)
         } else {
             write!(f, ")")
@@ -604,15 +615,15 @@ impl Display for Coercion {
 
 impl PartialEq for Coercion {
     fn eq(&self, other: &Self) -> bool {
-        self.desired_type == other.desired_type
-            && self.implicit_coercion == other.implicit_coercion
+        self.desired_type() == other.desired_type()
+            && self.implicit_coercion() == other.implicit_coercion()
     }
 }
 
 impl Hash for Coercion {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.desired_type.hash(state);
-        self.implicit_coercion.hash(state);
+        self.desired_type().hash(state);
+        self.implicit_coercion().hash(state);
     }
 }
 
@@ -926,8 +937,8 @@ mod tests {
         );
 
         let type_signature = TypeSignature::Coercible(vec![
-            Coercion::new(TypeSignatureClass::Native(logical_string())),
-            Coercion::new(TypeSignatureClass::Native(logical_int64())),
+            Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+            Coercion::new_exact(TypeSignatureClass::Native(logical_int64())),
         ]);
         let possible_types = type_signature.get_example_types();
         assert_eq!(

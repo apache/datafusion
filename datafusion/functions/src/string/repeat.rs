@@ -67,9 +67,9 @@ impl RepeatFunc {
         Self {
             signature: Signature::coercible(
                 vec![
-                    Coercion::new(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
                     // Accept all integer types but cast them to i64
-                    Coercion::new_with_implicit_coercion(
+                    Coercion::new_implicit(
                         TypeSignatureClass::Native(logical_int64()),
                         vec![TypeSignatureClass::Integer],
                         NativeType::Int64,

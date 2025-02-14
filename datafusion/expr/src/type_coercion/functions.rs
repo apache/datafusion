@@ -598,8 +598,8 @@ fn get_valid_types(
             for (current_type, param) in current_types.iter().zip(param_types.iter()) {
                 let current_native_type: NativeType = current_type.into();
 
-                if param.desired_type.matches_native_type(&current_native_type) {
-                    let casted_type = param.desired_type.default_casted_type(
+                if param.desired_type().matches_native_type(&current_native_type) {
+                    let casted_type = param.desired_type().default_casted_type(
                         &current_native_type,
                         current_type,
                     )?;
@@ -616,7 +616,7 @@ fn get_valid_types(
                 } else {
                     return internal_err!(
                         "Expect {} but received {}, DataType: {}",
-                        param.desired_type,
+                        param.desired_type(),
                         current_native_type,
                         current_type
                     );
