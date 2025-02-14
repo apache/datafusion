@@ -28,8 +28,8 @@ pub mod json;
 pub mod options;
 #[cfg(feature = "parquet")]
 pub mod parquet;
-pub use datafusion_catalog_listing::file_compression_type;
-pub use datafusion_catalog_listing::write;
+pub use datafusion_datasource::file_compression_type;
+pub use datafusion_datasource::write;
 
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};

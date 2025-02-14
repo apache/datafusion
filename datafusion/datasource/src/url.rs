@@ -193,7 +193,7 @@ impl ListingTableUrl {
     ///
     /// Examples:
     /// ```rust
-    /// use datafusion_catalog_listing::ListingTableUrl;
+    /// use datafusion_datasource::ListingTableUrl;
     /// let url = ListingTableUrl::parse("file:///foo/bar.csv").unwrap();
     /// assert_eq!(url.file_extension(), Some("csv"));
     /// let url = ListingTableUrl::parse("file:///foo/bar").unwrap();
