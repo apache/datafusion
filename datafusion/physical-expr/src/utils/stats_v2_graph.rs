@@ -37,6 +37,16 @@ use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::visit::DfsPostOrder;
 use petgraph::Outgoing;
 
+/// This object implements a directed acyclic expression graph (DAEG) that
+/// is used to compute statistics for expressions hierarchically.
+#[derive(Clone, Debug)]
+pub struct ExprStatisticGraph {
+    graph: StableGraph<ExprStatisticGraphNode, usize>,
+    root: NodeIndex,
+}
+
+/// This is a node in the DAEG; it encapsulates a reference to the actual
+/// [`PhysicalExpr`] as well as its statistics.
 #[derive(Clone, Debug)]
 pub struct ExprStatisticGraphNode {
     expr: Arc<dyn PhysicalExpr>,
@@ -44,15 +54,45 @@ pub struct ExprStatisticGraphNode {
 }
 
 impl ExprStatisticGraphNode {
-    /// Creates a DAEG node from DataFusion's [`ExprTreeNode`] object. Literals are creating
-    /// [`Uniform`] distribution kind of statistic with definite, singleton intervals.
-    /// Otherwise, create `Unknown` statistic with an unbounded interval, by default.
+    /// Constructs a new DAEG node based on the given interval with a
+    /// [`Uniform`] distribution.
+    fn new_uniform(expr: Arc<dyn PhysicalExpr>, interval: Interval) -> Result<Self> {
+        StatisticsV2::new_uniform(interval)
+            .map(|statistics| ExprStatisticGraphNode { expr, statistics })
+    }
+
+    /// Constructs a new DAEG node with a `Bernoulli` distribution having an
+    /// unknown success probability.
+    fn new_bernoulli(expr: Arc<dyn PhysicalExpr>) -> Result<Self> {
+        StatisticsV2::new_bernoulli(ScalarValue::Float64(None))
+            .map(|statistics| ExprStatisticGraphNode { expr, statistics })
+    }
+
+    /// Constructs a new DAEG node with an `Unknown` distribution having no
+    /// definite summary statistics.
+    fn new_unknown(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> Result<Self> {
+        let interval = Interval::make_unbounded(dt)?;
+        let statistics = StatisticsV2::new_from_interval(interval)?;
+        Ok(ExprStatisticGraphNode { expr, statistics })
+    }
+
+    /// Get the [`StatisticsV2`] object representing the statistics of the expression.
+    pub fn statistic(&self) -> &StatisticsV2 {
+        &self.statistics
+    }
+
+    /// This function creates a DAEG node from DataFusion's [`ExprTreeNode`]
+    /// object. Literals are created with [`Uniform`] distributions with a
+    /// definite, singleton interval. Expressions with a `Boolean` data type
+    /// result in a`Bernoulli` distribution with an unknown success probability.
+    /// Any other expression starts with an `Unknown` distribution with an
+    /// indefinite range (i.e. `[-∞, ∞]`).
     pub fn make_node(node: &ExprTreeNode<NodeIndex>, schema: &Schema) -> Result<Self> {
         let expr = Arc::clone(&node.expr);
         if let Some(literal) = expr.as_any().downcast_ref::<Literal>() {
             let value = literal.value();
             Interval::try_new(value.clone(), value.clone())
-                .map(|interval| Self::new_uniform(expr, interval))
+                .and_then(|interval| Self::new_uniform(expr, interval))
         } else {
             expr.data_type(schema).and_then(|dt| {
                 if dt.eq(&DataType::Boolean) {
@@ -63,49 +103,6 @@ impl ExprStatisticGraphNode {
             })
         }
     }
-
-    /// Creates a new graph node with statistic based on a given interval as [`Uniform`] distribution
-    fn new_uniform(expr: Arc<dyn PhysicalExpr>, interval: Interval) -> Self {
-        ExprStatisticGraphNode {
-            expr,
-            statistics: StatisticsV2::new_uniform(interval).unwrap(),
-        }
-    }
-
-    /// Creates a new graph node as `Bernoulli` distribution with uncertain probability.
-    fn new_bernoulli(expr: Arc<dyn PhysicalExpr>) -> Result<Self> {
-        Ok(ExprStatisticGraphNode {
-            expr,
-            statistics: StatisticsV2::new_bernoulli(ScalarValue::Float64(None))?,
-        })
-    }
-
-    /// Creates a new graph node with `Unknown` statistic.
-    fn new_unknown(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> Result<Self> {
-        Ok(ExprStatisticGraphNode {
-            expr,
-            statistics: StatisticsV2::new_unknown(
-                ScalarValue::try_from(dt)?,
-                ScalarValue::try_from(dt)?,
-                ScalarValue::try_from(dt)?,
-                Interval::make_unbounded(dt)?,
-            )?,
-        })
-    }
-
-    pub fn statistic(&self) -> &StatisticsV2 {
-        &self.statistics
-    }
-
-    pub fn expression(&self) -> Arc<dyn PhysicalExpr> {
-        Arc::clone(&self.expr)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct ExprStatisticGraph {
-    graph: StableGraph<ExprStatisticGraphNode, usize>,
-    root: NodeIndex,
 }
 
 impl ExprStatisticGraph {
@@ -192,7 +189,7 @@ impl ExprStatisticGraph {
                 .collect::<Vec<_>>();
             let node_statistics = self.graph[node].statistic();
             let propagated_statistics = self.graph[node]
-                .expression()
+                .expr
                 .propagate_statistics(node_statistics, &children_stats)?;
             if let Some(propagated_stats) = propagated_statistics {
                 for (child_idx, stat) in children.into_iter().zip(propagated_stats) {
