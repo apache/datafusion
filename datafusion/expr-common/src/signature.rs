@@ -449,7 +449,7 @@ impl TypeSignature {
         }
     }
 
-    #[deprecated(since = "0.46.0", note = "See get_example_types instead")]
+    #[deprecated(since = "46.0.0", note = "See get_example_types instead")]
     pub fn get_possible_types(&self) -> Vec<Vec<DataType>> {
         self.get_example_types()
     }
