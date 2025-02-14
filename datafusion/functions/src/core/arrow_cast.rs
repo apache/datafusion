@@ -22,7 +22,9 @@ use arrow::error::ArrowError;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_err, Result, ScalarValue,
 };
-use datafusion_common::{exec_datafusion_err, DataFusionError};
+use datafusion_common::{
+    exec_datafusion_err, utils::take_function_args, DataFusionError,
+};
 use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
@@ -117,10 +119,9 @@ impl ScalarUDFImpl for ArrowCastFunc {
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         let nullable = args.nullables.iter().any(|&nullable| nullable);
 
-        // Length check handled in the signature
-        debug_assert_eq!(args.scalar_arguments.len(), 2);
+        let [_, type_arg] = take_function_args(self.name(), args.scalar_arguments)?;
 
-        args.scalar_arguments[1]
+        type_arg
             .and_then(|sv| sv.try_as_str().flatten().filter(|s| !s.is_empty()))
             .map_or_else(
                 || {
@@ -178,13 +179,12 @@ impl ScalarUDFImpl for ArrowCastFunc {
 
 /// Returns the requested type from the arguments
 fn data_type_from_args(args: &[Expr]) -> Result<DataType> {
-    if args.len() != 2 {
-        return exec_err!("arrow_cast needs 2 arguments, {} provided", args.len());
-    }
-    let Expr::Literal(ScalarValue::Utf8(Some(val))) = &args[1] else {
+    let [_, type_arg] = take_function_args("arrow_cast", args)?;
+
+    let Expr::Literal(ScalarValue::Utf8(Some(val))) = type_arg else {
         return exec_err!(
             "arrow_cast requires its second argument to be a constant string, got {:?}",
-            &args[1]
+            type_arg
         );
     };
 

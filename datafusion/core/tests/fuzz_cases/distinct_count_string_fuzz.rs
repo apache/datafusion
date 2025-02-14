@@ -19,10 +19,8 @@
 
 use std::sync::Arc;
 
-use arrow::record_batch::RecordBatch;
-use arrow_array::{Array, OffsetSizeTrait};
+use arrow::array::{cast::AsArray, Array, OffsetSizeTrait, RecordBatch};
 
-use arrow_array::cast::AsArray;
 use datafusion::datasource::MemTable;
 use std::collections::HashSet;
 use tokio::task::JoinSet;

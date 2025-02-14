@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Documentation};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -80,14 +80,8 @@ impl ScalarUDFImpl for ArrowTypeOfFunc {
         args: &[ColumnarValue],
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
-        if args.len() != 1 {
-            return exec_err!(
-                "arrow_typeof function requires 1 arguments, got {}",
-                args.len()
-            );
-        }
-
-        let input_data_type = args[0].data_type();
+        let [arg] = take_function_args(self.name(), args)?;
+        let input_data_type = arg.data_type();
         Ok(ColumnarValue::Scalar(ScalarValue::from(format!(
             "{input_data_type}"
         ))))

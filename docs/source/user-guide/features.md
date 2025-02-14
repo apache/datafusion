@@ -17,23 +17,28 @@
   under the License.
 -->
 
-# Status
+# Features
 
 ## General
 
 - [x] SQL Parser
 - [x] SQL Query Planner
+- [x] DataFrame API
+- [x] Parallel query execution
+- [x] Streaming Execution
+
+## Optimizations
+
 - [x] Query Optimizer
 - [x] Constant folding
 - [x] Join Reordering
 - [x] Limit Pushdown
 - [x] Projection push down
 - [x] Predicate push down
-- [x] Type coercion
-- [x] Parallel query execution
 
 ## SQL Support
 
+- [x] Type coercion
 - [x] Projection (`SELECT`)
 - [x] Filter (`WHERE`)
 - [x] Filter post-aggregate (`HAVING`)
@@ -42,23 +47,23 @@
 - [x] Aggregate (`GROUP BY`)
 - [x] cast /try_cast
 - [x] [`VALUES` lists](https://www.postgresql.org/docs/current/queries-values.html)
-- [x] [String Functions](./scalar_functions.md#string-functions)
-- [x] [Conditional Functions](./scalar_functions.md#conditional-functions)
-- [x] [Time and Date Functions](./scalar_functions.md#time-and-date-functions)
-- [x] [Math Functions](./scalar_functions.md#math-functions)
-- [x] [Aggregate Functions](./aggregate_functions.md) (`SUM`, `MEDIAN`, and many more)
+- [x] [String Functions](./sql/scalar_functions.md#string-functions)
+- [x] [Conditional Functions](./sql/scalar_functions.md#conditional-functions)
+- [x] [Time and Date Functions](./sql/scalar_functions.md#time-and-date-functions)
+- [x] [Math Functions](./sql/scalar_functions.md#math-functions)
+- [x] [Aggregate Functions](./sql/aggregate_functions.md) (`SUM`, `MEDIAN`, and many more)
 - [x] Schema Queries
   - [x] `SHOW TABLES`
   - [x] `SHOW COLUMNS FROM <table/view>`
   - [x] `SHOW CREATE TABLE <view>`
-  - [x] Basic SQL [Information Schema](./information_schema.md) (`TABLES`, `VIEWS`, `COLUMNS`)
-  - [ ] Full SQL [Information Schema](./information_schema.md) support
-- [ ] Support for nested types (`ARRAY`/`LIST` and `STRUCT`. See [#2326](https://github.com/apache/datafusion/issues/2326) for details)
+  - [x] Basic SQL [Information Schema](./sql/information_schema.md) (`TABLES`, `VIEWS`, `COLUMNS`)
+  - [ ] Full SQL [Information Schema](./sql/information_schema.md) support
+- [x] Support for nested types (`ARRAY`/`LIST` and `STRUCT`.
   - [x] Read support
   - [x] Write support
   - [x] Field access (`col['field']` and [`col[1]`])
-  - [x] [Array Functions](./scalar_functions.md#array-functions)
-  - [ ] [Struct Functions](./scalar_functions.md#struct-functions)
+  - [x] [Array Functions](./sql/scalar_functions.md#array-functions)
+  - [x] [Struct Functions](./sql/scalar_functions.md#struct-functions)
     - [x] `struct`
     - [ ] [Postgres JSON operators](https://github.com/apache/datafusion/issues/6631) (`->`, `->>`, etc.)
 - [x] Subqueries
@@ -73,12 +78,12 @@
 - [x] Catalogs
   - [x] Schemas (`CREATE / DROP SCHEMA`)
   - [x] Tables (`CREATE / DROP TABLE`, `CREATE TABLE AS SELECT`)
-- [ ] Data Insert
+- [x] Data Insert
   - [x] `INSERT INTO`
-  - [ ] `COPY .. INTO ..`
+  - [x] `COPY .. INTO ..`
   - [x] CSV
-  - [ ] JSON
-  - [ ] Parquet
+  - [x] JSON
+  - [x] Parquet
   - [ ] Avro
 
 ## Runtime
@@ -87,16 +92,22 @@
 - [x] Streaming Window Evaluation
 - [x] Memory limits enforced
 - [x] Spilling (to disk) Sort
-- [ ] Spilling (to disk) Grouping
+- [x] Spilling (to disk) Grouping
 - [ ] Spilling (to disk) Joins
 
 ## Data Sources
 
-In addition to allowing arbitrary datasources via the `TableProvider`
+In addition to allowing arbitrary datasources via the [`TableProvider`]
 trait, DataFusion includes built in support for the following formats:
 
 - [x] CSV
-- [x] Parquet (for all primitive and nested types)
+- [x] Parquet
+  - [x] Primitive and Nested Types
+  - [x] Row Group and Data Page pruning on min/max statistics
+  - [x] Row Group pruning on Bloom Filters
+  - [x] Predicate push down (late materialization) [not by default](https://github.com/apache/datafusion/issues/3463)
 - [x] JSON
 - [x] Avro
 - [x] Arrow
+
+[`tableprovider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html

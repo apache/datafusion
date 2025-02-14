@@ -392,8 +392,8 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field};
+    use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field};
 
     use datafusion_expr::{col, lit};
 

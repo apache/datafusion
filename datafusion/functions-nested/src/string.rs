@@ -33,11 +33,13 @@ use datafusion_common::{
 use std::any::Any;
 
 use crate::utils::make_scalar_function;
+use arrow::array::{
+    builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder},
+    cast::AsArray,
+    GenericStringArray, StringArrayType, StringViewArray,
+};
 use arrow::compute::cast;
-use arrow_array::builder::{ArrayBuilder, LargeStringBuilder, StringViewBuilder};
-use arrow_array::cast::AsArray;
-use arrow_array::{GenericStringArray, StringArrayType, StringViewArray};
-use arrow_schema::DataType::{
+use arrow::datatypes::DataType::{
     Dictionary, FixedSizeList, LargeList, LargeUtf8, List, Null, Utf8, Utf8View,
 };
 use datafusion_common::cast::{as_large_list_array, as_list_array};

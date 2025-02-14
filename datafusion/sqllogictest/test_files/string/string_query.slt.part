@@ -19,6 +19,10 @@
 # with standard values, but different types in string columns
 # (String, StringView, etc.)
 
+# --------------------------------------
+# Show the input data
+# --------------------------------------
+
 # select
 query TTTT
 SELECT ascii_1, ascii_2, unicode_1, unicode_2 FROM test_basic_operator
@@ -34,6 +38,49 @@ percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt
 _ \_ (empty) (empty)
 NULL % NULL NULL
 NULL R NULL 🔥
+
+# --------------------------------------
+# test type coercion (compare to int)
+# queries should not error
+# --------------------------------------
+
+query BB
+select ascii_1 = 1 as col1, 1 = ascii_1 as col2 from test_basic_operator;
+----
+false false
+false false
+false false
+false false
+false false
+false false
+false false
+false false
+false false
+NULL NULL
+NULL NULL
+
+query BB
+select ascii_1 <> 1 as col1, 1 <> ascii_1 as col2 from test_basic_operator;
+----
+true true
+true true
+true true
+true true
+true true
+true true
+true true
+true true
+true true
+NULL NULL
+NULL NULL
+
+# Coercion to date/time
+query BBB
+select ts = '2024-08-09T12:13:14'::timestamp, d = '2024-08-08'::date, t = '12:13:14'::time from test_datetime;
+----
+true false true
+false false false
+NULL NULL NULL
 
 # --------------------------------------
 # column comparison as filters
@@ -187,6 +234,148 @@ percent pan Tadeusz ma iść w kąt false true false true
 _ (empty) false true false true
 NULL NULL NULL NULL NULL NULL
 NULL NULL NULL NULL NULL NULL
+
+# --------------------------------------
+# dynamic LIKE as filter
+# --------------------------------------
+
+query TTT rowsort
+SELECT ascii_1, 'is LIKE', ascii_2 FROM test_basic_operator WHERE ascii_1 LIKE ascii_2
+UNION ALL
+SELECT ascii_1, 'is NOT LIKE', ascii_2 FROM test_basic_operator WHERE ascii_1 NOT LIKE ascii_2
+UNION ALL
+SELECT unicode_1, 'is LIKE', ascii_2 FROM test_basic_operator WHERE unicode_1 LIKE ascii_2
+UNION ALL
+SELECT unicode_1, 'is NOT LIKE', ascii_2 FROM test_basic_operator WHERE unicode_1 NOT LIKE ascii_2
+UNION ALL
+SELECT unicode_2, 'is LIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 LIKE ascii_2
+UNION ALL
+SELECT unicode_2, 'is NOT LIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 NOT LIKE ascii_2
+----
+% is LIKE \%
+(empty) is LIKE %
+(empty) is LIKE %
+(empty) is LIKE %
+(empty) is LIKE %%
+(empty) is LIKE %%
+(empty) is LIKE %%
+(empty) is NOT LIKE \%
+(empty) is NOT LIKE \%
+(empty) is NOT LIKE \_
+(empty) is NOT LIKE \_
+Andrew is NOT LIKE X
+Pan Tadeusz ma frunąć stąd w kąt is NOT LIKE p%t
+Raphael is NOT LIKE R
+Xiangpeng is LIKE Xiangpeng
+_ is LIKE \_
+chrząszcz na łące w 東京都 is NOT LIKE un_____core
+datafusionДатаФусион is NOT LIKE R
+datafusion数据融合 is NOT LIKE Xiangpeng
+datafusion数据融合 is NOT LIKE Xiangpeng
+datafusion📊🔥 is NOT LIKE X
+pan Tadeusz ma iść w kąt is LIKE p%t
+percent is LIKE p%t
+un iść core is LIKE un_____core
+under_score is LIKE un_____core
+аФус is NOT LIKE R
+🔥 is NOT LIKE R
+🔥 is NOT LIKE X
+
+# --------------------------------------
+# dynamic LIKE as projection
+# --------------------------------------
+
+query TTTTBBBB rowsort
+SELECT
+    ascii_1, ascii_2, unicode_1, unicode_2,
+    (ascii_1 LIKE ascii_2) AS ascii_1_like_ascii_2,
+    (ascii_2 LIKE ascii_1) AS ascii_2_like_ascii_1,
+    (unicode_1 LIKE ascii_2) AS unicode_1_like_ascii_2,
+    (unicode_2 LIKE ascii_2) AS unicode_2_like_ascii_2
+FROM test_basic_operator
+----
+% \% (empty) (empty) true true false false
+(empty) % (empty) (empty) true false true true
+(empty) %% (empty) (empty) true false true true
+Andrew X datafusion📊🔥 🔥 false false false false
+NULL % NULL NULL NULL NULL NULL NULL
+NULL R NULL 🔥 NULL NULL NULL false
+Raphael R datafusionДатаФусион аФус false false false false
+Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合 true true false false
+_ \_ (empty) (empty) true false false false
+percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt true false true false
+under_score un_____core un iść core chrząszcz na łące w 東京都 true false true false
+
+# --------------------------------------
+# dynamic ILIKE as filter
+# --------------------------------------
+
+query TTT rowsort
+SELECT ascii_1, 'is ILIKE', ascii_2 FROM test_basic_operator WHERE ascii_1 ILIKE ascii_2
+UNION ALL
+SELECT ascii_1, 'is NOT ILIKE', ascii_2 FROM test_basic_operator WHERE ascii_1 NOT ILIKE ascii_2
+UNION ALL
+SELECT unicode_1, 'is ILIKE', ascii_2 FROM test_basic_operator WHERE unicode_1 ILIKE ascii_2
+UNION ALL
+SELECT unicode_1, 'is NOT ILIKE', ascii_2 FROM test_basic_operator WHERE unicode_1 NOT ILIKE ascii_2
+UNION ALL
+SELECT unicode_2, 'is ILIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 ILIKE ascii_2
+UNION ALL
+SELECT unicode_2, 'is NOT ILIKE', ascii_2 FROM test_basic_operator WHERE unicode_2 NOT ILIKE ascii_2
+----
+% is ILIKE \%
+(empty) is ILIKE %
+(empty) is ILIKE %
+(empty) is ILIKE %
+(empty) is ILIKE %%
+(empty) is ILIKE %%
+(empty) is ILIKE %%
+(empty) is NOT ILIKE \%
+(empty) is NOT ILIKE \%
+(empty) is NOT ILIKE \_
+(empty) is NOT ILIKE \_
+Andrew is NOT ILIKE X
+Pan Tadeusz ma frunąć stąd w kąt is ILIKE p%t
+Raphael is NOT ILIKE R
+Xiangpeng is ILIKE Xiangpeng
+_ is ILIKE \_
+chrząszcz na łące w 東京都 is NOT ILIKE un_____core
+datafusionДатаФусион is NOT ILIKE R
+datafusion数据融合 is NOT ILIKE Xiangpeng
+datafusion数据融合 is NOT ILIKE Xiangpeng
+datafusion📊🔥 is NOT ILIKE X
+pan Tadeusz ma iść w kąt is ILIKE p%t
+percent is ILIKE p%t
+un iść core is ILIKE un_____core
+under_score is ILIKE un_____core
+аФус is NOT ILIKE R
+🔥 is NOT ILIKE R
+🔥 is NOT ILIKE X
+
+# --------------------------------------
+# dynamic ILIKE as projection
+# --------------------------------------
+query TTTTBBBB rowsort
+SELECT
+    ascii_1, ascii_2, unicode_1, unicode_2,
+    (ascii_1 ILIKE ascii_2) AS ascii_1_ilike_ascii_2,
+    (ascii_2 ILIKE ascii_1) AS ascii_2_ilike_ascii_1,
+    (unicode_1 ILIKE ascii_2) AS unicode_1_ilike_ascii_2,
+    (unicode_2 ILIKE ascii_2) AS unicode_2_ilike_ascii_2
+FROM test_basic_operator
+----
+% \% (empty) (empty) true true false false
+(empty) % (empty) (empty) true false true true
+(empty) %% (empty) (empty) true false true true
+Andrew X datafusion📊🔥 🔥 false false false false
+NULL % NULL NULL NULL NULL NULL NULL
+NULL R NULL 🔥 NULL NULL NULL false
+Raphael R datafusionДатаФусион аФус false false false false
+Xiangpeng Xiangpeng datafusion数据融合 datafusion数据融合 true true false false
+_ \_ (empty) (empty) true false false false
+percent p%t pan Tadeusz ma iść w kąt Pan Tadeusz ma frunąć stąd w kąt true false true true
+under_score un_____core un iść core chrząszcz na łące w 東京都 true false true false
+
 
 # --------------------------------------
 # substr function

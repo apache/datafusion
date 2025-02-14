@@ -28,7 +28,6 @@ use arrow::datatypes::DataType::{
 use arrow::datatypes::TimeUnit::{Microsecond, Millisecond, Nanosecond, Second};
 use arrow::datatypes::{DataType, TimeUnit};
 
-use datafusion_common::not_impl_err;
 use datafusion_common::{
     cast::{
         as_date32_array, as_date64_array, as_int32_array, as_time32_millisecond_array,
@@ -36,8 +35,9 @@ use datafusion_common::{
         as_timestamp_microsecond_array, as_timestamp_millisecond_array,
         as_timestamp_nanosecond_array, as_timestamp_second_array,
     },
-    exec_err, internal_err,
+    exec_err, internal_err, not_impl_err,
     types::logical_string,
+    utils::take_function_args,
     Result, ScalarValue,
 };
 use datafusion_expr::{
@@ -140,10 +140,9 @@ impl ScalarUDFImpl for DatePartFunc {
     }
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
-        // Length check handled in the signature
-        debug_assert_eq!(args.scalar_arguments.len(), 2);
+        let [field, _] = take_function_args(self.name(), args.scalar_arguments)?;
 
-        args.scalar_arguments[0]
+        field
             .and_then(|sv| {
                 sv.try_as_str()
                     .flatten()
@@ -167,10 +166,7 @@ impl ScalarUDFImpl for DatePartFunc {
         args: &[ColumnarValue],
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
-        if args.len() != 2 {
-            return exec_err!("Expected two arguments in DATE_PART");
-        }
-        let (part, array) = (&args[0], &args[1]);
+        let [part, array] = take_function_args(self.name(), args)?;
 
         let part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = part {
             v

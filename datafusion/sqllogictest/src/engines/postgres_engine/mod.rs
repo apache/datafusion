@@ -17,6 +17,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::common::runtime::SpawnedTask;
 use futures::{SinkExt, StreamExt};
 use log::{debug, info};
 use sqllogictest::DBOutput;
@@ -24,7 +25,6 @@ use sqllogictest::DBOutput;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
-use tokio::task::JoinHandle;
 
 use super::conversion::*;
 use crate::engines::output::{DFColumnType, DFOutput};
@@ -53,8 +53,9 @@ pub enum Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 pub struct Postgres {
-    client: tokio_postgres::Client,
-    join_handle: JoinHandle<()>,
+    // None means the connection has been shutdown
+    client: Option<tokio_postgres::Client>,
+    spawned_task: Option<SpawnedTask<()>>,
     /// Relative test file path
     relative_path: PathBuf,
     pb: ProgressBar,
@@ -90,7 +91,7 @@ impl Postgres {
 
         let (client, connection) = res?;
 
-        let join_handle = tokio::spawn(async move {
+        let spawned_task = SpawnedTask::spawn(async move {
             if let Err(e) = connection.await {
                 log::error!("Postgres connection error: {:?}", e);
             }
@@ -113,11 +114,15 @@ impl Postgres {
             .await?;
 
         Ok(Self {
-            client,
-            join_handle,
+            client: Some(client),
+            spawned_task: Some(spawned_task),
             relative_path,
             pb,
         })
+    }
+
+    fn get_client(&mut self) -> &mut tokio_postgres::Client {
+        self.client.as_mut().expect("client is shutdown")
     }
 
     /// Special COPY command support. "COPY 'filename'" requires the
@@ -170,7 +175,7 @@ impl Postgres {
         debug!("Copying data from file {filename} using sql: {new_sql}");
 
         // start the COPY command and get location to write data to
-        let tx = self.client.transaction().await?;
+        let tx = self.get_client().transaction().await?;
         let sink = tx.copy_in(&new_sql).await?;
         let mut sink = Box::pin(sink);
 
@@ -222,12 +227,6 @@ fn schema_name(relative_path: &Path) -> String {
         .to_string()
 }
 
-impl Drop for Postgres {
-    fn drop(&mut self) {
-        self.join_handle.abort()
-    }
-}
-
 #[async_trait]
 impl sqllogictest::AsyncDB for Postgres {
     type Error = Error;
@@ -263,12 +262,12 @@ impl sqllogictest::AsyncDB for Postgres {
         }
 
         if !is_query_sql {
-            self.client.execute(sql, &[]).await?;
+            self.get_client().execute(sql, &[]).await?;
             self.pb.inc(1);
             return Ok(DBOutput::StatementComplete(0));
         }
         let start = Instant::now();
-        let rows = self.client.query(sql, &[]).await?;
+        let rows = self.get_client().query(sql, &[]).await?;
         let duration = start.elapsed();
 
         if duration.gt(&Duration::from_millis(500)) {
@@ -278,7 +277,7 @@ impl sqllogictest::AsyncDB for Postgres {
         self.pb.inc(1);
 
         let types: Vec<Type> = if rows.is_empty() {
-            self.client
+            self.get_client()
                 .prepare(sql)
                 .await?
                 .columns()
@@ -305,6 +304,15 @@ impl sqllogictest::AsyncDB for Postgres {
 
     fn engine_name(&self) -> &str {
         "postgres"
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(client) = self.client.take() {
+            drop(client);
+        }
+        if let Some(spawned_task) = self.spawned_task.take() {
+            spawned_task.join().await.ok();
+        }
     }
 }
 

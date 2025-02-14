@@ -20,20 +20,19 @@
 use std::mem;
 use std::sync::Arc;
 
-use super::ListingTableUrl;
-use super::PartitionedFile;
-use crate::execution::context::SessionState;
+use datafusion_catalog::Session;
 use datafusion_common::internal_err;
 use datafusion_common::{HashMap, Result, ScalarValue};
+use datafusion_datasource::ListingTableUrl;
+use datafusion_datasource::PartitionedFile;
 use datafusion_expr::{BinaryExpr, Operator};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, StringBuilder},
     compute::{and, cast, prep_null_mask_filter},
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Field, Fields, Schema},
     record_batch::RecordBatch,
 };
-use arrow_schema::Fields;
 use datafusion_expr::execution_props::ExecutionProps;
 use futures::stream::FuturesUnordered;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
@@ -154,7 +153,7 @@ pub fn split_files(
     chunks
 }
 
-struct Partition {
+pub struct Partition {
     /// The path to the partition, including the table prefix
     path: Path,
     /// How many path segments below the table prefix `path` contains
@@ -183,7 +182,7 @@ impl Partition {
 }
 
 /// Returns a recursive list of the partitions in `table_path` up to `max_depth`
-async fn list_partitions(
+pub async fn list_partitions(
     store: &dyn ObjectStore,
     table_path: &ListingTableUrl,
     max_depth: usize,
@@ -364,7 +363,7 @@ fn populate_partition_values<'a>(
     }
 }
 
-fn evaluate_partition_prefix<'a>(
+pub fn evaluate_partition_prefix<'a>(
     partition_cols: &'a [(String, DataType)],
     filters: &'a [Expr],
 ) -> Option<Path> {
@@ -405,7 +404,7 @@ fn evaluate_partition_prefix<'a>(
 /// `filters` should only contain expressions that can be evaluated
 /// using only the partition columns.
 pub async fn pruned_partition_list<'a>(
-    ctx: &'a SessionState,
+    ctx: &'a dyn Session,
     store: &'a dyn ObjectStore,
     table_path: &'a ListingTableUrl,
     filters: &'a [Expr],
@@ -489,7 +488,7 @@ pub async fn pruned_partition_list<'a>(
 
 /// Extract the partition values for the given `file_path` (in the given `table_path`)
 /// associated to the partitions defined by `table_partition_cols`
-fn parse_partitions_for_path<'a, I>(
+pub fn parse_partitions_for_path<'a, I>(
     table_path: &ListingTableUrl,
     file_path: &'a Path,
     table_partition_cols: I,
@@ -517,17 +516,36 @@ where
     }
     Some(part_values)
 }
+/// Describe a partition as a (path, depth, files) tuple for easier assertions
+pub fn describe_partition(partition: &Partition) -> (&str, usize, Vec<&str>) {
+    (
+        partition.path.as_ref(),
+        partition.depth,
+        partition
+            .files
+            .as_ref()
+            .map(|f| f.iter().map(|f| f.location.filename().unwrap()).collect())
+            .unwrap_or_default(),
+    )
+}
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::runtime_env::RuntimeEnv;
+    use futures::FutureExt;
+    use object_store::memory::InMemory;
+    use std::any::Any;
     use std::ops::Not;
-
-    use futures::StreamExt;
-
-    use crate::test::object_store::make_test_store_and_state;
-    use datafusion_expr::{case, col, lit, Expr};
+    // use futures::StreamExt;
 
     use super::*;
+    use datafusion_expr::{
+        case, col, lit, AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF,
+    };
+    use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+    use datafusion_physical_plan::ExecutionPlan;
 
     #[test]
     fn test_split_files() {
@@ -578,7 +596,7 @@ mod tests {
         ]);
         let filter = Expr::eq(col("mypartition"), lit("val1"));
         let pruned = pruned_partition_list(
-            &state,
+            state.as_ref(),
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter],
@@ -603,7 +621,7 @@ mod tests {
         ]);
         let filter = Expr::eq(col("mypartition"), lit("val1"));
         let pruned = pruned_partition_list(
-            &state,
+            state.as_ref(),
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter],
@@ -643,7 +661,7 @@ mod tests {
         let filter1 = Expr::eq(col("part1"), lit("p1v2"));
         let filter2 = Expr::eq(col("part2"), lit("p2v1"));
         let pruned = pruned_partition_list(
-            &state,
+            state.as_ref(),
             store.as_ref(),
             &ListingTableUrl::parse("file:///tablepath/").unwrap(),
             &[filter1, filter2],
@@ -678,19 +696,6 @@ mod tests {
             &f2.partition_values,
             &[ScalarValue::from("p1v2"), ScalarValue::from("p2v1")]
         );
-    }
-
-    /// Describe a partition as a (path, depth, files) tuple for easier assertions
-    fn describe_partition(partition: &Partition) -> (&str, usize, Vec<&str>) {
-        (
-            partition.path.as_ref(),
-            partition.depth,
-            partition
-                .files
-                .as_ref()
-                .map(|f| f.iter().map(|f| f.location.filename().unwrap()).collect())
-                .unwrap_or_default(),
-        )
     }
 
     #[tokio::test]
@@ -993,5 +998,75 @@ mod tests {
             ),
             Some(Path::from("a=1970-01-05")),
         );
+    }
+
+    pub fn make_test_store_and_state(
+        files: &[(&str, u64)],
+    ) -> (Arc<InMemory>, Arc<dyn Session>) {
+        let memory = InMemory::new();
+
+        for (name, size) in files {
+            memory
+                .put(&Path::from(*name), vec![0; *size as usize].into())
+                .now_or_never()
+                .unwrap()
+                .unwrap();
+        }
+
+        (Arc::new(memory), Arc::new(MockSession {}))
+    }
+
+    struct MockSession {}
+
+    #[async_trait]
+    impl Session for MockSession {
+        fn session_id(&self) -> &str {
+            unimplemented!()
+        }
+
+        fn config(&self) -> &SessionConfig {
+            unimplemented!()
+        }
+
+        async fn create_physical_plan(
+            &self,
+            _logical_plan: &LogicalPlan,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+
+        fn create_physical_expr(
+            &self,
+            _expr: Expr,
+            _df_schema: &DFSchema,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            unimplemented!()
+        }
+
+        fn scalar_functions(&self) -> &std::collections::HashMap<String, Arc<ScalarUDF>> {
+            unimplemented!()
+        }
+
+        fn aggregate_functions(
+            &self,
+        ) -> &std::collections::HashMap<String, Arc<AggregateUDF>> {
+            unimplemented!()
+        }
+
+        fn window_functions(&self) -> &std::collections::HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn runtime_env(&self) -> &Arc<RuntimeEnv> {
+            unimplemented!()
+        }
+
+        fn execution_props(&self) -> &ExecutionProps {
+            unimplemented!()
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
     }
 }

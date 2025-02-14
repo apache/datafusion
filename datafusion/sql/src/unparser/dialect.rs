@@ -17,7 +17,8 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow_schema::TimeUnit;
+use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
+use arrow::datatypes::TimeUnit;
 use datafusion_common::Result;
 use datafusion_expr::Expr;
 use regex::Regex;
@@ -28,8 +29,6 @@ use sqlparser::{
     },
     keywords::ALL_KEYWORDS,
 };
-
-use super::{utils::character_length_to_sql, utils::date_part_to_sql, Unparser};
 
 pub type ScalarFnToSqlHandler =
     Box<dyn Fn(&Unparser, &[Expr]) -> Result<Option<ast::Expr>> + Send + Sync>;
@@ -65,7 +64,7 @@ pub trait Dialect: Send + Sync {
     /// Does the dialect use DOUBLE PRECISION to represent Float64 rather than DOUBLE?
     /// E.g. Postgres uses DOUBLE PRECISION instead of DOUBLE
     fn float64_ast_dtype(&self) -> ast::DataType {
-        ast::DataType::Double
+        ast::DataType::Double(ast::ExactNumberInfo::None)
     }
 
     /// The SQL type to use for Arrow Utf8 unparsing
@@ -526,7 +525,7 @@ impl Default for CustomDialect {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::SQLStandard,
-            float64_ast_dtype: ast::DataType::Double,
+            float64_ast_dtype: ast::DataType::Double(ast::ExactNumberInfo::None),
             utf8_cast_dtype: ast::DataType::Varchar(None),
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,
@@ -718,7 +717,7 @@ impl CustomDialectBuilder {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::PostgresVerbose,
-            float64_ast_dtype: ast::DataType::Double,
+            float64_ast_dtype: ast::DataType::Double(ast::ExactNumberInfo::None),
             utf8_cast_dtype: ast::DataType::Varchar(None),
             large_utf8_cast_dtype: ast::DataType::Text,
             date_field_extract_style: DateFieldExtractStyle::DatePart,

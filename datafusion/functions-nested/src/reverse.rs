@@ -18,13 +18,14 @@
 //! [`ScalarUDFImpl`] definitions for array_reverse function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Capacities, MutableArrayData};
-use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::OffsetBuffer;
-use arrow_schema::DataType::{LargeList, List, Null};
-use arrow_schema::{DataType, FieldRef};
+use arrow::array::{
+    Array, ArrayRef, Capacities, GenericListArray, MutableArrayData, OffsetSizeTrait,
+};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::DataType::{LargeList, List, Null};
+use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -114,20 +115,18 @@ impl ScalarUDFImpl for ArrayReverse {
 
 /// array_reverse SQL function
 pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
-    if arg.len() != 1 {
-        return exec_err!("array_reverse needs one argument");
-    }
+    let [input_array] = take_function_args("array_reverse", arg)?;
 
-    match &arg[0].data_type() {
+    match &input_array.data_type() {
         List(field) => {
-            let array = as_list_array(&arg[0])?;
+            let array = as_list_array(input_array)?;
             general_array_reverse::<i32>(array, field)
         }
         LargeList(field) => {
-            let array = as_large_list_array(&arg[0])?;
+            let array = as_large_list_array(input_array)?;
             general_array_reverse::<i64>(array, field)
         }
-        Null => Ok(Arc::clone(&arg[0])),
+        Null => Ok(Arc::clone(input_array)),
         array_type => exec_err!("array_reverse does not support type '{array_type:?}'."),
     }
 }
@@ -173,7 +172,7 @@ fn general_array_reverse<O: OffsetSizeTrait + TryFrom<i64>>(
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::clone(field),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         Some(nulls.into()),
     )?))
 }

@@ -33,13 +33,15 @@ use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
+};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
 use datafusion_expr::{
     Accumulator, AggregateUDFImpl, Documentation, GroupsAccumulator, ReversedUDAF,
-    Signature, Volatility,
+    SetMonotonicity, Signature, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_functions_aggregate_common::utils::Hashable;
@@ -125,9 +127,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!("SUM expects exactly one argument");
-        }
+        let [args] = take_function_args(self.name(), arg_types)?;
 
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
         // smallint, int, bigint, real, double precision, decimal, or interval.
@@ -147,7 +147,7 @@ impl AggregateUDFImpl for Sum {
             }
         }
 
-        Ok(vec![coerced_type(&arg_types[0])?])
+        Ok(vec![coerced_type(args)?])
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
@@ -253,6 +253,18 @@ impl AggregateUDFImpl for Sum {
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
+    }
+
+    fn set_monotonicity(&self, data_type: &DataType) -> SetMonotonicity {
+        // `SUM` is only monotonically increasing when its input is unsigned.
+        // TODO: Expand these utilizing statistics.
+        match data_type {
+            DataType::UInt8 => SetMonotonicity::Increasing,
+            DataType::UInt16 => SetMonotonicity::Increasing,
+            DataType::UInt32 => SetMonotonicity::Increasing,
+            DataType::UInt64 => SetMonotonicity::Increasing,
+            _ => SetMonotonicity::NotMonotonic,
+        }
     }
 }
 
