@@ -4490,7 +4490,6 @@ mod tests {
 
             for op in ops {
                 let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
-                // TODO: to think, if maybe we want to handcraft the expected value...
                 assert_eq!(
                     expr.evaluate_statistics(&children)?,
                     new_unknown_from_binary_op(&op, children[0], children[1])?
@@ -4514,12 +4513,7 @@ mod tests {
             Arc::clone(&b),
             schema,
         )?);
-        let neq = Arc::new(binary_expr(
-            Arc::clone(&a),
-            Operator::NotEq,
-            Arc::clone(&b),
-            schema,
-        )?);
+        let neq = Arc::new(binary_expr(a, Operator::NotEq, b, schema)?);
 
         let left_stat = &StatisticsV2::new_uniform(Interval::make(Some(0), Some(7))?)?;
         let right_stat = &StatisticsV2::new_uniform(Interval::make(Some(4), Some(11))?)?;
@@ -4599,7 +4593,6 @@ mod tests {
         for child_view in children {
             let child_refs = child_view.iter().collect::<Vec<_>>();
             for op in &ops {
-                // println!("op: {:?} | cv: {:?}", op, child_view);
                 let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
                 assert_eq!(
                     expr.propagate_statistics(&parent, child_refs.as_slice())?,
@@ -4620,7 +4613,7 @@ mod tests {
         let right_interval = Interval::make(Some(6.0), Some(18.0))?;
 
         let one = ScalarValue::from(1.0);
-        let parent = StatisticsV2::new_bernoulli(one);
+        let parent = StatisticsV2::new_bernoulli(one)?;
         let children = vec![
             vec![
                 StatisticsV2::new_uniform(left_interval.clone())?,
@@ -4669,14 +4662,11 @@ mod tests {
         ];
 
         for child_view in children {
-            let child_view = child_view.iter().collect::<Vec<_>>();
+            let child_refs = child_view.iter().collect::<Vec<_>>();
             for op in &ops {
                 let expr = binary_expr(Arc::clone(&a), *op, Arc::clone(&b), schema)?;
                 assert!(expr
-                    .propagate_statistics(
-                        parent.as_ref().unwrap(),
-                        child_view.as_slice()
-                    )?
+                    .propagate_statistics(&parent, child_refs.as_slice())?
                     .is_some());
             }
         }

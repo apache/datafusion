@@ -347,8 +347,8 @@ mod tests {
         ];
 
         for child_view in children {
-            let ref_view: Vec<_> = child_view.iter().collect();
-            let actual = negative_expr.propagate_statistics(&parent, &ref_view)?;
+            let child_refs: Vec<_> = child_view.iter().collect();
+            let actual = negative_expr.propagate_statistics(&parent, &child_refs)?;
             let expected = Some(vec![StatisticsV2::new_from_interval(
                 after_propagation.clone(),
             )?]);

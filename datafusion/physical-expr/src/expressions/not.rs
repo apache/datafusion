@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn test_evaluate_statistics() -> Result<()> {
         let _schema = &Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+        let a = Arc::new(Column::new("a", 0)) as _;
         let expr = not(a)?;
 
         // Uniform with non-boolean bounds

@@ -1279,7 +1279,7 @@ mod tests {
             StatisticsV2::new_gaussian(ScalarValue::from(20.), ScalarValue::from(0.0))?;
 
         let test_data = vec![
-            // mean
+            // Mean:
             (
                 compute_mean(&Operator::Plus, &stat_a, &stat_b)?,
                 ScalarValue::from(30.),
@@ -1288,7 +1288,7 @@ mod tests {
                 compute_mean(&Operator::Minus, &stat_a, &stat_b)?,
                 ScalarValue::from(-10.),
             ),
-            // median
+            // Median:
             (
                 compute_median(&Operator::Plus, &stat_a, &stat_b)?,
                 ScalarValue::from(30.),
@@ -1305,15 +1305,19 @@ mod tests {
         Ok(())
     }
 
-    // Expected test results were calculated in Wolfram Mathematica, by using
-    // *METHOD_NAME*[TransformedDistribution[x op y, {x ~ *DISTRIBUTION_X*[..], y ~ *DISTRIBUTION_Y*[..]}]]
+    // Expected test results were calculated in Wolfram Mathematica, by using:
+    //
+    // *METHOD_NAME*[TransformedDistribution[
+    //  x *op* y,
+    //  {x ~ *DISTRIBUTION_X*[..], y ~ *DISTRIBUTION_Y*[..]}
+    // ]]
     #[test]
     fn test_calculate_unknown_properties_uniform_uniform() -> Result<()> {
         let stat_a = StatisticsV2::new_uniform(Interval::make(Some(0.), Some(12.))?)?;
         let stat_b = StatisticsV2::new_uniform(Interval::make(Some(12.), Some(36.))?)?;
 
         let test_data = vec![
-            // mean
+            // Mean:
             (
                 compute_mean(&Operator::Plus, &stat_a, &stat_b)?,
                 ScalarValue::from(30.),
@@ -1326,7 +1330,7 @@ mod tests {
                 compute_mean(&Operator::Multiply, &stat_a, &stat_b)?,
                 ScalarValue::from(144.),
             ),
-            // median
+            // Median:
             (
                 compute_median(&Operator::Plus, &stat_a, &stat_b)?,
                 ScalarValue::from(30.),
@@ -1335,9 +1339,7 @@ mod tests {
                 compute_median(&Operator::Minus, &stat_a, &stat_b)?,
                 ScalarValue::from(-18.),
             ),
-            // FYI: median of combined distributions for mul, div and mod ops doesn't exist.
-
-            // variance
+            // Variance:
             (
                 compute_variance(&Operator::Plus, &stat_a, &stat_b)?,
                 ScalarValue::from(60.),
@@ -1346,7 +1348,10 @@ mod tests {
                 compute_variance(&Operator::Minus, &stat_a, &stat_b)?,
                 ScalarValue::from(60.),
             ),
-            // (compute_variance(&Operator::Multiply, &stat_a, &stat_b), Some(Float64(Some(9216.)))),
+            (
+                compute_variance(&Operator::Multiply, &stat_a, &stat_b)?,
+                ScalarValue::from(9216.),
+            ),
         ];
         for (actual, expected) in test_data {
             assert_eq!(actual, expected);
