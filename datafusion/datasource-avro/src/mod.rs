@@ -24,6 +24,7 @@ mod physical_plan;
 // todo
 // - deprecate old
 // - split feature?
+// build time test
 
 #[cfg(test)]
 mod test_util {
