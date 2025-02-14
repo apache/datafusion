@@ -77,7 +77,7 @@ impl ExprStatisticGraphNode {
     }
 
     /// Get the [`StatisticsV2`] object representing the statistics of the expression.
-    pub fn statistic(&self) -> &StatisticsV2 {
+    pub fn statistics(&self) -> &StatisticsV2 {
         &self.statistics
     }
 
@@ -114,6 +114,9 @@ impl ExprStatisticGraph {
         Ok(Self { graph, root })
     }
 
+    /// This function assigns given statistics to expressions in the DAEG.
+    /// The argument `assignments` associates indices of sought expressions
+    /// with their corresponding new statistics.
     pub fn assign_statistics(&mut self, assignments: &[(usize, StatisticsV2)]) {
         for (index, stats) in assignments {
             let node_index = NodeIndex::from(*index as DefaultIx);
@@ -121,17 +124,15 @@ impl ExprStatisticGraph {
         }
     }
 
-    /// Runs a statistics evaluation mechanism in a bottom-up manner,
-    /// to calculate a root expression statistic.
-    /// Returns a calculated root expression statistic.
+    /// Computes statistics for an expression via a bottom-up traversal.
     pub fn evaluate_statistics(&mut self) -> Result<&StatisticsV2> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(idx) = dfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(idx, Outgoing);
             let mut children_statistics = neighbors
-                .map(|child| &self.graph[child].statistics)
+                .map(|child| self.graph[child].statistics())
                 .collect::<Vec<_>>();
-            // Note: all distributions are recognized as independent, by default.
+            // Note that all distributions are assumed to be independent.
             if !children_statistics.is_empty() {
                 // Reverse to align with `PhysicalExpr`'s children:
                 children_statistics.reverse();
@@ -140,11 +141,11 @@ impl ExprStatisticGraph {
                     .evaluate_statistics(&children_statistics)?;
             }
         }
-
-        Ok(&self.graph[self.root].statistics)
+        Ok(self.graph[self.root].statistics())
     }
 
-    /// Runs a propagation mechanism in a top-down manner to define a statistics for a leaf nodes.
+    /// Runs a propagation mechanism in a top-down manner to update statistics
+    /// of leaf nodes.
     pub fn propagate_statistics(
         &mut self,
         given_stats: StatisticsV2,
@@ -185,9 +186,9 @@ impl ExprStatisticGraph {
             children.reverse();
             let children_stats = children
                 .iter()
-                .map(|child| self.graph[*child].statistic())
+                .map(|child| self.graph[*child].statistics())
                 .collect::<Vec<_>>();
-            let node_statistics = self.graph[node].statistic();
+            let node_statistics = self.graph[node].statistics();
             let propagated_statistics = self.graph[node]
                 .expr
                 .propagate_statistics(node_statistics, &children_stats)?;

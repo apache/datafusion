@@ -134,7 +134,7 @@
 //!    +---+                           +---+
 //!
 //!  (c) Top-down propagation: Step 3  (d) Top-down propagation: Step 4
-//! 
+//!
 //!    * [-3, 1] ∩ ([4, 4] - [1, 4]) = [0, 1]
 //!    ** [1, 4] ∩ ([4, 4] - [0, 1]) = [3, 4]
 //!    *** [1, 2] ∩ [sqrt(3), sqrt(4)] = [sqrt(3), 2]
@@ -385,8 +385,9 @@ pub fn propagate_comparison(
 impl ExprIntervalGraph {
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &Schema) -> Result<Self> {
         // Build the full graph:
-        let (root, graph) =
-            build_dag(expr, &|node| ExprIntervalGraphNode::make_node(node, schema))?;
+        let (root, graph) = build_dag(expr, &|node| {
+            ExprIntervalGraphNode::make_node(node, schema)
+        })?;
         Ok(Self { graph, root })
     }
 
@@ -555,9 +556,6 @@ impl ExprIntervalGraph {
     /// Computes bounds for an expression using interval arithmetic via a
     /// bottom-up traversal.
     ///
-    /// # Arguments
-    /// * `leaf_bounds` - &[(usize, Interval)]. Provide NodeIndex, Interval tuples for leaf variables.
-    ///
     /// # Examples
     ///
     /// ```
@@ -615,7 +613,7 @@ impl ExprIntervalGraph {
                     self.graph[node].expr.evaluate_bounds(&children_intervals)?;
             }
         }
-        Ok(&self.graph[self.root].interval)
+        Ok(self.graph[self.root].interval())
     }
 
     /// Updates/shrinks bounds for leaf expressions using interval arithmetic
