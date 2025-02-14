@@ -37,8 +37,8 @@ use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::stats_v2::StatisticsV2::{Bernoulli, Gaussian};
-use datafusion_expr::stats_v2::{
+use datafusion_expr::statistics::StatisticsV2::{Bernoulli, Gaussian};
+use datafusion_expr::statistics::{
     combine_bernoullis, combine_gaussians, create_bernoulli_from_comparison,
     new_unknown_from_binary_op, StatisticsV2,
 };

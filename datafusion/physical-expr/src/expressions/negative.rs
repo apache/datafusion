@@ -31,7 +31,7 @@ use arrow::{
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::stats_v2::StatisticsV2::{
+use datafusion_expr::statistics::StatisticsV2::{
     self, Bernoulli, Exponential, Gaussian, Uniform, Unknown,
 };
 use datafusion_expr::{

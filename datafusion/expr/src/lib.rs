@@ -56,7 +56,7 @@ pub mod simplify;
 pub mod sort_properties {
     pub use datafusion_expr_common::sort_properties::*;
 }
-pub mod stats_v2 {
+pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
 pub mod test;

@@ -24,7 +24,7 @@ use crate::utils::{build_dag, ExprTreeNode};
 
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::stats_v2::StatisticsV2;
+use datafusion_expr::statistics::StatisticsV2;
 use datafusion_expr_common::interval_arithmetic::Interval;
 
 use petgraph::adj::DefaultIx;
@@ -205,7 +205,7 @@ mod tests {
 
     use crate::expressions::{binary, try_cast, Column};
     use crate::intervals::cp_solver::PropagationResult;
-    use crate::utils::stats_v2_graph::ExprStatisticGraph;
+    use crate::statistics::stats_solver::ExprStatisticGraph;
 
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::{Result, ScalarValue};
