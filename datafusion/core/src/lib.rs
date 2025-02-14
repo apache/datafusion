@@ -964,6 +964,12 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/sql/prepared_statements.md",
+    user_guide_prepared_statements
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/sql/scalar_functions.md",
     user_guide_sql_scalar_functions
 );

@@ -24,12 +24,10 @@ use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
 use datafusion_common::cast::as_binary_array;
 
-use crate::utils::take_function_args;
 use arrow::compute::StringArrayType;
-use datafusion_common::plan_err;
 use datafusion_common::{
-    cast::as_generic_binary_array, exec_err, internal_err, DataFusionError, Result,
-    ScalarValue,
+    cast::as_generic_binary_array, exec_err, internal_err, plan_err,
+    utils::take_function_args, DataFusionError, Result, ScalarValue,
 };
 use datafusion_expr::ColumnarValue;
 use md5::Md5;

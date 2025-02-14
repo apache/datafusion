@@ -26,12 +26,16 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::Result;
 use datafusion_common::{
-    cast::as_generic_list_array, exec_err, not_impl_err, plan_err, utils::list_ndims,
+    cast::as_generic_list_array,
+    exec_err, not_impl_err, plan_err,
+    utils::{list_ndims, take_function_args},
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -163,7 +167,18 @@ impl Default for ArrayPrepend {
 impl ArrayPrepend {
     pub fn new() -> Self {
         Self {
-            signature: Signature::element_and_array(Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Array,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![
                 String::from("list_prepend"),
                 String::from("array_push_front"),
@@ -415,11 +430,9 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_append SQL function
 pub(crate) fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_append expects two arguments");
-    }
+    let [array, _] = take_function_args("array_append", args)?;
 
-    match args[0].data_type() {
+    match array.data_type() {
         DataType::LargeList(_) => general_append_and_prepend::<i64>(args, true),
         _ => general_append_and_prepend::<i32>(args, true),
     }
@@ -427,11 +440,9 @@ pub(crate) fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_prepend SQL function
 pub(crate) fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_prepend expects two arguments");
-    }
+    let [_, array] = take_function_args("array_prepend", args)?;
 
-    match args[1].data_type() {
+    match array.data_type() {
         DataType::LargeList(_) => general_append_and_prepend::<i64>(args, false),
         _ => general_append_and_prepend::<i32>(args, false),
     }
