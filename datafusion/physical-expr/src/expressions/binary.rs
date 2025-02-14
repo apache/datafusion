@@ -4424,13 +4424,11 @@ mod tests {
         right: Arc<dyn PhysicalExpr>,
         schema: &Schema,
     ) -> Result<BinaryExpr> {
-        Ok(
-            binary_op(Arc::clone(&left), op, Arc::clone(&right), schema)?
-                .as_any()
-                .downcast_ref::<BinaryExpr>()
-                .unwrap()
-                .clone(),
-        )
+        Ok(binary_op(left, op, right, schema)?
+            .as_any()
+            .downcast_ref::<BinaryExpr>()
+            .unwrap()
+            .clone())
     }
 
     /// Test for Uniform-Uniform, Unknown-Uniform, Uniform-Unknown and Unknown-Unknown evaluation.

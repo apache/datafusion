@@ -405,7 +405,7 @@ pub fn compute_variance(
 mod tests {
     use std::sync::Arc;
 
-    use crate::expressions::{binary, try_cast, BinaryExpr, Column};
+    use crate::expressions::{binary, try_cast, Column};
     use crate::intervals::cp_solver::PropagationResult;
     use crate::utils::stats_v2_graph::{
         compute_mean, compute_median, compute_variance, create_bernoulli_from_comparison,
@@ -432,7 +432,7 @@ mod tests {
         op: Operator,
         right: Arc<dyn PhysicalExpr>,
         schema: &Schema,
-    ) -> Result<BinaryExpr> {
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         let left_type = left.data_type(schema)?;
         let right_type = right.data_type(schema)?;
         let binary_type_coercer = BinaryTypeCoercer::new(&left_type, &op, &right_type);
@@ -440,8 +440,7 @@ mod tests {
 
         let left_expr = try_cast(left, schema, lhs)?;
         let right_expr = try_cast(right, schema, rhs)?;
-        let b = binary(left_expr, op, right_expr, schema);
-        Ok(b?.as_any().downcast_ref::<BinaryExpr>().unwrap().clone())
+        binary(left_expr, op, right_expr, schema)
     }
 
     // Expected test results were calculated in Wolfram Mathematica, by using
@@ -596,16 +595,9 @@ mod tests {
         let c = Arc::new(Column::new("c", 2)) as _;
         let d = Arc::new(Column::new("d", 3)) as _;
 
-        let left =
-            Arc::new(binary_expr(Arc::clone(&a), Plus, Arc::clone(&b), schema)?) as _;
-        let right =
-            Arc::new(binary_expr(Arc::clone(&c), Minus, Arc::clone(&d), schema)?) as _;
-        let expr = Arc::new(binary_expr(
-            Arc::clone(&left),
-            Eq,
-            Arc::clone(&right),
-            schema,
-        )?);
+        let left = binary_expr(a, Plus, b, schema)?;
+        let right = binary_expr(c, Minus, d, schema)?;
+        let expr = binary_expr(left, Eq, right, schema)?;
 
         let mut graph = ExprStatisticGraph::try_new(expr, schema)?;
         // 2, 5 and 6 are BinaryExpr
