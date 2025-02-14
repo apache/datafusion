@@ -17,13 +17,14 @@
 
 use std::f64::consts::LN_2;
 
+use crate::interval_arithmetic::{apply_operator, Interval};
+use crate::operator::Operator;
+use crate::type_coercion::binary::binary_numeric_coercion;
+
 use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::DataType;
 use datafusion_common::rounding::alter_fp_rounding_mode;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
-use datafusion_expr_common::operator::Operator;
-use datafusion_expr_common::type_coercion::binary::binary_numeric_coercion;
 
 /// New, enhanced `Statistics` definition, represents five core statistical
 /// distributions. New variants will be added over time.
@@ -857,11 +858,11 @@ mod tests {
         compute_mean, compute_median, compute_variance, create_bernoulli_from_comparison,
         new_unknown_from_binary_op, StatisticsV2, UniformDistribution,
     };
+    use crate::interval_arithmetic::{apply_operator, Interval};
+    use crate::operator::Operator;
 
     use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
-    use datafusion_expr_common::operator::Operator;
 
     // The test data in the following tests are placed as follows: (stat -> expected answer)
     #[test]

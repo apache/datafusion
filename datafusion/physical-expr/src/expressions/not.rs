@@ -28,8 +28,8 @@ use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::stats_v2::StatisticsV2::{self, Bernoulli};
 use datafusion_expr::ColumnarValue;
-use datafusion_physical_expr_common::stats_v2::StatisticsV2::{self, Bernoulli};
 
 /// Not expression
 #[derive(Debug, Eq)]

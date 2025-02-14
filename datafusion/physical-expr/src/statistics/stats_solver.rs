@@ -24,8 +24,8 @@ use crate::utils::{build_dag, ExprTreeNode};
 
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::stats_v2::StatisticsV2;
 use datafusion_expr_common::interval_arithmetic::Interval;
-use datafusion_physical_expr_common::stats_v2::StatisticsV2;
 
 use petgraph::adj::DefaultIx;
 use petgraph::prelude::Bfs;
@@ -211,9 +211,9 @@ mod tests {
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr_common::interval_arithmetic::Interval;
     use datafusion_expr_common::operator::Operator;
+    use datafusion_expr_common::statistics::StatisticsV2;
     use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-    use datafusion_physical_expr_common::stats_v2::StatisticsV2;
 
     pub fn binary_expr(
         left: Arc<dyn PhysicalExpr>,

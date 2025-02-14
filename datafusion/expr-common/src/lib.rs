@@ -33,4 +33,5 @@ pub mod interval_arithmetic;
 pub mod operator;
 pub mod signature;
 pub mod sort_properties;
+pub mod statistics;
 pub mod type_coercion;

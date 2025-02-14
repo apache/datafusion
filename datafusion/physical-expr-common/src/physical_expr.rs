@@ -20,7 +20,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::stats_v2::StatisticsV2;
 use crate::utils::scatter;
 
 use arrow::array::BooleanArray;
@@ -31,6 +30,7 @@ use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
+use datafusion_expr_common::statistics::StatisticsV2;
 
 use itertools::izip;
 

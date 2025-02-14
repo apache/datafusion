@@ -15,18 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
-#![deny(clippy::clone_on_ref_ptr)]
+//! Statistics and constraint propagation library
 
-//! Physical Expr Common packages for [DataFusion]
-//! This package contains high level PhysicalExpr trait
-//!
-//! [DataFusion]: <https://crates.io/crates/datafusion>
-
-pub mod binary_map;
-pub mod binary_view_map;
-pub mod datum;
-pub mod physical_expr;
-pub mod sort_expr;
-pub mod tree_node;
-pub mod utils;
+pub mod stats_solver;

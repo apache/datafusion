@@ -38,8 +38,6 @@ use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableGraph;
 
 // Public interface:
-pub mod stats_v2_graph;
-
 pub use guarantee::{Guarantee, LiteralGuarantee};
 
 /// Assume the predicate is in the form of CNF, split the predicate to a Vec of PhysicalExprs.
