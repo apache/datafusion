@@ -2076,26 +2076,47 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
     // Function definition - Alias of the resulting column - Arguments of the function
     #[derive(Clone)]
     struct WindowFuncParam(WindowFunctionDefinition, String, Vec<Arc<dyn PhysicalExpr>>);
-    let function_arg = vec![col("nullable_col", &input_schema)?];
-    let fn_count = WindowFuncParam(
+    let function_arg_ordered = vec![col("nullable_col", &input_schema)?];
+    let function_arg_unordered = vec![col("non_nullable_col", &input_schema)?];
+    let fn_count_on_ordered = WindowFuncParam(
         WindowFunctionDefinition::AggregateUDF(count_udaf()),
         "count".to_string(),
-        function_arg.clone(),
+        function_arg_ordered.clone(),
     );
-    let fn_max = WindowFuncParam(
+    let fn_max_on_ordered = WindowFuncParam(
         WindowFunctionDefinition::AggregateUDF(max_udaf()),
         "max".to_string(),
-        function_arg.clone(),
+        function_arg_ordered.clone(),
     );
-    let fn_min = WindowFuncParam(
+    let fn_min_on_ordered = WindowFuncParam(
         WindowFunctionDefinition::AggregateUDF(min_udaf()),
         "min".to_string(),
-        function_arg.clone(),
+        function_arg_ordered.clone(),
     );
-    let fn_avg = WindowFuncParam(
+    let fn_avg_on_ordered = WindowFuncParam(
         WindowFunctionDefinition::AggregateUDF(avg_udaf()),
         "avg".to_string(),
-        function_arg,
+        function_arg_ordered,
+    );
+    let fn_count_on_unordered = WindowFuncParam(
+        WindowFunctionDefinition::AggregateUDF(count_udaf()),
+        "count".to_string(),
+        function_arg_unordered.clone(),
+    );
+    let fn_max_on_unordered = WindowFuncParam(
+        WindowFunctionDefinition::AggregateUDF(max_udaf()),
+        "max".to_string(),
+        function_arg_unordered.clone(),
+    );
+    let fn_min_on_unordered = WindowFuncParam(
+        WindowFunctionDefinition::AggregateUDF(min_udaf()),
+        "min".to_string(),
+        function_arg_unordered.clone(),
+    );
+    let fn_avg_on_unordered = WindowFuncParam(
+        WindowFunctionDefinition::AggregateUDF(avg_udaf()),
+        "avg".to_string(),
+        function_arg_unordered,
     );
     struct TestCase<'a> {
         // Whether window expression has a partition_by expression or not.
@@ -2105,8 +2126,6 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         // only one direction (when set-monotonicity has a meaning), or it is
         // a sliding window.
         window_frame: Arc<WindowFrame>,
-        // `ORDER BY` expression in the OVER() clause. Empty means no requirement.
-        order_by: LexOrdering,
         // Function definition - Alias of the resulting column - Arguments of the function
         func: WindowFuncParam,
         // Global sort requirement at the root and its direction,
@@ -2116,14 +2135,13 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         expected_plan: Vec<&'a str>,
     }
     let test_cases = vec![
-        // ====================================REGION STARTS========================================
-        //      {WindowAggExec + [unbounded preceding, unbounded following] + no partition_by}
+        // ============================================REGION STARTS============================================
+        // WindowAggExec + Plain(unbounded preceding, unbounded following) + no partition_by + on ordered column
         // Case 0:
         TestCase {
             partition_by: false,
             window_frame: Arc::new(WindowFrame::new(None)),
-            order_by: LexOrdering::default(),
-            func: fn_count.clone(),
+            func: fn_count_on_ordered.clone(),
             required_sort_columns: vec![("nullable_col", true, false), ("count", false, false)],
             initial_plan: vec![
                 "SortExec: expr=[nullable_col@0 ASC NULLS LAST, count@2 DESC NULLS LAST], preserve_partitioning=[false]",
@@ -2139,7 +2157,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         TestCase {
             partition_by: false,
             window_frame: Arc::new(WindowFrame::new(None)),
-            order_by: LexOrdering::default(),
+
             func: fn_count.clone(),
             required_sort_columns: vec![("nullable_col", false, false), ("count", false, false)],
             initial_plan: vec![
@@ -2157,7 +2175,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         TestCase {
             partition_by: false,
             window_frame: Arc::new(WindowFrame::new(None)),
-            order_by: LexOrdering::default(),
+
             func: fn_count.clone(),
             required_sort_columns: vec![ ("count", false, false),("nullable_col", true, false)],
             initial_plan: vec![
@@ -2174,7 +2192,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         TestCase {
             partition_by: false,
             window_frame: Arc::new(WindowFrame::new(None)),
-            order_by: LexOrdering::default(),
+
             func: fn_avg.clone(),
             required_sort_columns: vec![ ("avg", true, false),("nullable_col", true, false)],
             initial_plan: vec![
@@ -2195,7 +2213,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         TestCase {
             partition_by: true,
             window_frame: Arc::new(WindowFrame::new(None)),
-            order_by: LexOrdering::default(),
+
             func: fn_avg.clone(),
             required_sort_columns: vec![("nullable_col", true, false), ("avg", false, false)],
             initial_plan: vec![
@@ -2212,7 +2230,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         TestCase {
             partition_by: true,
             window_frame: Arc::new(WindowFrame::new(None)),
-            order_by: LexOrdering::default(),
+
             func: fn_avg.clone(),
             required_sort_columns: vec![("nullable_col", true, false), ("avg", true, false)],
             initial_plan: vec![
@@ -2228,7 +2246,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         TestCase {
             partition_by: true,
             window_frame: Arc::new(WindowFrame::new(None)),
-            order_by: LexOrdering::default(),
+
             func: fn_avg.clone(),
             required_sort_columns: vec![ ("avg", true, false),("nullable_col", true, false)],
             initial_plan: vec![
@@ -2249,7 +2267,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         TestCase {
             partition_by: false,
             window_frame: Arc::new(WindowFrame::new(Some(true))),
-            order_by: LexOrdering::default(),
+
             func: fn_count.clone(),
             required_sort_columns: vec![("nullable_col", true, false), ("count", true, false)],
             initial_plan: vec![
@@ -2266,7 +2284,24 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
         TestCase {
             partition_by: false,
             window_frame: Arc::new(WindowFrame::new(Some(true))),
-            order_by: LexOrdering::default(),
+
+            func: fn_max.clone(),
+            required_sort_columns: vec![("max", true, false), ("nullable_col", true, false)],
+            initial_plan: vec![
+                "SortExec: expr=[max@2 ASC NULLS LAST, nullable_col@0 ASC NULLS LAST], preserve_partitioning=[false]",
+                "  BoundedWindowAggExec: wdw=[max: Ok(Field { name: \"max\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: true }], mode=[Sorted]",
+                "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
+            ],
+            expected_plan: vec![
+                "BoundedWindowAggExec: wdw=[max: Ok(Field { name: \"max\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: true }], mode=[Sorted]",
+                "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
+            ],
+        },
+        // Case 9:
+        TestCase {
+            partition_by: false,
+            window_frame: Arc::new(WindowFrame::new(Some(true))),
+
             func: fn_min.clone(),
             required_sort_columns: vec![("min", false, false), ("nullable_col", true, false)],
             initial_plan: vec![
@@ -2279,11 +2314,10 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
                 "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
             ],
         },
-        // Case 9:
+        // Case 10:
         TestCase {
             partition_by: false,
             window_frame: Arc::new(WindowFrame::new(Some(true))),
-            order_by: LexOrdering::default(),
             func: fn_min.clone(),
             required_sort_columns: vec![("min", true, false), ("nullable_col", true, false)],
             initial_plan: vec![
@@ -2294,11 +2328,10 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             expected_plan: vec![
                  ],
         },
-        // Case 10:
+        // Case 11:
         TestCase {
             partition_by: false,
             window_frame: Arc::new(WindowFrame::new(Some(true))),
-            order_by: LexOrdering::default(),
             func: fn_avg.clone(),
             required_sort_columns: vec![("avg", true, false), ("nullable_col", true, false)],
             initial_plan: vec![
@@ -2323,7 +2356,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             case.func.1,
             &case.func.2,
             &partition_by,
-            &case.order_by,
+            &LexOrdering::default(),
             case.window_frame,
             input_schema.as_ref(),
             false,
