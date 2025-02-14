@@ -69,7 +69,7 @@ async fn oom_sort() {
         .with_expected_errors(vec![
             "Resources exhausted: Memory Exhausted while Sorting (DiskManager is disabled)",
         ])
-        .with_memory_limit(400_000)
+        .with_memory_limit(500_000)
         .run()
         .await
 }

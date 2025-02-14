@@ -435,23 +435,12 @@ impl ExternalSorter {
         // We'll gradually collect the sorted stream into self.in_mem_batches, or directly
         // write sorted batches to disk when the memory is insufficient.
         let mut spill_writer: Option<IPCWriter> = None;
-        // Leave at least 1/3 of spill reservation for sort/merge the next batch. Here the
-        // 1/3 is simply an arbitrary chosen number.
-        let sort_merge_minimum_overhead = self.sort_spill_reservation_bytes / 3;
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
             match &mut spill_writer {
                 None => {
                     let sorted_size = get_reserved_byte_for_record_batch(&batch);
-
-                    // We reserve more memory to ensure that we'll have enough memory for
-                    // `SortPreservingMergeStream` after consuming this batch, otherwise we'll
-                    // start spilling everything to disk.
-                    if self
-                        .reservation
-                        .try_grow(sorted_size + sort_merge_minimum_overhead)
-                        .is_err()
-                    {
+                    if self.reservation.try_grow(sorted_size).is_err() {
                         // Directly write in_mem_batches as well as all the remaining batches in
                         // sorted_stream to disk. Further batches fetched from `sorted_stream` will
                         // be handled by the `Some(writer)` matching arm.
@@ -469,9 +458,6 @@ impl ExternalSorter {
                         self.spills.push(spill_file);
                     } else {
                         self.in_mem_batches.push(batch);
-
-                        // Gives back memory for merging the next batch.
-                        self.reservation.shrink(sort_merge_minimum_overhead);
                     }
                 }
                 Some(writer) => {
