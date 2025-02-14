@@ -158,7 +158,7 @@ mod test {
             f32::NEG_INFINITY,
         ]));
         let args = ScalarFunctionArgs {
-            args: vec![ColumnarValue::Array(array.clone())],
+            args: vec![ColumnarValue::Array(Arc::clone(&array))],
             number_rows: array.len(),
             return_type: &DataType::Float32,
         };
@@ -202,7 +202,7 @@ mod test {
             f64::NEG_INFINITY,
         ]));
         let args = ScalarFunctionArgs {
-            args: vec![ColumnarValue::Array(array.clone())],
+            args: vec![ColumnarValue::Array(Arc::clone(&array))],
             number_rows: array.len(),
             return_type: &DataType::Float64,
         };
