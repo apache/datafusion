@@ -90,7 +90,7 @@ impl EnforceSorting {
 /// via its children.
 pub type PlanWithCorrespondingSort = PlanContext<bool>;
 
-fn update_sort_ctx_children(
+fn update_sort_ctx_children_data(
     mut node: PlanWithCorrespondingSort,
     data: bool,
 ) -> Result<PlanWithCorrespondingSort> {
@@ -322,7 +322,10 @@ pub fn parallelize_sorts(
 pub fn ensure_sorting(
     mut requirements: PlanWithCorrespondingSort,
 ) -> Result<Transformed<PlanWithCorrespondingSort>> {
-    requirements = update_sort_ctx_children(requirements, false)?;
+    // Before starting, making requirements' children's ExecutionPlan be same as the requirements' plan's children's ExecutionPlan.
+    // It should be guaranteed by previous code, but we need to make sure to avoid any potential missing.
+    requirements = requirements.update_plan_from_children()?;
+    requirements = update_sort_ctx_children_data(requirements, false)?;
 
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
     if requirements.children.is_empty() {
@@ -353,7 +356,8 @@ pub fn ensure_sorting(
                     child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 }
                 child = add_sort_above(child, required, None);
-                child = update_sort_ctx_children(child, true)?;
+                child = child.update_plan_from_children()?;
+                child = update_sort_ctx_children_data(child, true)?;
             }
         } else if physical_ordering.is_none()
             || !plan.maintains_input_order()[idx]
@@ -383,9 +387,10 @@ pub fn ensure_sorting(
                 Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
         }
         return Ok(Transformed::yes(child_node));
+    } else {
+        requirements = requirements.update_plan_from_children()?;
     }
-
-    update_sort_ctx_children(requirements, false).map(Transformed::yes)
+    update_sort_ctx_children_data(requirements, false).map(Transformed::yes)
 }
 
 /// Analyzes a given [`SortExec`] (`plan`) to determine whether its input
@@ -609,8 +614,9 @@ fn remove_corresponding_sort_from_sub_plan(
                 }
             })
             .collect::<Result<_>>()?;
+        node = node.update_plan_from_children()?;
         if any_connection || node.children.is_empty() {
-            node = update_sort_ctx_children(node, false)?;
+            node = update_sort_ctx_children_data(node, false)?;
         }
 
         // Replace with variants that do not preserve order.
@@ -643,7 +649,8 @@ fn remove_corresponding_sort_from_sub_plan(
             Arc::new(CoalescePartitionsExec::new(plan)) as _
         };
         node = PlanWithCorrespondingSort::new(plan, false, vec![node]);
-        node = update_sort_ctx_children(node, false)?;
+        node = node.update_plan_from_children()?;
+        node = update_sort_ctx_children_data(node, false)?;
     }
     Ok(node)
 }
