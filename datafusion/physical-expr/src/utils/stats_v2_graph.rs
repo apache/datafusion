@@ -23,13 +23,10 @@ use crate::physical_expr::PhysicalExpr;
 use crate::utils::{build_dag, ExprTreeNode};
 
 use arrow::datatypes::{DataType, Schema};
-use arrow_array::ArrowNativeTypeOp;
-use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
-use datafusion_expr_common::operator::Operator;
-use datafusion_physical_expr_common::stats_v2::StatisticsV2::{self, Gaussian, Uniform};
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_physical_expr_common::stats_v2::StatisticsV2;
 
-use log::debug;
 use petgraph::adj::DefaultIx;
 use petgraph::prelude::Bfs;
 use petgraph::stable_graph::{NodeIndex, StableGraph};
@@ -54,7 +51,7 @@ pub struct ExprStatisticGraphNode {
 
 impl ExprStatisticGraphNode {
     /// Constructs a new DAEG node based on the given interval with a
-    /// [`Uniform`] distribution.
+    /// `Uniform` distribution.
     fn new_uniform(expr: Arc<dyn PhysicalExpr>, interval: Interval) -> Result<Self> {
         StatisticsV2::new_uniform(interval)
             .map(|statistics| ExprStatisticGraphNode { expr, statistics })
@@ -81,7 +78,7 @@ impl ExprStatisticGraphNode {
     }
 
     /// This function creates a DAEG node from DataFusion's [`ExprTreeNode`]
-    /// object. Literals are created with [`Uniform`] distributions with a
+    /// object. Literals are created with `Uniform` distributions with a
     /// definite, singleton interval. Expressions with a `Boolean` data type
     /// result in a`Bernoulli` distribution with an unknown success probability.
     /// Any other expression starts with an `Unknown` distribution with an
@@ -174,7 +171,8 @@ impl ExprStatisticGraph {
         while let Some(node) = bfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(node, Outgoing);
             let mut children = neighbors.collect::<Vec<_>>();
-            // If the current expression is a leaf, its statistic is now final. Stop here.
+            // If the current expression is a leaf, its statistics is now final.
+            // So, just continue with the propagation procedure:
             if children.is_empty() {
                 continue;
             }
@@ -189,8 +187,8 @@ impl ExprStatisticGraph {
                 .expr
                 .propagate_statistics(node_statistics, &children_stats)?;
             if let Some(propagated_stats) = propagated_statistics {
-                for (child_idx, stat) in children.into_iter().zip(propagated_stats) {
-                    self.graph[child_idx].statistics = stat;
+                for (child_idx, stats) in children.into_iter().zip(propagated_stats) {
+                    self.graph[child_idx].statistics = stats;
                 }
             } else {
                 // The constraint is infeasible, report:
@@ -201,231 +199,21 @@ impl ExprStatisticGraph {
     }
 }
 
-/// Creates a new statistic with `Bernoulli` distribution by computing the
-/// resulting probability. Expects `op` to be a comparison operator, with
-/// `left` and `right` having numeric distributions. The resulting distribution
-/// has the `Float64` data type.
-pub fn create_bernoulli_from_comparison(
-    op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
-) -> Result<StatisticsV2> {
-    match (left, right) {
-        (Uniform(left), Uniform(right)) => {
-            match op {
-                Operator::Eq | Operator::NotEq => {
-                    let (li, ri) = (left.range(), right.range());
-                    if let Some(intersection) = li.intersect(ri)? {
-                        // If the ranges are not disjoint, calculate the probability
-                        // of equality using cardinalities:
-                        if let (Some(lc), Some(rc), Some(ic)) = (
-                            li.cardinality(),
-                            ri.cardinality(),
-                            intersection.cardinality(),
-                        ) {
-                            // Avoid overflow by widening the type temporarily:
-                            let pairs = ((lc as u128) * (rc as u128)) as f64;
-                            let p = (ic as f64).div_checked(pairs)?;
-                            return if op == &Operator::Eq {
-                                StatisticsV2::new_bernoulli(ScalarValue::from(p))
-                            } else {
-                                StatisticsV2::new_bernoulli(ScalarValue::from(1.0 - p))
-                            };
-                        }
-                    } else if op == &Operator::Eq {
-                        // If the ranges are disjoint, probability of equality is 0.
-                        return StatisticsV2::new_bernoulli(ScalarValue::from(0.0));
-                    } else {
-                        // If the ranges are disjoint, probability of not-equality is 1.
-                        return StatisticsV2::new_bernoulli(ScalarValue::from(1.0));
-                    }
-                }
-                Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
-                    // TODO: We can handle inequality operators and calculate a
-                    // `p` value instead of falling back to an unknown Bernoulli
-                    // distribution. Note that the strict and non-strict inequalities
-                    // may require slightly different logic in case of real vs.
-                    // integral data types.
-                }
-                _ => {}
-            }
-        }
-        (Gaussian(_), Gaussian(_)) => {
-            // TODO: We can handle Gaussian comparisons and calculate a `p` value
-            //       instead of falling back to an unknown Bernoulli distribution.
-        }
-        _ => {}
-    }
-    let (li, ri) = (left.range()?, right.range()?);
-    let range_evaluation = apply_operator(op, &li, &ri)?;
-    if range_evaluation.eq(&Interval::CERTAINLY_FALSE) {
-        StatisticsV2::new_bernoulli(ScalarValue::from(0.0))
-    } else if range_evaluation.eq(&Interval::CERTAINLY_TRUE) {
-        StatisticsV2::new_bernoulli(ScalarValue::from(1.0))
-    } else if range_evaluation.eq(&Interval::UNCERTAIN) {
-        StatisticsV2::new_bernoulli(ScalarValue::try_from(&DataType::Float64)?)
-    } else {
-        internal_err!("This function must be called with a comparison operator")
-    }
-}
-
-/// Creates a new statistic with `Unknown` distribution, and tries to compute
-/// mean, median and variance if possible.
-pub fn new_unknown_from_binary_expr(
-    op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
-) -> Result<StatisticsV2> {
-    StatisticsV2::new_unknown(
-        compute_mean(op, left, right)?,
-        compute_median(op, left, right)?,
-        compute_variance(op, left, right)?,
-        apply_operator(op, &left.range()?, &right.range()?)?,
-    )
-}
-
-/// Computes the mean value for the result of the given binary operation on
-/// two statistics.
-pub fn compute_mean(
-    op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
-) -> Result<ScalarValue> {
-    let (left_mean, right_mean) = (left.mean()?, right.mean()?);
-
-    match op {
-        Operator::Plus => return left_mean.add_checked(right_mean),
-        Operator::Minus => return left_mean.sub_checked(right_mean),
-        // Note the independence assumption below:
-        Operator::Multiply => return left_mean.mul_checked(right_mean),
-        // TODO: We can calculate the mean for division when we support reciprocals,
-        // or know the distributions of the operands. For details, see:
-        //
-        // <https://en.wikipedia.org/wiki/Algebra_of_random_variables>
-        // <https://stats.stackexchange.com/questions/185683/distribution-of-ratio-between-two-independent-uniform-random-variables>
-        Operator::Divide => {
-            // Fall back to an unknown mean value for division:
-            debug!("Division is not yet supported for mean calculations");
-        }
-        // Fall back to an unknown mean value for other cases:
-        _ => {
-            debug!("Unsupported operator {op} for mean calculations");
-        }
-    }
-    let target_type = StatisticsV2::target_type(&[&left_mean, &right_mean])?;
-    ScalarValue::try_from(target_type)
-}
-
-/// Computes the median value for the result of the given binary operation on
-/// two statistics. Currently, the median is calculable only for addition and
-/// subtraction operations on:
-/// - [`Uniform`] and [`Uniform`] distributions, and
-/// - [`Gaussian`] and [`Gaussian`] distributions.
-pub fn compute_median(
-    op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
-) -> Result<ScalarValue> {
-    match (left, right) {
-        (Uniform(lu), Uniform(ru)) => {
-            let (left_median, right_median) = (lu.median()?, ru.median()?);
-            // Under the independence assumption, the result is a symmetric
-            // triangular distribution, so we can simply add/subtract the
-            // median values:
-            match op {
-                Operator::Plus => return left_median.add_checked(right_median),
-                Operator::Minus => return left_median.sub_checked(right_median),
-                // Fall back to an unknown median value for other cases:
-                _ => {}
-            }
-        }
-        // Under the independence assumption, the result is another Gaussian
-        // distribution, so we can simply add/subtract the median values:
-        (Gaussian(lg), Gaussian(rg)) => match op {
-            Operator::Plus => return lg.mean().add_checked(rg.mean()),
-            Operator::Minus => return lg.mean().sub_checked(rg.mean()),
-            // Fall back to an unknown median value for other cases:
-            _ => {}
-        },
-        // Fall back to an unknown median value for other cases:
-        _ => {}
-    }
-
-    let (left_median, right_median) = (left.median()?, right.median()?);
-    let target_type = StatisticsV2::target_type(&[&left_median, &right_median])?;
-    ScalarValue::try_from(target_type)
-}
-
-/// Computes the variance value for the result of the given binary operation on
-/// two statistics.
-pub fn compute_variance(
-    op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
-) -> Result<ScalarValue> {
-    let (left_variance, right_variance) = (left.variance()?, right.variance()?);
-
-    match op {
-        // Note the independence assumption below:
-        Operator::Plus => return left_variance.add_checked(right_variance),
-        // Note the independence assumption below:
-        Operator::Minus => return left_variance.add_checked(right_variance),
-        // Note the independence assumption below:
-        Operator::Multiply => {
-            // For more details, along with an explanation of the formula below, see:
-            //
-            // <https://en.wikipedia.org/wiki/Distribution_of_the_product_of_two_random_variables>
-            let (left_mean, right_mean) = (left.mean()?, right.mean()?);
-            let left_mean_sq = left_mean.mul_checked(&left_mean)?;
-            let right_mean_sq = right_mean.mul_checked(&right_mean)?;
-            let left_sos = left_variance.add_checked(&left_mean_sq)?;
-            let right_sos = right_variance.add_checked(&right_mean_sq)?;
-            let pos = left_mean_sq.mul_checked(right_mean_sq)?;
-            return left_sos.mul_checked(right_sos)?.sub_checked(pos);
-        }
-        // TODO: We can calculate the variance for division when we support reciprocals,
-        // or know the distributions of the operands. For details, see:
-        //
-        // <https://en.wikipedia.org/wiki/Algebra_of_random_variables>
-        // <https://stats.stackexchange.com/questions/185683/distribution-of-ratio-between-two-independent-uniform-random-variables>
-        Operator::Divide => {
-            // Fall back to an unknown variance value for division:
-            debug!("Division is not yet supported for variance calculations");
-        }
-        // Fall back to an unknown variance value for other cases:
-        _ => {
-            debug!("Unsupported operator {op} for variance calculations");
-        }
-    }
-    let target_type = StatisticsV2::target_type(&[&left_variance, &right_variance])?;
-    ScalarValue::try_from(target_type)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use crate::expressions::{binary, try_cast, Column};
     use crate::intervals::cp_solver::PropagationResult;
-    use crate::utils::stats_v2_graph::{
-        compute_mean, compute_median, compute_variance, create_bernoulli_from_comparison,
-        new_unknown_from_binary_expr, ExprStatisticGraph,
-    };
+    use crate::utils::stats_v2_graph::ExprStatisticGraph;
 
     use arrow_schema::{DataType, Field, Schema};
-    use datafusion_common::ScalarValue::Float64;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
+    use datafusion_expr_common::interval_arithmetic::Interval;
     use datafusion_expr_common::operator::Operator;
-    use datafusion_expr_common::operator::Operator::{
-        Eq, Gt, GtEq, Lt, LtEq, Minus, Multiply, Plus,
-    };
     use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_expr_common::stats_v2::StatisticsV2;
-
-    type Actual = ScalarValue;
-    type Expected = ScalarValue;
 
     pub fn binary_expr(
         left: Arc<dyn PhysicalExpr>,
@@ -443,146 +231,8 @@ mod tests {
         binary(left_expr, op, right_expr, schema)
     }
 
-    // Expected test results were calculated in Wolfram Mathematica, by using
-    // *METHOD_NAME*[TransformedDistribution[x op y, {x ~ *DISTRIBUTION_X*[..], y ~ *DISTRIBUTION_Y*[..]}]]
     #[test]
-    fn test_calculate_unknown_properties_uniform_uniform() -> Result<()> {
-        let stat_a = StatisticsV2::new_uniform(Interval::make(Some(0.), Some(12.))?)?;
-        let stat_b = StatisticsV2::new_uniform(Interval::make(Some(12.), Some(36.))?)?;
-
-        let test_data: Vec<(Actual, Expected)> = vec![
-            // mean
-            (compute_mean(&Plus, &stat_a, &stat_b)?, Float64(Some(30.))),
-            (compute_mean(&Minus, &stat_a, &stat_b)?, Float64(Some(-18.))),
-            (
-                compute_mean(&Multiply, &stat_a, &stat_b)?,
-                Float64(Some(144.)),
-            ),
-            // median
-            (compute_median(&Plus, &stat_a, &stat_b)?, Float64(Some(30.))),
-            (
-                compute_median(&Minus, &stat_a, &stat_b)?,
-                Float64(Some(-18.)),
-            ),
-            // FYI: median of combined distributions for mul, div and mod ops doesn't exist.
-
-            // variance
-            (
-                compute_variance(&Plus, &stat_a, &stat_b)?,
-                Float64(Some(60.)),
-            ),
-            (
-                compute_variance(&Minus, &stat_a, &stat_b)?,
-                Float64(Some(60.)),
-            ),
-            // (compute_variance(&Operator::Multiply, &stat_a, &stat_b), Some(Float64(Some(9216.)))),
-        ];
-        for (actual, expected) in test_data {
-            assert_eq!(actual, expected);
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_calculate_unknown_properties_gauss_gauss() -> Result<()> {
-        let stat_a = StatisticsV2::new_gaussian(
-            ScalarValue::from(Some(10.)),
-            ScalarValue::from(Some(0.0)),
-        )?;
-        let stat_b = StatisticsV2::new_gaussian(
-            ScalarValue::from(Some(20.)),
-            ScalarValue::from(Some(0.0)),
-        )?;
-
-        let test_data: Vec<(Actual, Expected)> = vec![
-            // mean
-            (compute_mean(&Plus, &stat_a, &stat_b)?, Float64(Some(30.))),
-            (compute_mean(&Minus, &stat_a, &stat_b)?, Float64(Some(-10.))),
-            // median
-            (compute_median(&Plus, &stat_a, &stat_b)?, Float64(Some(30.))),
-            (
-                compute_median(&Minus, &stat_a, &stat_b)?,
-                Float64(Some(-10.)),
-            ),
-        ];
-        for (actual, expected) in test_data {
-            assert_eq!(actual, expected);
-        }
-
-        Ok(())
-    }
-
-    /// Test for Uniform-Uniform, Uniform-Unknown, Unknown-Uniform, Unknown-Unknown pairs,
-    /// where range is always present.
-    #[test]
-    fn test_compute_range_where_present() -> Result<()> {
-        let a = &Interval::make(Some(0.), Some(12.0))?;
-        let b = &Interval::make(Some(0.), Some(12.0))?;
-        let mean = Float64(Some(6.0));
-        for (stat_a, stat_b) in [
-            (
-                StatisticsV2::new_uniform(a.clone())?,
-                StatisticsV2::new_uniform(b.clone())?,
-            ),
-            (
-                StatisticsV2::new_unknown(
-                    mean.clone(),
-                    mean.clone(),
-                    Float64(None),
-                    a.clone(),
-                )?,
-                StatisticsV2::new_uniform(b.clone())?,
-            ),
-            (
-                StatisticsV2::new_uniform(a.clone())?,
-                StatisticsV2::new_unknown(
-                    mean.clone(),
-                    mean.clone(),
-                    Float64(None),
-                    b.clone(),
-                )?,
-            ),
-            (
-                StatisticsV2::new_unknown(
-                    mean.clone(),
-                    mean.clone(),
-                    Float64(None),
-                    a.clone(),
-                )?,
-                StatisticsV2::new_unknown(
-                    mean.clone(),
-                    mean.clone(),
-                    Float64(None),
-                    b.clone(),
-                )?,
-            ),
-        ] {
-            for op in [Plus, Minus, Multiply] {
-                assert_eq!(
-                    new_unknown_from_binary_expr(&op, &stat_a, &stat_b)?.range()?,
-                    apply_operator(&op, a, b)?,
-                    "Failed for {:?} {op} {:?}",
-                    stat_a,
-                    stat_b
-                );
-            }
-            for op in [Gt, GtEq, Lt, LtEq, Eq] {
-                assert_eq!(
-                    create_bernoulli_from_comparison(&op, &stat_a, &stat_b)?.range()?,
-                    apply_operator(&op, a, b)?,
-                    "Failed for {:?} {op} {:?}",
-                    stat_a,
-                    stat_b
-                );
-            }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_stats_v2_integration() -> Result<()> {
+    fn test_stats_integration() -> Result<()> {
         let schema = &Schema::new(vec![
             Field::new("a", DataType::Float64, false),
             Field::new("b", DataType::Float64, false),
@@ -595,9 +245,9 @@ mod tests {
         let c = Arc::new(Column::new("c", 2)) as _;
         let d = Arc::new(Column::new("d", 3)) as _;
 
-        let left = binary_expr(a, Plus, b, schema)?;
-        let right = binary_expr(c, Minus, d, schema)?;
-        let expr = binary_expr(left, Eq, right, schema)?;
+        let left = binary_expr(a, Operator::Plus, b, schema)?;
+        let right = binary_expr(c, Operator::Minus, d, schema)?;
+        let expr = binary_expr(left, Operator::Eq, right, schema)?;
 
         let mut graph = ExprStatisticGraph::try_new(expr, schema)?;
         // 2, 5 and 6 are BinaryExpr
@@ -620,7 +270,10 @@ mod tests {
             ),
         ]);
         let ev_stats = graph.evaluate_statistics()?;
-        assert_eq!(ev_stats, &StatisticsV2::new_bernoulli(Float64(None))?);
+        assert_eq!(
+            ev_stats,
+            &StatisticsV2::new_bernoulli(ScalarValue::Float64(None))?
+        );
 
         let one = ScalarValue::new_one(&DataType::Float64)?;
         assert_eq!(

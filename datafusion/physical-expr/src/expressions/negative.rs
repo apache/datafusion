@@ -266,21 +266,21 @@ mod tests {
 
         // Bernoulli
         assert!(negative_expr
-            .evaluate_statistics(&[&StatisticsV2::new_bernoulli(ScalarValue::Float64(
-                Some(0.75)
+            .evaluate_statistics(&[&StatisticsV2::new_bernoulli(ScalarValue::from(
+                0.75
             ))?])
             .is_err());
 
         // Exponential
         assert_eq!(
             negative_expr.evaluate_statistics(&[&StatisticsV2::new_exponential(
-                ScalarValue::Float64(Some(1.)),
-                ScalarValue::Float64(Some(1.)),
+                ScalarValue::from(1.),
+                ScalarValue::from(1.),
                 true
             )?])?,
             StatisticsV2::new_exponential(
-                ScalarValue::Float64(Some(1.)),
-                ScalarValue::Float64(Some(-1.)),
+                ScalarValue::from(1.),
+                ScalarValue::from(-1.),
                 false
             )?
         );
@@ -288,27 +288,24 @@ mod tests {
         // Gaussian
         assert_eq!(
             negative_expr.evaluate_statistics(&[&StatisticsV2::new_gaussian(
-                ScalarValue::Int32(Some(15)),
-                ScalarValue::Int32(Some(225)),
+                ScalarValue::from(15),
+                ScalarValue::from(225),
             )?])?,
-            StatisticsV2::new_gaussian(
-                ScalarValue::Int32(Some(-15)),
-                ScalarValue::Int32(Some(225))
-            )?
+            StatisticsV2::new_gaussian(ScalarValue::from(-15), ScalarValue::from(225),)?
         );
 
         // Unknown
         assert_eq!(
             negative_expr.evaluate_statistics(&[&StatisticsV2::new_unknown(
-                ScalarValue::Int32(Some(15)),
-                ScalarValue::Int32(Some(15)),
-                ScalarValue::Int32(Some(10)),
+                ScalarValue::from(15),
+                ScalarValue::from(15),
+                ScalarValue::from(10),
                 Interval::make(Some(10), Some(20))?
             )?])?,
             StatisticsV2::new_unknown(
-                ScalarValue::Int32(Some(-15)),
-                ScalarValue::Int32(Some(-15)),
-                ScalarValue::Int32(Some(10)),
+                ScalarValue::from(-15),
+                ScalarValue::from(-15),
+                ScalarValue::from(10),
                 Interval::make(Some(-20), Some(-10))?
             )?
         );
@@ -342,8 +339,8 @@ mod tests {
         let children: Vec<Vec<StatisticsV2>> = vec![
             vec![StatisticsV2::new_uniform(original_child_interval.clone())?],
             vec![StatisticsV2::new_unknown(
-                ScalarValue::Int32(Some(0)),
-                ScalarValue::Int32(Some(0)),
+                ScalarValue::from(0),
+                ScalarValue::from(0),
                 ScalarValue::Int32(None),
                 original_child_interval.clone(),
             )?],

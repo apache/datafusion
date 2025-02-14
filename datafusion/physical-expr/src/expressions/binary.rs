@@ -22,9 +22,6 @@ use std::{any::Any, sync::Arc};
 
 use crate::expressions::binary::kernels::concat_elements_utf8view;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use crate::utils::stats_v2_graph::{
-    create_bernoulli_from_comparison, new_unknown_from_binary_expr,
-};
 use crate::PhysicalExpr;
 
 use arrow::array::*;
@@ -45,7 +42,10 @@ use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nes
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{
     self, Bernoulli, Gaussian,
 };
-use datafusion_physical_expr_common::stats_v2::{combine_bernoullis, combine_gaussians};
+use datafusion_physical_expr_common::stats_v2::{
+    combine_bernoullis, combine_gaussians, create_bernoulli_from_comparison,
+    new_unknown_from_binary_op,
+};
 use kernels::{
     bitwise_and_dyn, bitwise_and_dyn_scalar, bitwise_or_dyn, bitwise_or_dyn_scalar,
     bitwise_shift_left_dyn, bitwise_shift_left_dyn_scalar, bitwise_shift_right_dyn,
@@ -520,7 +520,7 @@ impl PhysicalExpr for BinaryExpr {
             return create_bernoulli_from_comparison(&self.op, left, right);
         }
         // Fall back to an unknown distribution with only summary statistics:
-        new_unknown_from_binary_expr(&self.op, left, right)
+        new_unknown_from_binary_op(&self.op, left, right)
     }
 
     /// For each operator, [`BinaryExpr`] has distinct rules.
@@ -4436,18 +4436,12 @@ mod tests {
     fn test_evaluate_statistics_combination_of_range_holders() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
-        let b = lit(ScalarValue::Float64(Some(12.0)));
+        let b = lit(ScalarValue::from(12.0));
 
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(12.0), Some(36.0))?;
-        let (left_mean, right_mean) = (
-            ScalarValue::Float64(Some(6.0)),
-            ScalarValue::Float64(Some(24.0)),
-        );
-        let (left_med, right_med) = (
-            ScalarValue::Float64(Some(6.0)),
-            ScalarValue::Float64(Some(24.0)),
-        );
+        let (left_mean, right_mean) = (ScalarValue::from(6.0), ScalarValue::from(24.0));
+        let (left_med, right_med) = (ScalarValue::from(6.0), ScalarValue::from(24.0));
 
         for children in [
             vec![
@@ -4499,7 +4493,7 @@ mod tests {
                 // TODO: to think, if maybe we want to handcraft the expected value...
                 assert_eq!(
                     expr.evaluate_statistics(&children)?,
-                    new_unknown_from_binary_expr(&op, children[0], children[1])?
+                    new_unknown_from_binary_op(&op, children[0], children[1])?
                 );
             }
         }
@@ -4527,20 +4521,20 @@ mod tests {
             schema,
         )?);
 
-        let left_stat = &StatisticsV2::new_uniform(Interval::make(Some(0), Some(6))?)?;
-        let right_stat = &StatisticsV2::new_uniform(Interval::make(Some(4), Some(10))?)?;
+        let left_stat = &StatisticsV2::new_uniform(Interval::make(Some(0), Some(7))?)?;
+        let right_stat = &StatisticsV2::new_uniform(Interval::make(Some(4), Some(11))?)?;
 
-        // Intervals: [0, 6], [4, 10].
-        // The intersection is [4, 6], so the probability of equality is 3 / 49.
+        // Intervals: [0, 7], [4, 11].
+        // The intersection is [4, 7], so the probability of equality is 4 / 64 = 1 / 16.
         assert_eq!(
             eq.evaluate_statistics(&[left_stat, right_stat])?,
-            StatisticsV2::new_bernoulli(ScalarValue::from(3.0 / 49.0))?
+            StatisticsV2::new_bernoulli(ScalarValue::from(1.0 / 16.0))?
         );
 
-        // The probability of not equality is 1 - 3 / 49 = 46 / 49.
+        // The probability of being distinct is 1 - 1 / 16 = 15 / 16.
         assert_eq!(
             neq.evaluate_statistics(&[left_stat, right_stat])?,
-            StatisticsV2::new_bernoulli(ScalarValue::from(46.0 / 49.0))?
+            StatisticsV2::new_bernoulli(ScalarValue::from(15.0 / 16.0))?
         );
 
         Ok(())
@@ -4550,7 +4544,7 @@ mod tests {
     fn test_propagate_statistics_combination_of_range_holders_arithmetic() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
-        let b = lit(ScalarValue::Float64(Some(12.0)));
+        let b = lit(ScalarValue::from(12.0));
 
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(12.0), Some(36.0))?;
@@ -4563,8 +4557,8 @@ mod tests {
             ],
             vec![
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(6.)),
-                    ScalarValue::Float64(Some(6.)),
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
                     ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
@@ -4573,22 +4567,22 @@ mod tests {
             vec![
                 StatisticsV2::new_uniform(left_interval.clone())?,
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(12.)),
-                    ScalarValue::Float64(Some(12.)),
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
                     ScalarValue::Float64(None),
                     right_interval.clone(),
                 )?,
             ],
             vec![
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(6.)),
-                    ScalarValue::Float64(Some(6.)),
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
                     ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(12.)),
-                    ScalarValue::Float64(Some(12.)),
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
                     ScalarValue::Float64(None),
                     right_interval.clone(),
                 )?,
@@ -4620,12 +4614,12 @@ mod tests {
     fn test_propagate_statistics_combination_of_range_holders_comparison() -> Result<()> {
         let schema = &Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let a = Arc::new(Column::new("a", 0)) as _;
-        let b = lit(ScalarValue::Float64(Some(12.0)));
+        let b = lit(ScalarValue::from(12.0));
 
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(6.0), Some(18.0))?;
 
-        let one = ScalarValue::Float64(Some(1.0));
+        let one = ScalarValue::from(1.0);
         let parent = StatisticsV2::new_bernoulli(one);
         let children = vec![
             vec![
@@ -4634,9 +4628,9 @@ mod tests {
             ],
             vec![
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(6.)),
-                    ScalarValue::Float64(Some(6.)),
-                    ScalarValue::Null,
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
+                    ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
                 StatisticsV2::new_uniform(right_interval.clone())?,
@@ -4644,23 +4638,23 @@ mod tests {
             vec![
                 StatisticsV2::new_uniform(left_interval.clone())?,
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(12.)),
-                    ScalarValue::Float64(Some(12.)),
-                    ScalarValue::Null,
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
                     right_interval.clone(),
                 )?,
             ],
             vec![
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(6.)),
-                    ScalarValue::Float64(Some(6.)),
-                    ScalarValue::UInt64(None),
+                    ScalarValue::from(6.),
+                    ScalarValue::from(6.),
+                    ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(12.)),
-                    ScalarValue::Float64(Some(12.)),
-                    ScalarValue::Null,
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
                     right_interval.clone(),
                 )?,
             ],

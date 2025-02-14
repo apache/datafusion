@@ -84,8 +84,7 @@ impl PhysicalExpr for NotExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let evaluate_arg = self.arg.evaluate(batch)?;
-        match evaluate_arg {
+        match self.arg.evaluate(batch)? {
             ColumnarValue::Array(array) => {
                 let array = as_boolean_array(&array)?;
                 Ok(ColumnarValue::Array(Arc::new(
@@ -97,9 +96,7 @@ impl PhysicalExpr for NotExpr {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
                 }
                 let bool_value: bool = scalar.try_into()?;
-                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
-                    !bool_value,
-                ))))
+                Ok(ColumnarValue::Scalar(ScalarValue::from(!bool_value)))
             }
         }
     }
@@ -267,8 +264,8 @@ mod tests {
         // Exponential
         assert!(expr
             .evaluate_statistics(&[&StatisticsV2::new_exponential(
-                ScalarValue::new_one(&DataType::Float64)?,
-                ScalarValue::new_one(&DataType::Float64)?,
+                ScalarValue::from(1.0),
+                ScalarValue::from(1.0),
                 true
             )?])
             .is_err());
@@ -276,38 +273,38 @@ mod tests {
         // Gaussian
         assert!(expr
             .evaluate_statistics(&[&StatisticsV2::new_gaussian(
-                ScalarValue::new_one(&DataType::Float64)?,
-                ScalarValue::new_one(&DataType::Float64)?
+                ScalarValue::from(1.0),
+                ScalarValue::from(1.0),
             )?])
             .is_err());
 
         // Bernoulli
         assert_eq!(
             expr.evaluate_statistics(&[&StatisticsV2::new_bernoulli(
-                ScalarValue::Float64(Some(0.))
+                ScalarValue::from(0.0),
             )?])?,
-            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(1.)))?
+            StatisticsV2::new_bernoulli(ScalarValue::from(1.))?
         );
 
         assert_eq!(
             expr.evaluate_statistics(&[&StatisticsV2::new_bernoulli(
-                ScalarValue::Float64(Some(1.))
+                ScalarValue::from(1.0),
             )?])?,
-            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.)))?
+            StatisticsV2::new_bernoulli(ScalarValue::from(0.))?
         );
 
         assert_eq!(
             expr.evaluate_statistics(&[&StatisticsV2::new_bernoulli(
-                ScalarValue::Float64(Some(0.25))
+                ScalarValue::from(0.25),
             )?])?,
-            StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.75)))?
+            StatisticsV2::new_bernoulli(ScalarValue::from(0.75))?
         );
 
         assert!(expr
             .evaluate_statistics(&[&StatisticsV2::new_unknown(
-                ScalarValue::UInt8(None),
-                ScalarValue::UInt8(None),
-                ScalarValue::UInt8(None),
+                ScalarValue::Null,
+                ScalarValue::Null,
+                ScalarValue::Null,
                 Interval::make_unbounded(&DataType::UInt8)?
             )?])
             .is_err());
@@ -315,9 +312,9 @@ mod tests {
         // Unknown with non-boolean interval as range
         assert!(expr
             .evaluate_statistics(&[&StatisticsV2::new_unknown(
-                ScalarValue::Float64(None),
-                ScalarValue::Float64(None),
-                ScalarValue::Float64(None),
+                ScalarValue::Null,
+                ScalarValue::Null,
+                ScalarValue::Null,
                 Interval::make_unbounded(&DataType::Float64)?
             )?])
             .is_err());

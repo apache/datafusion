@@ -17,11 +17,11 @@
 
 use std::f64::consts::LN_2;
 
-use crate::stats_v2::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
-
+use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::DataType;
+use datafusion_common::rounding::alter_fp_rounding_mode;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
-use datafusion_expr_common::interval_arithmetic::Interval;
+use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::binary_numeric_coercion;
 
@@ -35,6 +35,8 @@ pub enum StatisticsV2 {
     Bernoulli(BernoulliDistribution),
     Unknown(UnknownDistribution),
 }
+
+use StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
 
 impl StatisticsV2 {
     /// Constructs a new [`StatisticsV2`] instance with [`Uniform`]
@@ -513,6 +515,12 @@ impl UnknownDistribution {
         variance: ScalarValue,
         range: Interval,
     ) -> Result<Self> {
+        if range.data_type().eq(&DataType::Boolean) {
+            return internal_err!(
+                "Construction of a boolean `Unknown` statistic is prohibited, create a `Bernoulli` statistic instead."
+            );
+        }
+
         let validate_location = |m: &ScalarValue| -> Result<bool> {
             // Checks whether the given location estimate is within the range.
             if m.is_null() {
@@ -522,11 +530,7 @@ impl UnknownDistribution {
             }
         };
 
-        if range.data_type().eq(&DataType::Boolean) {
-            internal_err!(
-                "Construction of a boolean `Unknown` statistic is prohibited, create a `Bernoulli` statistic instead."
-            )
-        } else if !validate_location(&mean)?
+        if !validate_location(&mean)?
             || !validate_location(&median)?
             || (!variance.is_null()
                 && variance.lt(&ScalarValue::new_zero(&variance.data_type())?))
@@ -643,13 +647,221 @@ pub fn combine_gaussians(
     }
 }
 
+/// Creates a new statistic with `Bernoulli` distribution by computing the
+/// resulting probability. Expects `op` to be a comparison operator, with
+/// `left` and `right` having numeric distributions. The resulting distribution
+/// has the `Float64` data type.
+pub fn create_bernoulli_from_comparison(
+    op: &Operator,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
+) -> Result<StatisticsV2> {
+    match (left, right) {
+        (Uniform(left), Uniform(right)) => {
+            match op {
+                Operator::Eq | Operator::NotEq => {
+                    let (li, ri) = (left.range(), right.range());
+                    if let Some(intersection) = li.intersect(ri)? {
+                        // If the ranges are not disjoint, calculate the probability
+                        // of equality using cardinalities:
+                        if let (Some(lc), Some(rc), Some(ic)) = (
+                            li.cardinality(),
+                            ri.cardinality(),
+                            intersection.cardinality(),
+                        ) {
+                            // Avoid overflow by widening the type temporarily:
+                            let pairs = ((lc as u128) * (rc as u128)) as f64;
+                            let p = (ic as f64).div_checked(pairs)?;
+                            // Alternative approach that may be more stable:
+                            // let p = (ic as f64)
+                            //     .div_checked(lc as f64)?
+                            //     .div_checked(rc as f64)?;
+
+                            let mut p_value = ScalarValue::from(p);
+                            if op == &Operator::NotEq {
+                                let one = ScalarValue::from(1.0);
+                                p_value = alter_fp_rounding_mode::<false, _>(
+                                    &one,
+                                    &p_value,
+                                    |lhs, rhs| lhs.sub_checked(rhs),
+                                )?;
+                            };
+                            return StatisticsV2::new_bernoulli(p_value);
+                        }
+                    } else if op == &Operator::Eq {
+                        // If the ranges are disjoint, probability of equality is 0.
+                        return StatisticsV2::new_bernoulli(ScalarValue::from(0.0));
+                    } else {
+                        // If the ranges are disjoint, probability of not-equality is 1.
+                        return StatisticsV2::new_bernoulli(ScalarValue::from(1.0));
+                    }
+                }
+                Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
+                    // TODO: We can handle inequality operators and calculate a
+                    // `p` value instead of falling back to an unknown Bernoulli
+                    // distribution. Note that the strict and non-strict inequalities
+                    // may require slightly different logic in case of real vs.
+                    // integral data types.
+                }
+                _ => {}
+            }
+        }
+        (Gaussian(_), Gaussian(_)) => {
+            // TODO: We can handle Gaussian comparisons and calculate a `p` value
+            //       instead of falling back to an unknown Bernoulli distribution.
+        }
+        _ => {}
+    }
+    let (li, ri) = (left.range()?, right.range()?);
+    let range_evaluation = apply_operator(op, &li, &ri)?;
+    if range_evaluation.eq(&Interval::CERTAINLY_FALSE) {
+        StatisticsV2::new_bernoulli(ScalarValue::from(0.0))
+    } else if range_evaluation.eq(&Interval::CERTAINLY_TRUE) {
+        StatisticsV2::new_bernoulli(ScalarValue::from(1.0))
+    } else if range_evaluation.eq(&Interval::UNCERTAIN) {
+        StatisticsV2::new_bernoulli(ScalarValue::try_from(&DataType::Float64)?)
+    } else {
+        internal_err!("This function must be called with a comparison operator")
+    }
+}
+
+/// Creates a new statistic with `Unknown` distribution, and tries to compute
+/// mean, median and variance if possible.
+pub fn new_unknown_from_binary_op(
+    op: &Operator,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
+) -> Result<StatisticsV2> {
+    StatisticsV2::new_unknown(
+        compute_mean(op, left, right)?,
+        compute_median(op, left, right)?,
+        compute_variance(op, left, right)?,
+        apply_operator(op, &left.range()?, &right.range()?)?,
+    )
+}
+
+/// Computes the mean value for the result of the given binary operation on
+/// two statistics.
+pub fn compute_mean(
+    op: &Operator,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
+) -> Result<ScalarValue> {
+    let (left_mean, right_mean) = (left.mean()?, right.mean()?);
+
+    match op {
+        Operator::Plus => return left_mean.add_checked(right_mean),
+        Operator::Minus => return left_mean.sub_checked(right_mean),
+        // Note the independence assumption below:
+        Operator::Multiply => return left_mean.mul_checked(right_mean),
+        // TODO: We can calculate the mean for division when we support reciprocals,
+        // or know the distributions of the operands. For details, see:
+        //
+        // <https://en.wikipedia.org/wiki/Algebra_of_random_variables>
+        // <https://stats.stackexchange.com/questions/185683/distribution-of-ratio-between-two-independent-uniform-random-variables>
+        //
+        // Fall back to an unknown mean value for division:
+        Operator::Divide => {}
+        // Fall back to an unknown mean value for other cases:
+        _ => {}
+    }
+    let target_type = StatisticsV2::target_type(&[&left_mean, &right_mean])?;
+    ScalarValue::try_from(target_type)
+}
+
+/// Computes the median value for the result of the given binary operation on
+/// two statistics. Currently, the median is calculable only for addition and
+/// subtraction operations on:
+/// - [`Uniform`] and [`Uniform`] distributions, and
+/// - [`Gaussian`] and [`Gaussian`] distributions.
+pub fn compute_median(
+    op: &Operator,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
+) -> Result<ScalarValue> {
+    match (left, right) {
+        (Uniform(lu), Uniform(ru)) => {
+            let (left_median, right_median) = (lu.median()?, ru.median()?);
+            // Under the independence assumption, the result is a symmetric
+            // triangular distribution, so we can simply add/subtract the
+            // median values:
+            match op {
+                Operator::Plus => return left_median.add_checked(right_median),
+                Operator::Minus => return left_median.sub_checked(right_median),
+                // Fall back to an unknown median value for other cases:
+                _ => {}
+            }
+        }
+        // Under the independence assumption, the result is another Gaussian
+        // distribution, so we can simply add/subtract the median values:
+        (Gaussian(lg), Gaussian(rg)) => match op {
+            Operator::Plus => return lg.mean().add_checked(rg.mean()),
+            Operator::Minus => return lg.mean().sub_checked(rg.mean()),
+            // Fall back to an unknown median value for other cases:
+            _ => {}
+        },
+        // Fall back to an unknown median value for other cases:
+        _ => {}
+    }
+
+    let (left_median, right_median) = (left.median()?, right.median()?);
+    let target_type = StatisticsV2::target_type(&[&left_median, &right_median])?;
+    ScalarValue::try_from(target_type)
+}
+
+/// Computes the variance value for the result of the given binary operation on
+/// two statistics.
+pub fn compute_variance(
+    op: &Operator,
+    left: &StatisticsV2,
+    right: &StatisticsV2,
+) -> Result<ScalarValue> {
+    let (left_variance, right_variance) = (left.variance()?, right.variance()?);
+
+    match op {
+        // Note the independence assumption below:
+        Operator::Plus => return left_variance.add_checked(right_variance),
+        // Note the independence assumption below:
+        Operator::Minus => return left_variance.add_checked(right_variance),
+        // Note the independence assumption below:
+        Operator::Multiply => {
+            // For more details, along with an explanation of the formula below, see:
+            //
+            // <https://en.wikipedia.org/wiki/Distribution_of_the_product_of_two_random_variables>
+            let (left_mean, right_mean) = (left.mean()?, right.mean()?);
+            let left_mean_sq = left_mean.mul_checked(&left_mean)?;
+            let right_mean_sq = right_mean.mul_checked(&right_mean)?;
+            let left_sos = left_variance.add_checked(&left_mean_sq)?;
+            let right_sos = right_variance.add_checked(&right_mean_sq)?;
+            let pos = left_mean_sq.mul_checked(right_mean_sq)?;
+            return left_sos.mul_checked(right_sos)?.sub_checked(pos);
+        }
+        // TODO: We can calculate the variance for division when we support reciprocals,
+        // or know the distributions of the operands. For details, see:
+        //
+        // <https://en.wikipedia.org/wiki/Algebra_of_random_variables>
+        // <https://stats.stackexchange.com/questions/185683/distribution-of-ratio-between-two-independent-uniform-random-variables>
+        //
+        // Fall back to an unknown variance value for division:
+        Operator::Divide => {}
+        // Fall back to an unknown variance value for other cases:
+        _ => {}
+    }
+    let target_type = StatisticsV2::target_type(&[&left_variance, &right_variance])?;
+    ScalarValue::try_from(target_type)
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::stats_v2::{StatisticsV2, UniformDistribution};
+    use super::{
+        compute_mean, compute_median, compute_variance, create_bernoulli_from_comparison,
+        new_unknown_from_binary_op, StatisticsV2, UniformDistribution,
+    };
 
     use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr_common::interval_arithmetic::Interval;
+    use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
+    use datafusion_expr_common::operator::Operator;
 
     // The test data in the following tests are placed as follows: (stat -> expected answer)
     #[test]
@@ -674,24 +886,24 @@ mod tests {
             ),
             (
                 StatisticsV2::new_exponential(
-                    ScalarValue::Float32(Some(0.)),
-                    ScalarValue::Float32(Some(1.)),
+                    ScalarValue::from(0_f32),
+                    ScalarValue::from(1_f32),
                     true,
                 ),
                 false,
             ),
             (
                 StatisticsV2::new_exponential(
-                    ScalarValue::Float32(Some(100.)),
-                    ScalarValue::Float32(Some(1.)),
+                    ScalarValue::from(100_f32),
+                    ScalarValue::from(1_f32),
                     true,
                 ),
                 true,
             ),
             (
                 StatisticsV2::new_exponential(
-                    ScalarValue::Float32(Some(-100.)),
-                    ScalarValue::Float32(Some(1.)),
+                    ScalarValue::from(-100_f32),
+                    ScalarValue::from(1_f32),
                     true,
                 ),
                 false,
@@ -711,22 +923,22 @@ mod tests {
             ),
             (
                 StatisticsV2::new_gaussian(
-                    ScalarValue::Float32(Some(0.)),
-                    ScalarValue::Float32(Some(0.)),
+                    ScalarValue::from(0_f32),
+                    ScalarValue::from(0_f32),
                 ),
                 true,
             ),
             (
                 StatisticsV2::new_gaussian(
-                    ScalarValue::Float32(Some(0.)),
-                    ScalarValue::Float32(Some(0.5)),
+                    ScalarValue::from(0_f32),
+                    ScalarValue::from(0.5_f32),
                 ),
                 true,
             ),
             (
                 StatisticsV2::new_gaussian(
-                    ScalarValue::Float32(Some(0.)),
-                    ScalarValue::Float32(Some(-0.5)),
+                    ScalarValue::from(0_f32),
+                    ScalarValue::from(-0.5_f32),
                 ),
                 false,
             ),
@@ -740,40 +952,19 @@ mod tests {
     fn bernoulli_stats_is_valid_test() {
         let gaussian_stats = vec![
             (StatisticsV2::new_bernoulli(ScalarValue::Null), true),
+            (StatisticsV2::new_bernoulli(ScalarValue::from(0.)), true),
+            (StatisticsV2::new_bernoulli(ScalarValue::from(0.25)), true),
+            (StatisticsV2::new_bernoulli(ScalarValue::from(1.)), true),
+            (StatisticsV2::new_bernoulli(ScalarValue::from(11.)), false),
+            (StatisticsV2::new_bernoulli(ScalarValue::from(-11.)), false),
+            (StatisticsV2::new_bernoulli(ScalarValue::from(0_i64)), true),
+            (StatisticsV2::new_bernoulli(ScalarValue::from(1_i64)), true),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.))),
-                true,
-            ),
-            (
-                StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.25))),
-                true,
-            ),
-            (
-                StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(1.))),
-                true,
-            ),
-            (
-                StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(11.))),
+                StatisticsV2::new_bernoulli(ScalarValue::from(11_i64)),
                 false,
             ),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(-11.))),
-                false,
-            ),
-            (
-                StatisticsV2::new_bernoulli(ScalarValue::Int64(Some(0))),
-                true,
-            ),
-            (
-                StatisticsV2::new_bernoulli(ScalarValue::Int64(Some(1))),
-                true,
-            ),
-            (
-                StatisticsV2::new_bernoulli(ScalarValue::Int64(Some(11))),
-                false,
-            ),
-            (
-                StatisticsV2::new_bernoulli(ScalarValue::Int64(Some(-11))),
+                StatisticsV2::new_bernoulli(ScalarValue::from(-11_i64)),
                 false,
             ),
         ];
@@ -806,17 +997,17 @@ mod tests {
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float32(Some(0.)),
+                    ScalarValue::from(0_f32),
                     ScalarValue::Float32(None),
-                    ScalarValue::Null,
+                    ScalarValue::Float32(None),
                     Interval::make_zero(&DataType::Float32)?,
                 ),
                 true,
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Null,
-                    ScalarValue::Float32(Some(0.)),
+                    ScalarValue::Float64(None),
+                    ScalarValue::from(0.),
                     ScalarValue::Float64(None),
                     Interval::make_zero(&DataType::Float32)?,
                 ),
@@ -824,18 +1015,18 @@ mod tests {
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float32(Some(-10.)),
-                    ScalarValue::Null,
-                    ScalarValue::Null,
+                    ScalarValue::from(-10_f32),
+                    ScalarValue::Float32(None),
+                    ScalarValue::Float32(None),
                     Interval::make_zero(&DataType::Float32)?,
                 ),
                 false,
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Null,
-                    ScalarValue::Float32(Some(10.)),
-                    ScalarValue::Null,
+                    ScalarValue::Float32(None),
+                    ScalarValue::from(10_f32),
+                    ScalarValue::Float32(None),
                     Interval::make_zero(&DataType::Float32)?,
                 ),
                 false,
@@ -851,54 +1042,54 @@ mod tests {
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Int32(Some(0)),
-                    ScalarValue::Int32(Some(0)),
-                    ScalarValue::Null,
+                    ScalarValue::from(0),
+                    ScalarValue::from(0),
+                    ScalarValue::Int32(None),
                     Interval::make_zero(&DataType::Int32)?,
                 ),
                 true,
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float32(Some(0.)),
-                    ScalarValue::Float32(Some(0.)),
-                    ScalarValue::Null,
+                    ScalarValue::from(0_f32),
+                    ScalarValue::from(0_f32),
+                    ScalarValue::Float32(None),
                     Interval::make_zero(&DataType::Float32)?,
                 ),
                 true,
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(50.)),
-                    ScalarValue::Float64(Some(50.)),
-                    ScalarValue::Null,
+                    ScalarValue::from(50.),
+                    ScalarValue::from(50.),
+                    ScalarValue::Float64(None),
                     Interval::make(Some(0.), Some(100.))?,
                 ),
                 true,
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(50.)),
-                    ScalarValue::Float64(Some(50.)),
-                    ScalarValue::Null,
+                    ScalarValue::from(50.),
+                    ScalarValue::from(50.),
+                    ScalarValue::Float64(None),
                     Interval::make(Some(-100.), Some(0.))?,
                 ),
                 false,
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Null,
-                    ScalarValue::Null,
-                    ScalarValue::Float64(Some(1.)),
+                    ScalarValue::Float64(None),
+                    ScalarValue::Float64(None),
+                    ScalarValue::from(1.),
                     Interval::make_zero(&DataType::Float64)?,
                 ),
                 true,
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Null,
-                    ScalarValue::Null,
-                    ScalarValue::Float64(Some(-1.)),
+                    ScalarValue::Float64(None),
+                    ScalarValue::Float64(None),
+                    ScalarValue::from(-1.),
                     Interval::make_zero(&DataType::Float64)?,
                 ),
                 false,
@@ -917,66 +1108,63 @@ mod tests {
         let stats = vec![
             (
                 StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64)?),
-                ScalarValue::Int64(Some(0)),
+                ScalarValue::from(0_i64),
             ),
             (
                 StatisticsV2::new_uniform(Interval::make_zero(&DataType::Float64)?),
-                ScalarValue::Float64(Some(0.)),
+                ScalarValue::from(0.),
             ),
             (
                 StatisticsV2::new_uniform(Interval::make(Some(1), Some(100))?),
-                ScalarValue::Int32(Some(50)),
+                ScalarValue::from(50),
             ),
             (
                 StatisticsV2::new_uniform(Interval::make(Some(-100), Some(-1))?),
-                ScalarValue::Int32(Some(-50)),
+                ScalarValue::from(-50),
             ),
             (
                 StatisticsV2::new_uniform(Interval::make(Some(-100), Some(100))?),
-                ScalarValue::Int32(Some(0)),
+                ScalarValue::from(0),
             ),
             (
                 StatisticsV2::new_exponential(
-                    ScalarValue::Float64(Some(2.)),
-                    ScalarValue::Float64(Some(0.)),
+                    ScalarValue::from(2.),
+                    ScalarValue::from(0.),
                     true,
                 ),
-                ScalarValue::Float64(Some(0.5)),
+                ScalarValue::from(0.5),
             ),
             (
                 StatisticsV2::new_exponential(
-                    ScalarValue::Float64(Some(2.)),
-                    ScalarValue::Float64(Some(1.)),
+                    ScalarValue::from(2.),
+                    ScalarValue::from(1.),
                     true,
                 ),
-                ScalarValue::Float64(Some(1.5)),
+                ScalarValue::from(1.5),
+            ),
+            (
+                StatisticsV2::new_gaussian(ScalarValue::from(0.), ScalarValue::from(1.)),
+                ScalarValue::from(0.),
             ),
             (
                 StatisticsV2::new_gaussian(
-                    ScalarValue::Float64(Some(0.)),
-                    ScalarValue::Float64(Some(1.)),
+                    ScalarValue::from(-2.),
+                    ScalarValue::from(0.5),
                 ),
-                ScalarValue::Float64(Some(0.)),
+                ScalarValue::from(-2.),
             ),
             (
-                StatisticsV2::new_gaussian(
-                    ScalarValue::Float64(Some(-2.)),
-                    ScalarValue::Float64(Some(0.5)),
-                ),
-                ScalarValue::Float64(Some(-2.)),
-            ),
-            (
-                StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.5))),
-                ScalarValue::Float64(Some(0.5)),
+                StatisticsV2::new_bernoulli(ScalarValue::from(0.5)),
+                ScalarValue::from(0.5),
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(42.)),
-                    ScalarValue::Float64(Some(42.)),
-                    ScalarValue::Null,
+                    ScalarValue::from(42.),
+                    ScalarValue::from(42.),
+                    ScalarValue::Float64(None),
                     Interval::make(Some(25.), Some(50.))?,
                 ),
-                ScalarValue::Float64(Some(42.)),
+                ScalarValue::from(42.),
             ),
         ];
 
@@ -993,50 +1181,44 @@ mod tests {
         let stats = vec![
             (
                 StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64)?),
-                ScalarValue::Int64(Some(0)),
+                ScalarValue::from(0_i64),
             ),
             (
                 StatisticsV2::new_uniform(Interval::make(Some(25.), Some(75.))?),
-                ScalarValue::Float64(Some(50.)),
+                ScalarValue::from(50.),
             ),
             (
                 StatisticsV2::new_exponential(
-                    ScalarValue::Float64(Some(2_f64.ln())),
-                    ScalarValue::Float64(Some(0.)),
+                    ScalarValue::from(2_f64.ln()),
+                    ScalarValue::from(0.),
                     true,
                 ),
-                ScalarValue::Float64(Some(1.)),
+                ScalarValue::from(1.),
             ),
             (
-                StatisticsV2::new_gaussian(
-                    ScalarValue::Float64(Some(2.)),
-                    ScalarValue::Float64(Some(1.)),
-                ),
-                ScalarValue::Float64(Some(2.)),
+                StatisticsV2::new_gaussian(ScalarValue::from(2.), ScalarValue::from(1.)),
+                ScalarValue::from(2.),
             ),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.25))),
-                ScalarValue::Float64(Some(0.)),
+                StatisticsV2::new_bernoulli(ScalarValue::from(0.25)),
+                ScalarValue::from(0.),
             ),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.75))),
-                ScalarValue::Float64(Some(1.)),
+                StatisticsV2::new_bernoulli(ScalarValue::from(0.75)),
+                ScalarValue::from(1.),
             ),
             (
-                StatisticsV2::new_gaussian(
-                    ScalarValue::Float64(Some(2.)),
-                    ScalarValue::Float64(Some(1.)),
-                ),
-                ScalarValue::Float64(Some(2.)),
+                StatisticsV2::new_gaussian(ScalarValue::from(2.), ScalarValue::from(1.)),
+                ScalarValue::from(2.),
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Float64(Some(12.)),
-                    ScalarValue::Float64(Some(12.)),
-                    ScalarValue::Null,
+                    ScalarValue::from(12.),
+                    ScalarValue::from(12.),
+                    ScalarValue::Float64(None),
                     Interval::make(Some(0.), Some(25.))?,
                 ),
-                ScalarValue::Float64(Some(12.)),
+                ScalarValue::from(12.),
             ),
         ];
 
@@ -1053,40 +1235,192 @@ mod tests {
         let stats = vec![
             (
                 StatisticsV2::new_uniform(Interval::make(Some(0.), Some(12.))?),
-                ScalarValue::Float64(Some(12.)),
+                ScalarValue::from(12.),
             ),
             (
                 StatisticsV2::new_exponential(
-                    ScalarValue::Float64(Some(10.)),
-                    ScalarValue::Float64(Some(0.)),
+                    ScalarValue::from(10.),
+                    ScalarValue::from(0.),
                     true,
                 ),
-                ScalarValue::Float64(Some(0.01)),
+                ScalarValue::from(0.01),
             ),
             (
-                StatisticsV2::new_gaussian(
-                    ScalarValue::Float64(Some(0.)),
-                    ScalarValue::Float64(Some(1.)),
-                ),
-                ScalarValue::Float64(Some(1.)),
+                StatisticsV2::new_gaussian(ScalarValue::from(0.), ScalarValue::from(1.)),
+                ScalarValue::from(1.),
             ),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::Float64(Some(0.5))),
-                ScalarValue::Float64(Some(0.25)),
+                StatisticsV2::new_bernoulli(ScalarValue::from(0.5)),
+                ScalarValue::from(0.25),
             ),
             (
                 StatisticsV2::new_unknown(
-                    ScalarValue::Null,
-                    ScalarValue::Null,
-                    ScalarValue::Float64(Some(0.02)),
+                    ScalarValue::Float64(None),
+                    ScalarValue::Float64(None),
+                    ScalarValue::from(0.02),
                     Interval::make_zero(&DataType::Float64)?,
                 ),
-                ScalarValue::Float64(Some(0.02)),
+                ScalarValue::from(0.02),
             ),
         ];
 
         for case in stats {
             assert_eq!(case.0?.variance()?, case.1);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_calculate_unknown_properties_gauss_gauss() -> Result<()> {
+        let stat_a =
+            StatisticsV2::new_gaussian(ScalarValue::from(10.), ScalarValue::from(0.0))?;
+        let stat_b =
+            StatisticsV2::new_gaussian(ScalarValue::from(20.), ScalarValue::from(0.0))?;
+
+        let test_data = vec![
+            // mean
+            (
+                compute_mean(&Operator::Plus, &stat_a, &stat_b)?,
+                ScalarValue::from(30.),
+            ),
+            (
+                compute_mean(&Operator::Minus, &stat_a, &stat_b)?,
+                ScalarValue::from(-10.),
+            ),
+            // median
+            (
+                compute_median(&Operator::Plus, &stat_a, &stat_b)?,
+                ScalarValue::from(30.),
+            ),
+            (
+                compute_median(&Operator::Minus, &stat_a, &stat_b)?,
+                ScalarValue::from(-10.),
+            ),
+        ];
+        for (actual, expected) in test_data {
+            assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
+
+    // Expected test results were calculated in Wolfram Mathematica, by using
+    // *METHOD_NAME*[TransformedDistribution[x op y, {x ~ *DISTRIBUTION_X*[..], y ~ *DISTRIBUTION_Y*[..]}]]
+    #[test]
+    fn test_calculate_unknown_properties_uniform_uniform() -> Result<()> {
+        let stat_a = StatisticsV2::new_uniform(Interval::make(Some(0.), Some(12.))?)?;
+        let stat_b = StatisticsV2::new_uniform(Interval::make(Some(12.), Some(36.))?)?;
+
+        let test_data = vec![
+            // mean
+            (
+                compute_mean(&Operator::Plus, &stat_a, &stat_b)?,
+                ScalarValue::from(30.),
+            ),
+            (
+                compute_mean(&Operator::Minus, &stat_a, &stat_b)?,
+                ScalarValue::from(-18.),
+            ),
+            (
+                compute_mean(&Operator::Multiply, &stat_a, &stat_b)?,
+                ScalarValue::from(144.),
+            ),
+            // median
+            (
+                compute_median(&Operator::Plus, &stat_a, &stat_b)?,
+                ScalarValue::from(30.),
+            ),
+            (
+                compute_median(&Operator::Minus, &stat_a, &stat_b)?,
+                ScalarValue::from(-18.),
+            ),
+            // FYI: median of combined distributions for mul, div and mod ops doesn't exist.
+
+            // variance
+            (
+                compute_variance(&Operator::Plus, &stat_a, &stat_b)?,
+                ScalarValue::from(60.),
+            ),
+            (
+                compute_variance(&Operator::Minus, &stat_a, &stat_b)?,
+                ScalarValue::from(60.),
+            ),
+            // (compute_variance(&Operator::Multiply, &stat_a, &stat_b), Some(Float64(Some(9216.)))),
+        ];
+        for (actual, expected) in test_data {
+            assert_eq!(actual, expected);
+        }
+
+        Ok(())
+    }
+
+    /// Test for Uniform-Uniform, Uniform-Unknown, Unknown-Uniform, Unknown-Unknown pairs,
+    /// where range is always present.
+    #[test]
+    fn test_compute_range_where_present() -> Result<()> {
+        let a = &Interval::make(Some(0.), Some(12.0))?;
+        let b = &Interval::make(Some(0.), Some(12.0))?;
+        let mean = ScalarValue::from(6.0);
+        for (stat_a, stat_b) in [
+            (
+                StatisticsV2::new_uniform(a.clone())?,
+                StatisticsV2::new_uniform(b.clone())?,
+            ),
+            (
+                StatisticsV2::new_unknown(
+                    mean.clone(),
+                    mean.clone(),
+                    ScalarValue::Float64(None),
+                    a.clone(),
+                )?,
+                StatisticsV2::new_uniform(b.clone())?,
+            ),
+            (
+                StatisticsV2::new_uniform(a.clone())?,
+                StatisticsV2::new_unknown(
+                    mean.clone(),
+                    mean.clone(),
+                    ScalarValue::Float64(None),
+                    b.clone(),
+                )?,
+            ),
+            (
+                StatisticsV2::new_unknown(
+                    mean.clone(),
+                    mean.clone(),
+                    ScalarValue::Float64(None),
+                    a.clone(),
+                )?,
+                StatisticsV2::new_unknown(
+                    mean.clone(),
+                    mean.clone(),
+                    ScalarValue::Float64(None),
+                    b.clone(),
+                )?,
+            ),
+        ] {
+            use super::Operator::{
+                Divide, Eq, Gt, GtEq, Lt, LtEq, Minus, Multiply, NotEq, Plus,
+            };
+            for op in [Plus, Minus, Multiply, Divide] {
+                assert_eq!(
+                    new_unknown_from_binary_op(&op, &stat_a, &stat_b)?.range()?,
+                    apply_operator(&op, a, b)?,
+                    "Failed for {:?} {op} {:?}",
+                    stat_a,
+                    stat_b
+                );
+            }
+            for op in [Gt, GtEq, Lt, LtEq, Eq, NotEq] {
+                assert_eq!(
+                    create_bernoulli_from_comparison(&op, &stat_a, &stat_b)?.range()?,
+                    apply_operator(&op, a, b)?,
+                    "Failed for {:?} {op} {:?}",
+                    stat_a,
+                    stat_b
+                );
+            }
         }
 
         Ok(())
