@@ -16,8 +16,8 @@
 # under the License.
 
 [package]
-name = "datafusion-catalog-listing"
-description = "datafusion-catalog-listing"
+name = "datafusion-datasource"
+description = "datafusion-datasource"
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -27,21 +27,41 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
+default = ["compression"]
+
 [dependencies]
 arrow = { workspace = true }
+async-compression = { version = "0.4.0", features = [
+    "bzip2",
+    "gzip",
+    "xz",
+    "zstd",
+    "tokio",
+], optional = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
+bzip2 = { version = "0.5.1", optional = true }
+chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
-datafusion-datasource = { workspace = true }
+datafusion-common-runtime = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-physical-expr = { workspace = true }
-datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
+glob = "0.3.0"
+itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
+rand = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { version = "0.7.4", features = ["io"], optional = true }
+url = { workspace = true }
+xz2 = { version = "0.1", optional = true, features = ["static"] }
+zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -50,5 +70,5 @@ tempfile = { workspace = true }
 workspace = true
 
 [lib]
-name = "datafusion_catalog_listing"
+name = "datafusion_datasource"
 path = "src/mod.rs"
