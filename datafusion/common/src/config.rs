@@ -1241,7 +1241,7 @@ macro_rules! extensions_options {
                 Box::new(self.clone())
             }
 
-            fn set(&mut self, key: &str, value: &str) -> Result<()> {
+            fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
                 $crate::config::ConfigField::set(self, key, value)
             }
 
