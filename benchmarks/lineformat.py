@@ -23,13 +23,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Any
 from pathlib import Path
 from argparse import ArgumentParser
-
-try:
-    from rich.console import Console
-    from rich.table import Table
-except ImportError:
-    print("Couldn't import modules -- run `./bench.sh venv` first")
-    raise
+import sys
+print = sys.stdout.write
 
 
 @dataclass
@@ -104,7 +99,7 @@ class BenchmarkRun:
             return cls.load_from(json.load(f))
 
 
-def compare(
+def lineformat(
     baseline: Path,
 ) -> None:
     baseline = BenchmarkRun.load_from_file(baseline)
@@ -114,7 +109,7 @@ def compare(
         query_str = f"query=\"{query.query}\""
         timestamp = f"{query.start_time*10**9}"
         for iter_num, result in enumerate(query.iterations):
-            print(f"{benchamrk_str} {query_str},iteration={iter_num},row_count={result.row_count},elapsed_ms={result.elapsed*1000:.0f} {timestamp}")
+            print(f"{benchamrk_str} {query_str},iteration={iter_num},row_count={result.row_count},elapsed_ms={result.elapsed*1000:.0f} {timestamp}\n")
     
 def main() -> None:
     parser = ArgumentParser()
@@ -127,7 +122,7 @@ def main() -> None:
 
     options = parser.parse_args()
 
-    compare(options.baseline_path)
+    lineformat(options.baseline_path)
 
 
 
