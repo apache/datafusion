@@ -1538,11 +1538,10 @@ impl DataFrame {
         };
 
         let table_ref: TableReference = table_name.into();
-        let table = table_ref.table().to_string();
-        let table_schema = self.session_state.schema_for_ref(table_ref)?;
-        let target = match table_schema.table(&table).await? {
+        let table_schema = self.session_state.schema_for_ref(table_ref.clone())?;
+        let target = match table_schema.table(table_ref.table()).await? {
             Some(ref provider) => Ok(Arc::clone(provider)),
-            _ => plan_err!("No table named '{table}'"),
+            _ => plan_err!("No table named '{table_name}'"),
         }?;
 
         let target = Arc::new(DefaultTableSource::new(target));
