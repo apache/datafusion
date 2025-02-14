@@ -137,7 +137,7 @@ pub fn signum(args: &[ArrayRef]) -> Result<ArrayRef> {
 mod test {
     use std::sync::Arc;
 
-    use arrow::array::{Float32Array, Float64Array};
+    use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::DataType;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
@@ -158,7 +158,7 @@ mod test {
             f32::NEG_INFINITY,
         ]));
         let args = ScalarFunctionArgs {
-            args: vec![ColumnarValue::Array(Arc::clone(&array))],
+            args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
             number_rows: array.len(),
             return_type: &DataType::Float32,
         };
@@ -202,7 +202,7 @@ mod test {
             f64::NEG_INFINITY,
         ]));
         let args = ScalarFunctionArgs {
-            args: vec![ColumnarValue::Array(Arc::clone(&array))],
+            args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
             number_rows: array.len(),
             return_type: &DataType::Float64,
         };
