@@ -86,7 +86,8 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 /// #  Field::new("c1", DataType::Int32, false),
 /// #  Field::new("c2", DataType::Int32, false),
 /// #  Field::new("c3", DataType::Int32, false),
-/// # ]);
+/// #  Field::new("c4", DataType::Int32, false),
+/// # ]));
 /// // create FileScan config for reading arrow files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
 /// let file_source = Arc::new(ArrowSource::default());
