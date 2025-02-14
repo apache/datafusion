@@ -26,6 +26,7 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::Result;
 use datafusion_common::{
     cast::as_generic_list_array,
@@ -33,7 +34,8 @@ use datafusion_common::{
     utils::{list_ndims, take_function_args},
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -165,7 +167,18 @@ impl Default for ArrayPrepend {
 impl ArrayPrepend {
     pub fn new() -> Self {
         Self {
-            signature: Signature::element_and_array(Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Element,
+                            ArrayFunctionArgument::Array,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![
                 String::from("list_prepend"),
                 String::from("array_push_front"),
