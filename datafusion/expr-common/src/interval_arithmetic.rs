@@ -646,8 +646,9 @@ impl Interval {
         };
 
         // If the intervals overlap or touch, return a single merged interval
-        if (self.is_not_null() && rhs.is_not_null()) && self.upper >= rhs.lower
-            || rhs.upper >= self.lower
+        if self.is_not_null()
+            && rhs.is_not_null()
+            && (self.upper >= rhs.lower || rhs.upper >= self.lower)
         {
             return Ok(Some(Self::new(lower_bound.unwrap(), upper_bound.unwrap())));
         }
