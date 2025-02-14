@@ -385,9 +385,8 @@ pub fn propagate_comparison(
 impl ExprIntervalGraph {
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &Schema) -> Result<Self> {
         // Build the full graph:
-        let (root, graph) = build_dag(expr, &|node| {
-            ExprIntervalGraphNode::make_node(node, schema)
-        })?;
+        let (root, graph) =
+            build_dag(expr, &|node| ExprIntervalGraphNode::make_node(node, schema))?;
         Ok(Self { graph, root })
     }
 
