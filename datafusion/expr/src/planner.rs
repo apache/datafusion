@@ -33,7 +33,7 @@ use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUD
 /// functions referenced in SQL statements, without a direct dependency on the
 /// `datafusion` Catalog structures such as [`TableProvider`]
 ///
-/// [`TableProvider`]:
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 pub trait ContextProvider {
     /// Returns a table by reference, if it exists
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
