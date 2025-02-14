@@ -1275,7 +1275,7 @@ macro_rules! extensions_options {
                 // The prefix is not used for extensions.
                 // The description is generated in ConfigField::visit.
                 // We can just pass empty strings here.
-                self.visit(&mut v, "", "");
+                $crate::config::ConfigField::visit(self, &mut v, "", "");
                 v.0
             }
         }
