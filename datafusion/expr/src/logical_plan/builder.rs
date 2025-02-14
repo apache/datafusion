@@ -384,14 +384,12 @@ impl LogicalPlanBuilder {
     pub fn insert_into(
         input: LogicalPlan,
         table_name: impl Into<TableReference>,
-        table_schema: &Schema,
+        target: Arc<dyn TableSource>,
         insert_op: InsertOp,
     ) -> Result<Self> {
-        let table_schema = table_schema.clone().to_dfschema_ref()?;
-
         Ok(Self::new(LogicalPlan::Dml(DmlStatement::new(
             table_name.into(),
-            table_schema,
+            target,
             WriteOp::Insert(insert_op),
             Arc::new(input),
         ))))
