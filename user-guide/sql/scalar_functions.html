@@ -4351,15 +4351,15 @@
   </ul>
  </li>
  <li class="toc-h2 nav-item toc-entry">
-  <a class="reference internal nav-link" href="#other-functions">
-   Other Functions
+  <a class="reference internal nav-link" href="#union-functions">
+   Union Functions
   </a>
   <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#arrow-cast">
+    <a class="reference internal nav-link" href="#union-extract">
      <code class="docutils literal notranslate">
       <span class="pre">
-       arrow_cast
+       union_extract
       </span>
      </code>
     </a>
@@ -4376,11 +4376,18 @@
      </li>
     </ul>
    </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#other-functions">
+   Other Functions
+  </a>
+  <ul class="nav section-nav flex-column">
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#arrow-typeof">
+    <a class="reference internal nav-link" href="#arrow-cast">
      <code class="docutils literal notranslate">
       <span class="pre">
-       arrow_typeof
+       arrow_cast
       </span>
      </code>
     </a>
@@ -4398,10 +4405,10 @@
     </ul>
    </li>
    <li class="toc-h3 nav-item toc-entry">
-    <a class="reference internal nav-link" href="#get-field">
+    <a class="reference internal nav-link" href="#arrow-typeof">
      <code class="docutils literal notranslate">
       <span class="pre">
-       get_field
+       arrow_typeof
       </span>
      </code>
     </a>
@@ -4419,6 +4426,27 @@
     </ul>
    </li>
    <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#get-field">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       get_field
+      </span>
+     </code>
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id307">
+       Arguments
+      </a>
+     </li>
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#id308">
+       Example
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
     <a class="reference internal nav-link" href="#version">
      <code class="docutils literal notranslate">
       <span class="pre">
@@ -4428,7 +4456,7 @@
     </a>
     <ul class="nav section-nav flex-column">
      <li class="toc-h4 nav-item toc-entry">
-      <a class="reference internal nav-link" href="#id307">
+      <a class="reference internal nav-link" href="#id309">
        Example
       </a>
      </li>
@@ -9053,6 +9081,42 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 </section>
 </section>
 </section>
+<section id="union-functions">
+<h2>Union Functions<a class="headerlink" href="#union-functions" title="Link to this heading">¶</a></h2>
+<p>Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator</p>
+<ul class="simple">
+<li><p><a class="reference internal" href="#union-extract">union_extract</a></p></li>
+</ul>
+<section id="union-extract">
+<h3><code class="docutils literal notranslate"><span class="pre">union_extract</span></code><a class="headerlink" href="#union-extract" title="Link to this heading">¶</a></h3>
+<p>Returns the value of the given field in the union when selected, or NULL otherwise.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">union_extract</span><span class="p">(</span><span class="n">union</span><span class="p">,</span> <span class="n">field_name</span><span class="p">)</span>
+</pre></div>
+</div>
+<section id="id301">
+<h4>Arguments<a class="headerlink" href="#id301" title="Link to this heading">¶</a></h4>
+<ul class="simple">
+<li><p><strong>union</strong>: Union expression to operate on. Can be a constant, column, or function, and any combination of operators.</p></li>
+<li><p><strong>field_name</strong>: String expression to operate on. Must be a constant.</p></li>
+</ul>
+</section>
+<section id="id302">
+<h4>Example<a class="headerlink" href="#id302" title="Link to this heading">¶</a></h4>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="err">❯</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">union_column</span><span class="p">,</span><span class="w"> </span><span class="n">union_extract</span><span class="p">(</span><span class="n">union_column</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;a&#39;</span><span class="p">),</span><span class="w"> </span><span class="n">union_extract</span><span class="p">(</span><span class="n">union_column</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;b&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">table_with_union</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">--------------+----------------------------------+----------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">union_column</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">union_extract</span><span class="p">(</span><span class="n">union_column</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;a&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">union_extract</span><span class="p">(</span><span class="n">union_column</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;b&#39;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------+----------------------------------+----------------------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">a</span><span class="o">=</span><span class="mi">1</span><span class="err">}</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">1</span><span class="w">                                </span><span class="o">|</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">b</span><span class="o">=</span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="err">}</span><span class="w">      </span><span class="o">|</span><span class="w">                                  </span><span class="o">|</span><span class="w"> </span><span class="mi">3</span><span class="p">.</span><span class="mi">0</span><span class="w">                              </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">a</span><span class="o">=</span><span class="mi">4</span><span class="err">}</span><span class="w">        </span><span class="o">|</span><span class="w"> </span><span class="mi">4</span><span class="w">                                </span><span class="o">|</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">b</span><span class="o">=</span><span class="err">}</span><span class="w">         </span><span class="o">|</span><span class="w">                                  </span><span class="o">|</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="err">{</span><span class="n">a</span><span class="o">=</span><span class="err">}</span><span class="w">         </span><span class="o">|</span><span class="w">                                  </span><span class="o">|</span><span class="w">                                  </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">--------------+----------------------------------+----------------------------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+</section>
 <section id="other-functions">
 <h2>Other Functions<a class="headerlink" href="#other-functions" title="Link to this heading">¶</a></h2>
 <ul class="simple">
@@ -9067,15 +9131,15 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_cast</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span><span class="w"> </span><span class="n">datatype</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id301">
-<h4>Arguments<a class="headerlink" href="#id301" title="Link to this heading">¶</a></h4>
+<section id="id303">
+<h4>Arguments<a class="headerlink" href="#id303" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to cast. The expression can be a constant, column, or function, and any combination of operators.</p></li>
 <li><p><strong>datatype</strong>: <a class="reference external" href="https://docs.rs/arrow/latest/arrow/datatypes/enum.DataType.html">Arrow data type</a> name to cast to, as a string. The format is the same as that returned by [<code class="docutils literal notranslate"><span class="pre">arrow_typeof</span></code>]</p></li>
 </ul>
 </section>
-<section id="id302">
-<h4>Example<a class="headerlink" href="#id302" title="Link to this heading">¶</a></h4>
+<section id="id304">
+<h4>Example<a class="headerlink" href="#id304" title="Link to this heading">¶</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">arrow_cast</span><span class="p">(</span><span class="o">-</span><span class="mi">5</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Int8&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">a</span><span class="p">,</span>
 <span class="w">  </span><span class="n">arrow_cast</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;Dictionary(Int32, Utf8)&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="n">b</span><span class="p">,</span>
 <span class="w">  </span><span class="n">arrow_cast</span><span class="p">(</span><span class="s1">&#39;bar&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;LargeUtf8&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">c</span><span class="p">,</span>
@@ -9096,14 +9160,14 @@ For <code class="docutils literal notranslate"><span class="pre">make_map</span>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">arrow_typeof</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id303">
-<h4>Arguments<a class="headerlink" href="#id303" title="Link to this heading">¶</a></h4>
+<section id="id305">
+<h4>Arguments<a class="headerlink" href="#id305" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression</strong>: Expression to evaluate. The expression can be a constant, column, or function, and any combination of operators.</p></li>
 </ul>
 </section>
-<section id="id304">
-<h4>Example<a class="headerlink" href="#id304" title="Link to this heading">¶</a></h4>
+<section id="id306">
+<h4>Example<a class="headerlink" href="#id306" title="Link to this heading">¶</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">arrow_typeof</span><span class="p">(</span><span class="s1">&#39;foo&#39;</span><span class="p">),</span><span class="w"> </span><span class="n">arrow_typeof</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
 <span class="o">+</span><span class="c1">---------------------------+------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="n">arrow_typeof</span><span class="p">(</span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo&quot;</span><span class="p">))</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">arrow_typeof</span><span class="p">(</span><span class="n">Int64</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="w"> </span><span class="o">|</span>
@@ -9123,15 +9187,15 @@ syntax such as <code class="docutils literal notranslate"><span class="pre">my_s
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="n">get_field</span><span class="p">(</span><span class="n">expression1</span><span class="p">,</span><span class="w"> </span><span class="n">expression2</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="id305">
-<h4>Arguments<a class="headerlink" href="#id305" title="Link to this heading">¶</a></h4>
+<section id="id307">
+<h4>Arguments<a class="headerlink" href="#id307" title="Link to this heading">¶</a></h4>
 <ul class="simple">
 <li><p><strong>expression1</strong>: The map or struct to retrieve a field for.</p></li>
 <li><p><strong>expression2</strong>: The field name in the map or struct to retrieve data for. Must evaluate to a string.</p></li>
 </ul>
 </section>
-<section id="id306">
-<h4>Example<a class="headerlink" href="#id306" title="Link to this heading">¶</a></h4>
+<section id="id308">
+<h4>Example<a class="headerlink" href="#id308" title="Link to this heading">¶</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">create</span><span class="w"> </span><span class="k">table</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="p">(</span><span class="n">idx</span><span class="w"> </span><span class="nb">varchar</span><span class="p">,</span><span class="w"> </span><span class="n">v</span><span class="w"> </span><span class="nb">varchar</span><span class="p">)</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">values</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;data&#39;</span><span class="p">,</span><span class="s1">&#39;fusion&#39;</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;apache&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;arrow&#39;</span><span class="p">);</span>
 <span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">struct</span><span class="p">(</span><span class="n">idx</span><span class="p">,</span><span class="w"> </span><span class="n">v</span><span class="p">)</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="k">c</span><span class="p">;</span>
 <span class="o">+</span><span class="c1">-------------------------+</span>
@@ -9164,8 +9228,8 @@ syntax such as <code class="docutils literal notranslate"><span class="pre">my_s
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">version</span><span class="p">()</span>
 </pre></div>
 </div>
-<section id="id307">
-<h4>Example<a class="headerlink" href="#id307" title="Link to this heading">¶</a></h4>
+<section id="id309">
+<h4>Example<a class="headerlink" href="#id309" title="Link to this heading">¶</a></h4>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="k">version</span><span class="p">();</span>
 <span class="o">+</span><span class="c1">--------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="k">version</span><span class="p">()</span><span class="w">                                  </span><span class="o">|</span>
