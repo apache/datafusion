@@ -76,16 +76,21 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow::datatypes::Schema;
+/// # use arrow::datatypes::{Field, Fields, DataType, Schema};
 /// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion::datasource::physical_plan::ArrowSource;
-/// use datafusion_physical_plan::ExecutionPlan;
-/// # let file_schema = Arc::new(Schema::empty());
-/// // create FileScan config for reading data from file://
+/// # use datafusion_physical_plan::ExecutionPlan;
+/// # let file_schema = Arc::new(Schema::new(vec![
+/// #  Field::new("c1", DataType::Int32, false),
+/// #  Field::new("c2", DataType::Int32, false),
+/// #  Field::new("c3", DataType::Int32, false),
+/// # ]);
+/// // create FileScan config for reading arrow files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
-/// let config = FileScanConfig::new(object_store_url, file_schema, Arc::new(ArrowSource::default()))
+/// let file_source = Arc::new(ArrowSource::default());
+/// let config = FileScanConfig::new(object_store_url, file_schema, file_source)
 ///   .with_limit(Some(1000))            // read only the first 1000 records
 ///   .with_projection(Some(vec![2, 3])) // project columns 2 and 3
 ///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group

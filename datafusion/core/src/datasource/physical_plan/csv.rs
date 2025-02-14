@@ -425,7 +425,7 @@ impl ExecutionPlan for CsvExec {
 /// let file_scan_config = FileScanConfig::new(object_store_url, file_schema, source)
 ///     .with_file(PartitionedFile::new("file1.csv", 100*1024*1024))
 ///     .with_newlines_in_values(true); // The file contains newlines in values;
-/// let exec = file_scan_config.new_exec();
+/// let exec = file_scan_config.build();
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct CsvSource {
