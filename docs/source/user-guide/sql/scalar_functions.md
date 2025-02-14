@@ -4349,7 +4349,7 @@ Functions to work with the union data type, also know as tagged unions, variant 
 
 Returns the value of the given field in the union when selected, or NULL otherwise.
 
-```
+```sql
 union_extract(union, field_name)
 ```
 
