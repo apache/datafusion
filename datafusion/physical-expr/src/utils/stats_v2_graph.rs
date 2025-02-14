@@ -28,7 +28,6 @@ use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::stats_v2::StatisticsV2::{self, Gaussian, Uniform};
-use datafusion_physical_expr_common::stats_v2::{get_one, get_zero};
 
 use log::debug;
 use petgraph::adj::DefaultIx;
@@ -150,24 +149,21 @@ impl ExprStatisticGraph {
         &mut self,
         given_stats: StatisticsV2,
     ) -> Result<PropagationResult> {
-        // Adjust the root node with the given range:
-        if let Some(interval) = self.graph[self.root]
-            .statistics
-            .range()?
-            .intersect(given_stats.range()?)?
-        {
-            if interval == Interval::CERTAINLY_TRUE {
-                self.graph[self.root].statistics =
-                    StatisticsV2::new_bernoulli(get_one().clone())?;
-            } else if interval == Interval::CERTAINLY_FALSE {
-                self.graph[self.root].statistics =
-                    StatisticsV2::new_bernoulli(get_zero().clone())?;
-            }
-            // If interval == Interval::UNCERTAIN => do nothing to the root
-            else if interval != Interval::UNCERTAIN {
-                // This case is for numeric quantities
-                self.graph[self.root].statistics =
-                    StatisticsV2::new_from_interval(interval)?;
+        // Adjust the root node with the given statistics:
+        let root_range = self.graph[self.root].statistics.range()?;
+        let given_range = given_stats.range()?;
+        if let Some(interval) = root_range.intersect(&given_range)? {
+            if interval != root_range {
+                // If the given statistics enable us to obtain a more precise
+                // range for the root, update it:
+                let subset = root_range.contains(given_range)?;
+                self.graph[self.root].statistics = if subset == Interval::CERTAINLY_TRUE {
+                    // Given statistics is strictly more informative, use it as is:
+                    given_stats
+                } else {
+                    // Intersecting ranges gives us a more precise range:
+                    StatisticsV2::new_from_interval(interval)?
+                };
             }
         } else {
             return Ok(PropagationResult::Infeasible);
@@ -413,7 +409,7 @@ mod tests {
     use crate::intervals::cp_solver::PropagationResult;
     use crate::utils::stats_v2_graph::{
         compute_mean, compute_median, compute_variance, create_bernoulli_from_comparison,
-        get_one, new_unknown_from_binary_expr, ExprStatisticGraph,
+        new_unknown_from_binary_expr, ExprStatisticGraph,
     };
 
     use arrow_schema::{DataType, Field, Schema};
@@ -595,16 +591,16 @@ mod tests {
             Field::new("d", DataType::Float64, false),
         ]);
 
-        let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
-        let b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 1));
-        let c: Arc<dyn PhysicalExpr> = Arc::new(Column::new("c", 2));
-        let d: Arc<dyn PhysicalExpr> = Arc::new(Column::new("d", 3));
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let b = Arc::new(Column::new("b", 1)) as _;
+        let c = Arc::new(Column::new("c", 2)) as _;
+        let d = Arc::new(Column::new("d", 3)) as _;
 
-        let left: Arc<dyn PhysicalExpr> =
-            Arc::new(binary_expr(Arc::clone(&a), Plus, Arc::clone(&b), schema)?);
-        let right: Arc<dyn PhysicalExpr> =
-            Arc::new(binary_expr(Arc::clone(&c), Minus, Arc::clone(&d), schema)?);
-        let expr: Arc<dyn PhysicalExpr> = Arc::new(binary_expr(
+        let left =
+            Arc::new(binary_expr(Arc::clone(&a), Plus, Arc::clone(&b), schema)?) as _;
+        let right =
+            Arc::new(binary_expr(Arc::clone(&c), Minus, Arc::clone(&d), schema)?) as _;
+        let expr = Arc::new(binary_expr(
             Arc::clone(&left),
             Eq,
             Arc::clone(&right),
@@ -634,9 +630,9 @@ mod tests {
         let ev_stats = graph.evaluate_statistics()?;
         assert_eq!(ev_stats, &StatisticsV2::new_bernoulli(Float64(None))?);
 
+        let one = ScalarValue::new_one(&DataType::Float64)?;
         assert_eq!(
-            graph
-                .propagate_statistics(StatisticsV2::new_bernoulli(get_one().clone())?)?,
+            graph.propagate_statistics(StatisticsV2::new_bernoulli(one)?)?,
             PropagationResult::Success
         );
         Ok(())

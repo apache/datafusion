@@ -16,7 +16,6 @@
 // under the License.
 
 use std::f64::consts::LN_2;
-use std::sync::OnceLock;
 
 use crate::stats_v2::StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
 
@@ -25,19 +24,6 @@ use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::operator::Operator;
 use datafusion_expr_common::type_coercion::binary::binary_numeric_coercion;
-
-static SCALAR_VALUE_ZERO_LOCK: OnceLock<ScalarValue> = OnceLock::new();
-static SCALAR_VALUE_ONE_LOCK: OnceLock<ScalarValue> = OnceLock::new();
-
-/// Returns a `0` as a [`ScalarValue`].
-pub fn get_zero() -> &'static ScalarValue {
-    SCALAR_VALUE_ZERO_LOCK.get_or_init(|| ScalarValue::Float64(Some(0.)))
-}
-
-/// Returns a `1` as a [`ScalarValue`].
-pub fn get_one() -> &'static ScalarValue {
-    SCALAR_VALUE_ONE_LOCK.get_or_init(|| ScalarValue::Float64(Some(1.)))
-}
 
 /// New, enhanced `Statistics` definition, represents five core statistical
 /// distributions. New variants will be added over time.
