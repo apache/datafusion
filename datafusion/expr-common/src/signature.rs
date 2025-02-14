@@ -20,15 +20,13 @@
 
 use std::fmt::Display;
 use std::hash::Hash;
-use std::num::NonZeroUsize;
 
 use crate::type_coercion::aggregates::NUMERICS;
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion_common::internal_err;
 use datafusion_common::types::{LogicalType, LogicalTypeRef, NativeType};
-use indexmap::IndexSet;
-
 use datafusion_common::utils::ListCoercion;
+use indexmap::IndexSet;
 use itertools::Itertools;
 
 /// Constant that is used as a placeholder for any valid timezone.

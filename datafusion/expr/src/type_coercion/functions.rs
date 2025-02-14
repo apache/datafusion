@@ -21,12 +21,12 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
+use datafusion_common::types::LogicalType;
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, ListCoercion};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err, types::NativeType,
     utils::list_ndims, Result,
 };
-use datafusion_common::types::LogicalType;
 use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
