@@ -130,7 +130,9 @@ fn update_sort_ctx_children(
 
     // set data attribute on current node
     node_and_ctx.data = data;
-    // update the [`PlanContext.plan.children()`] from the mutated [`PlanContext.children`].
+
+    // TODO(xudong963): the plans are not mutated, only the `data` attribute is set.
+    // Therefore this should be called before this function.
     node_and_ctx.update_plan_from_children()
 }
 
