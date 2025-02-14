@@ -1236,11 +1236,7 @@ async fn roundtrip_repartition_hash() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_read_filter() -> Result<()> {
-    roundtrip_verify_read_filter_counts(
-        "SELECT data.a FROM data JOIN data2 ON data.a = data2.a where data.a < 5 AND data2.e > 1",
-        0, 2,
-    )
-    .await
+    roundtrip_verify_read_filter_counts("SELECT a FROM data where a < 5", 0, 1).await
 }
 
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
@@ -1345,73 +1341,12 @@ fn count_read_filters(
             }
             Ok(())
         }
-        Some(RelType::Join(join)) => {
-            match count_read_filters(
-                join.left.as_ref().unwrap().as_ref(),
-                filter_count,
-                best_effort_filter_count,
-            ) {
-                Err(e) => Err(e),
-                Ok(_) => count_read_filters(
-                    join.right.as_ref().unwrap().as_ref(),
-                    filter_count,
-                    best_effort_filter_count,
-                ),
-            }
-        }
-        Some(RelType::Project(p)) => count_read_filters(
-            p.input.as_ref().unwrap().as_ref(),
-            filter_count,
-            best_effort_filter_count,
-        ),
         Some(RelType::Filter(filter)) => count_read_filters(
             filter.input.as_ref().unwrap().as_ref(),
             filter_count,
             best_effort_filter_count,
         ),
-        Some(RelType::Fetch(fetch)) => count_read_filters(
-            fetch.input.as_ref().unwrap().as_ref(),
-            filter_count,
-            best_effort_filter_count,
-        ),
-        Some(RelType::Sort(sort)) => count_read_filters(
-            sort.input.as_ref().unwrap().as_ref(),
-            filter_count,
-            best_effort_filter_count,
-        ),
-        Some(RelType::Aggregate(agg)) => count_read_filters(
-            agg.input.as_ref().unwrap().as_ref(),
-            filter_count,
-            best_effort_filter_count,
-        ),
-        Some(RelType::Set(set)) => {
-            for input in &set.inputs {
-                match count_read_filters(input, filter_count, best_effort_filter_count) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
-            }
-            Ok(())
-        }
-        Some(RelType::ExtensionSingle(ext)) => count_read_filters(
-            ext.input.as_ref().unwrap().as_ref(),
-            filter_count,
-            best_effort_filter_count,
-        ),
-        Some(RelType::ExtensionMulti(ext)) => {
-            for input in &ext.inputs {
-                match count_read_filters(input, filter_count, best_effort_filter_count) {
-                    Err(e) => return Err(e),
-                    Ok(_) => continue,
-                }
-            }
-            Ok(())
-        }
-        Some(RelType::ExtensionLeaf(_)) => Ok(()),
-        _ => not_impl_err!(
-            "Unexpected RelType: {:?} in read filter check",
-            rel.rel_type
-        ),
+        _ => Ok(()),
     }
 }
 

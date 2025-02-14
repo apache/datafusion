@@ -567,9 +567,8 @@ pub fn from_table_scan(
     let mut best_effort_filter_option = None;
 
     if !scan.filters.is_empty() {
-        let mut full_filters = vec![];
-        let mut partial_filters = vec![];
-        let mut unsupported_filters = vec![];
+        let mut exact_filters = vec![];
+        let mut inexact_filters = vec![];
         let filter_refs: Vec<&Expr> = scan.filters.iter().collect();
 
         if let Ok(results) = scan.source.supports_filters_pushdown(&filter_refs) {
@@ -577,18 +576,16 @@ pub fn from_table_scan(
                 .iter()
                 .zip(results.iter())
                 .for_each(|(x, res)| match res {
-                    TableProviderFilterPushDown::Exact => full_filters.push(x.clone()),
+                    TableProviderFilterPushDown::Exact => exact_filters.push(x.clone()),
                     TableProviderFilterPushDown::Inexact => {
-                        partial_filters.push(x.clone())
+                        inexact_filters.push(x.clone())
                     }
-                    TableProviderFilterPushDown::Unsupported => {
-                        unsupported_filters.push(x.clone())
-                    }
+                    _ => {}
                 });
         }
 
-        let table_schema_qualified =
-            Arc::new(if !full_filters.is_empty() || !partial_filters.is_empty() {
+        let table_schema_qualified = Arc::new(
+            if !exact_filters.is_empty() || !inexact_filters.is_empty() {
                 DFSchema::try_from_qualified_schema(
                     scan.table_name.clone(),
                     &(scan.source.schema()),
@@ -596,17 +593,18 @@ pub fn from_table_scan(
                 .unwrap()
             } else {
                 DFSchema::empty()
-            });
+            },
+        );
 
-        if !full_filters.is_empty() {
-            let combined_expr = conjunction(full_filters).unwrap();
+        if !exact_filters.is_empty() {
+            let combined_expr = conjunction(exact_filters).unwrap();
             let filter_expr =
                 producer.handle_expr(&combined_expr, &table_schema_qualified)?;
             filter_option = Some(Box::new(filter_expr));
         }
 
-        if !partial_filters.is_empty() {
-            let combined_expr = conjunction(partial_filters).unwrap();
+        if !inexact_filters.is_empty() {
+            let combined_expr = conjunction(inexact_filters).unwrap();
             let best_effort_filter_expr =
                 producer.handle_expr(&combined_expr, &table_schema_qualified)?;
             best_effort_filter_option = Some(Box::new(best_effort_filter_expr));

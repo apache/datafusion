@@ -68,8 +68,8 @@ use datafusion::logical_expr::{
 };
 use datafusion::prelude::{lit, JoinType};
 use datafusion::{
-    arrow, error::Result, logical_expr::utils::split_conjunction, prelude::Column,
-    scalar::ScalarValue,
+    arrow, error::Result, logical_expr::utils::split_conjunction,
+    logical_expr::utils::split_conjunction_owned, prelude::Column, scalar::ScalarValue,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -1332,29 +1332,20 @@ pub async fn from_read_rel(
     ) -> Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
 
-        let mut filters = vec![];
-        if filter.is_some() {
-            let filter_expr = consumer
-                .consume_expression(&(filter.clone().unwrap()), &schema)
-                .await?;
-            filters.append(
-                &mut split_conjunction(&filter_expr)
-                    .into_iter()
-                    .cloned()
-                    .collect(),
-            );
-        }
-        if best_effort_filter.is_some() {
-            let best_effort_filter_expr = consumer
-                .consume_expression(&(best_effort_filter.clone().unwrap()), &schema)
-                .await?;
-            filters.append(
-                &mut split_conjunction(&best_effort_filter_expr)
-                    .into_iter()
-                    .cloned()
-                    .collect(),
-            );
-        }
+        let filters = if let Some(f) = filter {
+            let filter_expr = consumer.consume_expression(&(f.clone()), &schema).await?;
+            split_conjunction_owned(filter_expr)
+        } else {
+            vec![]
+        };
+
+        let best_effort_filters = if let Some(bef) = best_effort_filter {
+            let best_effort_filter_expr =
+                consumer.consume_expression(&(bef.clone()), &schema).await?;
+            split_conjunction_owned(best_effort_filter_expr)
+        } else {
+            vec![]
+        };
 
         let plan = {
             let provider = match consumer.resolve_table_ref(&table_ref).await? {
@@ -1366,7 +1357,7 @@ pub async fn from_read_rel(
                 table_ref,
                 provider_as_source(Arc::clone(&provider)),
                 None,
-                filters,
+                [filters, best_effort_filters].concat(),
             )?
             .build()?
         };
