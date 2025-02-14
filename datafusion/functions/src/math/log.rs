@@ -31,7 +31,8 @@ use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    lit, ColumnarValue, Documentation, Expr, ScalarUDF, TypeSignature::*,
+    lit, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
+    TypeSignature::*,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
@@ -117,12 +118,8 @@ impl ScalarUDFImpl for LogFunc {
     }
 
     // Support overloaded log(base, x) and log(x) which defaults to log(10, x)
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(&args.args)?;
 
         let mut base = ColumnarValue::Scalar(ScalarValue::Float32(Some(10.0)));
 
