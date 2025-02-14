@@ -185,7 +185,7 @@
 //! specialize any behavior for your use case. For example,
 //! some projects may add custom [`ExecutionPlan`] operators, or create their own
 //! query language that directly creates [`LogicalPlan`] rather than using the
-//! built in SQL planner, [`SqlToRel`].
+//! provided in SQL planner, [`SqlToRel`].
 //!
 //! In order to achieve this, DataFusion supports extension at many points:
 //!
@@ -229,9 +229,9 @@
 //! 1. The query string is parsed to an Abstract Syntax Tree (AST)
 //!    [`Statement`] using [sqlparser].
 //!
-//! 2. The AST is converted to a [`LogicalPlan`] and logical
-//!    expressions [`Expr`]s to compute the desired result by the
-//!    [`SqlToRel`] planner.
+//! 2. The AST is converted to a [`LogicalPlan`] and logical expressions
+//!    [`Expr`]s to compute the desired result by [`SqlToRel`]. This phase
+//!    also includes name and type resolution ("binding").
 //!
 //! [`Statement`]: https://docs.rs/sqlparser/latest/sqlparser/ast/enum.Statement.html
 //!

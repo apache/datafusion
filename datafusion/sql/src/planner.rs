@@ -224,7 +224,24 @@ impl PlannerContext {
     }
 }
 
-/// SQL query planner
+/// SQL query planner and binder
+///
+/// This struct is used to convert a SQL AST into a [`LogicalPlan`].
+///
+/// You can control the behavior of the planner by providing [`ParserOptions`].
+///
+/// It performs the following tasks:
+///
+/// 1. Name and type resolution (called "binding" in other systems). This
+///    phase looks up table and column names using the [`ContextProvider`].
+/// 2. Mechanical translation of the AST into a [`LogicalPlan`].
+///
+/// It does not perform type checking, semantic analysis, type coercion, or
+/// optimization, which are performed by other components.
+///
+/// Key interfaces are:
+/// * [`Self::sql_statement_to_plan`]: Convert a statement (e.g. `SELECT ...`) into a [`LogicalPlan`]
+/// * [`Self::sql_to_expr`]: Convert an expression (e.g. `1 + 2`) into an [`Expr`]
 pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
