@@ -468,8 +468,8 @@ where
     };
 
     let res = match list_array.value_type() {
-        DataType::List(_) => concat_internal::<i32>(args)?,
-        DataType::LargeList(_) => concat_internal::<i64>(args)?,
+        DataType::List(_) => concat_internal::<O>(args)?,
+        DataType::LargeList(_) => concat_internal::<O>(args)?,
         data_type => {
             return generic_append_and_prepend::<O>(
                 list_array,
