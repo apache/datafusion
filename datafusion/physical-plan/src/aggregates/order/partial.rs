@@ -246,7 +246,7 @@ impl GroupOrderingPartial {
         let range_sort_key = get_row_at_idx(&sort_keys, last_range.start)?;
 
         let (current_sort, sort_key) = if last_range.start == 0 {
-            // There was no boundary in the batch. Compare with wthe previous sort_key (if present)
+            // There was no boundary in the batch. Compare with the previous sort_key (if present)
             // to check if there was a boundary between the current batch and the previous one.
             Self::updated_sort_key(
                 current_sort,
