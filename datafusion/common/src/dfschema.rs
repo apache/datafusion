@@ -1007,6 +1007,8 @@ pub trait SchemaExt {
     ///
     /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
     /// equivalence checking.
+    ///
+    /// It is only used by insert into cases.
     fn logically_equivalent_names_and_types(&self, other: &Self) -> Result<()>;
 }
 
@@ -1028,7 +1030,9 @@ impl SchemaExt for Schema {
             })
     }
 
+    // It is only used by insert into cases.
     fn logically_equivalent_names_and_types(&self, other: &Self) -> Result<()> {
+        // case 1 : schema length mismatch
         if self.fields().len() != other.fields().len() {
             _plan_err!(
                 "Inserting query must have the same schema length as the table. \
@@ -1037,6 +1041,8 @@ impl SchemaExt for Schema {
                 other.fields().len()
             )
         } else {
+            // case 2 : schema length match, but fields mismatch
+            // check if the fields name are the same and have the same data types
             self.fields()
                 .iter()
                 .zip(other.fields().iter())

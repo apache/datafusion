@@ -5287,25 +5287,22 @@ async fn test_insert_into_checking() -> Result<()> {
     let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
     session_ctx.register_table("t", initial_table.clone())?;
 
-    // There are three cases we need to check
+    // There are two cases we need to check
     // 1. The len of the schema of the plan and the schema of the table should be the same
     // 2. The datatype of the schema of the plan and the schema of the table should be the same
 
     // Test case 1:
     let write_df = session_ctx.sql("values (1, 2), (3, 4)").await.unwrap();
 
-    match write_df
+    let e = write_df
         .write_table("t", DataFrameWriteOptions::new())
         .await
-    {
-        Ok(_) => {}
-        Err(e) => {
-            assert_contains!(
-                e.to_string(),
-                "Inserting query must have the same schema length as the table."
-            );
-        }
-    }
+        .unwrap_err();
+
+    assert_contains!(
+        e.to_string(),
+        "Inserting query must have the same schema length as the table."
+    );
 
     // Setting nullable to true
     // Make sure the nullable check go through
@@ -5320,15 +5317,12 @@ async fn test_insert_into_checking() -> Result<()> {
     // Test case 2:
     let write_df = session_ctx.sql("values ('a123'), ('b456')").await.unwrap();
 
-    match write_df
+    let e = write_df
         .write_table("t", DataFrameWriteOptions::new())
         .await
-    {
-        Ok(_) => {}
-        Err(e) => {
-            assert_contains!(e.to_string(), "Inserting query schema mismatch: Expected table field 'a' with type Int64, but got 'column1' with type Utf8");
-        }
-    }
+        .unwrap_err();
+
+    assert_contains!(e.to_string(), "Inserting query schema mismatch: Expected table field 'a' with type Int64, but got 'column1' with type Utf8");
 
     Ok(())
 }
