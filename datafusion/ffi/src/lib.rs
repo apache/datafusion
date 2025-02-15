@@ -31,6 +31,7 @@ pub mod record_batch_stream;
 pub mod session_config;
 pub mod table_provider;
 pub mod table_source;
+pub mod udaf;
 pub mod udf;
 pub mod util;
 pub mod volatility;
