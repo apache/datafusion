@@ -382,7 +382,7 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_projection(Some(vec![0, 1, 2, 3, 4]))
-    .new_exec()
+    .build()
 }
 
 fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
@@ -399,7 +399,7 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_projection(Some(vec![3, 2, 1]))
-    .new_exec()
+    .build()
 }
 
 fn create_projecting_memory_exec() -> Arc<dyn ExecutionPlan> {

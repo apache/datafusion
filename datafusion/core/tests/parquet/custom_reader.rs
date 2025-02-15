@@ -90,7 +90,7 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
     )
     .with_file_group(file_group);
 
-    let parquet_exec = base_config.new_exec();
+    let parquet_exec = base_config.build();
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
