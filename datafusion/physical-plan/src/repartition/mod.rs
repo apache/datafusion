@@ -506,6 +506,9 @@ impl DisplayAs for RepartitionExec {
                 }
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

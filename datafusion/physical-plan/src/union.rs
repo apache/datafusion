@@ -157,6 +157,9 @@ impl DisplayAs for UnionExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "UnionExec")
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }
@@ -386,6 +389,9 @@ impl DisplayAs for InterleaveExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "InterleaveExec")
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
             }
         }
     }

@@ -167,6 +167,9 @@ impl DisplayAs for ProjectionExec {
 
                 write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

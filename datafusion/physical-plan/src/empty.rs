@@ -94,6 +94,9 @@ impl DisplayAs for EmptyExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "EmptyExec")
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

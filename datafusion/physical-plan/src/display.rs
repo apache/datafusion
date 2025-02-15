@@ -18,12 +18,13 @@
 //! Implementation of physical plan display. See
 //! [`crate::displayable`] for examples of how to format
 
-use std::fmt;
 use std::fmt::Formatter;
+use std::{fmt, str::FromStr};
 
 use arrow_schema::SchemaRef;
 
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
+use datafusion_common::DataFusionError;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
@@ -36,6 +37,23 @@ pub enum DisplayFormatType {
     Default,
     /// Verbose, showing all available details
     Verbose,
+    /// TreeRender, display plan like a tree.
+    TreeRender,
+}
+
+impl FromStr for DisplayFormatType {
+    type Err = DataFusionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "indent" => Ok(Self::Default),
+            "pretty" => Ok(Self::TreeRender),
+            _ => Err(DataFusionError::Configuration(format!(
+                "Invalid explain format: {}",
+                s
+            ))),
+        }
+    }
 }
 
 /// Wraps an `ExecutionPlan` with various methods for formatting
@@ -224,6 +242,37 @@ impl<'a> DisplayableExecutionPlan<'a> {
         }
     }
 
+    pub fn tree_render(&self) -> impl fmt::Display + 'a {
+        let format_type = DisplayFormatType::TreeRender;
+        struct Wrapper<'a> {
+            format_type: DisplayFormatType,
+            plan: &'a dyn ExecutionPlan,
+            show_metrics: ShowMetrics,
+            show_statistics: bool,
+            show_schema: bool,
+        }
+        impl fmt::Display for Wrapper<'_> {
+            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                let mut visitor = IndentVisitor {
+                    t: self.format_type,
+                    f,
+                    indent: 0,
+                    show_metrics: self.show_metrics,
+                    show_statistics: self.show_statistics,
+                    show_schema: self.show_schema,
+                };
+                accept(self.plan, &mut visitor)
+            }
+        }
+        Wrapper {
+            format_type,
+            plan: self.inner,
+            show_metrics: self.show_metrics,
+            show_statistics: self.show_statistics,
+            show_schema: self.show_schema,
+        }
+    }
+
     /// Return a single-line summary of the root of the plan
     /// Example: `ProjectionExec: expr=[a@0 as a]`.
     pub fn one_line(&self) -> impl fmt::Display + 'a {
@@ -258,8 +307,20 @@ impl<'a> DisplayableExecutionPlan<'a> {
     }
 
     /// format as a `StringifiedPlan`
-    pub fn to_stringified(&self, verbose: bool, plan_type: PlanType) -> StringifiedPlan {
-        StringifiedPlan::new(plan_type, self.indent(verbose).to_string())
+    pub fn to_stringified(
+        &self,
+        verbose: bool,
+        plan_type: PlanType,
+        explain_format: DisplayFormatType,
+    ) -> StringifiedPlan {
+        match explain_format {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                StringifiedPlan::new(plan_type, self.indent(verbose).to_string())
+            }
+            DisplayFormatType::TreeRender => {
+                StringifiedPlan::new(plan_type, self.tree_render().to_string())
+            }
+        }
     }
 }
 

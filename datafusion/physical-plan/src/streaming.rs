@@ -209,6 +209,9 @@ impl DisplayAs for StreamingTableExec {
 
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

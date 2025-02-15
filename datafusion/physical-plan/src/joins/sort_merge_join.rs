@@ -369,6 +369,9 @@ impl DisplayAs for SortMergeJoinExec {
                     ))
                 )
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

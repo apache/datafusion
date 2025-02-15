@@ -122,6 +122,9 @@ impl DisplayAs for CoalesceBatchesExec {
 
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

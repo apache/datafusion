@@ -430,6 +430,9 @@ impl DataSource for MemorySourceConfig {
                     )
                 }
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 
@@ -866,6 +869,9 @@ impl DisplayAs for LazyMemoryExec {
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
             }
         }
     }

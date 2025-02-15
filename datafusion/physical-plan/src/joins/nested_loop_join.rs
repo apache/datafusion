@@ -424,6 +424,7 @@ impl DisplayAs for NestedLoopJoinExec {
                     self.join_type, display_filter, display_projections
                 )
             }
+            DisplayFormatType::TreeRender => todo!(), // TODO(renjj): add display info
         }
     }
 }

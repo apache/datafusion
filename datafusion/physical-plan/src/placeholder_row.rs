@@ -112,6 +112,9 @@ impl DisplayAs for PlaceholderRowExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "PlaceholderRowExec")
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

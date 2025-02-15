@@ -154,6 +154,9 @@ impl DisplayAs for DataSinkExec {
                 write!(f, "DataSinkExec: sink=")?;
                 self.sink.fmt_as(t, f)
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

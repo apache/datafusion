@@ -163,6 +163,9 @@ impl DisplayAs for ValuesExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ValuesExec")
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

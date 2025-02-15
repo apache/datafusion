@@ -668,6 +668,9 @@ impl DisplayAs for HashJoinExec {
                     self.mode, self.join_type, on, display_filter, display_projections
                 )
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

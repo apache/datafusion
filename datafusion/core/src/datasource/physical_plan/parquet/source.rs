@@ -584,6 +584,9 @@ impl FileSource for ParquetSource {
 
                 write!(f, "{}{}", predicate_string, pruning_predicate_string)
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
     fn supports_repartition(&self, _config: &FileScanConfig) -> bool {
