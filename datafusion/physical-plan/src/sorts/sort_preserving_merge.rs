@@ -1389,6 +1389,9 @@ mod tests {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "CongestedExec",).unwrap()
                 }
+                DisplayFormatType::TreeRender => {
+                    write!(f, "").unwrap() // TODO(renjj): add display info
+                }
             }
             Ok(())
         }

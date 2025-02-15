@@ -138,6 +138,9 @@ impl DisplayAs for CustomExecutionPlan {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "CustomExecutionPlan: projection={:#?}", self.projection)
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

@@ -1102,6 +1102,9 @@ mod tests {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "UnboundableExec",).unwrap()
                 }
+                DisplayFormatType::TreeRender => {
+                    write!(f, "").unwrap() // TODO(renjj): add display info
+                }
             }
             Ok(())
         }
