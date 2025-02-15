@@ -280,6 +280,9 @@ impl FileScanConfig {
     /// # Parameters:
     /// * `object_store_url`: See [`Self::object_store_url`]
     /// * `file_schema`: See [`Self::file_schema`]
+    //
+    // todo: should this function (without projection) exist at all?
+    // config.with_source depends on projection being set correctly...
     pub fn new(
         object_store_url: ObjectStoreUrl,
         file_schema: SchemaRef,
@@ -294,6 +297,34 @@ impl FileScanConfig {
             constraints: Constraints::empty(),
             statistics,
             projection: None,
+            limit: None,
+            table_partition_cols: vec![],
+            output_ordering: vec![],
+            file_compression_type: FileCompressionType::UNCOMPRESSED,
+            new_lines_in_values: false,
+            source: Arc::clone(&file_source),
+        };
+
+        config = config.with_source(Arc::clone(&file_source));
+        config
+    }
+
+    /// Create a new [`FileScanConfig`] also setting the projection
+    pub fn new_with_projection(
+        object_store_url: ObjectStoreUrl,
+        file_schema: SchemaRef,
+        file_source: Arc<dyn FileSource>,
+        projection: Option<Vec<usize>>,
+    ) -> Self {
+        let statistics = Statistics::new_unknown(&file_schema);
+
+        let mut config = Self {
+            object_store_url,
+            file_schema,
+            file_groups: vec![],
+            constraints: Constraints::empty(),
+            statistics,
+            projection,
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
