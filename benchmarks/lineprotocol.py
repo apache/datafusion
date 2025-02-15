@@ -16,6 +16,66 @@
 # specific language governing permissions and limitations
 # under the License.
 
+
+""" 
+Converts a given json to LineProtocol format that can be 
+visualised by grafana/other systems that support LineProtocol. 
+
+Usage example: 
+$ python3 lineprotocol.py sort.json 
+benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="sort utf8",iteration=0,row_count=10838832,elapsed_ms=85626006 1691105678000000000
+benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="sort utf8",iteration=1,row_count=10838832,elapsed_ms=68694468 1691105678000000000
+benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="sort utf8",iteration=2,row_count=10838832,elapsed_ms=63392883 1691105678000000000
+benchmark,name=sort,version=28.0.0,datafusion_version=28.0.0,num_cpus=8 query="sort utf8",iteration=3,row_count=10838832,elapsed_ms=66388367 1691105678000000000
+"""
+
+# sort.json
+"""
+{
+  "queries": [
+    {
+      "iterations": [
+        {
+          "elapsed": 85626.006132,
+          "row_count": 10838832
+        },
+        {
+          "elapsed": 68694.467851,
+          "row_count": 10838832
+        },
+        {
+          "elapsed": 63392.883406,
+          "row_count": 10838832
+        },
+        {
+          "elapsed": 66388.367387,
+          "row_count": 10838832
+        },
+      ],
+      "query": "sort utf8",
+      "start_time": 1691105678
+    },
+  ],
+  "context": {
+    "arguments": [
+      "sort",
+      "--path",
+      "benchmarks/data",
+      "--scale-factor",
+      "1.0",
+      "--iterations",
+      "4",
+      "-o",
+      "sort.json"
+    ],
+    "benchmark_version": "28.0.0",
+    "datafusion_version": "28.0.0",
+    "num_cpus": 8,
+    "start_time": 1691105678
+  }
+}
+"""
+
 from __future__ import annotations
 
 import json
@@ -113,13 +173,11 @@ def lineformat(
     
 def main() -> None:
     parser = ArgumentParser()
-    compare_parser = parser
-    compare_parser.add_argument(
-        "baseline_path",
+    parser.add_argument(
+        "path",
         type=Path,
-        help="Path to the baseline summary file.",
+        help="Path to the benchmark file.",
     )
-
     options = parser.parse_args()
 
     lineformat(options.baseline_path)
