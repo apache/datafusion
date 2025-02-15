@@ -656,22 +656,9 @@ impl OnDemandRepartitionExec {
             })?;
 
             // Fetch the batch from the buffer, ideally this should reduce the time gap between the requester and the input stream
-            let batch_opt = loop {
-                match buffer_rx.try_recv() {
-                    Ok(batch) => break Some(batch),
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                        tokio::task::yield_now().await;
-                    }
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                        break None
-                    }
-                }
-            };
-
-            let batch = if let Some(batch) = batch_opt {
-                batch
-            } else {
-                break;
+            let batch = match buffer_rx.recv().await {
+                Some(batch) => batch,
+                None => break,
             };
 
             let size = batch.get_array_memory_size();
