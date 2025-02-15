@@ -117,6 +117,7 @@ impl State {
 }
 
 impl GroupOrderingPartial {
+    /// TODO: Remove unnecessary `input_schema` parameter.
     pub fn try_new(
         _input_schema: &Schema,
         order_indices: &[usize],
