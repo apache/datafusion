@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::GenericStringArray;
+use arrow::array::GenericStringBuilder;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Utf8;
 use rand::Rng;
@@ -94,14 +94,19 @@ impl ScalarUDFImpl for UuidFunc {
         let mut randoms = vec![0u128; num_rows];
         rng.fill(&mut randoms[..]);
 
-        // From Uuid::new_v4(): Mask out the version and variant bits
+        let mut builder =
+            GenericStringBuilder::<i32>::with_capacity(num_rows, num_rows * 36);
+
+        let mut buffer = [0u8; 36];
         for x in &mut randoms {
+            // From Uuid::new_v4(): Mask out the version and variant bits
             *x = *x & 0xFFFFFFFFFFFF4FFFBFFFFFFFFFFFFFFF | 0x40008000000000000000;
+            let uuid = Uuid::from_u128(*x);
+            let fmt = uuid::fmt::Hyphenated::from_uuid(uuid);
+            builder.append_value(fmt.encode_lower(&mut buffer));
         }
 
-        let values = randoms.into_iter().map(|x| Uuid::from_u128(x).to_string());
-        let array = GenericStringArray::<i32>::from_iter_values(values);
-        Ok(ColumnarValue::Array(Arc::new(array)))
+        Ok(ColumnarValue::Array(Arc::new(builder.finish())))
     }
 
     fn documentation(&self) -> Option<&Documentation> {
