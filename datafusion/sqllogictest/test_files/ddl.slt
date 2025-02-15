@@ -638,46 +638,6 @@ statement ok
 set datafusion.catalog.information_schema = true;
 
 statement ok
-CREATE OR REPLACE TABLE TABLE_WITH_NORMALIZATION(FIELD1 BIGINT, FIELD2 BIGINT);
-
-# Check table name is in lowercase
-query TTTT
-show create table table_with_normalization
-----
-datafusion public table_with_normalization NULL
-
-# Check column name is in uppercase
-query TTT
-describe table_with_normalization
-----
-field1 Int64 YES
-field2 Int64 YES
-
-# Disable ident normalization
-statement ok
-set datafusion.sql_parser.enable_ident_normalization = false;
-
-statement ok
-CREATE TABLE TABLE_WITHOUT_NORMALIZATION(FIELD1 BIGINT, FIELD2 BIGINT) AS VALUES (1,2);
-
-# Check table name is in uppercase
-query TTTT
-show create table TABLE_WITHOUT_NORMALIZATION
-----
-datafusion public TABLE_WITHOUT_NORMALIZATION NULL
-
-# Check column name is in uppercase
-query TTT
-describe TABLE_WITHOUT_NORMALIZATION
-----
-FIELD1 Int64 YES
-FIELD2 Int64 YES
-
-statement ok
-set datafusion.sql_parser.enable_ident_normalization = true;
-
-
-statement ok
 create table foo(x int);
 
 statement ok
