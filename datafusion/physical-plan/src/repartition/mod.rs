@@ -1129,7 +1129,6 @@ mod tests {
     use crate::{
         collect,
         expressions::col,
-        memory::MemorySourceConfig,
         test::{
             assert_is_pending,
             exec::{
@@ -1137,7 +1136,6 @@ mod tests {
                 ErrorExec, MockExec,
             },
         },
-        {collect, expressions::col},
     };
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
@@ -1672,12 +1670,13 @@ mod tests {
 #[cfg(test)]
 mod test {
     use arrow::compute::SortOptions;
-    use arrow::datatypes::Schema;
+    use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
     use crate::test::TestMemoryExec;
     use crate::union::UnionExec;
 
+    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
     /// Asserts that the plan is as expected
@@ -1765,6 +1764,10 @@ mod test {
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
+    }
+
+    fn test_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
     }
 
     fn sort_exprs(schema: &Schema) -> LexOrdering {
