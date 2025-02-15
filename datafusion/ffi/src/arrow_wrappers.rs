@@ -21,7 +21,7 @@ use abi_stable::StableAbi;
 use arrow::{
     array::{make_array, ArrayRef},
     datatypes::{Schema, SchemaRef},
-    ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
+    ffi::{from_ffi, to_ffi, FFI_ArrowArray, FFI_ArrowSchema},
 };
 use log::error;
 
@@ -77,5 +77,16 @@ impl TryFrom<WrappedArray> for ArrayRef {
         let data = unsafe { from_ffi(value.array, &value.schema.0)? };
 
         Ok(make_array(data))
+    }
+}
+
+impl TryFrom<&ArrayRef> for WrappedArray {
+    type Error = arrow::error::ArrowError;
+
+    fn try_from(array: &ArrayRef) -> Result<Self, Self::Error> {
+        let (array, schema) = to_ffi(&array.to_data())?;
+        let schema = WrappedSchema(schema);
+
+        Ok(WrappedArray { array, schema })
     }
 }
