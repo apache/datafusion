@@ -30,7 +30,7 @@ use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_datasource::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::ProjectionExec;

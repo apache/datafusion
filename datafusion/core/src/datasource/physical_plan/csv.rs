@@ -409,7 +409,7 @@ impl ExecutionPlan for CsvExec {
 /// # };
 /// # use datafusion::datasource::physical_plan::CsvSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
-/// # use datafusion_physical_plan::source::DataSourceExec;
+/// # use datafusion_datasource::source::DataSourceExec;
 ///
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let file_schema = Arc::new(Schema::empty());

@@ -48,12 +48,12 @@ use datafusion_physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
     SymmetricHashJoinExec,
 };
-use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_physical_plan::projection::{update_expr, ProjectionExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_plan::streaming::PartitionStream;
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;

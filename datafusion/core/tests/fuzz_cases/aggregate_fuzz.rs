@@ -43,8 +43,8 @@ use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::memory::MemorySourceConfig;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 

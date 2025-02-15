@@ -48,8 +48,8 @@ use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::memory::MemorySourceConfig;
+use datafusion_datasource::source::DataSourceExec;
 
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;

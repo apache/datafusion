@@ -41,7 +41,7 @@ use datafusion_common::project_schema;
 use datafusion_common::stats::Precision;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_datasource::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::PlanProperties;
 
 use async_trait::async_trait;

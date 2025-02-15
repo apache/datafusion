@@ -19,7 +19,7 @@
 
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion_physical_plan::metrics::MetricsSet;
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_plan::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
 /// Find the metrics from the first DataSourceExec encountered in the plan

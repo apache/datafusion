@@ -57,7 +57,7 @@ use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::PlanProperties;

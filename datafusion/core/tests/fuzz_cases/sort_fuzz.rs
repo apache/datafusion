@@ -32,7 +32,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_execution::memory_pool::GreedyMemoryPool;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_datasource::memory::MemorySourceConfig;
 
 use rand::Rng;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};

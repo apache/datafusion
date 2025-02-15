@@ -74,7 +74,14 @@ tokio = { workspace = true, features = [
     "fs",
     "parking_lot",
 ] }
+datafusion-datasource = { workspace = true }
+datafusion-physical-plan = { workspace = true}
 
 [[bench]]
 harness = false
 name = "spm"
+
+[[test]]
+harness = false
+name = "tests"
+path = "tests/mod.rs"

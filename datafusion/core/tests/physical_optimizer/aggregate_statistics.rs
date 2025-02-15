@@ -36,9 +36,9 @@ use datafusion_physical_plan::aggregates::PhysicalGroupBy;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::common;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// Mock data using a MemorySourceConfig which has an exact count statistic

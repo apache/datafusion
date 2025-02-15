@@ -34,7 +34,7 @@ use datafusion_execution::cache::cache_unit::{
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{col, lit, Expr};
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 
 use datafusion::datasource::physical_plan::FileScanConfig;
 use tempfile::tempdir;
