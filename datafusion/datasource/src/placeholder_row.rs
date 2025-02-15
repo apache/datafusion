@@ -180,7 +180,8 @@ impl ExecutionPlan for PlaceholderRowExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{test, with_new_children_if_necessary};
+    use crate::test;
+    use datafusion_physical_plan::with_new_children_if_necessary;
 
     #[test]
     fn with_new_children() -> Result<()> {

@@ -968,7 +968,7 @@ mod memory_exec_tests {
 
     use crate::memory::MemorySourceConfig;
     use crate::source::DataSourceExec;
-    use crate::ExecutionPlan;
+    use datafusion_physical_plan::ExecutionPlan;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1141,7 +1141,7 @@ mod lazy_memory_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::lit;
+    use datafusion_physical_plan::expressions::lit;
     use crate::test::{self, make_partition};
 
     use arrow::datatypes::{DataType, Field};

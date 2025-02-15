@@ -27,9 +27,9 @@ use arrow::{
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
-    memory::MemorySourceConfig,
     sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 

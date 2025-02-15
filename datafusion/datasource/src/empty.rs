@@ -163,7 +163,7 @@ impl ExecutionPlan for EmptyExec {
 mod tests {
     use super::*;
     use crate::test;
-    use crate::with_new_children_if_necessary;
+    use datafusion_physical_plan::with_new_children_if_necessary;
 
     #[tokio::test]
     async fn empty() -> Result<()> {
