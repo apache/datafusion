@@ -22,8 +22,9 @@ use arrow::array::{BooleanArray, Int32Array, Int8Array};
 use arrow::record_batch::RecordBatch;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::common::stats::Precision;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::DFSchema;
+use datafusion::common::{ColumnStatistics, DFSchema};
 use datafusion::common::{ScalarValue, ToDFSchema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::first_last::first_value_udaf;
@@ -79,6 +80,9 @@ async fn main() -> Result<()> {
 
     // See how to analyze ranges in expressions
     range_analysis_demo()?;
+
+    // See how to analyze boundaries in different kinds of expressions.
+    boundary_analysis_and_selectivity_demo()?;
 
     // See how to determine the data types of expressions
     expression_type_demo()?;
@@ -271,6 +275,83 @@ fn range_analysis_demo() -> Result<()> {
     // that in this case,  `date` must be in the range `['2020-09-01', '2020-10-01']`
     let expected_range = Interval::try_new(september_1, october_1)?;
     assert_eq!(analysis_result.boundaries[0].interval, Some(expected_range));
+
+    Ok(())
+}
+
+// DataFusion expression boundary analysis framework allows it to infer
+fn boundary_analysis_and_selectivity_demo() -> Result<()> {
+    // Case 1: Simple range predicate similar to id >= 5000
+    let id_greater_5000 = col("id").gt_eq(lit(5000i64));
+
+    // Case 2: Compound predicate with AND (similar to a > 5 AND a < 7)
+    let id_between_5_7 = col("id").gt(lit(5i64)).and(col("id").lt(lit(7i64)));
+
+    // Case 3: Compound predicate with OR (similar to a > 8 OR a = 1)
+    let id_gt8_or_eq1 = col("id").gt(lit(8i64)).or(col("id").eq(lit(1i64)));
+
+    // Define our schema with an 'id' column
+    let schema = Arc::new(Schema::new(vec![make_field("id", DataType::Int64)]));
+
+    // Create initial boundaries for our analysis
+    // We'll set known boundaries of id being between 1 and 10000
+    let mut column_stats = ColumnStatistics::new_unknown();
+    column_stats.min_value = Precision::Exact(ScalarValue::Int64(Some(1)));
+    column_stats.max_value = Precision::Exact(ScalarValue::Int64(Some(10000)));
+
+    let initial_boundaries =
+        vec![ExprBoundaries::try_from_column(&schema, &column_stats, 0)?];
+
+    // Create analysis context and schema for evaluation
+    let df_schema = DFSchema::try_from(schema.clone())?;
+    let ctx = SessionContext::new();
+
+    // Analyze Case 1: id >= 5000
+    let physical_expr1 = ctx.create_physical_expr(id_greater_5000, &df_schema)?;
+    let analysis1 = analyze(
+        &physical_expr1,
+        AnalysisContext::new(initial_boundaries.clone()),
+        df_schema.as_ref(),
+    )?;
+
+    // The analysis should show:
+    // - Minimum value: 5000
+    // - Maximum value: 10000
+    // - Selectivity estimate: ~0.5 as it selects half the range frm the statistics
+    // we previously specified.
+    println!("Analysis for id >= 5000:");
+    println!(
+        "Boundaries: {:?} and Selectivity: {:?}",
+        analysis1.boundaries[0], analysis1.selectivity
+    );
+
+    // Analyze Case 2: id > 5 AND id < 7
+    let physical_expr2 = ctx.create_physical_expr(id_between_5_7, &df_schema)?;
+    let analysis2 = analyze(
+        &physical_expr2,
+        AnalysisContext::new(initial_boundaries.clone()),
+        df_schema.as_ref(),
+    )?;
+
+    // The analysis should show:
+    // - Minimum value: 6
+    // - Maximum value: 6
+    // - Very low selectivity as it's a point query
+    // Proper support for boundary analysis will return [false, true] as that's
+    // what the expression can potentially evaluate to.
+    println!("\nAnalysis for id > 5 AND id < 7:");
+    println!("Boundaries: {:?}", analysis2.boundaries[0]);
+
+    // Analyze Case 3: id > 8 OR id = 1 (Unsupported)
+    //
+    // Currently interval arithmetic is not implemented for the OR operator so
+    // the below call to analysis will return an error.
+    let physical_expr3 = ctx.create_physical_expr(id_gt8_or_eq1, &df_schema)?;
+    let _ = analyze(
+        &physical_expr3,
+        AnalysisContext::new(initial_boundaries.clone()),
+        df_schema.as_ref(),
+    )?;
 
     Ok(())
 }
