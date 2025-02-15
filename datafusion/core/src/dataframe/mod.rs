@@ -52,7 +52,7 @@ use datafusion_common::{
     SchemaError, UnnestOptions,
 };
 use datafusion_expr::dml::InsertOp;
-use datafusion_expr::{case, is_null, lit, SortExpr};
+use datafusion_expr::{case, is_null, lit, Projection, SortExpr};
 use datafusion_expr::{
     utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
@@ -1770,7 +1770,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn with_column_renamed(
-        self,
+        mut self,
         old_name: impl Into<String>,
         new_name: &str,
     ) -> Result<DataFrame> {
@@ -1779,37 +1779,82 @@ impl DataFrame {
             .config_options()
             .sql_parser
             .enable_ident_normalization;
+
         let old_column: Column = if ident_opts {
             Column::from_qualified_name(old_name)
         } else {
             Column::from_qualified_name_ignore_case(old_name)
         };
 
-        let (qualifier_rename, field_rename) =
-            match self.plan.schema().qualified_field_from_column(&old_column) {
-                Ok(qualifier_and_field) => qualifier_and_field,
-                // no-op if field not found
-                Err(DataFusionError::SchemaError(
-                    SchemaError::FieldNotFound { .. },
-                    _,
-                )) => return Ok(self),
-                Err(err) => return Err(err),
-            };
-        let projection = self
-            .plan
-            .schema()
-            .iter()
-            .map(|(qualifier, field)| {
-                if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                    col(Column::from((qualifier, field))).alias(new_name)
-                } else {
-                    col(Column::from((qualifier, field)))
-                }
-            })
-            .collect::<Vec<_>>();
-        let project_plan = LogicalPlanBuilder::from(self.plan)
-            .project(projection)?
-            .build()?;
+        let project_plan = if let LogicalPlan::Projection(Projection {
+            expr,
+            input,
+            schema,
+            ..
+        }) = self.plan
+        {
+            // special case: we already have a projection on top, so we can reuse it rather than creating a new one
+            let (qualifier_rename, field_rename) =
+                match schema.qualified_field_from_column(&old_column) {
+                    Ok(qualifier_and_field) => qualifier_and_field,
+                    // no-op if field not found
+                    Err(DataFusionError::SchemaError(
+                        SchemaError::FieldNotFound { .. },
+                        _,
+                    )) => {
+                        self.plan = LogicalPlan::Projection(
+                            Projection::try_new_with_schema(expr, input, schema)?,
+                        );
+                        return Ok(self);
+                    }
+                    Err(err) => return Err(err),
+                };
+
+            let expr: Vec<_> = expr
+                .into_iter()
+                .map(|e| {
+                    let (qualifier, field) = e.qualified_name();
+
+                    if qualifier.as_ref().eq(&qualifier_rename)
+                        && field.as_str() == field_rename.name()
+                    {
+                        e.alias_qualified(qualifier, new_name.to_string())
+                    } else {
+                        e
+                    }
+                })
+                .collect();
+            LogicalPlan::Projection(Projection::try_new(expr, input)?)
+        } else {
+            let (qualifier_rename, field_rename) =
+                match self.plan.schema().qualified_field_from_column(&old_column) {
+                    Ok(qualifier_and_field) => qualifier_and_field,
+                    // no-op if field not found
+                    Err(DataFusionError::SchemaError(
+                        SchemaError::FieldNotFound { .. },
+                        _,
+                    )) => return Ok(self),
+                    Err(err) => return Err(err),
+                };
+
+            let projection = self
+                .plan
+                .schema()
+                .iter()
+                .map(|(qualifier, field)| {
+                    if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
+                        col(Column::from((qualifier, field))).alias(new_name)
+                    } else {
+                        col(Column::from((qualifier, field)))
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            LogicalPlanBuilder::from(self.plan)
+                .project(projection)?
+                .build()?
+        };
+
         Ok(DataFrame {
             session_state: self.session_state,
             plan: project_plan,

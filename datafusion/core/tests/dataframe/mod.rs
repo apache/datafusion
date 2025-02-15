@@ -1617,9 +1617,19 @@ async fn with_column_renamed() -> Result<()> {
         // accepts table qualifier
         .with_column_renamed("aggregate_test_100.c2", "two")?
         // no-op for missing column
-        .with_column_renamed("c4", "boom")?
-        .collect()
-        .await?;
+        .with_column_renamed("c4", "boom")?;
+
+    assert_eq!("\
+        Projection: aggregate_test_100.c1 AS one, aggregate_test_100.c2 AS two, aggregate_test_100.c3, aggregate_test_100.c2 + aggregate_test_100.c3 AS sum AS total\
+        \n  Limit: skip=0, fetch=1\
+        \n    Sort: aggregate_test_100.c1 ASC NULLS FIRST, aggregate_test_100.c2 ASC NULLS FIRST, aggregate_test_100.c3 ASC NULLS FIRST\
+        \n      Filter: aggregate_test_100.c2 = Int32(3) AND aggregate_test_100.c1 = Utf8(\"a\")\
+        \n        Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
+        \n          TableScan: aggregate_test_100",
+               format!("{}", df_sum_renamed.logical_plan()) // one projection is reused for  all renames
+    );
+
+    let batches = df_sum_renamed.collect().await?;
 
     assert_batches_sorted_eq!(
         [
@@ -1629,7 +1639,7 @@ async fn with_column_renamed() -> Result<()> {
             "| a   | 3   | -72 | -69   |",
             "+-----+-----+-----+-------+",
         ],
-        &df_sum_renamed
+        &batches
     );
 
     Ok(())
