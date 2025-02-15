@@ -72,8 +72,8 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, InputOrde
 
 use itertools::izip;
 
-/// This rule inspects [`SortExec`]'s in the given physical plan and removes the
-/// ones it can prove unnecessary.
+/// This rule inspects [`SortExec`]'s in the given physical plan in order to
+/// remove unnecessary sorts, and optimize sort performance across the plan.
 #[derive(Default, Debug)]
 pub struct EnforceSorting {}
 
@@ -163,51 +163,15 @@ fn update_coalesce_ctx_children(
     };
 }
 
-/// If `repartition_sorts` is enabled,
-/// then transform [`CoalescePartitionsExec`] + [`SortExec`] cascades
-/// into [`SortExec`] + [`SortPreservingMergeExec`] cascades.
+/// Performs optimizations based upon a series of subrules.
 ///
-/// The [`CoalescePartitionsExec`] + [`SortExec`] cascades
-/// combine the partitions first, and then sort:
+/// Refer to each subrule for detailed descriptions of the optimizations performed:
+/// [`ensure_sorting`], [`parallelize_sorts`], [`replace_with_order_preserving_variants()`],
+/// and [`pushdown_sorts`].
 ///
-///   ┌ ─ ─ ─ ─ ─ ┐                                                                                   
-///    ┌─┬─┬─┐                                                                                        
-///   ││B│A│D│... ├──┐                                                                                
-///    └─┴─┴─┘       │                                                                                
-///   └ ─ ─ ─ ─ ─ ┘  │  ┌────────────────────────┐   ┌ ─ ─ ─ ─ ─ ─ ┐   ┌────────┐    ┌ ─ ─ ─ ─ ─ ─ ─ ┐
-///    Partition 1   │  │        Coalesce        │    ┌─┬─┬─┬─┬─┐      │        │     ┌─┬─┬─┬─┬─┐     
-///                  ├──▶(no ordering guarantees)│──▶││B│E│A│D│C│...───▶  Sort  ├───▶││A│B│C│D│E│... │
-///                  │  │                        │    └─┴─┴─┴─┴─┘      │        │     └─┴─┴─┴─┴─┘     
-///   ┌ ─ ─ ─ ─ ─ ┐  │  └────────────────────────┘   └ ─ ─ ─ ─ ─ ─ ┘   └────────┘    └ ─ ─ ─ ─ ─ ─ ─ ┘
-///    ┌─┬─┐         │                                 Partition                       Partition      
-///   ││E│C│ ...  ├──┘                                                                                
-///    └─┴─┘                                                                                          
-///   └ ─ ─ ─ ─ ─ ┘                                                                                   
-///    Partition 2                                                                                    
-///                                                                                                  
+/// Subrule application is ordering dependent.
 ///
-///
-/// The [`SortExec`] + [`SortPreservingMergeExec`] cascades
-/// sorts each partition first, then merge partitions while retaining the sort:
-///
-///   ┌ ─ ─ ─ ─ ─ ┐   ┌────────┐   ┌ ─ ─ ─ ─ ─ ┐                                                 
-///    ┌─┬─┬─┐        │        │    ┌─┬─┬─┐                                                      
-///   ││B│A│D│... │──▶│  Sort  │──▶││A│B│D│... │──┐                                              
-///    └─┴─┴─┘        │        │    └─┴─┴─┘       │                                              
-///   └ ─ ─ ─ ─ ─ ┘   └────────┘   └ ─ ─ ─ ─ ─ ┘  │  ┌─────────────────────┐    ┌ ─ ─ ─ ─ ─ ─ ─ ┐
-///    Partition 1                  Partition 1   │  │                     │     ┌─┬─┬─┬─┬─┐     
-///                                               ├──▶ SortPreservingMerge ├───▶││A│B│C│D│E│... │
-///                                               │  │                     │     └─┴─┴─┴─┴─┘     
-///   ┌ ─ ─ ─ ─ ─ ┐   ┌────────┐   ┌ ─ ─ ─ ─ ─ ┐  │  └─────────────────────┘    └ ─ ─ ─ ─ ─ ─ ─ ┘
-///    ┌─┬─┐          │        │    ┌─┬─┐         │                               Partition      
-///   ││E│C│ ...  │──▶│  Sort  ├──▶││C│E│ ...  │──┘                                              
-///    └─┴─┘          │        │    └─┴─┘                                                        
-///   └ ─ ─ ─ ─ ─ ┘   └────────┘   └ ─ ─ ─ ─ ─ ┘                                                 
-///    Partition 2                  Partition 2                                                  
-///
-///
-/// The latter [`SortExec`] + [`SortPreservingMergeExec`] cascade performs the
-/// sort first on a per-partition basis, thereby paralleling the sort.
+/// The subrule `parallelize_sorts` is only applied if `repartition_sorts` is enabled.
 impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
         &self,
@@ -296,20 +260,66 @@ fn replace_with_partial_sort(
     Ok(plan)
 }
 
-/// This function turns plans of the form
+/// Transform [`CoalescePartitionsExec`] + [`SortExec`] into
+/// [`SortExec`] + [`SortPreservingMergeExec`] as illustrated below:
+///
+/// The [`CoalescePartitionsExec`] + [`SortExec`] cascades
+/// combine the partitions first, and then sort:
+/// ```text
+///   ┌ ─ ─ ─ ─ ─ ┐                                                                                   
+///    ┌─┬─┬─┐                                                                                        
+///   ││B│A│D│... ├──┐                                                                                
+///    └─┴─┴─┘       │                                                                                
+///   └ ─ ─ ─ ─ ─ ┘  │  ┌────────────────────────┐   ┌ ─ ─ ─ ─ ─ ─ ┐   ┌────────┐    ┌ ─ ─ ─ ─ ─ ─ ─ ┐
+///    Partition 1   │  │        Coalesce        │    ┌─┬─┬─┬─┬─┐      │        │     ┌─┬─┬─┬─┬─┐     
+///                  ├──▶(no ordering guarantees)│──▶││B│E│A│D│C│...───▶  Sort  ├───▶││A│B│C│D│E│... │
+///                  │  │                        │    └─┴─┴─┴─┴─┘      │        │     └─┴─┴─┴─┴─┘     
+///   ┌ ─ ─ ─ ─ ─ ┐  │  └────────────────────────┘   └ ─ ─ ─ ─ ─ ─ ┘   └────────┘    └ ─ ─ ─ ─ ─ ─ ─ ┘
+///    ┌─┬─┐         │                                 Partition                       Partition      
+///   ││E│C│ ...  ├──┘                                                                                
+///    └─┴─┘                                                                                          
+///   └ ─ ─ ─ ─ ─ ┘                                                                                   
+///    Partition 2                                                                                    
+/// ```                                                                                                 
+///
+///
+/// The [`SortExec`] + [`SortPreservingMergeExec`] cascades
+/// sorts each partition first, then merge partitions while retaining the sort:
+/// ```text
+///   ┌ ─ ─ ─ ─ ─ ┐   ┌────────┐   ┌ ─ ─ ─ ─ ─ ┐                                                 
+///    ┌─┬─┬─┐        │        │    ┌─┬─┬─┐                                                      
+///   ││B│A│D│... │──▶│  Sort  │──▶││A│B│D│... │──┐                                              
+///    └─┴─┴─┘        │        │    └─┴─┴─┘       │                                              
+///   └ ─ ─ ─ ─ ─ ┘   └────────┘   └ ─ ─ ─ ─ ─ ┘  │  ┌─────────────────────┐    ┌ ─ ─ ─ ─ ─ ─ ─ ┐
+///    Partition 1                  Partition 1   │  │                     │     ┌─┬─┬─┬─┬─┐     
+///                                               ├──▶ SortPreservingMerge ├───▶││A│B│C│D│E│... │
+///                                               │  │                     │     └─┴─┴─┴─┴─┘     
+///   ┌ ─ ─ ─ ─ ─ ┐   ┌────────┐   ┌ ─ ─ ─ ─ ─ ┐  │  └─────────────────────┘    └ ─ ─ ─ ─ ─ ─ ─ ┘
+///    ┌─┬─┐          │        │    ┌─┬─┐         │                               Partition      
+///   ││E│C│ ...  │──▶│  Sort  ├──▶││C│E│ ...  │──┘                                              
+///    └─┴─┘          │        │    └─┴─┘                                                        
+///   └ ─ ─ ─ ─ ─ ┘   └────────┘   └ ─ ─ ─ ─ ─ ┘                                                 
+///    Partition 2                  Partition 2                                                  
+/// ```
+///
+/// The latter [`SortExec`] + [`SortPreservingMergeExec`] cascade performs the
+/// sort first on a per-partition basis, thereby paralleling the sort.
+///
+///
+/// The outcome is that plans of the form
 /// ```text
 ///      "SortExec: expr=\[a@0 ASC\]",
-///      "  CoalescePartitionsExec",
-///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+///      "  ...nodes..."
+///      "    CoalescePartitionsExec",
+///      "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
 /// ```
-/// to
+/// are transformed into
 /// ```text
 ///      "SortPreservingMergeExec: \[a@0 ASC\]",
-///      "  SortExec: expr=\[a@0 ASC\]",
-///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+///      "  ...nodes..."
+///      "    SortExec: expr=\[a@0 ASC\]",
+///      "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
 /// ```
-/// by following connections from [`CoalescePartitionsExec`]s to [`SortExec`]s.
-/// By performing sorting in parallel, we can increase performance in some scenarios.
 pub fn parallelize_sorts(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<Transformed<PlanWithCorrespondingCoalescePartitions>> {
