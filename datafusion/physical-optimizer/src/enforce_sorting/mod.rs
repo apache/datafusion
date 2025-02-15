@@ -303,7 +303,7 @@ fn replace_with_partial_sort(
 /// ```
 ///
 /// The latter [`SortExec`] + [`SortPreservingMergeExec`] cascade performs the
-/// sort first on a per-partition basis, thereby paralleling the sort.
+/// sort first on a per-partition basis, thereby parallelizing the sort.
 ///
 ///
 /// The outcome is that plans of the form

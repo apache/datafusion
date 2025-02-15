@@ -46,7 +46,7 @@ impl DynTreeNode for dyn ExecutionPlan {
 /// as well as separately within the [`PlanContext.children`] (which are child nodes wrapped in the context),
 /// it's important to keep these child plans in sync when performing mutations.
 ///
-/// Since there are two ways to access child plans—directly -— it's recommended
+/// Since there are two ways to access child plans directly -— it's recommended
 /// to perform mutable operations via [`Self::update_plan_from_children`].
 #[derive(Debug)]
 pub struct PlanContext<T: Sized> {
