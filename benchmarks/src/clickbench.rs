@@ -132,6 +132,10 @@ impl RunOpt {
             parquet_options.binary_as_string = true;
         }
 
+        config
+            .options_mut()
+            .optimizer
+            .prefer_round_robin_repartition = self.prefer_round_robin;
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
         self.register_hits(&ctx).await?;

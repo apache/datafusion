@@ -1672,11 +1672,7 @@ mod tests {
         )
         .unwrap()
     }
-
-#[cfg(test)]
-mod test {
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
 
     use crate::source::DataSourceExec;
     use crate::union::UnionExec;
