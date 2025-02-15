@@ -397,14 +397,6 @@ pub(crate) fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) 
     );
 }
 
-/// Assert reason for sanity check failure.
-pub(crate) fn assert_sanity_check_err(plan: &Arc<dyn ExecutionPlan>, err: &str) {
-    let sanity_checker = SanityCheckPlan::new();
-    let opts = ConfigOptions::default();
-    let error = sanity_checker.optimize(plan.clone(), &opts).unwrap_err();
-    assert!(error.message().contains(err));
-}
-
 /// Check if the plan we created is as expected by comparing the plan
 /// formatted as a string.
 fn assert_plan(plan: &dyn ExecutionPlan, expected_lines: Vec<&str>) {

@@ -47,8 +47,8 @@ use crate::enforce_sorting::sort_pushdown::{
     assign_initial_requirements, pushdown_sorts, SortPushDown,
 };
 use crate::utils::{
-    add_sort_above, add_sort_above_with_check, is_coalesce_partitions, is_limit,
-    is_repartition, is_sort, is_sort_preserving_merge, is_union, is_window,
+    add_sort_above, add_sort_above_with_check, is_aggregate, is_coalesce_partitions,
+    is_limit, is_repartition, is_sort, is_sort_preserving_merge, is_union, is_window,
 };
 use crate::PhysicalOptimizerRule;
 
@@ -138,18 +138,17 @@ fn is_coalesce_to_remove(
     node: &Arc<dyn ExecutionPlan>,
     parent: &Arc<dyn ExecutionPlan>,
 ) -> bool {
-    node.as_any()
-        .downcast_ref::<CoalescePartitionsExec>()
+    node.as_any().downcast_ref::<CoalescePartitionsExec>()
         .map(|_coalesce| {
             // TODO(wiedld): find a more generalized approach that does not rely on
             // pattern matching the structure of the DAG
             // Note that the `Partitioning::satisfy()` (parent vs. coalesce.child) cannot be used for cases of:
             //      * Repartition -> Coalesce -> Repartition
+            //      * Coalesce -> AggregateExec(input=hash-partitioned)
 
-            let parent_req_single_partition = matches!(
-                parent.required_input_distribution()[0],
-                Distribution::SinglePartition
-            );
+            let parent_req_single_partition = matches!(parent.required_input_distribution()[0], Distribution::SinglePartition)
+                // handle aggregates with input=hashPartitioning with a single output partition
+                || (is_aggregate(parent) && parent.properties().output_partitioning().partition_count() <= 1);
 
             // node above does not require single distribution
             !parent_req_single_partition
@@ -157,8 +156,7 @@ fn is_coalesce_to_remove(
             || is_repartition(parent)
             // any adjacent Coalesce->Sort can be replaced
             || is_sort(parent)
-        })
-        .unwrap_or(false)
+        }).unwrap_or(false)
 }
 
 fn update_coalesce_ctx_children(

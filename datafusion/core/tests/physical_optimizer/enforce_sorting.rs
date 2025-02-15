@@ -18,9 +18,7 @@
 use std::sync::Arc;
 
 use crate::physical_optimizer::enforce_distribution::projection_exec_with_alias;
-use crate::physical_optimizer::sanity_checker::{
-    assert_sanity_check, assert_sanity_check_err,
-};
+use crate::physical_optimizer::sanity_checker::assert_sanity_check;
 use crate::physical_optimizer::test_utils::{
     aggregate_exec, bounded_window_exec, bounded_window_exec_non_set_monotonic,
     bounded_window_exec_with_partition, check_integrity, coalesce_batches_exec,
@@ -2307,40 +2305,27 @@ async fn test_preserve_needed_coalesce() -> Result<()> {
     let plan = sort_exec(sort_key, plan);
 
     // Starting plan: as in our test case.
-    assert_eq!(
-        get_plan_string(&plan),
-        vec![
-            "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-            "  AggregateExec: mode=SinglePartitioned, gby=[a@0 as a1], aggr=[]",
-            "    CoalescePartitionsExec",
-            "      ProjectionExec: expr=[a@0 as a, b@1 as value]",
-            "        UnionExec",
-            "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-            "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        ],
-    );
+    let starting_plan = vec![
+        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+        "  AggregateExec: mode=SinglePartitioned, gby=[a@0 as a1], aggr=[]",
+        "    CoalescePartitionsExec",
+        "      ProjectionExec: expr=[a@0 as a, b@1 as value]",
+        "        UnionExec",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+        "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
+    ];
+    assert_eq!(get_plan_string(&plan), starting_plan);
+
     // Test: plan is valid.
     assert_sanity_check(&plan, true);
 
-    // EnforceSorting will remove the coalesce, and add an SPM further up (above the aggregate).
+    // EnforceSorting will not remove the coalesce, as it's required.
     let optimizer = EnforceSorting::new();
     let optimized = optimizer.optimize(plan, &Default::default())?;
-    assert_eq!(
-        get_plan_string(&optimized),
-        vec![
-            "SortPreservingMergeExec: [a@0 ASC]",
-            "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-            "    AggregateExec: mode=SinglePartitioned, gby=[a@0 as a1], aggr=[]",
-            "      ProjectionExec: expr=[a@0 as a, b@1 as value]",
-            "        UnionExec",
-            "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-            "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
-        ],
-    );
+    assert_eq!(get_plan_string(&optimized), starting_plan);
 
-    // Bug: Plan is now invalid.
-    let err = "does not satisfy distribution requirements: HashPartitioned[[a@0]]). Child-0 output partitioning: UnknownPartitioning(2)";
-    assert_sanity_check_err(&optimized, err);
+    // Test: plan is valid.
+    assert_sanity_check(&optimized, true);
 
     Ok(())
 }
