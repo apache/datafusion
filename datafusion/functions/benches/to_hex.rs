@@ -18,8 +18,7 @@
 extern crate criterion;
 
 use arrow::{
-    array::Int64Array,
-    datatypes::{Float32Type, Float64Type, Int32Type, Int64Type},
+    datatypes::{Int32Type, Int64Type},
     util::bench_util::create_primitive_array,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
