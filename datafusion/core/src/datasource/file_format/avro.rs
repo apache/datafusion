@@ -148,11 +148,10 @@ impl FileFormat for AvroFormat {
     async fn create_physical_plan(
         &self,
         _state: &dyn Session,
-        mut conf: FileScanConfig,
+        conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        conf = conf.with_source(self.file_source());
-        Ok(conf.new_exec())
+        Ok(conf.with_source(self.file_source()).build())
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {
