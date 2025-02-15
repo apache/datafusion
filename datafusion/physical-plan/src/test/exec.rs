@@ -175,6 +175,9 @@ impl DisplayAs for MockExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "MockExec")
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }
@@ -337,6 +340,9 @@ impl DisplayAs for BarrierExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BarrierExec")
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }
@@ -449,6 +455,9 @@ impl DisplayAs for ErrorExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ErrorExec")
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }
@@ -534,6 +543,9 @@ impl DisplayAs for StatisticsExec {
                     self.schema.fields().len(),
                     self.stats.num_rows,
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
             }
         }
     }
@@ -629,6 +641,9 @@ impl DisplayAs for BlockingExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BlockingExec",)
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
             }
         }
     }
@@ -771,6 +786,9 @@ impl DisplayAs for PanicExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "PanicExec",)
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
             }
         }
     }

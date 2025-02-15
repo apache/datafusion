@@ -700,6 +700,9 @@ impl DisplayAs for TopKExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "TopKExec: k={}", self.k)
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

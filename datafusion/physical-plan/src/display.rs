@@ -253,13 +253,15 @@ impl<'a> DisplayableExecutionPlan<'a> {
         }
         impl fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-                let mut visitor = IndentVisitor {
+                let mut visitor = TreeRenderVisitor {
                     t: self.format_type,
                     f,
                     indent: 0,
                     show_metrics: self.show_metrics,
                     show_statistics: self.show_statistics,
                     show_schema: self.show_schema,
+                    height: 0,
+                    weight: 0,
                 };
                 accept(self.plan, &mut visitor)
             }
@@ -505,6 +507,40 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
 
     fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
         self.parents.pop();
+        Ok(true)
+    }
+}
+
+struct TreeRenderVisitor<'a, 'b> {
+    /// How to format each node
+    t: DisplayFormatType,
+    /// Write to this formatter
+    f: &'a mut Formatter<'b>,
+    /// Indent size
+    indent: usize,
+    /// How to show metrics
+    show_metrics: ShowMetrics,
+    /// If statistics should be displayed
+    show_statistics: bool,
+    /// If schema should be displayed
+    show_schema: bool,
+    height: usize,
+    weight: usize,
+}
+
+impl ExecutionPlanVisitor for TreeRenderVisitor<'_, '_> {
+    type Error = fmt::Error;
+
+    fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+
+        self.height += 1;
+        self.weight += 1;
+        todo!()
+    }
+
+    fn post_visit(&mut self, _plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+
+        self.weight -= 1;
         Ok(true)
     }
 }
