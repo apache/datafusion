@@ -576,7 +576,6 @@ pub fn combine_bernoullis(
     left: &BernoulliDistribution,
     right: &BernoulliDistribution,
 ) -> Result<BernoulliDistribution> {
-    // TODO: Write tests for this function.
     let left_p = left.p_value();
     let right_p = right.p_value();
     match op {
@@ -632,7 +631,6 @@ pub fn combine_gaussians(
     left: &GaussianDistribution,
     right: &GaussianDistribution,
 ) -> Result<Option<GaussianDistribution>> {
-    // TODO: Write tests for this function.
     match op {
         Operator::Plus => GaussianDistribution::try_new(
             left.mean().add_checked(right.mean())?,
@@ -855,14 +853,15 @@ pub fn compute_variance(
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_mean, compute_median, compute_variance, create_bernoulli_from_comparison,
-        new_unknown_from_binary_op, StatisticsV2, UniformDistribution,
+        combine_bernoullis, combine_gaussians, compute_mean, compute_median,
+        compute_variance, create_bernoulli_from_comparison, new_unknown_from_binary_op,
+        BernoulliDistribution, GaussianDistribution, StatisticsV2, UniformDistribution,
     };
     use crate::interval_arithmetic::{apply_operator, Interval};
     use crate::operator::Operator;
 
     use arrow::datatypes::DataType;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::{HashSet, Result, ScalarValue};
 
     // The test data in the following tests are placed as follows: (stat -> expected answer)
     #[test]
@@ -1306,6 +1305,143 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_combine_bernoullis_and_op() -> Result<()> {
+        let op = Operator::And;
+        let left = BernoulliDistribution::try_new(ScalarValue::from(0.5))?;
+        let right = BernoulliDistribution::try_new(ScalarValue::from(0.4))?;
+        let left_null = BernoulliDistribution::try_new(ScalarValue::Null)?;
+        let right_null = BernoulliDistribution::try_new(ScalarValue::Null)?;
+
+        assert_eq!(
+            combine_bernoullis(&op, &left, &right)?.p_value(),
+            &ScalarValue::from(0.5 * 0.4)
+        );
+        assert_eq!(
+            combine_bernoullis(&op, &left_null, &right)?.p_value(),
+            &ScalarValue::Float64(None)
+        );
+        assert_eq!(
+            combine_bernoullis(&op, &left, &right_null)?.p_value(),
+            &ScalarValue::Float64(None)
+        );
+        assert_eq!(
+            combine_bernoullis(&op, &left_null, &left_null)?.p_value(),
+            &ScalarValue::Null
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_combine_bernoullis_or_op() -> Result<()> {
+        let op = Operator::Or;
+        let left = BernoulliDistribution::try_new(ScalarValue::from(0.6))?;
+        let right = BernoulliDistribution::try_new(ScalarValue::from(0.4))?;
+        let left_null = BernoulliDistribution::try_new(ScalarValue::Null)?;
+        let right_null = BernoulliDistribution::try_new(ScalarValue::Null)?;
+
+        assert_eq!(
+            combine_bernoullis(&op, &left, &right)?.p_value(),
+            &ScalarValue::from(0.6 + 0.4 - (0.6 * 0.4))
+        );
+        assert_eq!(
+            combine_bernoullis(&op, &left_null, &right)?.p_value(),
+            &ScalarValue::Float64(None)
+        );
+        assert_eq!(
+            combine_bernoullis(&op, &left, &right_null)?.p_value(),
+            &ScalarValue::Float64(None)
+        );
+        assert_eq!(
+            combine_bernoullis(&op, &left_null, &left_null)?.p_value(),
+            &ScalarValue::Null
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_combine_bernoullis_unsupported_ops() -> Result<()> {
+        let mut operator_set = operator_set();
+        operator_set.remove(&Operator::And);
+        operator_set.remove(&Operator::Or);
+
+        let left = BernoulliDistribution::try_new(ScalarValue::from(0.6))?;
+        let right = BernoulliDistribution::try_new(ScalarValue::from(0.4))?;
+        for op in operator_set {
+            assert!(
+                combine_bernoullis(&op, &left, &right).is_err(),
+                "Operator {op} should not be supported for Bernoulli statistics"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_combine_gaussians_addition() -> Result<()> {
+        let op = Operator::Plus;
+        let left = GaussianDistribution::try_new(
+            ScalarValue::from(3.0),
+            ScalarValue::from(2.0),
+        )?;
+        let right = GaussianDistribution::try_new(
+            ScalarValue::from(4.0),
+            ScalarValue::from(1.0),
+        )?;
+
+        let result = combine_gaussians(&op, &left, &right)?.unwrap();
+
+        assert_eq!(result.mean(), &ScalarValue::from(7.0)); // 3.0 + 4.0
+        assert_eq!(result.variance(), &ScalarValue::from(3.0)); // 2.0 + 1.0
+        Ok(())
+    }
+
+    #[test]
+    fn test_combine_gaussians_subtraction() -> Result<()> {
+        let op = Operator::Minus;
+        let left = GaussianDistribution::try_new(
+            ScalarValue::from(7.0),
+            ScalarValue::from(2.0),
+        )?;
+        let right = GaussianDistribution::try_new(
+            ScalarValue::from(4.0),
+            ScalarValue::from(1.0),
+        )?;
+
+        let result = combine_gaussians(&op, &left, &right)?.unwrap();
+
+        assert_eq!(result.mean(), &ScalarValue::from(3.0)); // 7.0 - 4.0
+        assert_eq!(result.variance(), &ScalarValue::from(3.0)); // 2.0 + 1.0
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_combine_gaussians_unsupported_ops() -> Result<()> {
+        let mut operator_set = operator_set();
+        operator_set.remove(&Operator::Plus);
+        operator_set.remove(&Operator::Minus);
+
+        let left = GaussianDistribution::try_new(
+            ScalarValue::from(7.0),
+            ScalarValue::from(2.0),
+        )?;
+        let right = GaussianDistribution::try_new(
+            ScalarValue::from(4.0),
+            ScalarValue::from(1.0),
+        )?;
+        for op in operator_set {
+            assert!(
+                combine_gaussians(&op, &left, &right)?.is_none(),
+                "Operator {op} should not be supported for Gaussian statistics"
+            );
+        }
+
+        Ok(())
+    }
+
     // Expected test results were calculated in Wolfram Mathematica, by using:
     //
     // *METHOD_NAME*[TransformedDistribution[
@@ -1430,5 +1566,45 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    fn operator_set() -> HashSet<Operator> {
+        use super::Operator::*;
+
+        let all_ops = vec![
+            And,
+            Or,
+            Eq,
+            NotEq,
+            Gt,
+            GtEq,
+            Lt,
+            LtEq,
+            Plus,
+            Minus,
+            Multiply,
+            Divide,
+            Modulo,
+            IsDistinctFrom,
+            IsNotDistinctFrom,
+            RegexMatch,
+            RegexIMatch,
+            RegexNotMatch,
+            RegexNotIMatch,
+            LikeMatch,
+            ILikeMatch,
+            NotLikeMatch,
+            NotILikeMatch,
+            BitwiseAnd,
+            BitwiseOr,
+            BitwiseXor,
+            BitwiseShiftRight,
+            BitwiseShiftLeft,
+            StringConcat,
+            AtArrow,
+            ArrowAt,
+        ];
+
+        all_ops.into_iter().collect()
     }
 }
