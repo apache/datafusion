@@ -1733,9 +1733,11 @@ dependencies = [
  "datafusion-catalog-listing",
  "datafusion-common",
  "datafusion-common-runtime",
+ "datafusion-datasource",
  "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
+ "datafusion-expr-common",
  "datafusion-functions",
  "datafusion-functions-aggregate",
  "datafusion-functions-nested",
@@ -1823,32 +1825,20 @@ name = "datafusion-catalog-listing"
 version = "45.0.0"
 dependencies = [
  "arrow",
- "async-compression",
  "async-trait",
- "bytes",
- "bzip2 0.5.1",
- "chrono",
  "datafusion-catalog",
  "datafusion-common",
- "datafusion-common-runtime",
+ "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
- "flate2",
  "futures",
- "glob",
- "itertools 0.14.0",
  "log",
  "object_store",
- "rand 0.8.5",
  "tempfile",
  "tokio",
- "tokio-util",
- "url",
- "xz2",
- "zstd",
 ]
 
 [[package]]
@@ -1910,6 +1900,37 @@ version = "45.0.0"
 dependencies = [
  "log",
  "tokio",
+]
+
+[[package]]
+name = "datafusion-datasource"
+version = "45.0.0"
+dependencies = [
+ "arrow",
+ "async-compression",
+ "async-trait",
+ "bytes",
+ "bzip2 0.5.1",
+ "chrono",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-common-runtime",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-plan",
+ "flate2",
+ "futures",
+ "glob",
+ "itertools 0.14.0",
+ "log",
+ "object_store",
+ "rand 0.8.5",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "url",
+ "xz2",
+ "zstd",
 ]
 
 [[package]]

@@ -434,9 +434,7 @@ impl FileFormat for CsvFormat {
                 .with_terminator(self.options.terminator)
                 .with_comment(self.options.comment),
         );
-        conf = conf.with_source(source);
-
-        Ok(conf.new_exec())
+        Ok(conf.with_source(source).build())
     }
 
     async fn create_writer_physical_plan(

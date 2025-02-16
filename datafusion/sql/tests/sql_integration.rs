@@ -30,8 +30,8 @@ use datafusion_expr::{
     col,
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
-    ColumnarValue, CreateIndex, DdlStatement, ScalarUDF, ScalarUDFImpl, Signature,
-    Statement, Volatility,
+    CreateIndex, DdlStatement, ScalarUDF, ScalarUDFImpl, Signature, Statement,
+    Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -2645,14 +2645,6 @@ impl ScalarUDFImpl for DummyUDF {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
-    }
-
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        unimplemented!("DummyUDF::invoke")
     }
 }
 
