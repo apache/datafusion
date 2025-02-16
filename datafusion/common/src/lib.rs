@@ -116,8 +116,8 @@ macro_rules! downcast_value {
 // Not public API.
 #[doc(hidden)]
 pub mod __private {
-    use super::DataFusionError;
-    use super::Result;
+    use crate::error::_internal_datafusion_err;
+    use crate::Result;
     use arrow::array::Array;
     use std::any::{type_name, Any};
 
@@ -129,11 +129,11 @@ pub mod __private {
     impl<T: Array + ?Sized> DowncastArrayHelper for T {
         fn downcast_array_helper<U: Any>(&self) -> Result<&U> {
             self.as_any().downcast_ref().ok_or_else(|| {
-                DataFusionError::Internal(format!(
+                _internal_datafusion_err!(
                     "could not cast array of type {} to {}",
                     self.data_type(),
                     type_name::<U>()
-                ))
+                )
             })
         }
     }
@@ -166,10 +166,22 @@ mod tests {
         .err()
         .unwrap();
 
-        assert_eq!(
+        assert_starts_with(
             error.to_string(),
-            "Internal error: could not cast array of type Int32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::UInt64Type>.\n\
-            This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker"
+            "Internal error: could not cast array of type Int32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::UInt64Type>"
+        );
+    }
+
+    // `err.to_string()` depends on backtrace being present (may have backtrace appended)
+    // `err.strip_backtrace()` also depends on backtrace being present (may have "This was likely caused by ..." stripped)
+    fn assert_starts_with(actual: impl AsRef<str>, expected_prefix: impl AsRef<str>) {
+        let actual = actual.as_ref();
+        let expected_prefix = expected_prefix.as_ref();
+        assert!(
+            actual.starts_with(expected_prefix),
+            "Expected '{}' to start with '{}'",
+            actual,
+            expected_prefix
         );
     }
 }
