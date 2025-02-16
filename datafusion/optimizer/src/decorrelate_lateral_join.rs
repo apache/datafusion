@@ -60,10 +60,8 @@ impl OptimizerRule for DecorrelateLateralJoin {
         if join.join_type != JoinType::Inner {
             return Ok(Transformed::no(plan));
         }
-        // TODO: this makes the rule to be quadratic to the number of nodes, in theory, we can build this property
-        // bottom-up.
         if !plan_contains_outer_reference(&join.right) {
-            return Ok(Transformed::no(plan));
+            return Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump));
         }
         // The right side contains outer references, we need to decorrelate it.
         let LogicalPlan::Subquery(subquery) = &*join.right else {
