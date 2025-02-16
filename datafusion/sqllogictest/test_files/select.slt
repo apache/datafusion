@@ -1541,16 +1541,16 @@ LIMIT 4)
 GROUP BY c2;
 ----
 logical_plan
-01)Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[count(Int64(1)) AS count(*)]]
+01)Aggregate: groupBy=[[aggregate_test_100.c2]], aggr=[[count(Int64(1))]]
 02)--Projection: aggregate_test_100.c2
 03)----Sort: aggregate_test_100.c1 ASC NULLS LAST, aggregate_test_100.c2 ASC NULLS LAST, fetch=4
 04)------Projection: aggregate_test_100.c2, aggregate_test_100.c1
 05)--------TableScan: aggregate_test_100 projection=[c1, c2]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(*)]
+01)AggregateExec: mode=FinalPartitioned, gby=[c2@0 as c2], aggr=[count(Int64(1))]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----RepartitionExec: partitioning=Hash([c2@0], 2), input_partitions=2
-04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(*)]
+04)------AggregateExec: mode=Partial, gby=[c2@0 as c2], aggr=[count(Int64(1))]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
 06)----------ProjectionExec: expr=[c2@0 as c2]
 07)------------SortExec: TopK(fetch=4), expr=[c1@1 ASC NULLS LAST, c2@0 ASC NULLS LAST], preserve_partitioning=[false]

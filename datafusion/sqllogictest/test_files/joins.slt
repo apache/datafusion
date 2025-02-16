@@ -1395,15 +1395,15 @@ from (select * from join_t1 inner join join_t2 on join_t1.t1_id = join_t2.t2_id)
 group by t1_id
 ----
 logical_plan
-01)Projection: count(*)
-02)--Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[count(Int64(1)) AS count(*)]]
+01)Projection: count(Int64(1))
+02)--Aggregate: groupBy=[[join_t1.t1_id]], aggr=[[count(Int64(1))]]
 03)----Projection: join_t1.t1_id
 04)------Inner Join: join_t1.t1_id = join_t2.t2_id
 05)--------TableScan: join_t1 projection=[t1_id]
 06)--------TableScan: join_t2 projection=[t2_id]
 physical_plan
-01)ProjectionExec: expr=[count(*)@1 as count(*)]
-02)--AggregateExec: mode=SinglePartitioned, gby=[t1_id@0 as t1_id], aggr=[count(*)]
+01)ProjectionExec: expr=[count(Int64(1))@1 as count(Int64(1))]
+02)--AggregateExec: mode=SinglePartitioned, gby=[t1_id@0 as t1_id], aggr=[count(Int64(1))]
 03)----CoalesceBatchesExec: target_batch_size=2
 04)------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(t1_id@0, t2_id@0)], projection=[t1_id@0]
 05)--------CoalesceBatchesExec: target_batch_size=2
@@ -4442,7 +4442,7 @@ FROM my_catalog.my_schema.table_with_many_types AS l
 JOIN my_catalog.my_schema.table_with_many_types AS r ON l.binary_col = r.binary_col
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 02)--Projection: 
 03)----Inner Join: l.binary_col = r.binary_col
 04)------SubqueryAlias: l
@@ -4450,7 +4450,7 @@ logical_plan
 06)------SubqueryAlias: r
 07)--------TableScan: my_catalog.my_schema.table_with_many_types projection=[binary_col]
 physical_plan
-01)AggregateExec: mode=Single, gby=[], aggr=[count(*)]
+01)AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1))]
 02)--ProjectionExec: expr=[]
 03)----CoalesceBatchesExec: target_batch_size=3
 04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(binary_col@0, binary_col@0)]

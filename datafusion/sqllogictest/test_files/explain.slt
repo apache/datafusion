@@ -88,7 +88,7 @@ query TT
 EXPLAIN select count(*) from (values ('a', 1, 100), ('a', 2, 150)) as t (c1,c2,c3)
 ----
 physical_plan
-01)ProjectionExec: expr=[2 as count(*)]
+01)ProjectionExec: expr=[2 as count(Int64(1))]
 02)--PlaceholderRowExec
 
 statement ok
@@ -427,7 +427,7 @@ logical_plan
 02)--TableScan: t1 projection=[a]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: 
-05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 06)--------TableScan: t2 projection=[]
 physical_plan
 01)NestedLoopJoinExec: join_type=LeftSemi
