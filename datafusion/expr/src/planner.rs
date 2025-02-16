@@ -28,7 +28,7 @@ use datafusion_common::{
 use sqlparser::ast::{self, NullTreatment};
 
 use crate::{
-    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowUDF,
+    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame, WindowFunctionDefinition, WindowUDF
 };
 
 /// Provides the `SQL` query planner  meta-data about tables and
@@ -223,6 +223,16 @@ pub trait ExprPlanner: Debug + Send + Sync {
     ) -> Result<PlannerResult<RawAggregateExpr>> {
         Ok(PlannerResult::Original(expr))
     }
+
+    /// Plans Count(exprs), e.g., `COUNT(*) to Count(1)`
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_window(
+        &self,
+        expr: RawWindowExpr,
+    ) -> Result<PlannerResult<RawWindowExpr>> {
+        Ok(PlannerResult::Original(expr))
+    }
 }
 
 /// An operator with two arguments to plan
@@ -259,12 +269,7 @@ pub struct RawDictionaryExpr {
     pub values: Vec<Expr>,
 }
 
-/// An operator with two arguments to plan
-///
-/// Note `left` and `right` are DataFusion [`Expr`]s but the `op` is the SQL AST
-/// operator.
-///
-/// This structure is used by [`ExprPlanner`] to plan operators with
+/// This structure is used by [`AggregateFunctionPlanner`] to plan operators with
 /// custom expressions.
 #[derive(Debug, Clone)]
 pub struct RawAggregateExpr {
@@ -273,6 +278,16 @@ pub struct RawAggregateExpr {
     pub distinct: bool,
     pub filter: Option<Box<Expr>>,
     pub order_by: Option<Vec<SortExpr>>,
+    pub null_treatment: Option<NullTreatment>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawWindowExpr {
+    pub func_def: WindowFunctionDefinition,
+    pub args: Vec<Expr>,
+    pub partition_by: Vec<Expr>,
+    pub order_by: Vec<SortExpr>,
+    pub window_frame: WindowFrame,
     pub null_treatment: Option<NullTreatment>,
 }
 

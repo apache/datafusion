@@ -15,46 +15,43 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! SQL planning extensions like [`AggregateFunctionPlanner`]
+//! SQL planning extensions like [`WindowFunctionPlanner`]
 
 use datafusion_common::Result;
 use datafusion_expr::{
-    expr::AggregateFunction,
-    lit,
-    planner::{ExprPlanner, PlannerResult, RawAggregateExpr},
-    utils::COUNT_STAR_EXPANSION,
-    Expr,
+    expr::WindowFunction, lit, planner::{ExprPlanner, PlannerResult, RawWindowExpr}, utils::COUNT_STAR_EXPANSION, Expr, ExprFunctionExt
 };
 
 #[derive(Debug)]
-pub struct AggregateFunctionPlanner;
+pub struct WindowFunctionPlanner;
 
-impl ExprPlanner for AggregateFunctionPlanner {
-    fn plan_aggregate(
+impl ExprPlanner for WindowFunctionPlanner {
+    fn plan_window(
         &self,
-        expr: RawAggregateExpr,
-    ) -> Result<PlannerResult<RawAggregateExpr>> {
-        if expr.func.name() == "count" && (expr.args.len() == 1 && matches!(expr.args[0], Expr::Wildcard { .. })
+        expr: RawWindowExpr,
+    ) -> Result<PlannerResult<RawWindowExpr>> {
+        if expr.func_def.name() == "count" && (expr.args.len() == 1 && matches!(expr.args[0], Expr::Wildcard { .. })
             || expr.args.is_empty())
         {
-            let RawAggregateExpr {
-                func,
+            let RawWindowExpr {
+                func_def,
                 args: _,
-                distinct,
-                filter,
+                partition_by,
                 order_by,
+                window_frame,
                 null_treatment,
             } = expr;
-            return Ok(PlannerResult::Planned(Expr::AggregateFunction(
-                AggregateFunction::new_udf(
-                    func,
+            return Ok(PlannerResult::Planned(
+                Expr::WindowFunction(WindowFunction::new(
+                    func_def,
                     vec![lit(COUNT_STAR_EXPANSION)],
-                    distinct,
-                    filter,
-                    order_by,
-                    null_treatment,
-                ),
-            )));
+                ))
+                .partition_by(partition_by)
+                .order_by(order_by)
+                .window_frame(window_frame)
+                .null_treatment(null_treatment)
+                .build()?
+            ));
         }
 
         Ok(PlannerResult::Original(expr))

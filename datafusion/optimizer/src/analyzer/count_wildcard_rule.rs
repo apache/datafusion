@@ -21,7 +21,7 @@ use crate::utils::NamePreserver;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
-use datafusion_expr::expr::{AggregateFunction, WindowFunction};
+use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_expr::{lit, Expr, LogicalPlan, WindowFunctionDefinition};
 
@@ -51,15 +51,6 @@ fn is_wildcard(expr: &Expr) -> bool {
     matches!(expr, Expr::Wildcard { .. })
 }
 
-fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
-    matches!(aggregate_function,
-        AggregateFunction {
-            func,
-            args,
-            ..
-        } if func.name() == "count" && (args.len() == 1 && is_wildcard(&args[0]) || args.is_empty()))
-}
-
 fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
     let args = &window_function.args;
     matches!(window_function.fun,
@@ -78,14 +69,14 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
                 window_function.args = vec![lit(COUNT_STAR_EXPANSION)];
                 Ok(Transformed::yes(Expr::WindowFunction(window_function)))
             }
-            Expr::AggregateFunction(mut aggregate_function)
-                if is_count_star_aggregate(&aggregate_function) =>
-            {
-                aggregate_function.args = vec![lit(COUNT_STAR_EXPANSION)];
-                Ok(Transformed::yes(Expr::AggregateFunction(
-                    aggregate_function,
-                )))
-            }
+            // Expr::AggregateFunction(mut aggregate_function)
+            //     if is_count_star_aggregate(&aggregate_function) =>
+            // {
+            //     aggregate_function.args = vec![lit(COUNT_STAR_EXPANSION)];
+            //     Ok(Transformed::yes(Expr::AggregateFunction(
+            //         aggregate_function,
+            //     )))
+            // }
             _ => Ok(Transformed::no(expr)),
         })?;
         Ok(transformed_expr.update_data(|data| original_name.restore(data)))
