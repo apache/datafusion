@@ -311,7 +311,7 @@ fn mark_join(
     )
 }
 
-pub(crate) fn build_join(
+fn build_join(
     left: &LogicalPlan,
     subquery: &LogicalPlan,
     in_predicate_opt: Option<Expr>,
