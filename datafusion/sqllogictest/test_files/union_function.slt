@@ -45,3 +45,18 @@ select union_extract(union_column, 1) from union_table;
 
 query error DataFusion error: Error during planning: The function 'union_extract' expected 2 arguments but received 3
 select union_extract(union_column, 'a', 'b') from union_table;
+
+query ?T
+select union_column, union_tag(union_column) from union_table;
+----
+{int=1} int
+{int=2} int
+
+query error DataFusion error: Error during planning: 'union_tag' does not support zero arguments
+select union_tag() from union_table;
+
+query error DataFusion error: Error during planning: The function 'union_tag' expected 1 arguments but received 2
+select union_tag(union_column, 'int') from union_table;
+
+query error DataFusion error: Execution error: union_tag only support unions, got Utf8
+select union_tag('int') from union_table;
