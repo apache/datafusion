@@ -388,7 +388,7 @@ fn create_test_schema2() -> SchemaRef {
 }
 
 /// Check if sanity checker should accept or reject plans.
-fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
+pub(crate) fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
     let sanity_checker = SanityCheckPlan::new();
     let opts = ConfigOptions::default();
     assert_eq!(
