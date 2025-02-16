@@ -2278,16 +2278,15 @@ impl Display for SchemaDisplay<'_> {
                     && args[0] == Expr::Literal(COUNT_STAR_EXPANSION)
                 {
                     write!(f, "count_star()")?;
-                    return Ok(());
-                }
-
-                write!(
-                    f,
-                    "{}({}{})",
-                    func.name(),
-                    if *distinct { "DISTINCT " } else { "" },
-                    schema_name_from_exprs_comma_separated_without_space(args)?
-                )?;
+                } else {
+                    write!(
+                        f,
+                        "{}({}{})",
+                        func.name(),
+                        if *distinct { "DISTINCT " } else { "" },
+                        schema_name_from_exprs_comma_separated_without_space(args)?
+                    )?;
+                };
 
                 if let Some(null_treatment) = null_treatment {
                     write!(f, " {}", null_treatment)?;
