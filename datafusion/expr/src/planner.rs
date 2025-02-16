@@ -59,13 +59,14 @@ pub trait ContextProvider {
     /// CTE stands for "Common Table Expression"
     ///
     /// # Notes
-    /// We don't directly implement this in ['SqlToRel`] as implementing this function
+    /// We don't directly implement this in [`SqlToRel`] as implementing this function
     /// often requires access to a table that contains
     /// execution-related types that can't be a direct dependency
     /// of the sql crate (for example [`CteWorkTable`]).
     ///
     /// The [`ContextProvider`] provides a way to "hide" this dependency.
     ///
+    /// [`SqlToRel`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/struct.SqlToRel.html
     /// [`CteWorkTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/cte_worktable/struct.CteWorkTable.html
     fn create_cte_work_table(
         &self,
