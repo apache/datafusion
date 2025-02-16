@@ -1703,13 +1703,5 @@ mod test {
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Float64)
         }
-
-        fn invoke_batch(
-            &self,
-            _args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
-            unimplemented!()
-        }
     }
 }
