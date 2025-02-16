@@ -17,13 +17,21 @@
 
 //! [`DecorrelateLateralJoin`] decorrelates logical plans produced by lateral joins.
 
-use crate::optimizer::ApplyOrder;
-use crate::{decorrelate_predicate_subquery, OptimizerConfig, OptimizerRule};
+use std::collections::BTreeSet;
 
-use datafusion_common::tree_node::{Transformed, TreeNodeRecursion, TreeNodeVisitor};
+use crate::decorrelate::PullUpCorrelatedExpr;
+use crate::optimizer::ApplyOrder;
+use crate::utils::replace_qualified_name;
+use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_expr::lit;
+
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+};
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::JoinType;
-use datafusion_expr::LogicalPlan;
+use datafusion_expr::utils::conjunction;
+use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, Subquery};
 
 /// Optimizer rule for rewriting lateral joins to joins
 #[derive(Default, Debug)]
@@ -62,15 +70,7 @@ impl OptimizerRule for DecorrelateLateralJoin {
         let LogicalPlan::Subquery(subquery) = &*join.right else {
             return Ok(Transformed::no(plan));
         };
-        let alias = config.alias_generator();
-        let Some(new_plan) = decorrelate_predicate_subquery::build_join(
-            &join.left,
-            subquery.subquery.as_ref(),
-            None,
-            join.join_type,
-            alias.next("__lateral_sq"),
-        )?
-        else {
+        let Some(new_plan) = build_join(&join.left, join.join_type, subquery)? else {
             return Ok(Transformed::no(plan));
         };
         Ok(Transformed::new(new_plan, true, TreeNodeRecursion::Jump))
@@ -103,4 +103,49 @@ fn plan_contains_outer_reference(plan: &LogicalPlan) -> bool {
     let mut visitor = Visitor { contains: false };
     plan.visit_with_subqueries(&mut visitor).unwrap();
     visitor.contains
+}
+
+// Build the decorrelated join based on the original lateral join query. For now, we only support cross/inner
+// lateral joins.
+fn build_join(
+    left: &LogicalPlan,
+    join_type: JoinType,
+    subquery: &Subquery,
+) -> Result<Option<LogicalPlan>> {
+    if join_type != JoinType::Inner {
+        return Ok(None);
+    }
+    let subquery_plan = subquery.subquery.as_ref();
+    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+    let rewritten_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
+    if !pull_up.can_pull_up {
+        return Ok(None);
+    }
+    let mut all_correlated_cols = BTreeSet::new();
+    pull_up
+        .correlated_subquery_cols_map
+        .values()
+        .for_each(|cols| all_correlated_cols.extend(cols.clone()));
+    let join_filter_opt = conjunction(pull_up.join_filters);
+    let join_filter = match join_filter_opt {
+        Some(join_filter) => join_filter,
+        None => lit(true),
+    };
+    // -- inner join but the right side always has one row, we need to rewrite it to a left join
+    // SELECT * FROM t0, LATERAL (SELECT sum(v1) FROM t1 WHERE t0.v0 = t1.v0); 
+    // -- inner join but the right side number of rows is related to the filter (join) condition, so keep inner join.
+    // SELECT * FROM t0, LATERAL (SELECT * FROM t1 WHERE t0.v0 = t1.v0);
+    let new_plan = LogicalPlanBuilder::from(left.clone())
+        .join_on(
+            rewritten_subquery,
+            if pull_up.pulled_up_scalar_agg {
+                JoinType::Left
+            } else {
+                JoinType::Inner
+            },
+            Some(join_filter),
+        )?
+        .build()?;
+    // TODO: handle count(*) bug
+    Ok(Some(new_plan))
 }
