@@ -837,7 +837,7 @@ impl ScalarUDFImpl for TakeUDF {
 
     // The actual implementation
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [arg0, arg1, arg2] = take_function_args(self.name(), &args.args)?;
+        let [_arg0, _arg1, arg2] = take_function_args(self.name(), &args.args)?;
         let take_idx = match arg2 {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "0" => 0,
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "1" => 1,
