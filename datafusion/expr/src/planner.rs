@@ -267,7 +267,7 @@ pub struct RawDictionaryExpr {
     pub values: Vec<Expr>,
 }
 
-/// This structure is used by [`AggregateFunctionPlanner`] to plan operators with
+/// This structure is used by `AggregateFunctionPlanner` to plan operators with
 /// custom expressions.
 #[derive(Debug, Clone)]
 pub struct RawAggregateExpr {
