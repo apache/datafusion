@@ -106,7 +106,6 @@ impl Analyzer {
             // [Expr::Wildcard] should be expanded before [TypeCoercion]
             Arc::new(ResolveGroupingFunction::new()),
             Arc::new(TypeCoercion::new()),
-            Arc::new(CountWildcardRule::new()),
         ];
         Self::with_rules(rules)
     }
