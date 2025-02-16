@@ -236,8 +236,8 @@ impl PlannerContext {
 ///    phase looks up table and column names using the [`ContextProvider`].
 /// 2. Mechanical translation of the AST into a [`LogicalPlan`].
 ///
-/// It does not perform type checking, semantic analysis, type coercion, or
-/// optimization, which are performed by other components.
+/// It does not perform type coercion, or perform optimization, which are done
+/// by subsequent passes.
 ///
 /// Key interfaces are:
 /// * [`Self::sql_statement_to_plan`]: Convert a statement (e.g. `SELECT ...`) into a [`LogicalPlan`]
