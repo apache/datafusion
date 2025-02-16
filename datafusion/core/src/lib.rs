@@ -185,7 +185,7 @@
 //! specialize any behavior for your use case. For example,
 //! some projects may add custom [`ExecutionPlan`] operators, or create their own
 //! query language that directly creates [`LogicalPlan`] rather than using the
-//! provided in SQL planner, [`SqlToRel`].
+//! built in SQL planner, [`SqlToRel`].
 //!
 //! In order to achieve this, DataFusion supports extension at many points:
 //!
