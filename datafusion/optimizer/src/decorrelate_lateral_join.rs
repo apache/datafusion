@@ -21,12 +21,11 @@ use std::collections::BTreeSet;
 
 use crate::decorrelate::PullUpCorrelatedExpr;
 use crate::optimizer::ApplyOrder;
-use crate::utils::replace_qualified_name;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::lit;
 
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::JoinType;
@@ -52,7 +51,7 @@ impl OptimizerRule for DecorrelateLateralJoin {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        config: &dyn OptimizerConfig,
+        _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         // Find cross joins with outer column references on the right side (i.e., the apply operator).
         let LogicalPlan::Join(join) = &plan else {

@@ -67,7 +67,7 @@ pub struct PullUpCorrelatedExpr {
     pub pull_up_having_expr: Option<Expr>,
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
-    pub pulled_up_scalar_agg: bool
+    pub pulled_up_scalar_agg: bool,
 }
 
 impl Default for PullUpCorrelatedExpr {
