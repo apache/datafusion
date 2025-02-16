@@ -322,10 +322,11 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
 
     // The analysis will return better bounds thanks to the column statistics.
     assert_eq!(
-        analysis
-            .boundaries
-            .get(0)
-            .and_then(|boundary| Some(boundary.interval.clone().unwrap().into_bounds())),
+        analysis.boundaries.first().map(|boundary| boundary
+            .interval
+            .clone()
+            .unwrap()
+            .into_bounds()),
         Some((
             ScalarValue::Int64(Some(5000)),
             ScalarValue::Int64(Some(10000))
@@ -339,12 +340,9 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
     //
     // (a' - b' + 1) / (a - b)
     // (10000 - 5000 + 1) / (10000 - 1)
-    assert_eq!(
-        analysis
-            .selectivity
-            .is_some_and(|selectivity| selectivity >= 0.5 && selectivity <= 6.),
-        true
-    );
+    assert!(analysis
+        .selectivity
+        .is_some_and(|selectivity| (0.5..=0.6).contains(&selectivity)));
 
     Ok(())
 }
