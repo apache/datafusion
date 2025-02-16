@@ -68,21 +68,30 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
     ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
 }
 
-/// The base configurations to provide when creating a physical plan for
+/// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
+///
+/// Use [`Self::build`] to create a [`DataSourceExec`] from a ``FileScanConfig`.
 ///
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow::datatypes::Schema;
+/// # use arrow::datatypes::{Field, Fields, DataType, Schema};
 /// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion::datasource::physical_plan::ArrowSource;
-/// # let file_schema = Arc::new(Schema::empty());
-/// // create FileScan config for reading data from file://
+/// # use datafusion_physical_plan::ExecutionPlan;
+/// # let file_schema = Arc::new(Schema::new(vec![
+/// #  Field::new("c1", DataType::Int32, false),
+/// #  Field::new("c2", DataType::Int32, false),
+/// #  Field::new("c3", DataType::Int32, false),
+/// #  Field::new("c4", DataType::Int32, false),
+/// # ]));
+/// // create FileScan config for reading arrow files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
-/// let config = FileScanConfig::new(object_store_url, file_schema, Arc::new(ArrowSource::default()))
+/// let file_source = Arc::new(ArrowSource::default());
+/// let config = FileScanConfig::new(object_store_url, file_schema, file_source)
 ///   .with_limit(Some(1000))            // read only the first 1000 records
 ///   .with_projection(Some(vec![2, 3])) // project columns 2 and 3
 ///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
@@ -93,6 +102,8 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 ///    PartitionedFile::new("file2.parquet", 56),
 ///    PartitionedFile::new("file3.parquet", 78),
 ///   ]);
+/// // create an execution plan from the config
+/// let plan: Arc<dyn ExecutionPlan> = config.build();
 /// ```
 #[derive(Clone)]
 pub struct FileScanConfig {
@@ -252,19 +263,20 @@ impl DataSource for FileScanConfig {
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
         Ok(all_alias_free_columns(projection.expr()).then(|| {
-            let mut file_scan = self.clone();
+            let file_scan = self.clone();
             let source = Arc::clone(&file_scan.source);
             let new_projections = new_projections_for_columns(
                 projection,
                 &file_scan
                     .projection
+                    .clone()
                     .unwrap_or((0..self.file_schema.fields().len()).collect()),
             );
-            file_scan.projection = Some(new_projections);
-            // Assign projected statistics to source
-            file_scan = file_scan.with_source(source);
-
-            file_scan.new_exec() as _
+            file_scan
+                // Assign projected statistics to source
+                .with_projection(Some(new_projections))
+                .with_source(source)
+                .build() as _
         }))
     }
 }
@@ -574,9 +586,9 @@ impl FileScanConfig {
     }
 
     // TODO: This function should be moved into DataSourceExec once FileScanConfig moved out of datafusion/core
-    /// Returns a new [`DataSourceExec`] from file configurations
-    pub fn new_exec(&self) -> Arc<DataSourceExec> {
-        Arc::new(DataSourceExec::new(Arc::new(self.clone())))
+    /// Returns a new [`DataSourceExec`] to scan the files specified by this config
+    pub fn build(self) -> Arc<DataSourceExec> {
+        Arc::new(DataSourceExec::new(Arc::new(self)))
     }
 
     /// Write the data_type based on file_source

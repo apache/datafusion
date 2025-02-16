@@ -22,7 +22,8 @@ use arrow::datatypes::DataType::Float64;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -67,12 +68,8 @@ impl ScalarUDFImpl for PiFunc {
         Ok(Float64)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        if !args.is_empty() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if !args.args.is_empty() {
             return internal_err!("{} function does not accept arguments", self.name());
         }
         Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(
