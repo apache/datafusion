@@ -1458,7 +1458,12 @@ pub fn build_join_schema(
         .into_iter()
         .chain(right.metadata().clone())
         .collect();
-    let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
+    let mut dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
+    dfschema = dfschema.with_metadata_schema(DFSchema::join_metadata_schema(
+        left.metadata_schema(),
+        right.metadata_schema(),
+        join_type,
+    )?);
     dfschema.with_functional_dependencies(func_dependencies)
 }
 
