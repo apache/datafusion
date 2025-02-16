@@ -1059,8 +1059,9 @@ mod tests {
                 ErrorExec, MockExec,
             },
         },
-        {collect, expressions::col, memory::MemorySourceConfig},
+        {collect, expressions::col},
     };
+    use crate::test::MockMemorySourceConfig;
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1164,7 +1165,7 @@ mod tests {
     ) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(TaskContext::default());
         // create physical plan
-        let exec = MemorySourceConfig::try_new_exec(
+        let exec = MockMemorySourceConfig::try_new_exec(
             &input_partitions,
             Arc::clone(schema),
             None,
@@ -1559,7 +1560,7 @@ mod tests {
         let task_ctx = Arc::new(task_ctx);
 
         // create physical plan
-        let exec = MemorySourceConfig::try_new_exec(
+        let exec = MockMemorySourceConfig::try_new_exec(
             &input_partitions,
             Arc::clone(&schema),
             None,
@@ -1604,8 +1605,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
-    use crate::memory::MemorySourceConfig;
-    use crate::source::DataSourceExec;
+    use crate::test::MockMemorySourceConfig;
+    use crate::test::MockDataSourceExec;
     use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;
@@ -1711,15 +1712,15 @@ mod test {
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-        MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
+        MockMemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
     }
 
     fn sorted_memory_exec(
         schema: &SchemaRef,
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
-        Arc::new(DataSourceExec::new(Arc::new(
-            MemorySourceConfig::try_new(&[vec![]], Arc::clone(schema), None)
+        Arc::new(MockDataSourceExec::new(Arc::new(
+            MockMemorySourceConfig::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_exprs])
                 .unwrap(),

@@ -640,10 +640,10 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 mod tests {
     use super::*;
     use crate::collect;
-    use crate::memory::MemorySourceConfig;
+    use crate::test::MockMemorySourceConfig;
     use crate::test;
 
-    use crate::source::DataSourceExec;
+    use crate::test::MockDataSourceExec;
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
@@ -865,12 +865,12 @@ mod tests {
                 .iter()
                 .map(|ordering| convert_to_sort_exprs(ordering))
                 .collect::<Vec<_>>();
-            let child1 = Arc::new(DataSourceExec::new(Arc::new(
-                MemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
+            let child1 = Arc::new(MockDataSourceExec::new(Arc::new(
+                MockMemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(first_orderings)?,
             )));
-            let child2 = Arc::new(DataSourceExec::new(Arc::new(
-                MemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
+            let child2 = Arc::new(MockDataSourceExec::new(Arc::new(
+                MockMemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(second_orderings)?,
             )));
 

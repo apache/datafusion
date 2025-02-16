@@ -384,7 +384,7 @@ mod tests {
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::{Boundedness, EmissionType};
     use crate::expressions::col;
-    use crate::memory::MemorySourceConfig;
+    use crate::test::MockMemorySourceConfig;
     use crate::metrics::{MetricValue, Timestamp};
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
@@ -451,7 +451,7 @@ mod tests {
         ]);
 
         let repartition_exec = RepartitionExec::try_new(
-            MemorySourceConfig::try_new_exec(&[rbs], schema, None).unwrap(),
+            MockMemorySourceConfig::try_new_exec(&[rbs], schema, None).unwrap(),
             Partitioning::RoundRobinBatch(2),
         )?;
         let coalesce_batches_exec =
@@ -543,7 +543,7 @@ mod tests {
 
         let schema = batch.schema();
         let sort = LexOrdering::default(); // no sort expressions
-        let exec = MemorySourceConfig::try_new_exec(
+        let exec = MockMemorySourceConfig::try_new_exec(
             &[vec![batch.clone()], vec![batch]],
             schema,
             None,
@@ -736,7 +736,7 @@ mod tests {
                 options: Default::default(),
             },
         ]);
-        let exec = MemorySourceConfig::try_new_exec(partitions, schema, None).unwrap();
+        let exec = MockMemorySourceConfig::try_new_exec(partitions, schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(merge, context).await.unwrap();
@@ -844,7 +844,7 @@ mod tests {
         let sorted = basic_sort(csv, sort, context).await;
         let split: Vec<_> = sizes.iter().map(|x| split_batch(&sorted, *x)).collect();
 
-        Ok(MemorySourceConfig::try_new_exec(&split, sorted.schema(), None).unwrap())
+        Ok(MockMemorySourceConfig::try_new_exec(&split, sorted.schema(), None).unwrap())
     }
 
     #[tokio::test]
@@ -972,7 +972,7 @@ mod tests {
                 },
             },
         ]);
-        let exec = MemorySourceConfig::try_new_exec(&[vec![b1], vec![b2]], schema, None)
+        let exec = MockMemorySourceConfig::try_new_exec(&[vec![b1], vec![b2]], schema, None)
             .unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
@@ -1016,7 +1016,7 @@ mod tests {
             },
         }]);
         let exec =
-            MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
+            MockMemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
         let merge =
             Arc::new(SortPreservingMergeExec::new(sort, exec).with_fetch(Some(2)));
 
@@ -1052,7 +1052,7 @@ mod tests {
             },
         }]);
         let exec =
-            MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
+            MockMemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(merge, task_ctx).await.unwrap();
@@ -1161,7 +1161,7 @@ mod tests {
             expr: col("b", &schema).unwrap(),
             options: Default::default(),
         }]);
-        let exec = MemorySourceConfig::try_new_exec(&[vec![b1], vec![b2]], schema, None)
+        let exec = MockMemorySourceConfig::try_new_exec(&[vec![b1], vec![b2]], schema, None)
             .unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
@@ -1273,7 +1273,7 @@ mod tests {
             },
         }]);
 
-        let exec = MemorySourceConfig::try_new_exec(&partitions, schema, None).unwrap();
+        let exec = MockMemorySourceConfig::try_new_exec(&partitions, schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(merge, task_ctx).await.unwrap();

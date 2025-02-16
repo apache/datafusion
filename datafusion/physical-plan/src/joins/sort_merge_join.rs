@@ -2547,7 +2547,7 @@ mod tests {
     use crate::joins::sort_merge_join::{get_corrected_filter_mask, JoinedRecordBatches};
     use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
     use crate::joins::SortMergeJoinExec;
-    use crate::memory::MemorySourceConfig;
+    use crate::test::MockMemorySourceConfig;
     use crate::test::{build_table_i32, build_table_i32_two_cols};
     use crate::{common, ExecutionPlan};
 
@@ -2558,12 +2558,12 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        MockMemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     fn build_table_from_batches(batches: Vec<RecordBatch>) -> Arc<dyn ExecutionPlan> {
         let schema = batches.first().unwrap().schema();
-        MemorySourceConfig::try_new_exec(&[batches], schema, None).unwrap()
+        MockMemorySourceConfig::try_new_exec(&[batches], schema, None).unwrap()
     }
 
     fn build_date_table(
@@ -2588,7 +2588,7 @@ mod tests {
         .unwrap();
 
         let schema = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        MockMemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     fn build_date64_table(
@@ -2613,7 +2613,7 @@ mod tests {
         .unwrap();
 
         let schema = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        MockMemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     /// returns a table with 3 columns of i32 in memory
@@ -2636,7 +2636,7 @@ mod tests {
             ],
         )
         .unwrap();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        MockMemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     pub fn build_table_two_cols(
@@ -2645,7 +2645,7 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32_two_cols(a, b);
         let schema = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        MockMemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     fn join(
