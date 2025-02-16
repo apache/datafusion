@@ -61,12 +61,12 @@ async fn count_only_nulls() -> Result<()> {
         vec![Expr::AggregateFunction(AggregateFunction {
             func: Arc::new(AggregateUDF::new_from_impl(Count::new())),
             params: AggregateFunctionParams {
-            args: vec![input_col_ref],
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
-            }
+                args: vec![input_col_ref],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         })],
     )?);
 
