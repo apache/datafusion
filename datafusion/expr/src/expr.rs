@@ -34,6 +34,7 @@ use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
+use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_common::{
     plan_err, Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
@@ -2272,6 +2273,12 @@ impl Display for SchemaDisplay<'_> {
                 order_by,
                 null_treatment,
             }) => {
+                // TODO: Make this customizable by adding `schema_name` for UDAF
+                if func.name() == "count" && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
+                    write!(f, "count_star()")?;
+                    return Ok(());
+                }
+
                 write!(
                     f,
                     "{}({}{})",
@@ -2773,16 +2780,21 @@ fn fmt_function(
     args: &[Expr],
     display: bool,
 ) -> fmt::Result {
-    let args: Vec<String> = match display {
-        true => args.iter().map(|arg| format!("{arg}")).collect(),
-        false => args.iter().map(|arg| format!("{arg:?}")).collect(),
-    };
+    if fun == "count" && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
+        // TODO: Call customizable `display_name()` of UDAF
+        write!(f, "count_star()")
+    } else {
+        let args: Vec<String> = match display {
+            true => args.iter().map(|arg| format!("{arg}")).collect(),
+            false => args.iter().map(|arg| format!("{arg:?}")).collect(),
+        };
 
-    let distinct_str = match distinct {
-        true => "DISTINCT ",
-        false => "",
-    };
-    write!(f, "{}({}{})", fun, distinct_str, args.join(", "))
+        let distinct_str = match distinct {
+            true => "DISTINCT ",
+            false => "",
+        };
+        write!(f, "{}({}{})", fun, distinct_str, args.join(", "))
+    }
 }
 
 /// The name of the column (field) that this `Expr` will produce in the physical plan.

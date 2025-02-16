@@ -307,7 +307,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+01)Aggregate: groupBy=[[]], aggr=[[count_star()]]
 02)--Limit: skip=11, fetch=3
 03)----TableScan: t1 projection=[], fetch=14
 physical_plan
@@ -325,7 +325,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+01)Aggregate: groupBy=[[]], aggr=[[count_star()]]
 02)--Limit: skip=8, fetch=3
 03)----TableScan: t1 projection=[], fetch=11
 physical_plan
@@ -343,7 +343,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 OFFSET 8);
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+01)Aggregate: groupBy=[[]], aggr=[[count_star()]]
 02)--Limit: skip=8, fetch=None
 03)----TableScan: t1 projection=[]
 physical_plan
@@ -360,7 +360,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+01)Aggregate: groupBy=[[]], aggr=[[count_star()]]
 02)--Projection: 
 03)----Limit: skip=6, fetch=3
 04)------Filter: t1.a > Int32(3)

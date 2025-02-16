@@ -279,6 +279,8 @@ pub struct RawAggregateExpr {
     pub null_treatment: Option<NullTreatment>,
 }
 
+/// This structure is used by `WindowFunctionPlanner` to plan operators with
+/// custom expressions.
 #[derive(Debug, Clone)]
 pub struct RawWindowExpr {
     pub func_def: WindowFunctionDefinition,
