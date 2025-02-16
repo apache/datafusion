@@ -22,7 +22,8 @@
 use datafusion_common::{TableReference, UnnestOptions};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
-    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList, Like, Placeholder, ScalarFunction, Unnest
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
+    Like, Placeholder, ScalarFunction, Unnest,
 };
 use datafusion_expr::WriteOp;
 use datafusion_expr::{
@@ -347,13 +348,14 @@ pub fn serialize_expr(
         }
         Expr::AggregateFunction(expr::AggregateFunction {
             ref func,
-            params: AggregateFunctionParams {
-                ref args,
-                ref distinct,
-                ref filter,
-                ref order_by,
-                null_treatment: _,
-            },
+            params:
+                AggregateFunctionParams {
+                    ref args,
+                    ref distinct,
+                    ref filter,
+                    ref order_by,
+                    null_treatment: _,
+                },
         }) => {
             let mut buf = Vec::new();
             let _ = codec.try_encode_udaf(func, &mut buf);
