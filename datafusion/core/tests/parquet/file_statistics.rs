@@ -27,6 +27,7 @@ use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::cache::cache_unit::{
     DefaultFileStatisticsCache, DefaultListFilesCache,
@@ -34,7 +35,6 @@ use datafusion_execution::cache::cache_unit::{
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::{col, lit, Expr};
-use datafusion_datasource::source::DataSourceExec;
 
 use datafusion::datasource::physical_plan::FileScanConfig;
 use tempfile::tempdir;

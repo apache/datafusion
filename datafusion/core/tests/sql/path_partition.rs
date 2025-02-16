@@ -40,10 +40,10 @@ use datafusion::{
 use datafusion_catalog::TableProvider;
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::{col, lit, Expr, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-use datafusion_datasource::source::DataSourceExec;
 
 use async_trait::async_trait;
 use bytes::Bytes;

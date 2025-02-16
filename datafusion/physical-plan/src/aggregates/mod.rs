@@ -1347,10 +1347,10 @@ mod tests {
     use crate::common::collect;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
-    use crate::test::MockMemorySourceConfig;
     use crate::metrics::MetricValue;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::MockMemorySourceConfig;
     use crate::RecordBatchStream;
 
     use arrow::array::{
@@ -2626,8 +2626,11 @@ mod tests {
             .unwrap(),
         ];
 
-        let input =
-            MockMemorySourceConfig::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+        let input = MockMemorySourceConfig::try_new_exec(
+            &[input_data],
+            Arc::clone(&schema),
+            None,
+        )?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by,
@@ -2713,8 +2716,11 @@ mod tests {
             .unwrap(),
         ];
 
-        let input =
-            MockMemorySourceConfig::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+        let input = MockMemorySourceConfig::try_new_exec(
+            &[input_data],
+            Arc::clone(&schema),
+            None,
+        )?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by,

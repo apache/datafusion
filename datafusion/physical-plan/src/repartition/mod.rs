@@ -1051,6 +1051,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::test::MockMemorySourceConfig;
     use crate::{
         test::{
             assert_is_pending,
@@ -1061,7 +1062,6 @@ mod tests {
         },
         {collect, expressions::col},
     };
-    use crate::test::MockMemorySourceConfig;
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1605,8 +1605,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
-    use crate::test::MockMemorySourceConfig;
     use crate::test::MockDataSourceExec;
+    use crate::test::MockMemorySourceConfig;
     use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;

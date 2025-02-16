@@ -231,8 +231,8 @@ impl ExecutionPlan for ValuesExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion_physical_plan::expressions::lit;
     use crate::test::{self, make_partition};
+    use datafusion_physical_plan::expressions::lit;
 
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::stats::{ColumnStatistics, Precision};

@@ -25,6 +25,8 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
+use datafusion_datasource::memory::MemorySourceConfig;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast};
@@ -36,9 +38,7 @@ use datafusion_physical_plan::aggregates::PhysicalGroupBy;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::common;
 use datafusion_physical_plan::filter::FilterExec;
-use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// Mock data using a MemorySourceConfig which has an exact count statistic

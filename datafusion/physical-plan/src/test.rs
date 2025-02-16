@@ -17,40 +17,28 @@
 
 //! Utilities for testing datafusion-physical-plan
 
-use std::collections::HashMap;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::fmt;
-use arrow::array::{ArrayRef, Int32Array, RecordBatch, RecordBatchOptions};
+use arrow::array::{ArrayRef, Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::LexOrdering;
 use futures::{Future, FutureExt};
-
+use std::collections::HashMap;
+use std::fmt;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use std::task::{Context, Poll};
 
-use crate::projection::{
-    all_alias_free_columns, new_projections_for_columns,
-};
-use crate::{
-    common, ColumnarValue,
-    PhysicalExpr, RecordBatchStream,
-};
+use crate::{common, RecordBatchStream};
 
-use datafusion_common::{
-    plan_err, project_schema, Result,
-};
+use datafusion_common::{project_schema, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::expressions::Column;
 
 use futures::Stream;
 
-use crate::projection::ProjectionExec;
-// use crate::memory::MockMemorySourceConfig;
-// use crate::source::MockDataSourceExec;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
 use crate::ExecutionPlan;
@@ -62,12 +50,10 @@ use std::fmt::{Debug, Formatter};
 
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::{
-    DisplayAs, DisplayFormatType, PlanProperties,
-};
+use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{internal_err, Constraints, ScalarValue, Statistics};
+use datafusion_common::{internal_err, Statistics};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 
 /// Common behaviors in Data Sources for both from Files and MockMemory.
@@ -92,15 +78,10 @@ pub trait MockDataSource: Send + Sync {
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
     fn statistics(&self) -> Result<Statistics>;
-    fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn MockDataSource>>;
     fn fetch(&self) -> Option<usize>;
     fn metrics(&self) -> ExecutionPlanMetricsSet {
         ExecutionPlanMetricsSet::new()
     }
-    fn try_swapping_with_projection(
-        &self,
-        _projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>>;
 }
 
 impl Debug for dyn MockDataSource {
@@ -118,14 +99,14 @@ pub struct MockDataSourceExec {
 
 impl DisplayAs for MockDataSourceExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-        write!(f, "MockDataSourceExec: ")?;
+        write!(f, "DataSourceExec: ")?;
         self.source.fmt_as(t, f)
     }
 }
 
 impl ExecutionPlan for MockDataSourceExec {
     fn name(&self) -> &'static str {
-        "MockDataSourceExec"
+        "DataSourceExec"
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -144,31 +125,15 @@ impl ExecutionPlan for MockDataSourceExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(self)
+        unimplemented!()
     }
 
     fn repartitioned(
         &self,
-        target_partitions: usize,
-        config: &ConfigOptions,
+        _target_partitions: usize,
+        _config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        let source = self.source.repartitioned(
-            target_partitions,
-            config.optimizer.repartition_file_min_size,
-            self.properties().eq_properties.output_ordering(),
-        )?;
-
-        if let Some(source) = source {
-            let output_partitioning = source.output_partitioning();
-            let plan = self
-                .clone()
-                .with_source(source)
-                // Changing source partitioning may invalidate output partitioning. Update it also
-                .with_partitioning(output_partitioning);
-            Ok(Some(Arc::new(plan)))
-        } else {
-            Ok(Some(Arc::new(self.clone())))
-        }
+        unimplemented!()
     }
 
     fn execute(
@@ -187,25 +152,9 @@ impl ExecutionPlan for MockDataSourceExec {
         self.source.statistics()
     }
 
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        let mut source = Arc::clone(&self.source);
-        source = source.with_fetch(limit)?;
-        let cache = self.cache.clone();
-
-        Some(Arc::new(Self { source, cache }))
-    }
-
     fn fetch(&self) -> Option<usize> {
         self.source.fetch()
     }
-
-    fn try_swapping_with_projection(
-        &self,
-        projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.source.try_swapping_with_projection(projection)
-    }
-    
 }
 
 impl MockDataSourceExec {
@@ -217,24 +166,6 @@ impl MockDataSourceExec {
     /// Return the source object
     pub fn source(&self) -> &Arc<dyn MockDataSource> {
         &self.source
-    }
-
-    pub fn with_source(mut self, source: Arc<dyn MockDataSource>) -> Self {
-        self.cache = Self::compute_properties(Arc::clone(&source));
-        self.source = source;
-        self
-    }
-
-    /// Assign constraints
-    pub fn with_constraints(mut self, constraints: Constraints) -> Self {
-        self.cache = self.cache.with_constraints(constraints);
-        self
-    }
-
-    /// Assign output partitioning
-    pub fn with_partitioning(mut self, partitioning: Partitioning) -> Self {
-        self.cache = self.cache.with_partitioning(partitioning);
-        self
     }
 
     fn compute_properties(source: Arc<dyn MockDataSource>) -> PlanProperties {
@@ -348,37 +279,8 @@ impl MockDataSource for MockMemorySourceConfig {
         ))
     }
 
-    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn MockDataSource>> {
-        let source = self.clone();
-        Some(Arc::new(source.with_limit(limit)))
-    }
-
     fn fetch(&self) -> Option<usize> {
         self.fetch
-    }
-
-    fn try_swapping_with_projection(
-        &self,
-        projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // If there is any non-column or alias-carrier expression, Projection should not be removed.
-        // This process can be moved into MockMemoryExec, but it would be an overlap of their responsibility.
-        all_alias_free_columns(projection.expr())
-            .then(|| {
-                let all_projections = (0..self.schema.fields().len()).collect();
-                let new_projections = new_projections_for_columns(
-                    projection,
-                    self.projection().as_ref().unwrap_or(&all_projections),
-                );
-
-                MockMemorySourceConfig::try_new_exec(
-                    self.partitions(),
-                    self.original_schema(),
-                    Some(new_projections),
-                )
-                .map(|e| e as _)
-            })
-            .transpose()
     }
 }
 
@@ -413,105 +315,9 @@ impl MockMemorySourceConfig {
         Ok(Arc::new(MockDataSourceExec::new(Arc::new(source))))
     }
 
-    /// Create a new execution plan from a list of constant values (`ValuesExec`)
-    pub fn try_new_as_values(
-        schema: SchemaRef,
-        data: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    ) -> Result<Arc<MockDataSourceExec>> {
-        if data.is_empty() {
-            return plan_err!("Values list cannot be empty");
-        }
-
-        let n_row = data.len();
-        let n_col = schema.fields().len();
-
-        // We have this single row batch as a placeholder to satisfy evaluation argument
-        // and generate a single output row
-        let placeholder_schema = Arc::new(Schema::empty());
-        let placeholder_batch = RecordBatch::try_new_with_options(
-            Arc::clone(&placeholder_schema),
-            vec![],
-            &RecordBatchOptions::new().with_row_count(Some(1)),
-        )?;
-
-        // Evaluate each column
-        let arrays = (0..n_col)
-            .map(|j| {
-                (0..n_row)
-                    .map(|i| {
-                        let expr = &data[i][j];
-                        let result = expr.evaluate(&placeholder_batch)?;
-
-                        match result {
-                            ColumnarValue::Scalar(scalar) => Ok(scalar),
-                            ColumnarValue::Array(array) if array.len() == 1 => {
-                                ScalarValue::try_from_array(&array, 0)
-                            }
-                            ColumnarValue::Array(_) => {
-                                plan_err!("Cannot have array values in a values list")
-                            }
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()
-                    .and_then(ScalarValue::iter_to_array)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        let batch = RecordBatch::try_new_with_options(
-            Arc::clone(&schema),
-            arrays,
-            &RecordBatchOptions::new().with_row_count(Some(n_row)),
-        )?;
-
-        let partitions = vec![batch];
-        Self::try_new_from_batches(Arc::clone(&schema), partitions)
-    }
-
-    /// Create a new plan using the provided schema and batches.
-    ///
-    /// Errors if any of the batches don't match the provided schema, or if no
-    /// batches are provided.
-    pub fn try_new_from_batches(
-        schema: SchemaRef,
-        batches: Vec<RecordBatch>,
-    ) -> Result<Arc<MockDataSourceExec>> {
-        if batches.is_empty() {
-            return plan_err!("Values list cannot be empty");
-        }
-
-        for batch in &batches {
-            let batch_schema = batch.schema();
-            if batch_schema != schema {
-                return plan_err!(
-                    "Batch has invalid schema. Expected: {}, got: {}",
-                    schema,
-                    batch_schema
-                );
-            }
-        }
-
-        let partitions = vec![batches];
-        let source = Self {
-            partitions,
-            schema: Arc::clone(&schema),
-            projected_schema: Arc::clone(&schema),
-            projection: None,
-            sort_information: vec![],
-            show_sizes: true,
-            fetch: None,
-        };
-        Ok(Arc::new(MockDataSourceExec::new(Arc::new(source))))
-    }
-
     /// Set the limit of the files
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.fetch = limit;
-        self
-    }
-
-    /// Set `show_sizes` to determine whether to display partition sizes
-    pub fn with_show_sizes(mut self, show_sizes: bool) -> Self {
-        self.show_sizes = show_sizes;
         self
     }
 
@@ -523,11 +329,6 @@ impl MockMemorySourceConfig {
     /// Ref to projection
     pub fn projection(&self) -> &Option<Vec<usize>> {
         &self.projection
-    }
-
-    /// Show sizes
-    pub fn show_sizes(&self) -> bool {
-        self.show_sizes
     }
 
     /// Ref to sort information
@@ -609,13 +410,12 @@ impl MockMemorySourceConfig {
     }
 }
 
-
 /// Iterator over batches
 pub struct MockMemoryStream {
     /// Vector of record batches
     data: Vec<RecordBatch>,
     /// Optional memory reservation bound to the data, freed on drop
-    reservation: Option<MemoryReservation>,
+    _reservation: Option<MemoryReservation>,
     /// Schema representing the data
     schema: SchemaRef,
     /// Optional projection for which columns to load
@@ -635,7 +435,7 @@ impl MockMemoryStream {
     ) -> Result<Self> {
         Ok(Self {
             data,
-            reservation: None,
+            _reservation: None,
             schema,
             projection,
             index: 0,
@@ -643,13 +443,7 @@ impl MockMemoryStream {
         })
     }
 
-    /// Set the memory reservation for the data
-    pub(super) fn with_reservation(mut self, reservation: MemoryReservation) -> Self {
-        self.reservation = Some(reservation);
-        self
-    }
-
-    /// Set the number of rows to produce
+    // /// Set the number of rows to produce
     pub(super) fn with_fetch(mut self, fetch: Option<usize>) -> Self {
         self.fetch = fetch;
         self

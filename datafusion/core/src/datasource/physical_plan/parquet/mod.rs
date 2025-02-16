@@ -579,10 +579,10 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_datasource::source::DataSourceExec;
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-    use datafusion_datasource::source::DataSourceExec;
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use crate::datasource::physical_plan::parquet::source::ParquetSource;

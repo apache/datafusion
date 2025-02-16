@@ -640,8 +640,8 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 mod tests {
     use super::*;
     use crate::collect;
-    use crate::test::MockMemorySourceConfig;
     use crate::test;
+    use crate::test::MockMemorySourceConfig;
 
     use crate::test::MockDataSourceExec;
     use arrow::compute::SortOptions;

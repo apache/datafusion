@@ -30,10 +30,10 @@ use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_common::{ScalarValue, ToDFSchema};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{col, lit, Expr};
 use datafusion_physical_expr::create_physical_expr;
-use datafusion_datasource::source::DataSourceExec;
 
 use futures::StreamExt;
 use object_store::path::Path;

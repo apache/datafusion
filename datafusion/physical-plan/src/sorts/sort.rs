@@ -1067,10 +1067,10 @@ mod tests {
     use crate::collect;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
-    use crate::test::MockMemorySourceConfig;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::MockMemorySourceConfig;
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
@@ -1374,9 +1374,12 @@ mod tests {
             Arc::new(vec![3, 2, 1].into_iter().map(Some).collect::<UInt64Array>());
 
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data]).unwrap();
-        let input =
-            MockMemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
-                .unwrap();
+        let input = MockMemorySourceConfig::try_new_exec(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )
+        .unwrap();
 
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
@@ -1446,7 +1449,11 @@ mod tests {
                     },
                 },
             ]),
-            MockMemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?,
+            MockMemorySourceConfig::try_new_exec(
+                &[vec![batch]],
+                Arc::clone(&schema),
+                None,
+            )?,
         ));
 
         assert_eq!(DataType::Int32, *sort_exec.schema().field(0).data_type());

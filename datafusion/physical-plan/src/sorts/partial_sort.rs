@@ -466,11 +466,11 @@ mod tests {
     use crate::collect;
     use crate::expressions::col;
     use crate::expressions::PhysicalSortExpr;
-    use crate::test::MockMemorySourceConfig;
     use crate::sorts::sort::SortExec;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::MockMemorySourceConfig;
 
     use super::*;
 
@@ -880,8 +880,11 @@ mod tests {
             Arc::new(vec![1, 1, 2].into_iter().map(Some).collect::<UInt64Array>());
 
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data])?;
-        let input =
-            MockMemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let input = MockMemorySourceConfig::try_new_exec(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )?;
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {

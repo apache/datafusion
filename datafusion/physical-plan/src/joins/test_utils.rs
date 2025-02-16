@@ -23,9 +23,9 @@ use crate::joins::utils::{JoinFilter, JoinOn};
 use crate::joins::{
     HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
-use crate::test::MockMemorySourceConfig;
 use crate::repartition::RepartitionExec;
 use crate::test::MockDataSourceExec;
+use crate::test::MockMemorySourceConfig;
 use crate::{common, ExecutionPlan, ExecutionPlanProperties, Partitioning};
 
 use arrow::array::{

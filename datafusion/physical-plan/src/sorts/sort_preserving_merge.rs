@@ -384,12 +384,12 @@ mod tests {
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::{Boundedness, EmissionType};
     use crate::expressions::col;
-    use crate::test::MockMemorySourceConfig;
     use crate::metrics::{MetricValue, Timestamp};
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::MockMemorySourceConfig;
     use crate::test::{self, assert_is_pending, make_partition};
     use crate::{collect, common};
 
@@ -736,7 +736,8 @@ mod tests {
                 options: Default::default(),
             },
         ]);
-        let exec = MockMemorySourceConfig::try_new_exec(partitions, schema, None).unwrap();
+        let exec =
+            MockMemorySourceConfig::try_new_exec(partitions, schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(merge, context).await.unwrap();
@@ -972,8 +973,9 @@ mod tests {
                 },
             },
         ]);
-        let exec = MockMemorySourceConfig::try_new_exec(&[vec![b1], vec![b2]], schema, None)
-            .unwrap();
+        let exec =
+            MockMemorySourceConfig::try_new_exec(&[vec![b1], vec![b2]], schema, None)
+                .unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(merge, task_ctx).await.unwrap();
@@ -1161,8 +1163,9 @@ mod tests {
             expr: col("b", &schema).unwrap(),
             options: Default::default(),
         }]);
-        let exec = MockMemorySourceConfig::try_new_exec(&[vec![b1], vec![b2]], schema, None)
-            .unwrap();
+        let exec =
+            MockMemorySourceConfig::try_new_exec(&[vec![b1], vec![b2]], schema, None)
+                .unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(Arc::clone(&merge) as Arc<dyn ExecutionPlan>, task_ctx)
@@ -1273,7 +1276,8 @@ mod tests {
             },
         }]);
 
-        let exec = MockMemorySourceConfig::try_new_exec(&partitions, schema, None).unwrap();
+        let exec =
+            MockMemorySourceConfig::try_new_exec(&partitions, schema, None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, exec));
 
         let collected = collect(merge, task_ctx).await.unwrap();

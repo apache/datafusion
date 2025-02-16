@@ -2082,9 +2082,12 @@ mod tests {
         let batch2 =
             build_table_i32(("a1", &vec![2]), ("b2", &vec![2]), ("c1", &vec![9]));
         let schema = batch1.schema();
-        let left =
-            MockMemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
-                .unwrap();
+        let left = MockMemorySourceConfig::try_new_exec(
+            &[vec![batch1], vec![batch2]],
+            schema,
+            None,
+        )
+        .unwrap();
 
         let right = build_table(
             ("a1", &vec![1, 2, 3]),
@@ -2154,9 +2157,12 @@ mod tests {
         );
         let schema = batch1.schema();
 
-        let left =
-            MockMemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
-                .unwrap();
+        let left = MockMemorySourceConfig::try_new_exec(
+            &[vec![batch1], vec![batch2]],
+            schema,
+            None,
+        )
+        .unwrap();
         let right = build_table(
             ("a2", &vec![20, 30, 10]),
             ("b2", &vec![5, 6, 4]),
@@ -2208,9 +2214,12 @@ mod tests {
         let batch2 =
             build_table_i32(("a2", &vec![30]), ("b1", &vec![5]), ("c2", &vec![90]));
         let schema = batch1.schema();
-        let right =
-            MockMemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
-                .unwrap();
+        let right = MockMemorySourceConfig::try_new_exec(
+            &[vec![batch1], vec![batch2]],
+            schema,
+            None,
+        )
+        .unwrap();
 
         let on = vec![(
             Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
@@ -3737,9 +3746,12 @@ mod tests {
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19107, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
-        let left =
-            MockMemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
-                .unwrap();
+        let left = MockMemorySourceConfig::try_new_exec(
+            &[vec![batch]],
+            Arc::clone(&schema),
+            None,
+        )
+        .unwrap();
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19108, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
