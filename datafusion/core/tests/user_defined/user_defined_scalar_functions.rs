@@ -46,6 +46,7 @@ use parking_lot::Mutex;
 use regex::Regex;
 use sqlparser::ast::Ident;
 use sqlparser::tokenizer::Span;
+use datafusion_common::utils::take_function_args;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -515,7 +516,8 @@ impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let answer = match &args.args[0] {
+        let [arg] = take_function_args(self.name(), &args.args)?;
+        let answer = match arg {
             // When called with static arguments, the result is returned as an array.
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(value))) => {
                 let mut answer = vec![];
