@@ -31,6 +31,7 @@ use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{
     assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
     plan_err, DFSchema, DataFusionError, HashMap, Result, ScalarValue,
@@ -46,7 +47,6 @@ use parking_lot::Mutex;
 use regex::Regex;
 use sqlparser::ast::Ident;
 use sqlparser::tokenizer::Span;
-use datafusion_common::utils::take_function_args;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -837,7 +837,8 @@ impl ScalarUDFImpl for TakeUDF {
 
     // The actual implementation
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let take_idx = match &args.args[2] {
+        let [arg0, arg1, arg2] = take_function_args(self.name(), &args.args)?;
+        let take_idx = match arg2 {
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "0" => 0,
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "1" => 1,
             _ => unreachable!(),
