@@ -1145,9 +1145,9 @@ async fn test_count_wildcard() -> Result<()> {
         .build()
         .unwrap();
 
-    let expected = "Sort: count(Int64(1)) ASC NULLS LAST [count(Int64(1)):Int64]\
-    \n  Projection: count(Int64(1)) [count(Int64(1)):Int64]\
-    \n    Aggregate: groupBy=[[test.b]], aggr=[[count(Int64(1))]] [b:UInt32, count(Int64(1)):Int64]\
+    let expected = "Sort: count_star() ASC NULLS LAST [count_star():Int64]\
+    \n  Projection: count_star() [count_star():Int64]\
+    \n    Aggregate: groupBy=[[test.b]], aggr=[[count_star()]] [b:UInt32, count_star():Int64]\
     \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
 
     let formatted_plan = plan.display_indent_schema().to_string();

@@ -687,7 +687,7 @@ async fn simple_intersect() -> Result<()> {
     // Substrait treats both count(*) and count(1) the same
     assert_expected_plan(
         "SELECT count(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
-        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
+        "Aggregate: groupBy=[[]], aggr=[[count_star()]]\
          \n  Projection: \
          \n    LeftSemi Join: data.a = data2.a\
          \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
@@ -822,7 +822,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     // Schema check works because we set aliases to what the Substrait consumer will generate.
     assert_expected_plan(
         "SELECT count(1) FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);",
-        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[count_star()]]\
         \n  Projection: \
         \n    LeftSemi Join: left.a = right.a\
         \n      SubqueryAlias: left\

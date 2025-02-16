@@ -2274,7 +2274,9 @@ impl Display for SchemaDisplay<'_> {
                 null_treatment,
             }) => {
                 // TODO: Make this customizable by adding `schema_name` for UDAF
-                if func.name() == "count" && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
+                if func.name() == "count"
+                    && args[0] == Expr::Literal(COUNT_STAR_EXPANSION)
+                {
                     write!(f, "count_star()")?;
                     return Ok(());
                 }
