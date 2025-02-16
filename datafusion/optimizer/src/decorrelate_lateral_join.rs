@@ -86,23 +86,17 @@ impl OptimizerRule for DecorrelateLateralJoin {
 }
 
 fn plan_contains_outer_reference(plan: &LogicalPlan) -> bool {
-    struct Visitor {
-        contains: bool,
-    }
-    impl<'n> TreeNodeVisitor<'n> for Visitor {
-        type Node = LogicalPlan;
-        fn f_down(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
-            if plan.contains_outer_reference() {
-                self.contains = true;
-                Ok(TreeNodeRecursion::Stop)
-            } else {
-                Ok(TreeNodeRecursion::Continue)
-            }
+    let mut contains = false;
+    plan.apply_subqueries(|plan| {
+        if plan.contains_outer_reference() {
+            contains = true;
+            Ok(TreeNodeRecursion::Stop)
+        } else {
+            Ok(TreeNodeRecursion::Continue)
         }
-    }
-    let mut visitor = Visitor { contains: false };
-    plan.visit_with_subqueries(&mut visitor).unwrap();
-    visitor.contains
+    })
+    .unwrap();
+    contains
 }
 
 // Build the decorrelated join based on the original lateral join query. For now, we only support cross/inner
@@ -132,7 +126,7 @@ fn build_join(
         None => lit(true),
     };
     // -- inner join but the right side always has one row, we need to rewrite it to a left join
-    // SELECT * FROM t0, LATERAL (SELECT sum(v1) FROM t1 WHERE t0.v0 = t1.v0); 
+    // SELECT * FROM t0, LATERAL (SELECT sum(v1) FROM t1 WHERE t0.v0 = t1.v0);
     // -- inner join but the right side number of rows is related to the filter (join) condition, so keep inner join.
     // SELECT * FROM t0, LATERAL (SELECT * FROM t1 WHERE t0.v0 = t1.v0);
     let new_plan = LogicalPlanBuilder::from(left.clone())
