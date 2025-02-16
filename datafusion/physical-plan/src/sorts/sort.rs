@@ -225,6 +225,8 @@ struct ExternalSorter {
     // ========================================================================
     /// Potentially unsorted in memory buffer
     in_mem_batches: Vec<RecordBatch>,
+    /// if `Self::in_mem_batches` are sorted
+    in_mem_batches_sorted: bool,
 
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)
@@ -277,6 +279,7 @@ impl ExternalSorter {
         Self {
             schema,
             in_mem_batches: vec![],
+            in_mem_batches_sorted: false,
             spills: vec![],
             expr: expr.into(),
             metrics,
@@ -309,6 +312,7 @@ impl ExternalSorter {
         }
 
         self.in_mem_batches.push(input);
+        self.in_mem_batches_sorted = false;
         Ok(())
     }
 
@@ -423,7 +427,8 @@ impl ExternalSorter {
     async fn sort_or_spill_in_mem_batches(&mut self) -> Result<()> {
         // Release the memory reserved for merge back to the pool so
         // there is some left when `in_mem_sort_stream` requests an
-        // allocation.
+        // allocation. At the end of this function, memory will be
+        // reserved again for the next spill.
         self.merge_reservation.free();
 
         let before = self.reservation.size();
@@ -458,6 +463,7 @@ impl ExternalSorter {
                         self.spills.push(spill_file);
                     } else {
                         self.in_mem_batches.push(batch);
+                        self.in_mem_batches_sorted = true;
                     }
                 }
                 Some(writer) => {
@@ -662,10 +668,10 @@ impl ExternalSorter {
 /// Estimate how much memory is needed to sort a `RecordBatch`.
 ///
 /// This is used to pre-reserve memory for the sort/merge. The sort/merge process involves
-/// creating sorted copies of sorted columns in record batches, the sorted copies could be
-/// in either row format or array format. Please refer to cursor.rs and stream.rs for more
-/// details. No matter what format the sorted copies are, they will use more memory than
-/// the original record batch.
+/// creating sorted copies of sorted columns in record batches for speeding up comparison
+/// in sorting and merging. The sorted copies are in either row format or array format.
+/// Please refer to cursor.rs and stream.rs for more details. No matter what format the
+/// sorted copies are, they will use more memory than the original record batch.
 fn get_reserved_byte_for_record_batch(batch: &RecordBatch) -> usize {
     // 2x may not be enough for some cases, but it's a good start.
     // If 2x is not enough, user can set a larger value for `sort_spill_reservation_bytes`
