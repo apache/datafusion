@@ -168,6 +168,7 @@ impl AggregateUDF {
         self.inner.name()
     }
 
+    /// See [`AggregateUDFImpl::schema_name`] for more details.
     pub fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
         self.inner.schema_name(params)
     }
