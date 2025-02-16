@@ -25,7 +25,7 @@ use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::lit;
 
 use datafusion_common::tree_node::{
-    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
 use datafusion_common::Result;
 use datafusion_expr::logical_plan::JoinType;
@@ -83,17 +83,23 @@ impl OptimizerRule for DecorrelateLateralJoin {
 }
 
 fn plan_contains_outer_reference(plan: &LogicalPlan) -> bool {
-    let mut contains = false;
-    plan.apply_subqueries(|plan| {
-        if plan.contains_outer_reference() {
-            contains = true;
-            Ok(TreeNodeRecursion::Stop)
-        } else {
-            Ok(TreeNodeRecursion::Continue)
+    struct Visitor {
+        contains: bool,
+    }
+    impl<'n> TreeNodeVisitor<'n> for Visitor {
+        type Node = LogicalPlan;
+        fn f_down(&mut self, plan: &'n LogicalPlan) -> Result<TreeNodeRecursion> {
+            if plan.contains_outer_reference() {
+                self.contains = true;
+                Ok(TreeNodeRecursion::Stop)
+            } else {
+                Ok(TreeNodeRecursion::Continue)
+            }
         }
-    })
-    .unwrap();
-    contains
+    }
+    let mut visitor = Visitor { contains: false };
+    plan.visit_with_subqueries(&mut visitor).unwrap();
+    visitor.contains
 }
 
 // Build the decorrelated join based on the original lateral join query. For now, we only support cross/inner
