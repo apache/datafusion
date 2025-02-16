@@ -54,7 +54,7 @@ pub trait ContextProvider {
         not_impl_err!("Table Functions are not supported")
     }
 
-    /// Provides an intermediate table that is used to store the results of a CTE during execution)
+    /// Provides an intermediate table that is used to store the results of a CTE during execution
     ///
     /// CTE stands for "Common Table Expression"
     ///
@@ -96,7 +96,7 @@ pub trait ContextProvider {
 
     /// Return the system/user-defined variable type, if any
     ///
-    /// A user defined variable is typically accessed via `@@var_name`
+    /// A user defined variable is typically accessed via `@var_name`
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType>;
 
     /// Return overall configuration options
