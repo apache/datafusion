@@ -151,20 +151,35 @@ where
     T: OffsetSizeTrait,
     S: StringArrayType<'a>,
 {
-    let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+    let mut total_capacity = 0;
     string_array.iter().zip(number_array.iter()).try_for_each(
         |(string, number)| -> Result<(), DataFusionError> {
             match (string, number) {
                 (Some(string), Some(number)) if number >= 0 => {
-                    if number as usize * string.len() > max_str_len {
+                    let item_capcaity = string.len() * number as usize;
+                    if item_capcaity > max_str_len {
                         return exec_err!(
                             "string size overflow on repeat, max size is {}, but got {}",
                             max_str_len,
                             number as usize * string.len()
                         );
-                    } else {
-                        builder.append_value(string.repeat(number as usize))
                     }
+                    total_capacity += item_capcaity;
+                }
+                _ => (),
+            }
+            Ok(())
+        },
+    )?;
+
+    let mut builder =
+        GenericStringBuilder::<T>::with_capacity(string_array.len(), total_capacity);
+
+    string_array.iter().zip(number_array.iter()).try_for_each(
+        |(string, number)| -> Result<(), DataFusionError> {
+            match (string, number) {
+                (Some(string), Some(number)) if number >= 0 => {
+                    builder.append_value(string.repeat(number as usize));
                 }
                 (Some(_), Some(_)) => builder.append_value(""),
                 _ => builder.append_null(),
