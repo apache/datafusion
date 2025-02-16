@@ -279,79 +279,73 @@ fn range_analysis_demo() -> Result<()> {
     Ok(())
 }
 
-// DataFusion expression boundary analysis framework allows it to infer
+// DataFusion's analysis can infer boundary statistics and selectivity in
+// various situations which can be helpful in building more efficient
+// query plans.
 fn boundary_analysis_and_selectivity_demo() -> Result<()> {
-    // Case 1: Simple range predicate similar to id >= 5000
+    // Consider the example where we want all rows with an `id` greater than
+    // 5000.
     let id_greater_5000 = col("id").gt_eq(lit(5000i64));
 
-    // Case 2: Compound predicate with AND (similar to a > 5 AND a < 7)
-    let id_between_5_7 = col("id").gt(lit(5i64)).and(col("id").lt(lit(7i64)));
-
-    // Case 3: Compound predicate with OR (similar to a > 8 OR a = 1)
-    let id_gt8_or_eq1 = col("id").gt(lit(8i64)).or(col("id").eq(lit(1i64)));
-
-    // Define our schema with an 'id' column
+    // As in most examples we must tell DaataFusion the type of the column.
     let schema = Arc::new(Schema::new(vec![make_field("id", DataType::Int64)]));
 
-    // Create initial boundaries for our analysis
-    // We'll set known boundaries of id being between 1 and 10000
-    let mut column_stats = ColumnStatistics::new_unknown();
-    column_stats.min_value = Precision::Exact(ScalarValue::Int64(Some(1)));
-    column_stats.max_value = Precision::Exact(ScalarValue::Int64(Some(10000)));
+    // DataFusion is able to do cardinality estimation on various column types
+    // these estimates represented by the `ColumnStatistics` type describe
+    // properties such as the maximum and minimum value, the number of distinct
+    // values and the number of null values.
+    let column_stats = ColumnStatistics {
+        null_count: Precision::Exact(0),
+        max_value: Precision::Exact(ScalarValue::Int64(Some(10000))),
+        min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+        sum_value: Precision::Absent,
+        distinct_count: Precision::Absent,
+    };
 
+    // We can then build our expression boundaries from the column statistics
+    // allowing the analysis to be more precise.
     let initial_boundaries =
         vec![ExprBoundaries::try_from_column(&schema, &column_stats, 0)?];
 
-    // Create analysis context and schema for evaluation
+    // With the above we can perform the boundary analysis similar to the previous
+    // example.
     let df_schema = DFSchema::try_from(schema.clone())?;
-    let ctx = SessionContext::new();
 
-    // Analyze Case 1: id >= 5000
-    let physical_expr1 = ctx.create_physical_expr(id_greater_5000, &df_schema)?;
-    let analysis1 = analyze(
+    // Analysis case id >= 5000
+    let physical_expr1 =
+        SessionContext::new().create_physical_expr(id_greater_5000, &df_schema)?;
+    let analysis = analyze(
         &physical_expr1,
         AnalysisContext::new(initial_boundaries.clone()),
         df_schema.as_ref(),
     )?;
 
-    // The analysis should show:
-    // - Minimum value: 5000
-    // - Maximum value: 10000
-    // - Selectivity estimate: ~0.5 as it selects half the range frm the statistics
-    // we previously specified.
-    println!("Analysis for id >= 5000:");
-    println!(
-        "Boundaries: {:?} and Selectivity: {:?}",
-        analysis1.boundaries[0], analysis1.selectivity
+    // The analysis will return better bounds thanks to the column statistics.
+    // TODO:
+    assert_eq!(
+        analysis
+            .boundaries
+            .get(0)
+            .and_then(|boundary| Some(boundary.interval.clone().unwrap().into_bounds())),
+        Some((
+            ScalarValue::Int64(Some(5000)),
+            ScalarValue::Int64(Some(10000))
+        ))
     );
 
-    // Analyze Case 2: id > 5 AND id < 7
-    let physical_expr2 = ctx.create_physical_expr(id_between_5_7, &df_schema)?;
-    let analysis2 = analyze(
-        &physical_expr2,
-        AnalysisContext::new(initial_boundaries.clone()),
-        df_schema.as_ref(),
-    )?;
-
-    // The analysis should show:
-    // - Minimum value: 6
-    // - Maximum value: 6
-    // - Very low selectivity as it's a point query
-    // Proper support for boundary analysis will return [false, true] as that's
-    // what the expression can potentially evaluate to.
-    println!("\nAnalysis for id > 5 AND id < 7:");
-    println!("Boundaries: {:?}", analysis2.boundaries[0]);
-
-    // Analyze Case 3: id > 8 OR id = 1 (Unsupported)
+    // We can also infer selectivity from the column statistics by assuming
+    // that the column is uniformly distributed and using the following
+    // estimation formula:
+    // Assuming the original range is [a, b] and the new range: [a', b']
     //
-    // Currently interval arithmetic is not implemented for the OR operator so
-    // the below call to analysis will return an error.
-    let physical_expr3 = ctx.create_physical_expr(id_gt8_or_eq1, &df_schema)?;
-    let _ = analyze(
-        &physical_expr3,
-        AnalysisContext::new(initial_boundaries.clone()),
-        df_schema.as_ref(),
-    )?;
+    // (a' - b' + 1) / (a - b)
+    // (10000 - 5000 + 1) / (10000 - 1)
+    assert_eq!(
+        analysis
+            .selectivity
+            .is_some_and(|selectivity| selectivity >= 0.5 && selectivity <= 6.),
+        true
+    );
 
     Ok(())
 }
