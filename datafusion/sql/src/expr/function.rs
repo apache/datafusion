@@ -23,7 +23,7 @@ use datafusion_common::{
     DFSchema, Dependency, Result,
 };
 use datafusion_expr::expr::{ScalarFunction, Unnest};
-use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::planner::{PlannerResult, RawAggregateExpr};
 use datafusion_expr::{
     expr, qualified_wildcard, wildcard, Expr, ExprFunctionExt, ExprSchemable,
     WindowFrame, WindowFunctionDefinition,
@@ -341,8 +341,33 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
                     .transpose()?
                     .map(Box::new);
+
+                let mut aggregate_expr = RawAggregateExpr {
+                    func: fm,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                };
+                for planner in self.context_provider.get_expr_planners().iter() {
+                    match planner.plan_aggregate(aggregate_expr)? {
+                        PlannerResult::Planned(expr) => return Ok(expr),
+                        PlannerResult::Original(expr) => aggregate_expr = expr,
+                    }
+                }
+
+                let RawAggregateExpr {
+                    func,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                } = aggregate_expr;
+
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
-                    fm,
+                    func,
                     args,
                     distinct,
                     filter,

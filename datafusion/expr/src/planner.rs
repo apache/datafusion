@@ -25,9 +25,11 @@ use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
-use sqlparser::ast;
+use sqlparser::ast::{self, NullTreatment};
 
-use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
+use crate::{
+    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowUDF,
+};
 
 /// Provides the `SQL` query planner  meta-data about tables and
 /// functions referenced in SQL statements, without a direct dependency on other
@@ -211,6 +213,16 @@ pub trait ExprPlanner: Debug + Send + Sync {
     fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
         Ok(PlannerResult::Original(expr))
     }
+
+    /// Plans Count(exprs), e.g., `COUNT(*) to Count(1)`
+    ///
+    /// Returns origin expression arguments if not possible
+    fn plan_aggregate(
+        &self,
+        expr: RawAggregateExpr,
+    ) -> Result<PlannerResult<RawAggregateExpr>> {
+        Ok(PlannerResult::Original(expr))
+    }
 }
 
 /// An operator with two arguments to plan
@@ -245,6 +257,23 @@ pub struct RawFieldAccessExpr {
 pub struct RawDictionaryExpr {
     pub keys: Vec<Expr>,
     pub values: Vec<Expr>,
+}
+
+/// An operator with two arguments to plan
+///
+/// Note `left` and `right` are DataFusion [`Expr`]s but the `op` is the SQL AST
+/// operator.
+///
+/// This structure is used by [`ExprPlanner`] to plan operators with
+/// custom expressions.
+#[derive(Debug, Clone)]
+pub struct RawAggregateExpr {
+    pub func: Arc<AggregateUDF>,
+    pub args: Vec<Expr>,
+    pub distinct: bool,
+    pub filter: Option<Box<Expr>>,
+    pub order_by: Option<Vec<SortExpr>>,
+    pub null_treatment: Option<NullTreatment>,
 }
 
 /// Result of planning a raw expr with [`ExprPlanner`]
