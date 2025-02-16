@@ -380,7 +380,7 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Create a [DmlStatement] for inserting the contents of this builder into the named table.
+    /// Create a [`DmlStatement`] for inserting the contents of this builder into the named table.
     ///
     /// Note,  use a [`DefaultTableSource`] to insert into a [`TableProvider`]
     ///
