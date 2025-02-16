@@ -34,8 +34,9 @@ impl ExprPlanner for AggregateFunctionPlanner {
         &self,
         expr: RawAggregateExpr,
     ) -> Result<PlannerResult<RawAggregateExpr>> {
-        if expr.func.name() == "count" && (expr.args.len() == 1 && matches!(expr.args[0], Expr::Wildcard { .. })
-            || expr.args.is_empty())
+        if expr.func.name() == "count"
+            && (expr.args.len() == 1 && matches!(expr.args[0], Expr::Wildcard { .. })
+                || expr.args.is_empty())
         {
             let RawAggregateExpr {
                 func,

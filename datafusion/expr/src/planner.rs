@@ -28,7 +28,8 @@ use datafusion_common::{
 use sqlparser::ast::{self, NullTreatment};
 
 use crate::{
-    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame, WindowFunctionDefinition, WindowUDF
+    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
+    WindowFunctionDefinition, WindowUDF,
 };
 
 /// Provides the `SQL` query planner  meta-data about tables and
@@ -227,10 +228,7 @@ pub trait ExprPlanner: Debug + Send + Sync {
     /// Plans Count(exprs), e.g., `COUNT(*) to Count(1)`
     ///
     /// Returns origin expression arguments if not possible
-    fn plan_window(
-        &self,
-        expr: RawWindowExpr,
-    ) -> Result<PlannerResult<RawWindowExpr>> {
+    fn plan_window(&self, expr: RawWindowExpr) -> Result<PlannerResult<RawWindowExpr>> {
         Ok(PlannerResult::Original(expr))
     }
 }

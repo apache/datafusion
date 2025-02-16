@@ -79,6 +79,12 @@ pub fn count_distinct(expr: Expr) -> Expr {
     ))
 }
 
+/// Count(*), Count(), Count(1) are all equivalent expression
+/// In DataFusion, we convert them to Count(1) expression
+pub fn count_wildcard() -> Expr {
+    count(Expr::Literal(COUNT_STAR_EXPANSION))
+}
+
 #[user_doc(
     doc_section(label = "General Functions"),
     description = "Returns the number of non-null values in the specified column. To include null values in the total count, use `count(*)`.",

@@ -28,7 +28,6 @@ use datafusion_common::Result;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{InvariantLevel, LogicalPlan};
 
-use crate::analyzer::count_wildcard_rule::CountWildcardRule;
 use crate::analyzer::expand_wildcard_rule::ExpandWildcardRule;
 use crate::analyzer::inline_table_scan::InlineTableScan;
 use crate::analyzer::resolve_grouping_function::ResolveGroupingFunction;
@@ -37,7 +36,6 @@ use crate::utils::log_plan;
 
 use self::function_rewrite::ApplyFunctionRewrites;
 
-pub mod count_wildcard_rule;
 pub mod expand_wildcard_rule;
 pub mod function_rewrite;
 pub mod inline_table_scan;

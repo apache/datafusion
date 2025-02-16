@@ -44,7 +44,6 @@ pub mod planner;
 
 mod utils;
 
-
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
     pub use super::cume_dist::cume_dist;

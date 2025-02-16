@@ -19,19 +19,21 @@
 
 use datafusion_common::Result;
 use datafusion_expr::{
-    expr::WindowFunction, lit, planner::{ExprPlanner, PlannerResult, RawWindowExpr}, utils::COUNT_STAR_EXPANSION, Expr, ExprFunctionExt
+    expr::WindowFunction,
+    lit,
+    planner::{ExprPlanner, PlannerResult, RawWindowExpr},
+    utils::COUNT_STAR_EXPANSION,
+    Expr, ExprFunctionExt,
 };
 
 #[derive(Debug)]
 pub struct WindowFunctionPlanner;
 
 impl ExprPlanner for WindowFunctionPlanner {
-    fn plan_window(
-        &self,
-        expr: RawWindowExpr,
-    ) -> Result<PlannerResult<RawWindowExpr>> {
-        if expr.func_def.name() == "count" && (expr.args.len() == 1 && matches!(expr.args[0], Expr::Wildcard { .. })
-            || expr.args.is_empty())
+    fn plan_window(&self, expr: RawWindowExpr) -> Result<PlannerResult<RawWindowExpr>> {
+        if expr.func_def.name() == "count"
+            && (expr.args.len() == 1 && matches!(expr.args[0], Expr::Wildcard { .. })
+                || expr.args.is_empty())
         {
             let RawWindowExpr {
                 func_def,
@@ -50,7 +52,7 @@ impl ExprPlanner for WindowFunctionPlanner {
                 .order_by(order_by)
                 .window_frame(window_frame)
                 .null_treatment(null_treatment)
-                .build()?
+                .build()?,
             ));
         }
 
