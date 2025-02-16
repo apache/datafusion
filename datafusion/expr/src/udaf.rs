@@ -19,7 +19,7 @@
 
 use std::any::Any;
 use std::cmp::Ordering;
-use std::fmt::{self, Debug, Formatter};
+use std::fmt::{self, Debug, Formatter, Write};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::vec;
@@ -29,7 +29,10 @@ use arrow::datatypes::{DataType, Field};
 use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
-use crate::expr::AggregateFunction;
+use crate::expr::{
+    schema_name_from_exprs_comma_separated_without_space, schema_name_from_sorts,
+    AggregateFunction, AggregateFunctionParams,
+};
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
 };
@@ -163,6 +166,10 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::name`] for more details.
     pub fn name(&self) -> &str {
         self.inner.name()
+    }
+
+    pub fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.schema_name(params)
     }
 
     pub fn is_nullable(&self) -> bool {
@@ -381,6 +388,45 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// Returns this function's name
     fn name(&self) -> &str;
+
+    /// Returns the name of the column this expression would create
+    ///
+    /// See [`Expr::schema_name`] for details
+    fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        let AggregateFunctionParams {
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        } = params;
+
+        let mut schema_name = String::new();
+
+        schema_name.write_fmt(format_args!(
+            "{}({}{})",
+            self.name(),
+            if *distinct { "DISTINCT " } else { "" },
+            schema_name_from_exprs_comma_separated_without_space(args)?
+        ))?;
+
+        if let Some(null_treatment) = null_treatment {
+            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+        }
+
+        if let Some(filter) = filter {
+            schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
+        };
+
+        if let Some(order_by) = order_by {
+            schema_name.write_fmt(format_args!(
+                " ORDER BY [{}]",
+                schema_name_from_sorts(order_by)?
+            ))?;
+        };
+
+        Ok(schema_name)
+    }
 
     /// Returns the function's [`Signature`] for information about what input
     /// types are accepted and the function's Volatility.

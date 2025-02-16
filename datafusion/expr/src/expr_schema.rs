@@ -17,8 +17,8 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, Alias, BinaryExpr, Cast, InList, InSubquery, Placeholder,
-    ScalarFunction, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
+    InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
 };
 use crate::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
@@ -153,7 +153,10 @@ impl ExprSchemable for Expr {
             Expr::WindowFunction(window_function) => self
                 .data_type_and_nullable_with_window_function(schema, window_function)
                 .map(|(return_type, _)| return_type),
-            Expr::AggregateFunction(AggregateFunction { func, args, .. }) => {
+            Expr::AggregateFunction(AggregateFunction {
+                func,
+                params: AggregateFunctionParams { args, .. },
+            }) => {
                 let data_types = args
                     .iter()
                     .map(|e| e.get_type(schema))

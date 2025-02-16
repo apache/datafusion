@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::expr::Unnest;
+use datafusion_expr::expr::{AggregateFunctionParams, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
     self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
@@ -284,9 +284,15 @@ impl Unparser<'_> {
             }),
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func.name();
+                let AggregateFunctionParams {
+                    distinct,
+                    args,
+                    filter,
+                    ..
+                } = &agg.params;
 
-                let args = self.function_args_to_sql(&agg.args)?;
-                let filter = match &agg.filter {
+                let args = self.function_args_to_sql(args)?;
+                let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
@@ -297,8 +303,7 @@ impl Unparser<'_> {
                         span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
-                        duplicate_treatment: agg
-                            .distinct
+                        duplicate_treatment: distinct
                             .then_some(ast::DuplicateTreatment::Distinct),
                         args,
                         clauses: vec![],
