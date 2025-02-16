@@ -28,7 +28,7 @@ use datafusion_common::{JoinSide, JoinType, ScalarValue};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::{
-    ColumnarValue, Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+    Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_physical_expr::expressions::{
     binary, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
@@ -90,14 +90,6 @@ impl ScalarUDFImpl for DummyUDF {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Int32)
-    }
-
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        unimplemented!("DummyUDF::invoke")
     }
 }
 

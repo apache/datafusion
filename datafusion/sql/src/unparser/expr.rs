@@ -1655,7 +1655,7 @@ mod tests {
     use datafusion_expr::{
         case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
-        table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
+        table_scan, try_cast, when, wildcard, ScalarUDF, ScalarUDFImpl,
         Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
@@ -1704,14 +1704,6 @@ mod tests {
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int32)
-        }
-
-        fn invoke_batch(
-            &self,
-            _args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
-            unimplemented!("DummyUDF::invoke")
         }
     }
     // See sql::tests for E2E tests.
