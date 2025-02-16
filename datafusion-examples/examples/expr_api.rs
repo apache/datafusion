@@ -321,7 +321,6 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
     )?;
 
     // The analysis will return better bounds thanks to the column statistics.
-    // TODO:
     assert_eq!(
         analysis
             .boundaries
