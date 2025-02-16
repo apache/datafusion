@@ -171,11 +171,10 @@ impl FileFormat for ArrowFormat {
     async fn create_physical_plan(
         &self,
         _state: &dyn Session,
-        mut conf: FileScanConfig,
+        conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        conf = conf.with_source(Arc::new(ArrowSource::default()));
-        Ok(conf.new_exec())
+        Ok(conf.with_source(Arc::new(ArrowSource::default())).build())
     }
 
     async fn create_writer_physical_plan(

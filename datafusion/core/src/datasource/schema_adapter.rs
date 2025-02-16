@@ -507,7 +507,7 @@ mod tests {
             FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
                 .with_file(partitioned_file);
 
-        let parquet_exec = base_conf.new_exec();
+        let parquet_exec = base_conf.build();
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();

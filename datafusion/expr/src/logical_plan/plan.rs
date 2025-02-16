@@ -784,7 +784,7 @@ impl LogicalPlan {
             }
             LogicalPlan::Dml(DmlStatement {
                 table_name,
-                table_schema,
+                target,
                 op,
                 ..
             }) => {
@@ -792,7 +792,7 @@ impl LogicalPlan {
                 let input = self.only_input(inputs)?;
                 Ok(LogicalPlan::Dml(DmlStatement::new(
                     table_name.clone(),
-                    Arc::clone(table_schema),
+                    Arc::clone(target),
                     op.clone(),
                     Arc::new(input),
                 )))

@@ -737,6 +737,11 @@ pub mod logical_expr {
     pub use datafusion_expr::*;
 }
 
+/// re-export of [`datafusion_expr_common`] crate
+pub mod logical_expr_common {
+    pub use datafusion_expr_common::*;
+}
+
 /// re-export of [`datafusion_optimizer`] crate
 pub mod optimizer {
     pub use datafusion_optimizer::*;

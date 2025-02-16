@@ -45,7 +45,7 @@ use itertools::izip;
 pub type OrderPreservationContext = PlanContext<bool>;
 
 /// Updates order-preservation data for all children of the given node.
-pub fn update_children(opc: &mut OrderPreservationContext) {
+pub fn update_order_preservation_ctx_children_data(opc: &mut OrderPreservationContext) {
     for PlanContext {
         plan,
         children,
@@ -244,7 +244,7 @@ pub fn replace_with_order_preserving_variants(
     is_spm_better: bool,
     config: &ConfigOptions,
 ) -> Result<Transformed<OrderPreservationContext>> {
-    update_children(&mut requirements);
+    update_order_preservation_ctx_children_data(&mut requirements);
     if !(is_sort(&requirements.plan) && requirements.children[0].data) {
         return Ok(Transformed::no(requirements));
     }
