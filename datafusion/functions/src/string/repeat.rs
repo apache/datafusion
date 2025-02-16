@@ -156,15 +156,15 @@ where
         |(string, number)| -> Result<(), DataFusionError> {
             match (string, number) {
                 (Some(string), Some(number)) if number >= 0 => {
-                    let item_capcaity = string.len() * number as usize;
-                    if item_capcaity > max_str_len {
+                    let item_capacity = string.len() * number as usize;
+                    if item_capacity > max_str_len {
                         return exec_err!(
                             "string size overflow on repeat, max size is {}, but got {}",
                             max_str_len,
                             number as usize * string.len()
                         );
                     }
-                    total_capacity += item_capcaity;
+                    total_capacity += item_capacity;
                 }
                 _ => (),
             }
