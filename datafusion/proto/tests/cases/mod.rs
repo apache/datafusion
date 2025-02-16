@@ -22,8 +22,8 @@ use std::fmt::Debug;
 use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, PartitionEvaluator, ScalarUDFImpl,
-    Signature, Volatility, WindowUDFImpl,
+    Accumulator, AggregateUDFImpl, PartitionEvaluator, ScalarUDFImpl, Signature,
+    Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;

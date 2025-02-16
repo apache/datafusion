@@ -30,8 +30,8 @@ use datafusion_expr::{
     col,
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
-    CreateIndex, DdlStatement, ScalarUDF, ScalarUDFImpl, Signature,
-    Statement, Volatility,
+    CreateIndex, DdlStatement, ScalarUDF, ScalarUDFImpl, Signature, Statement,
+    Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
