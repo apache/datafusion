@@ -551,13 +551,43 @@ fn get_data_types(native_type: &NativeType) -> Vec<DataType> {
     }
 }
 
+/// Represents type coercion rules for function arguments, specifying both the desired type
+/// and optional implicit coercion rules for source types.
+///
+/// # Examples
+///
+/// ```
+/// use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
+/// use datafusion_common::types::{NativeType, logical_binary, logical_string};
+///
+/// // Exact coercion that only accepts timestamp types
+/// let exact = Coercion::new_exact(TypeSignatureClass::Timestamp);
+///
+/// // Implicit coercion that accepts string types but can coerce from binary types
+/// let implicit = Coercion::new_implicit(
+///     TypeSignatureClass::Native(logical_string()),
+///     vec![TypeSignatureClass::Native(logical_binary())],
+///     NativeType::String
+/// );
+/// ```
+///
+/// There are two variants:
+///
+/// * `Exact` - Only accepts arguments that exactly match the desired type
+/// * `Implicit` - Accepts the desired type and can coerce from specified source types
 #[derive(Debug, Clone, Eq, PartialOrd)]
 pub enum Coercion {
+    /// Coercion that only accepts arguments exactly matching the desired type.
     Exact {
+        /// The required type for the argument
         desired_type: TypeSignatureClass,
     },
+
+    /// Coercion that accepts the desired type and can implicitly coerce from other types.
     Implicit {
+        /// The primary desired type for the argument
         desired_type: TypeSignatureClass,
+        /// Rules for implicit coercion from other types
         implicit_coercion: ImplicitCoercion,
     },
 }
@@ -645,12 +675,35 @@ impl Hash for Coercion {
     }
 }
 
+/// Defines rules for implicit type coercion, specifying which source types can be
+/// coerced and the default type to use when coercing.
+///
+/// This is used by functions to specify which types they can accept via implicit
+/// coercion in addition to their primary desired type.
+///
+/// # Examples
+///
+/// ```
+/// use arrow::datatypes::TimeUnit;
+///
+/// use datafusion_expr_common::signature::{Coercion, ImplicitCoercion, TypeSignatureClass};
+/// use datafusion_common::types::{NativeType, logical_binary};
+///
+/// // Allow coercing from binary types to string, using Utf8 as the default
+/// let implicit = Coercion::new_implicit(
+///     TypeSignatureClass::Timestamp,
+///     vec![TypeSignatureClass::Native(logical_binary())],
+///     NativeType::Timestamp(TimeUnit::Second, None),
+/// );
+/// ```
 #[derive(Debug, Clone, Eq, PartialOrd)]
 pub struct ImplicitCoercion {
+    /// The types that can be coerced from via implicit casting
     allowed_source_types: Vec<TypeSignatureClass>,
-    /// For types like Timestamp, there are multiple possible timeunit and timezone from a given TypeSignatureClass
-    /// We need to specify the default type to be used for coercion if we cast from other types via `allowed_source_types`
-    /// Other types like Int64, you don't need to specify this field since there is only one possible type.
+
+    /// The default type to use when coercing from allowed source types.
+    /// This is particularly important for types like Timestamp that have multiple
+    /// possible configurations (different time units and timezones).
     default_casted_type: NativeType,
 }
 
