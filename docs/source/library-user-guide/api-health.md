@@ -38,7 +38,7 @@ Compatibility Section of the cargo book]. Common examples of breaking changes:
 - Removing a `pub` function
 - Changing the return type of a function
 
-When making breaking public API changes, please add the `api-change` label to
+When making breaking public API changes, please add the `api change` label to
 the PR so we can highlight the changes in the release notes.
 
 [docs.rs page]: https://docs.rs/datafusion/latest/datafusion/index.html
@@ -69,3 +69,32 @@ pub fn api_to_deprecated(a: usize, b: usize) {}
 Deprecated methods will remain in the codebase for a period of 6 major versions or 6 months, whichever is longer, to provide users ample time to transition away from them.
 
 Please refer to [DataFusion releases](https://crates.io/crates/datafusion/versions) to plan ahead API migration
+
+## Migration Guidelines
+
+To ensure smooth upgrades and maintain application stability, the following guidelines should be followed for changes involving:
+
+- Public API changes
+- Introducing deprecated methods
+- Removal of obsolete methods
+
+Highlight all breaking changes, deprecated methods, and obsolete methods in the [migration guide](../../../MIGRATION_GUIDE.md).
+
+### Migration Document Requirements:
+
+For each upgrade, append a section in [migration guide](../../../MIGRATION_GUIDE.md) outlining the following:
+
+#### Breaking Changes:
+
+- Describe all changes that break backward compatibility.
+- Provide detailed steps to migrate from old to new APIs.
+
+#### Deprecations:
+
+- List all deprecated methods and expected removal timelines.
+- Provide alternative methods or workarounds.
+
+#### Removals:
+
+- List all methods or APIs that are removed in the current release.
+- Suggest migration paths for impacted functionalities
