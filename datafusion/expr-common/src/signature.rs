@@ -689,7 +689,7 @@ impl Hash for Coercion {
 /// use datafusion_expr_common::signature::{Coercion, ImplicitCoercion, TypeSignatureClass};
 /// use datafusion_common::types::{NativeType, logical_binary};
 ///
-/// // Allow coercing from binary types to string, using Utf8 as the default
+/// // Allow coercing from binary types to timestamp, coerce to specific timestamp unit and timezone
 /// let implicit = Coercion::new_implicit(
 ///     TypeSignatureClass::Timestamp,
 ///     vec![TypeSignatureClass::Native(logical_binary())],
