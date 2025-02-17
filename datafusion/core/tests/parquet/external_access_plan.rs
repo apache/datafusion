@@ -351,7 +351,7 @@ impl TestFull {
         let config = FileScanConfig::new(object_store_url, schema.clone(), source)
             .with_file(partitioned_file);
 
-        let plan: Arc<dyn ExecutionPlan> = config.new_exec();
+        let plan: Arc<dyn ExecutionPlan> = config.build();
 
         // run the DataSourceExec and collect the results
         let results =

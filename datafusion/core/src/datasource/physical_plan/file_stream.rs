@@ -37,11 +37,9 @@ use crate::physical_plan::RecordBatchStream;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-pub use datafusion_catalog_listing::file_stream::{FileOpenFuture, FileOpener, OnError};
-use datafusion_catalog_listing::file_stream::{
-    FileStreamMetrics, FileStreamState, NextOpen,
-};
 use datafusion_common::ScalarValue;
+pub use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener, OnError};
+use datafusion_datasource::file_stream::{FileStreamMetrics, FileStreamState, NextOpen};
 
 use futures::{ready, FutureExt, Stream, StreamExt};
 

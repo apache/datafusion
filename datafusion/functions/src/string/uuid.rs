@@ -18,9 +18,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::GenericStringArray;
+use arrow::array::GenericStringBuilder;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Utf8;
+use rand::Rng;
 use uuid::Uuid;
 
 use datafusion_common::{internal_err, Result};
@@ -87,9 +88,25 @@ impl ScalarUDFImpl for UuidFunc {
         if !args.is_empty() {
             return internal_err!("{} function does not accept arguments", self.name());
         }
-        let values = std::iter::repeat_with(|| Uuid::new_v4().to_string()).take(num_rows);
-        let array = GenericStringArray::<i32>::from_iter_values(values);
-        Ok(ColumnarValue::Array(Arc::new(array)))
+
+        // Generate random u128 values
+        let mut rng = rand::thread_rng();
+        let mut randoms = vec![0u128; num_rows];
+        rng.fill(&mut randoms[..]);
+
+        let mut builder =
+            GenericStringBuilder::<i32>::with_capacity(num_rows, num_rows * 36);
+
+        let mut buffer = [0u8; 36];
+        for x in &mut randoms {
+            // From Uuid::new_v4(): Mask out the version and variant bits
+            *x = *x & 0xFFFFFFFFFFFF4FFFBFFFFFFFFFFFFFFF | 0x40008000000000000000;
+            let uuid = Uuid::from_u128(*x);
+            let fmt = uuid::fmt::Hyphenated::from_uuid(uuid);
+            builder.append_value(fmt.encode_lower(&mut buffer));
+        }
+
+        Ok(ColumnarValue::Array(Arc::new(builder.finish())))
     }
 
     fn documentation(&self) -> Option<&Documentation> {

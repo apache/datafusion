@@ -152,7 +152,7 @@ pub async fn from_substrait_rel(
                         }
                     }
 
-                    Ok(base_config.new_exec() as Arc<dyn ExecutionPlan>)
+                    Ok(base_config.build() as Arc<dyn ExecutionPlan>)
                 }
                 _ => not_impl_err!(
                     "Only LocalFile reads are supported when parsing physical"

@@ -19,7 +19,7 @@
 
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, TypeSignature};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, TypeSignature};
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use datafusion_expr::{Documentation, ScalarUDFImpl, Signature, Volatility};
@@ -75,12 +75,8 @@ impl ScalarUDFImpl for IsNanFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(&args.args)?;
 
         let arr: ArrayRef = match args[0].data_type() {
             DataType::Float64 => Arc::new(BooleanArray::from_unary(
