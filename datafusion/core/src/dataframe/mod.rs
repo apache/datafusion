@@ -1700,7 +1700,7 @@ impl DataFrame {
         .await
     }
 
-    /// Add an additional column to the DataFrame.
+    /// Add or replace a column in the DataFrame.
     ///
     /// # Example
     /// ```
@@ -1728,6 +1728,14 @@ impl DataFrame {
 
         let mut col_exists = false;
         let new_column = expr.alias(name);
+        // if the existing plan is a projection we can skip validation
+        // this is only really true as long as only the dataframe api
+        // is used. If the logical plan is built first then .with_column
+        // is called that wouldn't be a valid assumption
+        let existing_requires_validation = match plan {
+            LogicalPlan::Projection(_) => false,
+            _ => true,
+        };
         let mut fields: Vec<(Expr, bool)> = plan
             .schema()
             .iter()
@@ -1741,7 +1749,7 @@ impl DataFrame {
                         .as_ref()
                         .filter(|s| *s == &e.to_string())
                         .is_none()
-                        .then_some((e, false))
+                        .then_some((e, existing_requires_validation))
                 }
             })
             .collect();
@@ -1813,9 +1821,11 @@ impl DataFrame {
             .iter()
             .map(|(qualifier, field)| {
                 if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                    (col(Column::from((qualifier, field)))
-                        .alias_qualified(qualifier.cloned(), new_name),
-                         false)
+                    (
+                        col(Column::from((qualifier, field)))
+                            .alias_qualified(qualifier.cloned(), new_name),
+                        false,
+                    )
                 } else {
                     (col(Column::from((qualifier, field))), false)
                 }

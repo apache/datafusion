@@ -499,6 +499,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a projection without alias with optional validation
+    /// (true to validate, false to not validate)
     pub fn project_with_validation(
         self,
         expr: Vec<(impl Into<Expr>, bool)>,
@@ -1626,7 +1627,7 @@ pub fn project(
 
 /// Create Projection. Similar to project except that the expressions
 /// passed in have a flag to indicate if that expression requires
-/// validation (normalize & columnize) or not
+/// validation (normalize & columnize) (true) or not (false)
 /// # Errors
 /// This function errors under any of the following conditions:
 /// * Two or more expressions have the same name
