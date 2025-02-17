@@ -37,6 +37,22 @@ developing DataFusion in an isolated environment either locally or remote if des
 DataFusion is not a requirement by any means but is available for those where doing local development could be tricky
 such as with Windows and WSL2, those with older hardware, etc.
 
+To open the project in vscode you will need the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers). For codespaces you will need to [create a new codespace](https://github.com/apache/datafusion).
+
+With the extension installed you can run the following from the `Command Palette` to get started
+
+```
+> Dev Containers: Clone Repository in Container Volume...
+```
+
+In the subsequent popup paste the url to the repo and hit enter.
+
+```
+https://github.com/apache/datafusion
+```
+
+This will create an isolated Workspace in vscode, including all tools and environment variables required to build, test and run.
+
 For specific details on IDE support for dev containers see the documentation for [Visual Studio Code](https://code.visualstudio.com/docs/devcontainers/containers),
 [IntelliJ IDEA](https://www.jetbrains.com/help/idea/connect-to-devcontainer.html),
 [Rust Rover](https://www.jetbrains.com/help/rust/connect-to-devcontainer.html), and
