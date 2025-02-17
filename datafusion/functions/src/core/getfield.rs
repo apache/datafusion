@@ -16,10 +16,9 @@
 // under the License.
 
 use arrow::array::{
-    make_array, make_comparator, Array, BooleanArray, Capacities, Datum,
-    MutableArrayData, Scalar, StringArray, StructArray,
+    make_array, make_comparator, Array, BooleanArray, Capacities, MutableArrayData,
+    Scalar,
 };
-use arrow::array::{Int64Array, ListArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow_buffer::NullBuffer;
@@ -188,13 +187,10 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
         };
 
-        fn process_map_array<K>(
+        fn process_map_array(
             array: Arc<dyn Array>,
             key_array: Arc<dyn Array>,
-        ) -> Result<ColumnarValue>
-        where
-            K: Array + 'static,
-        {
+        ) -> Result<ColumnarValue> {
             let map_array = as_map_array(array.as_ref())?;
             let keys = if key_array.data_type().is_nested() {
                 let comparator = make_comparator(
@@ -241,27 +237,19 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
 
         match (array.data_type(), name) {
-            (DataType::Map(_, _), ScalarValue::Utf8(Some(k))) => {
-                let key_array: Arc<dyn Array> = Arc::new(StringArray::from(vec![k.clone()]));
-                process_map_array::<StringArray>(array, key_array)
-            }
-            (DataType::Map(_, _), ScalarValue::Int64(Some(k))) => {
-                let key_array: Arc<dyn Array> = Arc::new(Int64Array::from(vec![*k]));
-                process_map_array::<Int64Array>(array, key_array)
-            }
             (DataType::Map(_, _), ScalarValue::List(arr)) => {
                 let key_array: Arc<dyn Array> = Arc::new((**arr).clone());
-                process_map_array::<ListArray>(array, key_array)
+                process_map_array(array, key_array)
             }
             (DataType::Map(_, _), ScalarValue::Struct(arr)) => {
-                process_map_array::<StructArray>(array, Arc::new(arr.clone() as Arc<dyn Array>))
+                process_map_array(array, Arc::clone(arr) as Arc<dyn Array>)
             }
             (DataType::Map(_, _), other) => {
                 let data_type = other.data_type();
                 if data_type.is_nested() {
-                    return exec_err!("unsupported type {:?} for map access", data_type);
+                    exec_err!("unsupported type {:?} for map access", data_type)
                 } else {
-                    process_map_array::<Arc<dyn Array>>(array, other.to_array()?)
+                    process_map_array(array, other.to_array()?)
                 }
             }
             (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
