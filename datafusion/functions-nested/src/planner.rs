@@ -20,7 +20,8 @@
 use arrow::datatypes::DataType;
 use datafusion_common::ExprSchema;
 use datafusion_common::{plan_err, utils::list_ndims, DFSchema, Result};
-use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, ScalarFunction};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::AggregateUDF;
 use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
