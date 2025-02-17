@@ -847,10 +847,16 @@ impl LogicalPlanBuilder {
         plan: &LogicalPlan,
         column: impl Into<Column>,
     ) -> Result<Column> {
+        let column = column.into();
+        if column.relation.is_some() {
+            // column is already normalized
+            return Ok(column);
+        }
+
         let schema = plan.schema();
         let fallback_schemas = plan.fallback_normalize_schemas();
         let using_columns = plan.using_columns()?;
-        column.into().normalize_with_schemas_and_ambiguity_check(
+        column.normalize_with_schemas_and_ambiguity_check(
             &[&[schema], &fallback_schemas],
             &using_columns,
         )
