@@ -595,18 +595,12 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 
 /// Returns a `MockDataSourceExec` that scans `partitions` of 100 batches each
 pub fn scan_partitioned(partitions: usize) -> Arc<dyn ExecutionPlan> {
-    Arc::new(mem_exec(partitions))
-}
-
-/// Returns a `MockDataSourceExec` that scans `partitions` of 100 batches each
-pub fn mem_exec(partitions: usize) -> MockDataSourceExec {
     let data: Vec<Vec<_>> = (0..partitions).map(|_| vec![make_partition(100)]).collect();
 
     let schema = data[0][0].schema();
     let projection = None;
-    MockDataSourceExec::new(Arc::new(
-        MockMemorySourceConfig::try_new(&data, schema, projection).unwrap(),
-    ))
+    
+    MockMemorySourceConfig::try_new_exec(&data, schema, projection).unwrap()
 }
 
 // Construct a stream partition for test purposes
