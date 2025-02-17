@@ -1548,7 +1548,7 @@ impl DataFrame {
 
         let plan = LogicalPlanBuilder::insert_into(
             plan,
-            table_name.to_owned(),
+            table_ref,
             target,
             write_options.insert_op,
         )?
