@@ -63,7 +63,7 @@ use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_catalog::TableProvider;
 use datafusion_common::{
     assert_contains, Constraint, Constraints, DataFusionError, ParamValues, ScalarValue,
-    UnnestOptions,
+    TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::config::SessionConfig;
@@ -1629,7 +1629,23 @@ async fn with_column_renamed() -> Result<()> {
                format!("{}", df_sum_renamed.logical_plan()) // one projection is reused for  all renames
     );
 
-    let batches = df_sum_renamed.collect().await?;
+    let references: Vec<_> = df_sum_renamed
+        .schema()
+        .iter()
+        .map(|(a, _)| a.cloned())
+        .collect();
+
+    assert_eq!(
+        references,
+        vec![
+            Some(TableReference::bare("aggregate_test_100")), // table name is preserved
+            Some(TableReference::bare("aggregate_test_100")),
+            Some(TableReference::bare("aggregate_test_100")),
+            None // total column
+        ]
+    );
+
+    let batches = &df_sum_renamed.collect().await?;
 
     assert_batches_sorted_eq!(
         [
@@ -5283,4 +5299,56 @@ async fn register_non_parquet_file() {
         err.unwrap_err().to_string(),
         "1.json' does not match the expected extension '.parquet'"
     );
+}
+
+// Test inserting into checking.
+#[tokio::test]
+async fn test_insert_into_checking() -> Result<()> {
+    // Create a new schema with one field called "a" of type Int64, and setting nullable to false
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+    let session_ctx = SessionContext::new();
+
+    // Create and register the initial table with the provided schema and data
+    let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
+    session_ctx.register_table("t", initial_table.clone())?;
+
+    // There are two cases we need to check
+    // 1. The len of the schema of the plan and the schema of the table should be the same
+    // 2. The datatype of the schema of the plan and the schema of the table should be the same
+
+    // Test case 1:
+    let write_df = session_ctx.sql("values (1, 2), (3, 4)").await.unwrap();
+
+    let e = write_df
+        .write_table("t", DataFrameWriteOptions::new())
+        .await
+        .unwrap_err();
+
+    assert_contains!(
+        e.to_string(),
+        "Inserting query must have the same schema length as the table."
+    );
+
+    // Setting nullable to true
+    // Make sure the nullable check go through
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+
+    let session_ctx = SessionContext::new();
+
+    // Create and register the initial table with the provided schema and data
+    let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
+    session_ctx.register_table("t", initial_table.clone())?;
+
+    // Test case 2:
+    let write_df = session_ctx.sql("values ('a123'), ('b456')").await.unwrap();
+
+    let e = write_df
+        .write_table("t", DataFrameWriteOptions::new())
+        .await
+        .unwrap_err();
+
+    assert_contains!(e.to_string(), "Inserting query schema mismatch: Expected table field 'a' with type Int64, but got 'column1' with type Utf8");
+
+    Ok(())
 }

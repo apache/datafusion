@@ -220,6 +220,7 @@ set datafusion.execution.batch_size = 4;
 
 # Inserting into nullable table with batch_size specified above
 # to prevent creation on single in-memory batch
+
 statement ok
 CREATE TABLE aggregate_test_100_null (
   c2  TINYINT NOT NULL,
@@ -506,7 +507,7 @@ SELECT
   avg(c11) FILTER (WHERE c2 != 5)
 FROM aggregate_test_100 GROUP BY c1 ORDER BY c1;
 ----
-a 2.5 0.449071887467    
+a 2.5 0.449071887467
 b 2.642857142857 0.445486298629
 c 2.421052631579 0.422882117723
 d 2.125 0.518706191331

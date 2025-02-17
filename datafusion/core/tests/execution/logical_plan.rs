@@ -20,7 +20,7 @@ use arrow::datatypes::{DataType, Field};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion_common::{Column, DFSchema, Result, ScalarValue, Spans};
 use datafusion_execution::TaskContext;
-use datafusion_expr::expr::AggregateFunction;
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::logical_plan::{LogicalPlan, Values};
 use datafusion_expr::{Aggregate, AggregateUDF, Expr};
 use datafusion_functions_aggregate::count::Count;
@@ -60,11 +60,13 @@ async fn count_only_nulls() -> Result<()> {
         vec![],
         vec![Expr::AggregateFunction(AggregateFunction {
             func: Arc::new(AggregateUDF::new_from_impl(Count::new())),
-            args: vec![input_col_ref],
-            distinct: false,
-            filter: None,
-            order_by: None,
-            null_treatment: None,
+            params: AggregateFunctionParams {
+                args: vec![input_col_ref],
+                distinct: false,
+                filter: None,
+                order_by: None,
+                null_treatment: None,
+            },
         })],
     )?);
 

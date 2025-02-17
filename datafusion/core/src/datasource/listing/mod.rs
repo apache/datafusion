@@ -19,5 +19,8 @@
 //! to get the list of files to process.
 
 mod table;
-pub use datafusion_catalog_listing::*;
+pub use datafusion_catalog_listing::helpers;
+pub use datafusion_datasource::{
+    FileRange, ListingTableUrl, PartitionedFile, PartitionedFileStream,
+};
 pub use table::{ListingOptions, ListingTable, ListingTableConfig};
