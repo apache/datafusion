@@ -183,6 +183,8 @@ pub struct DataFrame {
     // Box the (large) SessionState to reduce the size of DataFrame on the stack
     session_state: Box<SessionState>,
     plan: LogicalPlan,
+    // whether we can skip validation for projection ops
+    projection_requires_validation: bool,
 }
 
 impl DataFrame {
@@ -195,6 +197,7 @@ impl DataFrame {
         Self {
             session_state: Box::new(session_state),
             plan,
+            projection_requires_validation: true,
         }
     }
 
@@ -332,6 +335,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan: project_plan,
+            projection_requires_validation: false,
         })
     }
 
@@ -437,6 +441,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -477,6 +482,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -547,6 +553,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: !is_grouping_set,
         })
     }
 
@@ -559,6 +566,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -597,6 +605,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 
@@ -634,6 +643,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -672,6 +682,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -703,6 +714,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -744,6 +756,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -944,6 +957,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 
@@ -993,6 +1007,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 
@@ -1060,6 +1075,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -1119,6 +1135,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -1154,6 +1171,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -1425,6 +1443,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 
@@ -1477,6 +1496,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -1512,6 +1532,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: true,
         })
     }
 
@@ -1557,6 +1578,7 @@ impl DataFrame {
         DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         }
         .collect()
         .await
@@ -1626,6 +1648,7 @@ impl DataFrame {
         DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         }
         .collect()
         .await
@@ -1695,6 +1718,7 @@ impl DataFrame {
         DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         }
         .collect()
         .await
@@ -1728,14 +1752,6 @@ impl DataFrame {
 
         let mut col_exists = false;
         let new_column = expr.alias(name);
-        // if the existing plan is a projection we can skip validation
-        // this is only really true as long as only the dataframe api
-        // is used. If the logical plan is built first then .with_column
-        // is called that wouldn't be a valid assumption
-        let existing_requires_validation = match plan {
-            LogicalPlan::Projection(_) => false,
-            _ => true,
-        };
         let mut fields: Vec<(Expr, bool)> = plan
             .schema()
             .iter()
@@ -1749,7 +1765,7 @@ impl DataFrame {
                         .as_ref()
                         .filter(|s| *s == &e.to_string())
                         .is_none()
-                        .then_some((e, existing_requires_validation))
+                        .then_some((e, self.projection_requires_validation))
                 }
             })
             .collect();
@@ -1765,6 +1781,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan: project_plan,
+            projection_requires_validation: false,
         })
     }
 
@@ -1837,6 +1854,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan: project_plan,
+            projection_requires_validation: false,
         })
     }
 
@@ -1902,6 +1920,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 
@@ -1937,6 +1956,7 @@ impl DataFrame {
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         })
     }
 }
