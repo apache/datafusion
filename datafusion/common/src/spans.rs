@@ -33,6 +33,13 @@ pub struct Location {
     pub column: u64,
 }
 
+impl Location {
+    /// Creates a new [`Location`] from its line and column information.
+    pub fn new(line: u64, column: u64) -> Self {
+        Self { line, column }
+    }
+}
+
 impl fmt::Debug for Location {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Location({},{})", self.line, self.column)
