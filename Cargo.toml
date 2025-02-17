@@ -86,7 +86,7 @@ arrow-buffer = { version = "54.1.0", default-features = false }
 arrow-flight = { version = "54.1.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "54.1.0", default-features = false, features = [
+arrow-ipc = { version = "54.2.0", default-features = false, features = [
     "lz4",
 ] }
 arrow-ord = { version = "54.1.0", default-features = false }
