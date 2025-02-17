@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
-use crate::datasource::source_as_provider;
+use crate::datasource::{source_as_provider, DefaultTableSource};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -70,7 +70,8 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
-    physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
+    physical_name, AggregateFunction, AggregateFunctionParams, Alias, GroupingSet,
+    WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -541,19 +542,22 @@ impl DefaultPhysicalPlanner {
                     .await?
             }
             LogicalPlan::Dml(DmlStatement {
-                table_name,
+                target,
                 op: WriteOp::Insert(insert_op),
                 ..
             }) => {
-                let name = table_name.table();
-                let schema = session_state.schema_for_ref(table_name.clone())?;
-                if let Some(provider) = schema.table(name).await? {
+                if let Some(provider) =
+                    target.as_any().downcast_ref::<DefaultTableSource>()
+                {
                     let input_exec = children.one()?;
                     provider
+                        .table_provider
                         .insert_into(session_state, input_exec, *insert_op)
                         .await?
                 } else {
-                    return exec_err!("Table '{table_name}' does not exist");
+                    return exec_err!(
+                        "Table source can't be downcasted to DefaultTableSource"
+                    );
                 }
             }
             LogicalPlan::Window(Window { window_expr, .. }) => {
@@ -1576,11 +1580,14 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     match e {
         Expr::AggregateFunction(AggregateFunction {
             func,
-            distinct,
-            args,
-            filter,
-            order_by,
-            null_treatment,
+            params:
+                AggregateFunctionParams {
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                },
         }) => {
             let name = if let Some(name) = name {
                 name

@@ -26,7 +26,8 @@ use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -87,12 +88,8 @@ impl ScalarUDFImpl for NanvlFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        make_scalar_function(nanvl, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(nanvl, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

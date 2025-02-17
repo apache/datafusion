@@ -16,9 +16,10 @@
 // under the License.
 
 use std::any::Any;
+use std::fmt::Write;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait};
+use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, DataType, Int32Type, Int64Type,
 };
@@ -40,22 +41,30 @@ where
 {
     let integer_array = as_primitive_array::<T>(&args[0])?;
 
-    let result = integer_array
-        .iter()
-        .map(|integer| {
-            if let Some(value) = integer {
-                if let Some(value_usize) = value.to_usize() {
-                    Ok(Some(format!("{value_usize:x}")))
-                } else if let Some(value_isize) = value.to_isize() {
-                    Ok(Some(format!("{value_isize:x}")))
-                } else {
-                    exec_err!("Unsupported data type {integer:?} for function to_hex")
-                }
+    let mut result = GenericStringBuilder::<i32>::with_capacity(
+        integer_array.len(),
+        // * 8 to convert to bits, / 4 bits per hex char
+        integer_array.len() * (T::Native::get_byte_width() * 8 / 4),
+    );
+
+    for integer in integer_array {
+        if let Some(value) = integer {
+            if let Some(value_usize) = value.to_usize() {
+                write!(result, "{value_usize:x}")?;
+            } else if let Some(value_isize) = value.to_isize() {
+                write!(result, "{value_isize:x}")?;
             } else {
-                Ok(None)
+                return exec_err!(
+                    "Unsupported data type {integer:?} for function to_hex"
+                );
             }
-        })
-        .collect::<Result<GenericStringArray<i32>>>()?;
+            result.append_value("");
+        } else {
+            result.append_null();
+        }
+    }
+
+    let result = result.finish();
 
     Ok(Arc::new(result) as ArrayRef)
 }

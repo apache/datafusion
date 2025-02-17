@@ -30,8 +30,8 @@ use datafusion_expr::{
     col,
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
-    ColumnarValue, CreateIndex, DdlStatement, ScalarUDF, ScalarUDFImpl, Signature,
-    Statement, Volatility,
+    CreateIndex, DdlStatement, ScalarUDF, ScalarUDFImpl, Signature, Statement,
+    Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -2114,8 +2114,60 @@ fn union() {
 }
 
 #[test]
+fn union_by_name_different_columns() {
+    let sql = "SELECT order_id from orders UNION BY NAME SELECT order_id, 1 FROM orders";
+    let expected = "\
+        Distinct:\
+        \n  Union\
+        \n    Projection: NULL AS Int64(1), order_id\
+        \n      Projection: orders.order_id\
+        \n        TableScan: orders\
+        \n    Projection: orders.order_id, Int64(1)\
+        \n      TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn union_by_name_same_column_names() {
+    let sql = "SELECT order_id from orders UNION SELECT order_id FROM orders";
+    let expected = "\
+        Distinct:\
+        \n  Union\
+        \n    Projection: orders.order_id\
+        \n      TableScan: orders\
+        \n    Projection: orders.order_id\
+        \n      TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn union_all() {
     let sql = "SELECT order_id from orders UNION ALL SELECT order_id FROM orders";
+    let expected = "Union\
+            \n  Projection: orders.order_id\
+            \n    TableScan: orders\
+            \n  Projection: orders.order_id\
+            \n    TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn union_all_by_name_different_columns() {
+    let sql =
+        "SELECT order_id from orders UNION ALL BY NAME SELECT order_id, 1 FROM orders";
+    let expected = "\
+        Union\
+        \n  Projection: NULL AS Int64(1), order_id\
+        \n    Projection: orders.order_id\
+        \n      TableScan: orders\
+        \n  Projection: orders.order_id, Int64(1)\
+        \n    TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn union_all_by_name_same_column_names() {
+    let sql = "SELECT order_id from orders UNION ALL BY NAME SELECT order_id FROM orders";
     let expected = "Union\
             \n  Projection: orders.order_id\
             \n    TableScan: orders\
@@ -2645,14 +2697,6 @@ impl ScalarUDFImpl for DummyUDF {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
-    }
-
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        unimplemented!("DummyUDF::invoke")
     }
 }
 
