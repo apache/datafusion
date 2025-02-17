@@ -2648,28 +2648,15 @@ impl Display for Expr {
                 )?;
                 Ok(())
             }
-            Expr::AggregateFunction(AggregateFunction {
-                func,
-                params:
-                    AggregateFunctionParams {
-                        ref args,
-                        distinct,
-                        filter,
-                        order_by,
-                        null_treatment,
-                    },
-            }) => {
-                fmt_function(f, func.name(), *distinct, args, true)?;
-                if let Some(nt) = null_treatment {
-                    write!(f, " {}", nt)?;
+            Expr::AggregateFunction(AggregateFunction { func, params }) => {
+                match func.display_name(params) {
+                    Ok(name) => {
+                        write!(f, "{}", name)
+                    }
+                    Err(e) => {
+                        write!(f, "got error from display_name {}", e)
+                    }
                 }
-                if let Some(fe) = filter {
-                    write!(f, " FILTER (WHERE {fe})")?;
-                }
-                if let Some(ob) = order_by {
-                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(ob))?;
-                }
-                Ok(())
             }
             Expr::Between(Between {
                 expr,
