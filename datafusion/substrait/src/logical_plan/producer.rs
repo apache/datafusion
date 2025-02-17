@@ -368,7 +368,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
     }
 }
 
-struct DefaultSubstraitProducer<'a> {
+pub struct DefaultSubstraitProducer<'a> {
     extensions: Extensions,
     serializer_registry: &'a dyn SerializerRegistry,
 }
