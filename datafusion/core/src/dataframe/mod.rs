@@ -1548,7 +1548,7 @@ impl DataFrame {
 
         let plan = LogicalPlanBuilder::insert_into(
             plan,
-            table_name.to_owned(),
+            table_ref,
             target,
             write_options.insert_op,
         )?
@@ -1813,7 +1813,9 @@ impl DataFrame {
             .iter()
             .map(|(qualifier, field)| {
                 if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                    (col(Column::from((qualifier, field))).alias(new_name), false)
+                    (col(Column::from((qualifier, field)))
+                        .alias_qualified(qualifier.cloned(), new_name),
+                         false)
                 } else {
                     (col(Column::from((qualifier, field))), false)
                 }

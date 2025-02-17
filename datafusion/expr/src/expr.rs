@@ -696,7 +696,11 @@ impl<'a> TreeNodeContainer<'a, Expr> for Sort {
 pub struct AggregateFunction {
     /// Name of the function
     pub func: Arc<crate::AggregateUDF>,
-    /// List of expressions to feed to the functions as arguments
+    pub params: AggregateFunctionParams,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+pub struct AggregateFunctionParams {
     pub args: Vec<Expr>,
     /// Whether this is a DISTINCT aggregation or not
     pub distinct: bool,
@@ -719,11 +723,13 @@ impl AggregateFunction {
     ) -> Self {
         Self {
             func,
-            args,
-            distinct,
-            filter,
-            order_by,
-            null_treatment,
+            params: AggregateFunctionParams {
+                args,
+                distinct,
+                filter,
+                order_by,
+                null_treatment,
+            },
         }
     }
 }
@@ -1864,19 +1870,25 @@ impl NormalizeEq for Expr {
             (
                 Expr::AggregateFunction(AggregateFunction {
                     func: self_func,
-                    args: self_args,
-                    distinct: self_distinct,
-                    filter: self_filter,
-                    order_by: self_order_by,
-                    null_treatment: self_null_treatment,
+                    params:
+                        AggregateFunctionParams {
+                            args: self_args,
+                            distinct: self_distinct,
+                            filter: self_filter,
+                            order_by: self_order_by,
+                            null_treatment: self_null_treatment,
+                        },
                 }),
                 Expr::AggregateFunction(AggregateFunction {
                     func: other_func,
-                    args: other_args,
-                    distinct: other_distinct,
-                    filter: other_filter,
-                    order_by: other_order_by,
-                    null_treatment: other_null_treatment,
+                    params:
+                        AggregateFunctionParams {
+                            args: other_args,
+                            distinct: other_distinct,
+                            filter: other_filter,
+                            order_by: other_order_by,
+                            null_treatment: other_null_treatment,
+                        },
                 }),
             ) => {
                 self_func.name() == other_func.name()
@@ -2154,11 +2166,14 @@ impl HashNode for Expr {
             }
             Expr::AggregateFunction(AggregateFunction {
                 func,
-                args: _args,
-                distinct,
-                filter: _filter,
-                order_by: _order_by,
-                null_treatment,
+                params:
+                    AggregateFunctionParams {
+                        args: _args,
+                        distinct,
+                        filter: _,
+                        order_by: _,
+                        null_treatment,
+                    },
             }) => {
                 func.hash(state);
                 distinct.hash(state);
@@ -2264,35 +2279,15 @@ impl Display for SchemaDisplay<'_> {
             | Expr::Placeholder(_)
             | Expr::Wildcard { .. } => write!(f, "{}", self.0),
 
-            Expr::AggregateFunction(AggregateFunction {
-                func,
-                args,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
-            }) => {
-                write!(
-                    f,
-                    "{}({}{})",
-                    func.name(),
-                    if *distinct { "DISTINCT " } else { "" },
-                    schema_name_from_exprs_comma_separated_without_space(args)?
-                )?;
-
-                if let Some(null_treatment) = null_treatment {
-                    write!(f, " {}", null_treatment)?;
+            Expr::AggregateFunction(AggregateFunction { func, params }) => {
+                match func.schema_name(params) {
+                    Ok(name) => {
+                        write!(f, "{name}")
+                    }
+                    Err(e) => {
+                        write!(f, "got error from schema_name {}", e)
+                    }
                 }
-
-                if let Some(filter) = filter {
-                    write!(f, " FILTER (WHERE {filter})")?;
-                };
-
-                if let Some(order_by) = order_by {
-                    write!(f, " ORDER BY [{}]", schema_name_from_sorts(order_by)?)?;
-                };
-
-                Ok(())
             }
             // Expr is not shown since it is aliased
             Expr::Alias(Alias {
@@ -2653,26 +2648,15 @@ impl Display for Expr {
                 )?;
                 Ok(())
             }
-            Expr::AggregateFunction(AggregateFunction {
-                func,
-                distinct,
-                ref args,
-                filter,
-                order_by,
-                null_treatment,
-                ..
-            }) => {
-                fmt_function(f, func.name(), *distinct, args, true)?;
-                if let Some(nt) = null_treatment {
-                    write!(f, " {}", nt)?;
+            Expr::AggregateFunction(AggregateFunction { func, params }) => {
+                match func.display_name(params) {
+                    Ok(name) => {
+                        write!(f, "{}", name)
+                    }
+                    Err(e) => {
+                        write!(f, "got error from display_name {}", e)
+                    }
                 }
-                if let Some(fe) = filter {
-                    write!(f, " FILTER (WHERE {fe})")?;
-                }
-                if let Some(ob) = order_by {
-                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(ob))?;
-                }
-                Ok(())
             }
             Expr::Between(Between {
                 expr,

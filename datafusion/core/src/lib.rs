@@ -229,9 +229,9 @@
 //! 1. The query string is parsed to an Abstract Syntax Tree (AST)
 //!    [`Statement`] using [sqlparser].
 //!
-//! 2. The AST is converted to a [`LogicalPlan`] and logical
-//!    expressions [`Expr`]s to compute the desired result by the
-//!    [`SqlToRel`] planner.
+//! 2. The AST is converted to a [`LogicalPlan`] and logical expressions
+//!    [`Expr`]s to compute the desired result by [`SqlToRel`]. This phase
+//!    also includes name and type resolution ("binding").
 //!
 //! [`Statement`]: https://docs.rs/sqlparser/latest/sqlparser/ast/enum.Statement.html
 //!

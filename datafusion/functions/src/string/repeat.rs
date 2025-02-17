@@ -26,11 +26,11 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::types::{logical_int64, logical_string};
+use datafusion_common::types::{logical_int64, logical_string, NativeType};
 use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
 use datafusion_expr::{ScalarUDFImpl, Signature};
-use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -67,8 +67,13 @@ impl RepeatFunc {
         Self {
             signature: Signature::coercible(
                 vec![
-                    TypeSignatureClass::Native(logical_string()),
-                    TypeSignatureClass::Native(logical_int64()),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    // Accept all integer types but cast them to i64
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![TypeSignatureClass::Integer],
+                        NativeType::Int64,
+                    ),
                 ],
                 Volatility::Immutable,
             ),
@@ -151,20 +156,35 @@ where
     T: OffsetSizeTrait,
     S: StringArrayType<'a>,
 {
-    let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
+    let mut total_capacity = 0;
     string_array.iter().zip(number_array.iter()).try_for_each(
         |(string, number)| -> Result<(), DataFusionError> {
             match (string, number) {
                 (Some(string), Some(number)) if number >= 0 => {
-                    if number as usize * string.len() > max_str_len {
+                    let item_capacity = string.len() * number as usize;
+                    if item_capacity > max_str_len {
                         return exec_err!(
                             "string size overflow on repeat, max size is {}, but got {}",
                             max_str_len,
                             number as usize * string.len()
                         );
-                    } else {
-                        builder.append_value(string.repeat(number as usize))
                     }
+                    total_capacity += item_capacity;
+                }
+                _ => (),
+            }
+            Ok(())
+        },
+    )?;
+
+    let mut builder =
+        GenericStringBuilder::<T>::with_capacity(string_array.len(), total_capacity);
+
+    string_array.iter().zip(number_array.iter()).try_for_each(
+        |(string, number)| -> Result<(), DataFusionError> {
+            match (string, number) {
+                (Some(string), Some(number)) if number >= 0 => {
+                    builder.append_value(string.repeat(number as usize));
                 }
                 (Some(_), Some(_)) => builder.append_value(""),
                 _ => builder.append_null(),

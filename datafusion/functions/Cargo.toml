@@ -115,6 +115,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "to_hex"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "regx"
 required-features = ["regex_expressions"]
 
