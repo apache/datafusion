@@ -36,6 +36,7 @@ use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_common::{
     exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
 };
+use datafusion_common::{Diagnostic, Spans};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
@@ -97,13 +98,35 @@ macro_rules! downcast_sum {
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
+    /// Original source code location, if known
+    pub spans: Spans,
 }
 
 impl Sum {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            spans: Spans::new(),
         }
+    }
+
+    /// Returns a reference to the set of locations in the SQL query where this
+    /// column appears, if known.
+    pub fn spans(&self) -> &Spans {
+        &self.spans
+    }
+
+    /// Returns a mutable reference to the set of locations in the SQL query
+    /// where this column appears, if known.
+    pub fn spans_mut(&mut self) -> &mut Spans {
+        &mut self.spans
+    }
+
+    /// Replaces the set of locations in the SQL query where this column
+    /// appears, if known.
+    pub fn with_spans(mut self, spans: Spans) -> Self {
+        self.spans = spans;
+        self
     }
 }
 
@@ -132,9 +155,9 @@ impl AggregateUDFImpl for Sum {
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
         // smallint, int, bigint, real, double precision, decimal, or interval.
 
-        fn coerced_type(data_type: &DataType) -> Result<DataType> {
+        fn coerced_type(sum: &Sum, data_type: &DataType) -> Result<DataType> {
             match data_type {
-                DataType::Dictionary(_, v) => coerced_type(v),
+                DataType::Dictionary(_, v) => coerced_type(sum, v),
                 // in the spark, the result type is DECIMAL(min(38,precision+10), s)
                 // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
                 DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
@@ -143,11 +166,18 @@ impl AggregateUDFImpl for Sum {
                 dt if dt.is_signed_integer() => Ok(DataType::Int64),
                 dt if dt.is_unsigned_integer() => Ok(DataType::UInt64),
                 dt if dt.is_floating() => Ok(DataType::Float64),
-                _ => exec_err!("Sum not supported for {}", data_type),
+                _ => exec_err!("Sum not supported for {}", data_type)
+                    .map_err(|err| {
+                        let diagnostic = Diagnostic::new_error(
+                            format!("Coercion only supports integer and floating point values"),
+                            sum.spans().first(),
+                        );
+                        err.with_diagnostic(diagnostic)
+                    }),
             }
         }
 
-        Ok(vec![coerced_type(args)?])
+        Ok(vec![coerced_type(&self, args)?])
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
