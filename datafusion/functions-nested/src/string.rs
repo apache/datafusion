@@ -192,12 +192,11 @@ impl ScalarUDFImpl for ArrayToString {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_to_string_inner)(args)
+        make_scalar_function(array_to_string_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -286,11 +285,11 @@ impl ScalarUDFImpl for StringToArray {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
         match args[0].data_type() {
             Utf8 | Utf8View => make_scalar_function(string_to_array_inner::<i32>)(args),
             LargeUtf8 => make_scalar_function(string_to_array_inner::<i64>)(args),
