@@ -398,9 +398,9 @@ pub fn ensure_sorting(
         return Ok(maybe_requirements);
     };
 
-    let plan = &requirements.plan;
     let mut updated_children = vec![];
-    for (idx, (required_ordering, mut child)) in plan
+    for (idx, (required_ordering, mut child)) in requirements
+        .plan
         .required_input_ordering()
         .into_iter()
         .zip(requirements.children.into_iter())
@@ -413,34 +413,40 @@ pub fn ensure_sorting(
             if !eq_properties.ordering_satisfy_requirement(&required) {
                 // Make sure we preserve the ordering requirements:
                 if physical_ordering.is_some() {
-                    child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
+                    child = update_child_to_remove_unnecessary_sort(
+                        idx,
+                        child,
+                        &requirements.plan,
+                    )?;
                 }
                 child = add_sort_above(child, required, None);
                 child = update_sort_ctx_children_data(child, true)?;
             }
         } else if physical_ordering.is_none()
-            || !plan.maintains_input_order()[idx]
-            || is_union(plan)
+            || !requirements.plan.maintains_input_order()[idx]
+            || is_union(&requirements.plan)
         {
             // We have a `SortExec` whose effect may be neutralized by another
             // order-imposing operator, remove this sort:
-            child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
+            child =
+                update_child_to_remove_unnecessary_sort(idx, child, &requirements.plan)?;
         }
         updated_children.push(child);
     }
     requirements.children = updated_children;
+    requirements = requirements.update_plan_from_children()?;
     // For window expressions, we can remove some sorts when we can
     // calculate the result in reverse:
     let child_node = &requirements.children[0];
-    if is_window(plan) && child_node.data {
+    if is_window(&requirements.plan) && child_node.data {
         return adjust_window_sort_removal(requirements).map(Transformed::yes);
-    } else if is_sort_preserving_merge(plan)
+    } else if is_sort_preserving_merge(&requirements.plan)
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
         // This `SortPreservingMergeExec` is unnecessary, input already has a
         // single partition and no fetch is required.
         let mut child_node = requirements.children.swap_remove(0);
-        if let Some(fetch) = plan.fetch() {
+        if let Some(fetch) = requirements.plan.fetch() {
             // Add the limit exec if the spm has a fetch
             child_node.plan =
                 Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
@@ -671,6 +677,7 @@ fn remove_corresponding_sort_from_sub_plan(
                 }
             })
             .collect::<Result<_>>()?;
+        node = node.update_plan_from_children()?;
         if any_connection || node.children.is_empty() {
             node = update_sort_ctx_children_data(node, false)?;
         }
