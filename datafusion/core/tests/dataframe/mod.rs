@@ -63,7 +63,7 @@ use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_catalog::TableProvider;
 use datafusion_common::{
     assert_contains, Constraint, Constraints, DataFusionError, ParamValues, ScalarValue,
-    UnnestOptions,
+    TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::config::SessionConfig;
@@ -1617,9 +1617,25 @@ async fn with_column_renamed() -> Result<()> {
         // accepts table qualifier
         .with_column_renamed("aggregate_test_100.c2", "two")?
         // no-op for missing column
-        .with_column_renamed("c4", "boom")?
-        .collect()
-        .await?;
+        .with_column_renamed("c4", "boom")?;
+
+    let references: Vec<_> = df_sum_renamed
+        .schema()
+        .iter()
+        .map(|(a, _)| a.cloned())
+        .collect();
+
+    assert_eq!(
+        references,
+        vec![
+            Some(TableReference::bare("aggregate_test_100")), // table name is preserved
+            Some(TableReference::bare("aggregate_test_100")),
+            Some(TableReference::bare("aggregate_test_100")),
+            None // total column
+        ]
+    );
+
+    let batches = &df_sum_renamed.collect().await?;
 
     assert_batches_sorted_eq!(
         [
@@ -1629,7 +1645,7 @@ async fn with_column_renamed() -> Result<()> {
             "| a   | 3   | -72 | -69   |",
             "+-----+-----+-----+-------+",
         ],
-        &df_sum_renamed
+        batches
     );
 
     Ok(())
