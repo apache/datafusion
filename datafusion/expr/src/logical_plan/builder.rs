@@ -720,6 +720,21 @@ impl LogicalPlanBuilder {
         union(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
     }
 
+    /// Apply a union by name, preserving duplicate rows
+    pub fn union_by_name(self, plan: LogicalPlan) -> Result<Self> {
+        union_by_name(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
+    }
+
+    /// Apply a union by name, removing duplicate rows
+    pub fn union_by_name_distinct(self, plan: LogicalPlan) -> Result<Self> {
+        let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
+        let right_plan: LogicalPlan = plan;
+
+        Ok(Self::new(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            union_by_name(left_plan, right_plan)?,
+        )))))
+    }
+
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
         let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
@@ -1533,6 +1548,18 @@ pub fn validate_unique_names<'a>(
 /// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
     Ok(LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+        Arc::new(left_plan),
+        Arc::new(right_plan),
+    ])?))
+}
+
+/// Like [`union`], but combine rows from different tables by name, rather than
+/// by position.
+pub fn union_by_name(
+    left_plan: LogicalPlan,
+    right_plan: LogicalPlan,
+) -> Result<LogicalPlan> {
+    Ok(LogicalPlan::Union(Union::try_new_by_name(vec![
         Arc::new(left_plan),
         Arc::new(right_plan),
     ])?))
