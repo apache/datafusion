@@ -280,9 +280,6 @@ impl FileScanConfig {
     /// # Parameters:
     /// * `object_store_url`: See [`Self::object_store_url`]
     /// * `file_schema`: See [`Self::file_schema`]
-    //
-    // todo: should this function (without projection) exist at all?
-    // config.with_source depends on projection being set correctly...
     pub fn new(
         object_store_url: ObjectStoreUrl,
         file_schema: SchemaRef,
@@ -309,34 +306,6 @@ impl FileScanConfig {
         config
     }
 
-    /// Create a new [`FileScanConfig`] also setting the projection
-    pub fn new_with_projection(
-        object_store_url: ObjectStoreUrl,
-        file_schema: SchemaRef,
-        file_source: Arc<dyn FileSource>,
-        projection: Option<Vec<usize>>,
-    ) -> Self {
-        let statistics = Statistics::new_unknown(&file_schema);
-
-        let mut config = Self {
-            object_store_url,
-            file_schema,
-            file_groups: vec![],
-            constraints: Constraints::empty(),
-            statistics,
-            projection,
-            limit: None,
-            table_partition_cols: vec![],
-            output_ordering: vec![],
-            file_compression_type: FileCompressionType::UNCOMPRESSED,
-            new_lines_in_values: false,
-            source: Arc::clone(&file_source),
-        };
-
-        config = config.with_source(Arc::clone(&file_source));
-        config
-    }
-
     /// Set the file source
     pub fn with_source(mut self, source: Arc<dyn FileSource>) -> Self {
         let (
@@ -346,6 +315,19 @@ impl FileScanConfig {
             _projected_output_ordering,
         ) = self.project();
         self.source = source.with_statistics(projected_statistics);
+        self
+    }
+
+    /// Refreshes the source with updated statistics.
+    /// Should be called after projection-related fields are updated.
+    pub fn refresh_source(mut self) -> Self {
+        let (
+            _projected_schema,
+            _constraints,
+            projected_statistics,
+            _projected_output_ordering,
+        ) = self.project();
+        self.source = self.source.with_statistics(projected_statistics);
         self
     }
 
@@ -617,6 +599,7 @@ impl FileScanConfig {
     }
 
     /// Returns the file_source
+    /// If projection has changed since the last call, use [`FileScanConfig::refresh_source`] before
     pub fn file_source(&self) -> &Arc<dyn FileSource> {
         &self.source
     }
