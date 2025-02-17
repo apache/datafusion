@@ -129,7 +129,7 @@ impl ScalarUDFImpl for ArrayHas {
             ColumnarValue::Array(array_needle) => {
                 // the needle is already an array, convert the haystack to an array of the same length
                 let haystack = args[0].to_array(array_needle.len())?;
-                let array = array_has_inner_for_array(&haystack, &array_needle)?;
+                let array = array_has_inner_for_array(&haystack, array_needle)?;
                 Ok(ColumnarValue::Array(array))
             }
             ColumnarValue::Scalar(scalar_needle) => {
