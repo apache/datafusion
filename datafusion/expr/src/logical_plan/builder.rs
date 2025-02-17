@@ -380,7 +380,40 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Create a [DmlStatement] for inserting the contents of this builder into the named table
+    /// Create a [`DmlStatement`] for inserting the contents of this builder into the named table.
+    ///
+    /// Note,  use a [`DefaultTableSource`] to insert into a [`TableProvider`]
+    ///
+    /// [`DefaultTableSource`]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
+    /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+    ///
+    /// # Example:
+    /// ```
+    /// # use datafusion_expr::{lit, LogicalPlanBuilder,
+    /// #  logical_plan::builder::LogicalTableSource,
+    /// # };
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{Schema, DataType, Field};
+    /// # use datafusion_expr::dml::InsertOp;
+    /// #
+    /// # fn test() -> datafusion_common::Result<()> {
+    /// # let employee_schema = Arc::new(Schema::new(vec![
+    /// #     Field::new("id", DataType::Int32, false),
+    /// # ])) as _;
+    /// # let table_source = Arc::new(LogicalTableSource::new(employee_schema));
+    /// // VALUES (1), (2)
+    /// let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?
+    ///   .build()?;
+    /// // INSERT INTO MyTable VALUES (1), (2)
+    /// let insert_plan = LogicalPlanBuilder::insert_into(
+    ///   input,
+    ///   "MyTable",
+    ///   table_source,
+    ///   InsertOp::Append,
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn insert_into(
         input: LogicalPlan,
         table_name: impl Into<TableReference>,
