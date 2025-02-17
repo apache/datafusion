@@ -5274,3 +5274,55 @@ async fn register_non_parquet_file() {
         "1.json' does not match the expected extension '.parquet'"
     );
 }
+
+// Test inserting into checking.
+#[tokio::test]
+async fn test_insert_into_checking() -> Result<()> {
+    // Create a new schema with one field called "a" of type Int64, and setting nullable to false
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+    let session_ctx = SessionContext::new();
+
+    // Create and register the initial table with the provided schema and data
+    let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
+    session_ctx.register_table("t", initial_table.clone())?;
+
+    // There are two cases we need to check
+    // 1. The len of the schema of the plan and the schema of the table should be the same
+    // 2. The datatype of the schema of the plan and the schema of the table should be the same
+
+    // Test case 1:
+    let write_df = session_ctx.sql("values (1, 2), (3, 4)").await.unwrap();
+
+    let e = write_df
+        .write_table("t", DataFrameWriteOptions::new())
+        .await
+        .unwrap_err();
+
+    assert_contains!(
+        e.to_string(),
+        "Inserting query must have the same schema length as the table."
+    );
+
+    // Setting nullable to true
+    // Make sure the nullable check go through
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+
+    let session_ctx = SessionContext::new();
+
+    // Create and register the initial table with the provided schema and data
+    let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
+    session_ctx.register_table("t", initial_table.clone())?;
+
+    // Test case 2:
+    let write_df = session_ctx.sql("values ('a123'), ('b456')").await.unwrap();
+
+    let e = write_df
+        .write_table("t", DataFrameWriteOptions::new())
+        .await
+        .unwrap_err();
+
+    assert_contains!(e.to_string(), "Inserting query schema mismatch: Expected table field 'a' with type Int64, but got 'column1' with type Utf8");
+
+    Ok(())
+}
