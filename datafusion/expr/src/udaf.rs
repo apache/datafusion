@@ -393,6 +393,8 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// Returns the name of the column this expression would create
     ///
     /// See [`Expr::schema_name`] for details
+    ///
+    /// Example of schema_name: count(DISTINCT column1) FILTER (WHERE column2 > 10) ORDER BY [column3]
     fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
         let AggregateFunctionParams {
             args,
