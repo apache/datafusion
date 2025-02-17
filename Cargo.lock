@@ -448,9 +448,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-schema"
-version = "54.1.0"
+version = "54.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "105f01ec0090259e9a33a9263ec18ff223ab91a0ea9fbc18042f7e38005142f6"
+checksum = "0f40f6be8f78af1ab610db7d9b236e21d587b7168e368a36275d2e5670096735"
 dependencies = [
  "bitflags 2.8.0",
 ]
