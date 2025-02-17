@@ -592,6 +592,24 @@ select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7)
 [NULL] [NULL] [[1, NULL, 3]]
 [NULL] [NULL] [NULL]
 
+query ?
+select column1[1] from map_array_table_1;
+----
+[1, NULL, 3]
+NULL
+NULL
+NULL
+
+query ?
+select column1[-1000 + 1001] from map_array_table_1;
+----
+[1, NULL, 3]
+NULL
+NULL
+NULL
+
+
+
 query ???
 select map_extract(column1, column2), map_extract(column1, column3), map_extract(column1, column4) from map_array_table_1;
 ----
