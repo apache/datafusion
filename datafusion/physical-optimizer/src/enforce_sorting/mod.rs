@@ -385,9 +385,6 @@ pub fn parallelize_sorts(
 pub fn ensure_sorting(
     mut requirements: PlanWithCorrespondingSort,
 ) -> Result<Transformed<PlanWithCorrespondingSort>> {
-    // Before starting, making requirements' children's ExecutionPlan be same as the requirements' plan's children's ExecutionPlan.
-    // It should be guaranteed by previous code, but we need to make sure to avoid any potential missing.
-    requirements = requirements.update_plan_from_children()?;
     requirements = update_sort_ctx_children_data(requirements, false)?;
 
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
@@ -419,7 +416,6 @@ pub fn ensure_sorting(
                     child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 }
                 child = add_sort_above(child, required, None);
-                child = child.update_plan_from_children()?;
                 child = update_sort_ctx_children_data(child, true)?;
             }
         } else if physical_ordering.is_none()
@@ -450,8 +446,6 @@ pub fn ensure_sorting(
                 Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
         }
         return Ok(Transformed::yes(child_node));
-    } else {
-        requirements = requirements.update_plan_from_children()?;
     }
     update_sort_ctx_children_data(requirements, false).map(Transformed::yes)
 }
@@ -677,7 +671,6 @@ fn remove_corresponding_sort_from_sub_plan(
                 }
             })
             .collect::<Result<_>>()?;
-        node = node.update_plan_from_children()?;
         if any_connection || node.children.is_empty() {
             node = update_sort_ctx_children_data(node, false)?;
         }
@@ -712,7 +705,6 @@ fn remove_corresponding_sort_from_sub_plan(
             Arc::new(CoalescePartitionsExec::new(plan)) as _
         };
         node = PlanWithCorrespondingSort::new(plan, false, vec![node]);
-        node = node.update_plan_from_children()?;
         node = update_sort_ctx_children_data(node, false)?;
     }
     Ok(node)
