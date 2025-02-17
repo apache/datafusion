@@ -2009,6 +2009,7 @@ version = "45.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
+ "indexmap 2.7.1",
  "itertools 0.14.0",
  "paste",
 ]

@@ -21,19 +21,15 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, TimeUnit},
 };
+use datafusion_common::types::LogicalType;
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, ListCoercion};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err,
-    types::{LogicalType, NativeType},
-    utils::list_ndims,
-    Result,
+    exec_err, internal_datafusion_err, internal_err, plan_err, types::NativeType,
+    utils::list_ndims, Result,
 };
 use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::{
-    signature::{
-        ArrayFunctionSignature, TypeSignatureClass, FIXED_SIZE_LIST_WILDCARD,
-        TIMEZONE_WILDCARD,
-    },
+    signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
     type_coercion::binary::comparison_coercion_numeric,
     type_coercion::binary::string_coercion,
 };
@@ -604,75 +600,36 @@ fn get_valid_types(
                 vec![vec![target_type; *num]]
             }
         }
-        TypeSignature::Coercible(target_types) => {
-            function_length_check(
-                function_name,
-                current_types.len(),
-                target_types.len(),
-            )?;
-
-            // Aim to keep this logic as SIMPLE as possible!
-            // Make sure the corresponding test is covered
-            // If this function becomes COMPLEX, create another new signature!
-            fn can_coerce_to(
-                function_name: &str,
-                current_type: &DataType,
-                target_type_class: &TypeSignatureClass,
-            ) -> Result<DataType> {
-                let logical_type: NativeType = current_type.into();
-
-                match target_type_class {
-                    TypeSignatureClass::Native(native_type) => {
-                        let target_type = native_type.native();
-                        if &logical_type == target_type {
-                            return target_type.default_cast_for(current_type);
-                        }
-
-                        if logical_type == NativeType::Null {
-                            return target_type.default_cast_for(current_type);
-                        }
-
-                        if target_type.is_integer() && logical_type.is_integer() {
-                            return target_type.default_cast_for(current_type);
-                        }
-
-                        internal_err!(
-                            "Function '{function_name}' expects {target_type_class} but received {current_type}"
-                        )
-                    }
-                    // Not consistent with Postgres and DuckDB but to avoid regression we implicit cast string to timestamp
-                    TypeSignatureClass::Timestamp
-                        if logical_type == NativeType::String =>
-                    {
-                        Ok(DataType::Timestamp(TimeUnit::Nanosecond, None))
-                    }
-                    TypeSignatureClass::Timestamp if logical_type.is_timestamp() => {
-                        Ok(current_type.to_owned())
-                    }
-                    TypeSignatureClass::Date if logical_type.is_date() => {
-                        Ok(current_type.to_owned())
-                    }
-                    TypeSignatureClass::Time if logical_type.is_time() => {
-                        Ok(current_type.to_owned())
-                    }
-                    TypeSignatureClass::Interval if logical_type.is_interval() => {
-                        Ok(current_type.to_owned())
-                    }
-                    TypeSignatureClass::Duration if logical_type.is_duration() => {
-                        Ok(current_type.to_owned())
-                    }
-                    _ => {
-                        not_impl_err!("Function '{function_name}' got logical_type: {logical_type} with target_type_class: {target_type_class}")
-                    }
-                }
-            }
+        TypeSignature::Coercible(param_types) => {
+            function_length_check(function_name, current_types.len(), param_types.len())?;
 
             let mut new_types = Vec::with_capacity(current_types.len());
-            for (current_type, target_type_class) in
-                current_types.iter().zip(target_types.iter())
-            {
-                let target_type = can_coerce_to(function_name, current_type, target_type_class)?;
-                new_types.push(target_type);
+            for (current_type, param) in current_types.iter().zip(param_types.iter()) {
+                let current_native_type: NativeType = current_type.into();
+
+                if param.desired_type().matches_native_type(&current_native_type) {
+                    let casted_type = param.desired_type().default_casted_type(
+                        &current_native_type,
+                        current_type,
+                    )?;
+
+                    new_types.push(casted_type);
+                } else if param
+                .allowed_source_types()
+                .iter()
+                .any(|t| t.matches_native_type(&current_native_type)) {
+                    // If the condition is met which means `implicit coercion`` is provided so we can safely unwrap
+                    let default_casted_type = param.default_casted_type().unwrap();
+                    let casted_type = default_casted_type.default_cast_for(current_type)?;
+                    new_types.push(casted_type);
+                } else {
+                    return internal_err!(
+                        "Expect {} but received {}, DataType: {}",
+                        param.desired_type(),
+                        current_native_type,
+                        current_type
+                    );
+                }
             }
 
             vec![new_types]
