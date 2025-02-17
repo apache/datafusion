@@ -32,7 +32,7 @@ use arrow::{
 
 use datafusion_common::{
     downcast_value, internal_err, not_impl_datafusion_err, not_impl_err, plan_err,
-    DataFusionError, Result, ScalarValue,
+    Result, ScalarValue,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::type_coercion::aggregates::{INTEGERS, NUMERICS};
