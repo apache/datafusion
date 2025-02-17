@@ -70,7 +70,8 @@ use datafusion_common::{
 };
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
-    physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
+    physical_name, AggregateFunction, AggregateFunctionParams, Alias, GroupingSet,
+    WindowFunction,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -1579,11 +1580,14 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     match e {
         Expr::AggregateFunction(AggregateFunction {
             func,
-            distinct,
-            args,
-            filter,
-            order_by,
-            null_treatment,
+            params:
+                AggregateFunctionParams {
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                },
         }) => {
             let name = if let Some(name) = name {
                 name

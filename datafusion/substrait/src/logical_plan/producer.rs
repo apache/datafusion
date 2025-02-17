@@ -52,7 +52,8 @@ use datafusion::common::{
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr::{
-    Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery, WindowFunction,
+    AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
+    InSubquery, WindowFunction,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -1208,11 +1209,14 @@ pub fn from_aggregate_function(
 ) -> Result<Measure> {
     let expr::AggregateFunction {
         func,
-        args,
-        distinct,
-        filter,
-        order_by,
-        null_treatment: _null_treatment,
+        params:
+            AggregateFunctionParams {
+                args,
+                distinct,
+                filter,
+                order_by,
+                null_treatment: _null_treatment,
+            },
     } = agg_fn;
     let sorts = if let Some(order_by) = order_by {
         order_by
