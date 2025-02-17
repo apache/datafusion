@@ -2266,7 +2266,6 @@ dependencies = [
  "datafusion-functions-window-common",
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
- "datafusion-physical-plan",
  "futures",
  "half",
  "hashbrown 0.14.5",

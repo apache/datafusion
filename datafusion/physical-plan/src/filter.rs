@@ -624,7 +624,7 @@ mod tests {
     use crate::expressions::*;
     use crate::test;
     use crate::test::exec::StatisticsExec;
-
+    #[allow(unused_imports)]
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
     use datafusion_common::ScalarValue;
 
