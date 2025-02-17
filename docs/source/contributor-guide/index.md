@@ -30,6 +30,10 @@ In addition to submitting new PRs, we have a healthy tradition of community
 members reviewing each other's PRs. Doing so is a great way to help the
 community as well as get more familiar with Rust and the relevant codebases.
 
+## Development Environment
+
+You can find how to setup build and testing environment [here](https://datafusion.apache.org/user-guide/example-usage.html)
+
 ## Finding and Creating Issues to Work On
 
 You can find a curated [good-first-issue] list to help you get started.
@@ -216,23 +220,3 @@ The good thing about open code and open development is that any issues in one ch
 
 Pull requests will be marked with a `stale` label after 60 days of inactivity and then closed 7 days after that.
 Commenting on the PR will remove the `stale` label.
-
-## Building
-
-- To build the project, run `cargo build`; to run all the tests, run `cargo test`.
-- One external dependency `protoc` is needed, please install it before build and make sure both executable and protobuf definition accessible
-
-## Dev Container / Github Codespaces
-The easiest way to start contributing is via Dev Container. This container works both locally in Visual Studio Code as well as [Github Codespaces](https://github.com/features/codespaces). To open the project in vscode you will need the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers). For codespaces you will need to [create a new codespace](https://github.com/apache/datafusion).
-
-With the extension installed you can run the following from the `Command Palette` to get started
-```
-> Dev Containers: Clone Repository in Container Volume...
-```
-
-In the subsequent popup paste the url to the repo and hit enter.
-```
-https://github.com/apache/datafusion
-```
-
-This will create an isolated Workspace in vscode, including all tools and environment variables required to build, test and run.
