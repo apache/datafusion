@@ -25,6 +25,7 @@ use crate::physical_optimizer::test_utils::{
 };
 use crate::physical_optimizer::test_utils::{parquet_exec_with_sort, trim_plan_display};
 
+use crate::sql::ExplainNormalizer;
 use arrow::compute::SortOptions;
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -3169,9 +3170,11 @@ async fn apply_enforce_distribution_multiple_times() -> Result<()> {
     // Create a configuration
     let config = SessionConfig::new();
     let ctx = SessionContext::new_with_config(config);
-
+    let testdata = datafusion::test_util::arrow_test_data();
+    let csv_file = format!("{testdata}/csv/aggregate_test_100.csv");
     // Create table schema and data
-    let sql = "CREATE EXTERNAL TABLE aggregate_test_100 (
+    let sql = format!(
+        "CREATE EXTERNAL TABLE aggregate_test_100 (
         c1  VARCHAR NOT NULL,
         c2  TINYINT NOT NULL,
         c3  SMALLINT NOT NULL,
@@ -3187,10 +3190,11 @@ async fn apply_enforce_distribution_multiple_times() -> Result<()> {
         c13 VARCHAR NOT NULL
     )
     STORED AS CSV
-    LOCATION '../../testing/data/csv/aggregate_test_100.csv'
-    OPTIONS ('format.has_header' 'true')";
+    LOCATION '{csv_file}'
+    OPTIONS ('format.has_header' 'true')"
+    );
 
-    ctx.sql(sql).await?;
+    ctx.sql(sql.as_str()).await?;
 
     let df = ctx.sql("SELECT * FROM(SELECT * FROM aggregate_test_100 UNION ALL SELECT * FROM aggregate_test_100) ORDER BY c13 LIMIT 5").await?;
     let logical_plan = df.logical_plan().clone();
@@ -3228,12 +3232,33 @@ async fn apply_enforce_distribution_multiple_times() -> Result<()> {
     let optimized_physical_plan = planner
         .create_physical_plan(&optimized_logical_plan, &session_state)
         .await?;
+    let normalizer = ExplainNormalizer::new();
+    let actual = format!(
+        "{}",
+        displayable(optimized_physical_plan.as_ref()).indent(true)
+    )
+    .trim()
+    .lines()
+    // normalize paths
+    .map(|s| normalizer.normalize(s))
+    .collect::<Vec<_>>();
+    // Test the optimized plan is correct (after twice `EnforceDistribution`)
+    // The `fetch` is maintained after the second `EnforceDistribution`
+    let expected = vec![
+        "SortExec: TopK(fetch=5), expr=[c13@12 ASC NULLS LAST], preserve_partitioning=[false]",
+        "  CoalescePartitionsExec",
+        "    UnionExec",
+        "      SortExec: TopK(fetch=5), expr=[c13@12 ASC NULLS LAST], preserve_partitioning=[false]",
+        "        DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], file_type=csv, has_header=true",
+        "      SortExec: TopK(fetch=5), expr=[c13@12 ASC NULLS LAST], preserve_partitioning=[false]",
+        "        DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13], file_type=csv, has_header=true",
+    ];
+    assert_eq!(
+        expected, actual,
+        "expected:\n{expected:#?}\nactual:\n\n{actual:#?}\n"
+    );
 
-    // println!("{}", displayable(optimized_physical_plan.as_ref()).indent(true));
-
-    let mut results = optimized_physical_plan
-        .execute(0, ctx.task_ctx().clone())
-        .unwrap();
+    let mut results = optimized_physical_plan.execute(0, ctx.task_ctx().clone())?;
 
     let batch = results.next().await.unwrap()?;
     // Without the fix of https://github.com/apache/datafusion/pull/14207, the number of rows will be 10
