@@ -138,7 +138,7 @@ pub(crate) fn parquet_exec_with_stats() -> Arc<DataSourceExec> {
     .with_statistics(statistics);
     assert_eq!(config.statistics.num_rows, Precision::Inexact(10));
 
-    config.new_exec()
+    config.build()
 }
 
 pub fn create_test_schema() -> Result<SchemaRef> {
