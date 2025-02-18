@@ -358,6 +358,8 @@ pub enum ArrayFunctionArgument {
     /// An argument of type List/LargeList/FixedSizeList. All Array arguments must be coercible
     /// to the same type.
     Array,
+    // An arbitrary data type.
+    DataType(DataType),
 }
 
 impl Display for ArrayFunctionArgument {
@@ -371,6 +373,9 @@ impl Display for ArrayFunctionArgument {
             }
             ArrayFunctionArgument::Array => {
                 write!(f, "array")
+            }
+            ArrayFunctionArgument::DataType(ref data_type) => {
+                write!(f, "{}", data_type)
             }
         }
     }
