@@ -30,7 +30,8 @@ use datafusion::{
 use tokio::runtime::Handle;
 
 use crate::{
-    plan_properties::FFI_PlanProperties, record_batch_stream::FFI_RecordBatchStream,
+    df_result, plan_properties::FFI_PlanProperties,
+    record_batch_stream::FFI_RecordBatchStream, rresult,
 };
 
 /// A stable struct for sharing a [`ExecutionPlan`] across FFI boundaries.
@@ -112,13 +113,11 @@ unsafe extern "C" fn execute_fn_wrapper(
     let ctx = &(*private_data).context;
     let runtime = (*private_data).runtime.clone();
 
-    match plan.execute(partition, Arc::clone(ctx)) {
-        Ok(rbs) => RResult::ROk(FFI_RecordBatchStream::new(rbs, runtime)),
-        Err(e) => RResult::RErr(
-            format!("Error occurred during FFI_ExecutionPlan execute: {}", e).into(),
-        ),
-    }
+    rresult!(plan
+        .execute(partition, Arc::clone(ctx))
+        .map(|rbs| FFI_RecordBatchStream::new(rbs, runtime)))
 }
+
 unsafe extern "C" fn name_fn_wrapper(plan: &FFI_ExecutionPlan) -> RString {
     let private_data = plan.private_data as *const ExecutionPlanPrivateData;
     let plan = &(*private_data).plan;
@@ -274,16 +273,8 @@ impl ExecutionPlan for ForeignExecutionPlan {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unsafe {
-            match (self.plan.execute)(&self.plan, partition) {
-                RResult::ROk(stream) => {
-                    let stream = Pin::new(Box::new(stream)) as SendableRecordBatchStream;
-                    Ok(stream)
-                }
-                RResult::RErr(e) => Err(DataFusionError::Execution(format!(
-                    "Error occurred during FFI call to FFI_ExecutionPlan execute. {}",
-                    e
-                ))),
-            }
+            df_result!((self.plan.execute)(&self.plan, partition))
+                .map(|stream| Pin::new(Box::new(stream)) as SendableRecordBatchStream)
         }
     }
 }

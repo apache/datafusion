@@ -35,7 +35,10 @@ use datafusion::{
 use futures::{Stream, TryStreamExt};
 use tokio::runtime::Handle;
 
-use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
+use crate::{
+    arrow_wrappers::{WrappedArray, WrappedSchema},
+    rresult,
+};
 
 /// A stable struct for sharing [`RecordBatchStream`] across FFI boundaries.
 /// We use the async-ffi crate for handling async calls across libraries.
@@ -97,13 +100,12 @@ fn record_batch_to_wrapped_array(
     record_batch: RecordBatch,
 ) -> RResult<WrappedArray, RString> {
     let struct_array = StructArray::from(record_batch);
-    match to_ffi(&struct_array.to_data()) {
-        Ok((array, schema)) => RResult::ROk(WrappedArray {
+    rresult!(
+        to_ffi(&struct_array.to_data()).map(|(array, schema)| WrappedArray {
             array,
-            schema: WrappedSchema(schema),
-        }),
-        Err(e) => RResult::RErr(e.to_string().into()),
-    }
+            schema: WrappedSchema(schema)
+        })
+    )
 }
 
 // probably want to use pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Result<ArrayData> {
