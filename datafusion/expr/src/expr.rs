@@ -2757,6 +2757,7 @@ fn fmt_function(
     args: &[Expr],
     display: bool,
 ) -> fmt::Result {
+    // TODO: Need to support schema name and display name for UDWF
     if fun == "count" && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
         // TODO: Call customizable `display_name()` of UDAF
         write!(f, "count(*)")
