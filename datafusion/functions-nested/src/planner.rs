@@ -17,17 +17,20 @@
 
 //! SQL planning extensions like [`NestedFunctionPlanner`] and [`FieldAccessPlanner`]
 
-use std::sync::Arc;
-
+use arrow::datatypes::DataType;
+use datafusion_common::ExprSchema;
 use datafusion_common::{plan_err, utils::list_ndims, DFSchema, Result};
-use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, ScalarFunction};
+use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::AggregateUDF;
 use datafusion_expr::{
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
     sqlparser, Expr, ExprSchemable, GetFieldAccess,
 };
+use datafusion_functions::core::get_field as get_field_inner;
 use datafusion_functions::expr_fn::get_field;
 use datafusion_functions_aggregate::nth_value::nth_value_udaf;
+use std::sync::Arc;
 
 use crate::map::map_udf;
 use crate::{
@@ -140,7 +143,7 @@ impl ExprPlanner for FieldAccessPlanner {
     fn plan_field_access(
         &self,
         expr: RawFieldAccessExpr,
-        _schema: &DFSchema,
+        schema: &DFSchema,
     ) -> Result<PlannerResult<RawFieldAccessExpr>> {
         let RawFieldAccessExpr { expr, field_access } = expr;
 
@@ -173,6 +176,17 @@ impl ExprPlanner for FieldAccessPlanner {
                             null_treatment,
                         )),
                     )),
+                    // special case for map access with
+                    Expr::Column(ref c)
+                        if matches!(schema.data_type(c)?, DataType::Map(_, _)) =>
+                    {
+                        Ok(PlannerResult::Planned(Expr::ScalarFunction(
+                            ScalarFunction::new_udf(
+                                get_field_inner(),
+                                vec![expr, *index],
+                            ),
+                        )))
+                    }
                     _ => Ok(PlannerResult::Planned(array_element(expr, *index))),
                 }
             }
