@@ -27,7 +27,10 @@ use arrow::{
     error::ArrowError,
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
-use datafusion::error::DataFusionError;
+use datafusion::{
+    error::DataFusionError,
+    logical_expr::type_coercion::functions::data_types_with_scalar_udf,
+};
 use datafusion::{
     error::Result,
     logical_expr::{
@@ -38,7 +41,7 @@ use datafusion::{
 use crate::{
     arrow_wrappers::{WrappedArray, WrappedSchema},
     df_result, rresult, rresult_return,
-    util::rvec_wrapped_to_vec_datatype,
+    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
     volatility::FFI_Volatility,
 };
 
@@ -67,6 +70,11 @@ pub struct FFI_ScalarUDF {
     ) -> RResult<WrappedArray, RString>,
 
     pub short_circuits: unsafe extern "C" fn(udf: &Self) -> bool,
+
+    pub coerce_types: unsafe extern "C" fn(
+        udf: &Self,
+        arg_types: RVec<WrappedSchema>,
+    ) -> RResult<RVec<WrappedSchema>, RString>,
 
     /// Used to create a clone on the provider of the udf. This should
     /// only need to be called by the receiver of the udf.
@@ -102,6 +110,20 @@ unsafe extern "C" fn return_type_fn_wrapper(
         .map(WrappedSchema);
 
     rresult!(return_type)
+}
+
+unsafe extern "C" fn coerce_types_fn_wrapper(
+    udf: &FFI_ScalarUDF,
+    arg_types: RVec<WrappedSchema>,
+) -> RResult<RVec<WrappedSchema>, RString> {
+    let private_data = udf.private_data as *const ScalarUDFPrivateData;
+    let udf = &(*private_data).udf;
+
+    let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
+
+    let return_types = rresult_return!(data_types_with_scalar_udf(&arg_types, udf));
+
+    rresult!(vec_datatype_to_rvec_wrapped(&return_types))
 }
 
 unsafe extern "C" fn invoke_with_args_fn_wrapper(
@@ -182,6 +204,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             invoke_with_args: invoke_with_args_fn_wrapper,
             short_circuits: short_circuits_fn_wrapper,
             return_type: return_type_fn_wrapper,
+            coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -244,7 +267,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_types = crate::util::vec_datatype_to_rvec_wrapped(arg_types)?;
+        let arg_types = vec_datatype_to_rvec_wrapped(arg_types)?;
 
         let result = unsafe { (self.udf.return_type)(&self.udf, arg_types) };
 
@@ -292,6 +315,14 @@ impl ScalarUDFImpl for ForeignScalarUDF {
 
     fn short_circuits(&self) -> bool {
         unsafe { (self.udf.short_circuits)(&self.udf) }
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        unsafe {
+            let arg_types = vec_datatype_to_rvec_wrapped(arg_types)?;
+            let result_types = df_result!((self.udf.coerce_types)(&self.udf, arg_types))?;
+            Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
+        }
     }
 }
 
