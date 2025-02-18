@@ -24,7 +24,8 @@ use datafusion_common::exec_err;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -81,12 +82,8 @@ impl ScalarUDFImpl for ContainsFunc {
         Ok(Boolean)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        make_scalar_function(contains, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(contains, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -125,8 +122,9 @@ pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
 mod test {
     use super::ContainsFunc;
     use arrow::array::{BooleanArray, StringArray};
+    use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
@@ -137,8 +135,14 @@ mod test {
             Some("yyy?()"),
         ])));
         let scalar = ColumnarValue::Scalar(ScalarValue::Utf8(Some("x?(".to_string())));
-        #[allow(deprecated)] // TODO migrate UDF to invoke
-        let actual = udf.invoke_batch(&[array, scalar], 2).unwrap();
+
+        let args = ScalarFunctionArgs {
+            args: vec![array, scalar],
+            number_rows: 2,
+            return_type: &DataType::Boolean,
+        };
+
+        let actual = udf.invoke_with_args(args).unwrap();
         let expect = ColumnarValue::Array(Arc::new(BooleanArray::from(vec![
             Some(true),
             Some(false),

@@ -278,26 +278,9 @@ impl TableProvider for MemTable {
 
         // Create a physical plan from the logical plan.
         // Check that the schema of the plan matches the schema of this table.
-        if !self
-            .schema()
-            .logically_equivalent_names_and_types(&input.schema())
-        {
-            return plan_err!(
-                "Inserting query must have the same schema with the table. \
-                Expected: {:?}, got: {:?}",
-                self.schema()
-                    .fields()
-                    .iter()
-                    .map(|field| field.data_type())
-                    .collect::<Vec<_>>(),
-                input
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|field| field.data_type())
-                    .collect::<Vec<_>>()
-            );
-        }
+        self.schema()
+            .logically_equivalent_names_and_types(&input.schema())?;
+
         if insert_op != InsertOp::Append {
             return not_impl_err!("{insert_op} not implemented for MemoryTable yet");
         }
@@ -390,7 +373,7 @@ impl DataSink for MemSink {
 mod tests {
 
     use super::*;
-    use crate::datasource::provider_as_source;
+    use crate::datasource::{provider_as_source, DefaultTableSource};
     use crate::physical_plan::collect;
     use crate::prelude::SessionContext;
 
@@ -640,6 +623,7 @@ mod tests {
         // Create and register the initial table with the provided schema and data
         let initial_table = Arc::new(MemTable::try_new(schema.clone(), initial_data)?);
         session_ctx.register_table("t", initial_table.clone())?;
+        let target = Arc::new(DefaultTableSource::new(initial_table.clone()));
         // Create and register the source table with the provided schema and inserted data
         let source_table = Arc::new(MemTable::try_new(schema.clone(), inserted_data)?);
         session_ctx.register_table("source", source_table.clone())?;
@@ -649,7 +633,7 @@ mod tests {
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?.build()?;
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, InsertOp::Append)?
+            LogicalPlanBuilder::insert_into(scan_plan, "t", target, InsertOp::Append)?
                 .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx

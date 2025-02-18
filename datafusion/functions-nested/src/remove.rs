@@ -101,12 +101,11 @@ impl ScalarUDFImpl for ArrayRemove {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_remove_inner)(args)
+        make_scalar_function(array_remove_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -180,12 +179,11 @@ impl ScalarUDFImpl for ArrayRemoveN {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_remove_n_inner)(args)
+        make_scalar_function(array_remove_n_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -258,12 +256,11 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_remove_all_inner)(args)
+        make_scalar_function(array_remove_all_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

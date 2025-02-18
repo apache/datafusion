@@ -23,9 +23,10 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::Context;
 
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::memory::MemoryStream;
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
@@ -33,20 +34,17 @@ use crate::ExecutionPlan;
 use crate::{common, RecordBatchStream};
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
-use arrow::array::{ArrayRef, Int32Array, RecordBatch};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{
     config::ConfigOptions, internal_err, project_schema, Result, Statistics,
 };
-use datafusion_execution::{
-    memory_pool::MemoryReservation, SendableRecordBatchStream, TaskContext,
-};
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{
     equivalence::ProjectionMapping, expressions::Column, utils::collect_columns,
     EquivalenceProperties, LexOrdering, Partitioning,
 };
 
-use futures::Stream;
 use futures::{Future, FutureExt};
 
 pub mod exec;
@@ -176,7 +174,7 @@ impl MockMemorySourceConfig {
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(
-            MockMemoryStream::try_new(
+            MemoryStream::try_new(
                 self.partitions[partition].clone(),
                 Arc::clone(&self.projected_schema),
                 self.projection.clone(),
@@ -356,91 +354,6 @@ impl MockMemorySourceConfig {
     }
 }
 
-/// Iterator over batches
-pub struct MockMemoryStream {
-    /// Vector of record batches
-    data: Vec<RecordBatch>,
-    /// Optional memory reservation bound to the data, freed on drop
-    _reservation: Option<MemoryReservation>,
-    /// Schema representing the data
-    schema: SchemaRef,
-    /// Optional projection for which columns to load
-    projection: Option<Vec<usize>>,
-    /// Index into the data
-    index: usize,
-    /// The remaining number of rows to return. If None, all rows are returned
-    fetch: Option<usize>,
-}
-
-impl MockMemoryStream {
-    /// Create an iterator for a vector of record batches
-    pub fn try_new(
-        data: Vec<RecordBatch>,
-        schema: SchemaRef,
-        projection: Option<Vec<usize>>,
-    ) -> Result<Self> {
-        Ok(Self {
-            data,
-            _reservation: None,
-            schema,
-            projection,
-            index: 0,
-            fetch: None,
-        })
-    }
-
-    // /// Set the number of rows to produce
-    pub(super) fn with_fetch(mut self, fetch: Option<usize>) -> Self {
-        self.fetch = fetch;
-        self
-    }
-}
-
-impl Stream for MockMemoryStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        _: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        if self.index >= self.data.len() {
-            return Poll::Ready(None);
-        }
-        self.index += 1;
-        let batch = &self.data[self.index - 1];
-        // return just the columns requested
-        let batch = match self.projection.as_ref() {
-            Some(columns) => batch.project(columns)?,
-            None => batch.clone(),
-        };
-
-        let Some(&fetch) = self.fetch.as_ref() else {
-            return Poll::Ready(Some(Ok(batch)));
-        };
-        if fetch == 0 {
-            return Poll::Ready(None);
-        }
-
-        let batch = if batch.num_rows() > fetch {
-            batch.slice(0, fetch)
-        } else {
-            batch
-        };
-        self.fetch = Some(fetch - batch.num_rows());
-        Poll::Ready(Some(Ok(batch)))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.data.len(), Some(self.data.len()))
-    }
-}
-
-impl RecordBatchStream for MockMemoryStream {
-    /// Get the schema
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-}
 /// Asserts that given future is pending.
 pub fn assert_is_pending<'a, T>(fut: &mut Pin<Box<dyn Future<Output = T> + Send + 'a>>) {
     let waker = futures::task::noop_waker();
@@ -539,14 +452,49 @@ pub fn make_partition(sz: i32) -> RecordBatch {
     RecordBatch::try_new(schema, vec![arr]).unwrap()
 }
 
-/// Returns a `MockMemorySourceConfig` that scans `partitions` of 100 batches each
+pub fn make_partition_utf8(sz: i32) -> RecordBatch {
+    let seq_start = 0;
+    let seq_end = sz;
+    let values = (seq_start..seq_end)
+        .map(|i| format!("test_long_string_that_is_roughly_42_bytes_{}", i))
+        .collect::<Vec<_>>();
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Utf8, true)]));
+    let mut string_array = arrow::array::StringArray::from(values);
+    string_array.shrink_to_fit();
+    let arr = Arc::new(string_array);
+    let arr = arr as ArrayRef;
+
+    RecordBatch::try_new(schema, vec![arr]).unwrap()
+}
+
+/// Returns a `DataSourceExec` that scans `partitions` of 100 batches each
 pub fn scan_partitioned(partitions: usize) -> Arc<dyn ExecutionPlan> {
+    Arc::new(mem_exec(partitions))
+}
+
+pub fn scan_partitioned_utf8(partitions: usize) -> Arc<dyn ExecutionPlan> {
+    Arc::new(mem_exec_utf8(partitions))
+}
+
+/// Returns a `DataSourceExec` that scans `partitions` of 100 batches each
+pub fn mem_exec(partitions: usize) -> MockMemorySourceConfig {
     let data: Vec<Vec<_>> = (0..partitions).map(|_| vec![make_partition(100)]).collect();
 
     let schema = data[0][0].schema();
     let projection = None;
 
-    MockMemorySourceConfig::try_new_exec(&data, schema, projection).unwrap()
+    MockMemorySourceConfig::try_new(&data, schema, projection).unwrap()
+}
+
+pub fn mem_exec_utf8(partitions: usize) -> MockMemorySourceConfig {
+    let data: Vec<Vec<_>> = (0..partitions)
+        .map(|_| vec![make_partition_utf8(100)])
+        .collect();
+
+    let schema = data[0][0].schema();
+    let projection = None;
+
+    MockMemorySourceConfig::try_new(&data, schema, projection).unwrap()
 }
 
 // Construct a stream partition for test purposes

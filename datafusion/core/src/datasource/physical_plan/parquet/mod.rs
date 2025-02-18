@@ -708,7 +708,7 @@ mod tests {
 
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();
-            let parquet_exec = base_config.new_exec();
+            let parquet_exec = base_config.clone().build();
             RoundTripResult {
                 batches: collect(parquet_exec.clone(), task_ctx).await,
                 parquet_exec,
@@ -1354,7 +1354,7 @@ mod tests {
                 Arc::new(ParquetSource::default()),
             )
             .with_file_groups(file_groups)
-            .new_exec();
+            .build();
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1468,7 +1468,7 @@ mod tests {
                     false,
                 ),
             ])
-            .new_exec();
+            .build();
         let partition_count = parquet_exec
             .source()
             .output_partitioning()
@@ -1531,7 +1531,7 @@ mod tests {
             Arc::new(ParquetSource::default()),
         )
         .with_file(partitioned_file)
-        .new_exec();
+        .build();
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
@@ -2188,7 +2188,7 @@ mod tests {
                 extensions: None,
                 metadata_size_hint: None,
             })
-            .new_exec();
+            .build();
 
         let res = collect(exec, ctx.task_ctx()).await.unwrap();
         assert_eq!(res.len(), 2);

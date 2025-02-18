@@ -78,7 +78,7 @@ version = "45.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "54.1.0", features = [
+arrow = { version = "54.2.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
@@ -86,7 +86,7 @@ arrow-buffer = { version = "54.1.0", default-features = false }
 arrow-flight = { version = "54.1.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "54.1.0", default-features = false, features = [
+arrow-ipc = { version = "54.2.0", default-features = false, features = [
     "lz4",
 ] }
 arrow-ord = { version = "54.1.0", default-features = false }

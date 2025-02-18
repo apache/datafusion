@@ -109,12 +109,11 @@ impl ScalarUDFImpl for ArrayAppend {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_append_inner)(args)
+        make_scalar_function(array_append_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -205,12 +204,11 @@ impl ScalarUDFImpl for ArrayPrepend {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_prepend_inner)(args)
+        make_scalar_function(array_prepend_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -324,12 +322,11 @@ impl ScalarUDFImpl for ArrayConcat {
         Ok(expr_type)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_concat_inner)(args)
+        make_scalar_function(array_concat_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -468,8 +465,8 @@ where
     };
 
     let res = match list_array.value_type() {
-        DataType::List(_) => concat_internal::<i32>(args)?,
-        DataType::LargeList(_) => concat_internal::<i64>(args)?,
+        DataType::List(_) => concat_internal::<O>(args)?,
+        DataType::LargeList(_) => concat_internal::<O>(args)?,
         data_type => {
             return generic_append_and_prepend::<O>(
                 list_array,
