@@ -172,12 +172,11 @@ impl ScalarUDFImpl for ArrayElement {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_element_inner)(args)
+        make_scalar_function(array_element_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -395,12 +394,11 @@ impl ScalarUDFImpl for ArraySlice {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_slice_inner)(args)
+        make_scalar_function(array_slice_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -704,12 +702,11 @@ impl ScalarUDFImpl for ArrayPopFront {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_pop_front_inner)(args)
+        make_scalar_function(array_pop_front_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -812,12 +809,11 @@ impl ScalarUDFImpl for ArrayPopBack {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_pop_back_inner)(args)
+        make_scalar_function(array_pop_back_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -918,13 +914,13 @@ impl ScalarUDFImpl for ArrayAnyValue {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_any_value_inner)(args)
+        make_scalar_function(array_any_value_inner)(&args.args)
     }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
