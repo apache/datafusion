@@ -17,13 +17,21 @@
 
 extern crate criterion;
 
+use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_expr::ScalarFunctionArgs;
 use datafusion_functions::string;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let uuid = string::uuid();
     c.bench_function("uuid", |b| {
-        b.iter(|| black_box(uuid.invoke_batch(&[], 1024)))
+        b.iter(|| {
+            black_box(uuid.invoke_with_args(ScalarFunctionArgs {
+                args: vec![],
+                number_rows: 1024,
+                return_type: &DataType::Utf8,
+            }))
+        })
     });
 }
 

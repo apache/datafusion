@@ -28,7 +28,7 @@ use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
@@ -111,12 +111,8 @@ impl ScalarUDFImpl for ChrFunc {
         Ok(Utf8)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        make_scalar_function(chr, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(chr, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
