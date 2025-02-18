@@ -125,7 +125,6 @@ impl ScalarUDFImpl for ArrayHas {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        //let args = &args.args;
         let [first_arg, second_arg] = take_function_args(self.name(), &args.args)?;
         match &second_arg {
             ColumnarValue::Array(array_needle) => {
