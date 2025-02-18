@@ -17,7 +17,12 @@
 
 use std::collections::HashMap;
 
+use arrow::datatypes::DataType;
+use datafusion_common::diagnostic::DiagnosticKind;
+use datafusion_common::DataFusionError;
 use datafusion_common::{Diagnostic, Location, Result, Span};
+use datafusion_expr::AggregateUDFImpl;
+use datafusion_functions_aggregate::sum::Sum;
 use datafusion_sql::planner::{ParserOptions, SqlToRel};
 use regex::Regex;
 use sqlparser::{dialect::GenericDialect, parser::Parser};
@@ -271,6 +276,39 @@ fn test_ambiguous_column_suggestion() -> Result<()> {
 
     suggested_fields.sort();
     assert_eq!(suggested_fields, vec!["person.id", "test_decimal.id"]);
+
+    Ok(())
+}
+
+#[test]
+fn test_sum_coerce_type() -> Result<()> {
+    let mut sum = Sum::new();
+    let span = Span::new(Location::new(1, 1), Location::new(2, 1));
+    let span_for_test = span;
+    sum.spans_mut().add_span(span);
+    let datatype_vec = vec![DataType::Date64];
+    let res = sum.coerce_types(&datatype_vec);
+    let err = res.expect_err("Expected an error, but got success");
+
+    match err {
+        DataFusionError::Diagnostic(ref diagnostic, _) => {
+            assert_eq!(diagnostic.kind, DiagnosticKind::Error);
+            assert_eq!(
+                diagnostic.message,
+                "Coercion only supports integer and floating point values"
+            );
+            assert_eq!(diagnostic.span, Some(span_for_test));
+            assert!(diagnostic.notes.is_empty());
+            assert!(diagnostic.helps.is_empty());
+        }
+        _ => {
+            assert!(
+                false,
+                "Expected a Diagnostic error, but got another type: {:?}",
+                err
+            );
+        }
+    }
 
     Ok(())
 }
