@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::expr::Unnest;
+use datafusion_expr::expr::{AggregateFunctionParams, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
     self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
@@ -284,9 +284,15 @@ impl Unparser<'_> {
             }),
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func.name();
+                let AggregateFunctionParams {
+                    distinct,
+                    args,
+                    filter,
+                    ..
+                } = &agg.params;
 
-                let args = self.function_args_to_sql(&agg.args)?;
-                let filter = match &agg.filter {
+                let args = self.function_args_to_sql(args)?;
+                let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
@@ -297,8 +303,7 @@ impl Unparser<'_> {
                         span: Span::empty(),
                     }]),
                     args: ast::FunctionArguments::List(ast::FunctionArgumentList {
-                        duplicate_treatment: agg
-                            .distinct
+                        duplicate_treatment: distinct
                             .then_some(ast::DuplicateTreatment::Distinct),
                         args,
                         clauses: vec![],
@@ -1655,8 +1660,8 @@ mod tests {
     use datafusion_expr::{
         case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
-        table_scan, try_cast, when, wildcard, ColumnarValue, ScalarUDF, ScalarUDFImpl,
-        Signature, Volatility, WindowFrame, WindowFunctionDefinition,
+        table_scan, try_cast, when, wildcard, ScalarUDF, ScalarUDFImpl, Signature,
+        Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
     use datafusion_functions::expr_fn::{get_field, named_struct};
@@ -1704,14 +1709,6 @@ mod tests {
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int32)
-        }
-
-        fn invoke_batch(
-            &self,
-            _args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
-            unimplemented!("DummyUDF::invoke")
         }
     }
     // See sql::tests for E2E tests.

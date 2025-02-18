@@ -18,8 +18,9 @@
 //! Tree node implementation for Logical Expressions
 
 use crate::expr::{
-    AggregateFunction, Alias, Between, BinaryExpr, Case, Cast, GroupingSet, InList,
-    InSubquery, Like, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Cast,
+    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, TryCast, Unnest,
+    WindowFunction,
 };
 use crate::{Expr, ExprFunctionExt};
 
@@ -87,7 +88,7 @@ impl TreeNode for Expr {
                           }) => (expr, low, high).apply_ref_elements(f),
             Expr::Case(Case { expr, when_then_expr, else_expr }) =>
                 (expr, when_then_expr, else_expr).apply_ref_elements(f),
-            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. }) =>
+            Expr::AggregateFunction(AggregateFunction { params: AggregateFunctionParams { args, filter, order_by, ..}, .. }) =>
                 (args, filter, order_by).apply_ref_elements(f),
             Expr::WindowFunction(WindowFunction {
                                      args,
@@ -241,12 +242,15 @@ impl TreeNode for Expr {
                 },
             ),
             Expr::AggregateFunction(AggregateFunction {
-                args,
                 func,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
+                params:
+                    AggregateFunctionParams {
+                        args,
+                        distinct,
+                        filter,
+                        order_by,
+                        null_treatment,
+                    },
             }) => (args, filter, order_by).map_elements(f)?.map_data(
                 |(new_args, new_filter, new_order_by)| {
                     Ok(Expr::AggregateFunction(AggregateFunction::new_udf(

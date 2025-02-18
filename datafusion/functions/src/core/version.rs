@@ -17,11 +17,11 @@
 
 //! [`VersionFunc`]: Implementation of the `version` function.
 
-use crate::utils::take_function_args;
 use arrow::datatypes::DataType;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -76,12 +76,8 @@ impl ScalarUDFImpl for VersionFunc {
         Ok(DataType::Utf8)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let [] = take_function_args(self.name(), args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [] = take_function_args(self.name(), args.args)?;
         // TODO it would be great to add rust version and arrow version,
         // but that requires a `build.rs` script and/or adding a version const to arrow-rs
         let version = format!(
@@ -106,8 +102,13 @@ mod test {
     #[tokio::test]
     async fn test_version_udf() {
         let version_udf = ScalarUDF::from(VersionFunc::new());
-        #[allow(deprecated)] // TODO: migrate to invoke_with_args
-        let version = version_udf.invoke_batch(&[], 1).unwrap();
+        let version = version_udf
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![],
+                number_rows: 0,
+                return_type: &DataType::Utf8,
+            })
+            .unwrap();
 
         if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(version))) = version {
             assert!(version.starts_with("Apache DataFusion"));

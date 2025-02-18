@@ -68,7 +68,8 @@ impl RunOpt {
         };
 
         let config = self.common.config();
-        let ctx = SessionContext::new_with_config(config);
+        let rt_builder = self.common.runtime_env_builder()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
 
         // Register data
         self.register_data(&ctx).await?;

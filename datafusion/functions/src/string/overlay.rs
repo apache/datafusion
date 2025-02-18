@@ -27,7 +27,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -100,16 +100,14 @@ impl ScalarUDFImpl for OverlayFunc {
         utf8_to_str_type(&arg_types[0], "overlay")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {
-                make_scalar_function(overlay::<i32>, vec![])(args)
+                make_scalar_function(overlay::<i32>, vec![])(&args.args)
             }
-            DataType::LargeUtf8 => make_scalar_function(overlay::<i64>, vec![])(args),
+            DataType::LargeUtf8 => {
+                make_scalar_function(overlay::<i64>, vec![])(&args.args)
+            }
             other => exec_err!("Unsupported data type {other:?} for function overlay"),
         }
     }

@@ -72,7 +72,7 @@ fn csv_exec_ordered(
     )
     .with_file(PartitionedFile::new("file_path".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .new_exec()
+    .build()
 }
 
 /// Created a sorted parquet exec
@@ -90,7 +90,7 @@ pub fn parquet_exec_sorted(
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .new_exec()
+    .build()
 }
 
 /// Create a sorted Csv exec
@@ -107,7 +107,7 @@ fn csv_exec_sorted(
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .new_exec()
+    .build()
 }
 
 /// Runs the sort enforcement optimizer and asserts the plan

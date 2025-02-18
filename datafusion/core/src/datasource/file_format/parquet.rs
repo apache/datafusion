@@ -398,7 +398,7 @@ impl FileFormat for ParquetFormat {
     async fn create_physical_plan(
         &self,
         _state: &dyn Session,
-        mut conf: FileScanConfig,
+        conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let mut predicate = None;
@@ -424,8 +424,7 @@ impl FileFormat for ParquetFormat {
         if let Some(metadata_size_hint) = metadata_size_hint {
             source = source.with_metadata_size_hint(metadata_size_hint)
         }
-        conf = conf.with_source(Arc::new(source));
-        Ok(conf.new_exec())
+        Ok(conf.with_source(Arc::new(source)).build())
     }
 
     async fn create_writer_physical_plan(

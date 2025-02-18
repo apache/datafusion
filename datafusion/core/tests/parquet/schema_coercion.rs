@@ -64,7 +64,7 @@ async fn multi_parquet_coercion() {
         FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, source)
             .with_file_group(file_group);
 
-    let parquet_exec = conf.new_exec();
+    let parquet_exec = conf.build();
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
@@ -121,7 +121,7 @@ async fn multi_parquet_coercion_projection() {
     )
     .with_file_group(file_group)
     .with_projection(Some(vec![1, 0, 2]))
-    .new_exec();
+    .build();
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
