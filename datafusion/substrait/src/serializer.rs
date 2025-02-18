@@ -41,9 +41,9 @@ pub async fn serialize(
 
     if std::fs::metadata(path.as_ref()).is_ok_and(|meta| meta.len() > 0) {
         return Err(DataFusionError::Substrait(format!(
-            "Failed to encode substrait plan: the file {} already exists and is not empty", 
-            path.as_ref().display())
-        ));
+            "Failed to encode plan: the file {} already exists and is not empty",
+            path.as_ref().display()
+        )));
     }
 
     let mut file = OpenOptions::new()
@@ -62,9 +62,9 @@ pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec<u8>>
     let proto = producer::to_substrait_plan(&plan, &ctx.state())?;
 
     let mut protobuf_out = Vec::<u8>::new();
-    proto.encode(&mut protobuf_out).map_err(|e| {
-        DataFusionError::Substrait(format!("Failed to encode substrait plan: {e}"))
-    })?;
+    proto
+        .encode(&mut protobuf_out)
+        .map_err(|e| DataFusionError::Substrait(format!("Failed to encode plan: {e}")))?;
     Ok(protobuf_out)
 }
 
@@ -81,6 +81,6 @@ pub async fn deserialize(path: impl AsRef<Path>) -> Result<Box<Plan>> {
 /// Deserializes a plan from the bytes.
 pub async fn deserialize_bytes(proto_bytes: Vec<u8>) -> Result<Box<Plan>> {
     Ok(Box::new(Message::decode(&*proto_bytes).map_err(|e| {
-        DataFusionError::Substrait(format!("Failed to decode substrait plan: {e}"))
+        DataFusionError::Substrait(format!("Failed to decode plan: {e}"))
     })?))
 }
