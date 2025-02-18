@@ -27,6 +27,7 @@ use arrow::{
 };
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
+use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::ColumnarValue;
 
 /// IS NOT NULL expression
@@ -103,6 +104,17 @@ impl PhysicalExpr for IsNotNullExpr {
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(IsNotNullExpr::new(Arc::clone(&children[0]))))
+    }
+
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        let inner = children[0];
+        Ok(if inner.is_null() {
+            Interval::CERTAINLY_FALSE
+        } else if inner.lower().is_null() || inner.upper().is_null() {
+            Interval::UNCERTAIN
+        } else {
+            Interval::CERTAINLY_TRUE
+        })
     }
 }
 

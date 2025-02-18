@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::PhysicalExpr;
 
+use arrow::datatypes::SchemaRef;
 use arrow::{
     compute::kernels::numeric::neg_wrapping,
     datatypes::{DataType, Schema},
@@ -120,6 +121,10 @@ impl PhysicalExpr for NegativeExpr {
             children[0].upper().arithmetic_negate()?,
             children[0].lower().arithmetic_negate()?,
         )
+    }
+
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        self.arg().supports_bounds_evaluation(schema)
     }
 
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that

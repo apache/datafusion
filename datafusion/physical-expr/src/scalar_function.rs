@@ -38,7 +38,7 @@ use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
 use arrow::array::{Array, RecordBatch};
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
@@ -235,6 +235,10 @@ impl PhysicalExpr for ScalarFunctionExpr {
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         self.fun.evaluate_bounds(children)
+    }
+
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        self.fun.supports_bounds_evaluation(schema)
     }
 
     fn propagate_constraints(
