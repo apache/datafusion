@@ -3212,6 +3212,7 @@ async fn apply_enforce_distribution_multiple_times() -> Result<()> {
         Arc::new(ProjectionPushdown::new()),
         Arc::new(CoalesceBatches::new()),
         Arc::new(EnforceDistribution::new()), // -- Add enforce distribution rule again
+        // The second `EnforceDistribution` should be run before removing `OutputRequirements` to reproduce the bug.
         Arc::new(OutputRequirements::new_remove_mode()),
         Arc::new(ProjectionPushdown::new()),
         Arc::new(LimitPushdown::new()),
