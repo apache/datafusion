@@ -18,7 +18,9 @@
 //! [`ScalarUDFImpl`] definitions for array_sort function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, ListArray, NullBufferBuilder};
+use arrow::array::{
+    make_array, Array, ArrayData, ArrayRef, ListArray, NullBufferBuilder,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List};
 use arrow::datatypes::{DataType, Field};
@@ -26,7 +28,8 @@ use arrow::{compute, compute::SortOptions};
 use datafusion_common::cast::{as_list_array, as_string_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -87,7 +90,30 @@ impl Default for ArraySort {
 impl ArraySort {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: None,
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::DataType(DataType::Utf8),
+                        ],
+                        array_coercion: None,
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::DataType(DataType::Utf8),
+                            ArrayFunctionArgument::DataType(DataType::Utf8),
+                        ],
+                        array_coercion: None,
+                    }),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec!["list_sort".to_string()],
         }
     }
@@ -142,6 +168,13 @@ impl ScalarUDFImpl for ArraySort {
 pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     if args.is_empty() || args.len() > 3 {
         return exec_err!("array_sort expects one to three arguments");
+    }
+
+    if args[1..].iter().any(|array| array.logical_null_count() > 0) {
+        return Ok(Arc::new(make_array(ArrayData::new_null(
+            args[0].data_type(),
+            1,
+        ))));
     }
 
     let sort_option = match args.len() {
