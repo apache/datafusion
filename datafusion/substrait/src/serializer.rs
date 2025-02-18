@@ -39,15 +39,11 @@ pub async fn serialize(
 ) -> Result<()> {
     let protobuf_out = serialize_bytes(sql, ctx).await;
 
-    match std::fs::metadata(path.as_ref()) {
-        Ok(meta) if meta.len() > 0 => {
-            return Err(DataFusionError::Substrait(format!(
-                "Failed to encode substrait plan: the file {} already exists and is not empty", 
-                path.as_ref().display())
-            ));
-        }
-        // Ignores other cases.
-        _ => {}
+    if std::fs::metadata(path.as_ref()).is_ok_and(|meta| meta.len() > 0) {
+        return Err(DataFusionError::Substrait(format!(
+            "Failed to encode substrait plan: the file {} already exists and is not empty", 
+            path.as_ref().display())
+        ));
     }
 
     let mut file = OpenOptions::new()
@@ -73,7 +69,7 @@ pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec<u8>>
 }
 
 /// Reads the file at `path` and deserializes a plan from the bytes.
-pub async fn deserialize(path: &str) -> Result<Box<Plan>> {
+pub async fn deserialize(path: impl AsRef<Path>) -> Result<Box<Plan>> {
     let mut protobuf_in = Vec::<u8>::new();
 
     let mut file = OpenOptions::new().read(true).open(path)?;
