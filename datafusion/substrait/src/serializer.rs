@@ -39,17 +39,9 @@ pub async fn serialize(
 ) -> Result<()> {
     let protobuf_out = serialize_bytes(sql, ctx).await;
 
-    if std::fs::metadata(path.as_ref()).is_ok_and(|meta| meta.len() > 0) {
-        return Err(DataFusionError::Substrait(format!(
-            "Failed to encode plan: the file {} already exists and is not empty",
-            path.as_ref().display()
-        )));
-    }
-
     let mut file = OpenOptions::new()
-        .create(true)
         .write(true)
-        .truncate(true)
+        .create_new(true)
         .open(path)?;
     file.write_all(&protobuf_out?)?;
     Ok(())
