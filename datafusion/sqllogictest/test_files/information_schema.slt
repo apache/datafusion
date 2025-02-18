@@ -249,6 +249,7 @@ datafusion.optimizer.max_passes 3
 datafusion.optimizer.prefer_existing_sort false
 datafusion.optimizer.prefer_existing_union false
 datafusion.optimizer.prefer_hash_join true
+datafusion.optimizer.prefer_round_robin_repartition true
 datafusion.optimizer.repartition_aggregations true
 datafusion.optimizer.repartition_file_min_size 10485760
 datafusion.optimizer.repartition_file_scans true
@@ -344,6 +345,7 @@ datafusion.optimizer.max_passes 3 Number of times that the optimizer will attemp
 datafusion.optimizer.prefer_existing_sort false When true, DataFusion will opportunistically remove sorts when the data is already sorted, (i.e. setting `preserve_order` to true on `RepartitionExec`  and using `SortPreservingMergeExec`) When false, DataFusion will maximize plan parallelism using `RepartitionExec` even if this requires subsequently resorting data using a `SortExec`.
 datafusion.optimizer.prefer_existing_union false When set to true, the optimizer will not attempt to convert Union to Interleave
 datafusion.optimizer.prefer_hash_join true When set to true, the physical plan optimizer will prefer HashJoin over SortMergeJoin. HashJoin can work more efficiently than SortMergeJoin but consumes more memory
+datafusion.optimizer.prefer_round_robin_repartition true When set to false, the physical plan optimizer will replace the round robin repartitioning with on demand repartitioning
 datafusion.optimizer.repartition_aggregations true Should DataFusion repartition data using the aggregate keys to execute aggregates in parallel using the provided `target_partitions` level
 datafusion.optimizer.repartition_file_min_size 10485760 Minimum total files size in bytes to perform file scan repartitioning.
 datafusion.optimizer.repartition_file_scans true When set to `true`, file groups will be repartitioned to achieve maximum parallelism. Currently Parquet and CSV formats are supported. If set to `true`, all files will be repartitioned evenly (i.e., a single large file might be partitioned into smaller chunks) for parallel scanning. If set to `false`, different files will be read in parallel, but repartitioning won't happen within a single file.
