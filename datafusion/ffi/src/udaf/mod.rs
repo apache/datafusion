@@ -15,13 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{ffi::c_void, sync::Arc};
+use std::{
+    ffi::c_void,
+    sync::{Arc, Mutex},
+};
 
 use abi_stable::{
-    std_types::{RResult, RString, RVec},
+    std_types::{RResult, RStr, RString, RVec},
     StableAbi,
 };
-use arrow::datatypes::DataType;
+use accumulator::FFI_Accumulator;
+use accumulator_args::FFI_AccumulatorArgs;
+use arrow::datatypes::{DataType, Field, SchemaRef};
 use arrow::ffi::{from_ffi, to_ffi, FFI_ArrowSchema};
 use datafusion::{
     error::DataFusionError,
@@ -30,6 +35,8 @@ use datafusion::{
         utils::AggregateOrderSensitivity,
         Accumulator, GroupsAccumulator, ReversedUDAF,
     },
+    physical_plan::aggregates::order,
+    prelude::SessionContext,
 };
 use datafusion::{
     error::Result,
@@ -37,14 +44,31 @@ use datafusion::{
         AggregateUDF, AggregateUDFImpl, ColumnarValue, ScalarFunctionArgs, Signature,
     },
 };
+use datafusion_proto::{
+    physical_plan::{
+        from_proto::{parse_physical_exprs, parse_physical_sort_exprs},
+        to_proto::{
+            serialize_physical_expr, serialize_physical_exprs,
+            serialize_physical_sort_exprs,
+        },
+        DefaultPhysicalExtensionCodec,
+    },
+    protobuf::{PhysicalAggregateExprNode, PhysicalSortExprNodeCollection},
+};
+use groups_accumulator::FFI_GroupsAccumulator;
 
 use crate::{
     arrow_wrappers::{WrappedArray, WrappedSchema},
     df_result, rresult, rresult_return,
-    signature::{self, rvec_wrapped_to_vec_datatype, FFI_Signature},
+    signature::{
+        self, rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped, FFI_Signature,
+    },
 };
+use prost::Message;
 
 mod accumulator;
+mod accumulator_args;
+mod groups_accumulator;
 
 /// A stable struct for sharing a [`AggregateUDF`] across FFI boundaries.
 #[repr(C)]
@@ -65,6 +89,28 @@ pub struct FFI_AggregateUDF {
 
     pub is_nullable: bool,
 
+    pub groups_accumulator_supported:
+        unsafe extern "C" fn(udaf: &FFI_AggregateUDF, args: FFI_AccumulatorArgs) -> bool,
+
+    pub accumulator: unsafe extern "C" fn(
+        udaf: &FFI_AggregateUDF,
+        args: FFI_AccumulatorArgs,
+    ) -> RResult<FFI_Accumulator, RString>,
+
+    pub state_fields: unsafe extern "C" fn(
+        udaf: &FFI_AggregateUDF,
+        name: &RStr,
+        input_types: RVec<WrappedSchema>,
+        return_type: WrappedSchema,
+        ordering_fields: RVec<RVec<u8>>,
+        is_distinct: bool,
+    ) -> RResult<RVec<RVec<u8>>, RString>,
+
+    pub create_groups_accumulator:
+        unsafe extern "C" fn(
+            &FFI_AggregateUDF,
+            args: FFI_AccumulatorArgs,
+        ) -> RResult<FFI_Accumulator, RString>,
 
     /// Used to create a clone on the provider of the udaf. This should
     /// only need to be called by the receiver of the udaf.
@@ -125,6 +171,49 @@ unsafe extern "C" fn return_type_fn_wrapper(
     rresult!(return_type)
 }
 
+unsafe extern "C" fn accumulator_fn_wrapper(
+    udaf: &FFI_AggregateUDF,
+    args: FFI_AccumulatorArgs,
+) -> RResult<FFI_Accumulator, RString> {
+    let private_data = udaf.private_data as *const AggregateUDFPrivateData;
+    let udaf = &(*private_data).udaf;
+
+    let accumulator_args = rresult_return!(args.to_accumulator_args());
+
+    rresult!(udaf
+        .accumulator(accumulator_args)
+        .map(FFI_Accumulator::from))
+}
+
+unsafe extern "C" fn create_groups_accumulator_fn_wrapper(
+    udaf: &FFI_AggregateUDF,
+    args: FFI_AccumulatorArgs,
+) -> RResult<FFI_Accumulator, RString> {
+    let private_data = udaf.private_data as *const AggregateUDFPrivateData;
+    let udaf = &(*private_data).udaf;
+
+    let accumulator_args = rresult_return!(args.to_accumulator_args());
+
+    rresult!(udaf
+        .create_groups_accumulator(accumulator_args)
+        .map(FFI_GroupsAccumulator::from))
+}
+
+unsafe extern "C" fn groups_accumulator_supported_fn_wrapper(
+    udaf: &FFI_AggregateUDF,
+    args: FFI_AccumulatorArgs,
+) -> bool {
+    let private_data = udaf.private_data as *const AggregateUDFPrivateData;
+    let udaf = &(*private_data).udaf;
+
+    args.to_accumulator_args()
+        .map(|a| udaf.groups_accumulator_supported(a))
+        .unwrap_or_else(|e| {
+            log::warn!("Unable to parse accumulator args. {}", e);
+            false
+        })
+}
+
 unsafe extern "C" fn release_fn_wrapper(udaf: &mut FFI_AggregateUDF) {
     let private_data = Box::from_raw(udaf.private_data as *mut AggregateUDFPrivateData);
     drop(private_data);
@@ -156,6 +245,9 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             signature: signature_fn_wrapper,
             aliases: aliases_fn_wrapper,
             return_type: return_type_fn_wrapper,
+            accumulator: accumulator_fn_wrapper,
+            create_groups_accumulator: create_groups_accumulator_fn_wrapper,
+            groups_accumulator_supported: groups_accumulator_supported_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -221,7 +313,7 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_types = signature::vec_datatype_to_rvec_wrapped(arg_types)?;
+        let arg_types = vec_datatype_to_rvec_wrapped(arg_types)?;
 
         let result = unsafe { (self.udaf.return_type)(&self.udaf, arg_types) };
 
@@ -234,16 +326,69 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
         self.udaf.is_nullable
     }
 
-    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {}
+    fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+        let args = acc_args.try_into()?;
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {}
+        unsafe { df_result!((self.udaf.accumulator)(&self.udaf, args)) }
+    }
 
-    fn groups_accumulator_supported(&self, _args: AccumulatorArgs) -> bool {}
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<Field>> {
+        unsafe {
+            let name = RStr::from_str(args.name);
+            let input_types = vec_datatype_to_rvec_wrapped(args.input_types)?;
+            let return_type = WrappedSchema(FFI_ArrowSchema::try_from(args.return_type)?);
+            let ordering_fields = args
+                .ordering_fields
+                .iter()
+                .map(datafusion_proto::protobuf::Field::try_from)
+                .map(|v| v.map_err(DataFusionError::from))
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .map(|proto_field| proto_field.encode_to_vec().into())
+                .collect();
+
+            let fields = df_result!((self.udaf.state_fields)(
+                &self.udaf,
+                &name,
+                input_types,
+                return_type,
+                ordering_fields,
+                args.is_distinct
+            ))?;
+            let fields = fields
+                .into_iter()
+                .map(|field_bytes| {
+                    datafusion_proto_common::Field::decode(field_bytes.as_ref())
+                        .map_err(|e| DataFusionError::Execution(e.to_string()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            datafusion_proto_common::from_proto::parse_proto_fields_to_fields(
+                fields.iter(),
+            )
+            .map_err(|e| DataFusionError::Execution(e.to_string()))
+        }
+    }
+
+    fn groups_accumulator_supported(&self, args: AccumulatorArgs) -> bool {
+        let args = match FFI_AccumulatorArgs::try_from(args) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("Attempting to convert accumulator arguments: {}", e);
+                return false;
+            }
+        };
+
+        unsafe { (self.udaf.groups_accumulator_supported)(&self.udaf, args) }
+    }
 
     fn create_groups_accumulator(
         &self,
-        _args: AccumulatorArgs,
+        args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        let args = FFI_AccumulatorArgs::try_from(args)?;
+
+        unsafe { df_result!((self.udaf.accumulator)(&self.udaf, args)) }
     }
 
     fn aliases(&self) -> &[String] {
