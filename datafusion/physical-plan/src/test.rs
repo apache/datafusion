@@ -17,81 +17,59 @@
 
 //! Utilities for testing datafusion-physical-plan
 
-use arrow::array::{ArrayRef, Int32Array, RecordBatch};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_expr::LexOrdering;
-use futures::{Future, FutureExt};
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
+use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
-
 use std::task::{Context, Poll};
 
-use crate::{common, RecordBatchStream};
-
-use datafusion_common::{project_schema, Result};
-use datafusion_execution::memory_pool::MemoryReservation;
-use datafusion_physical_expr::equivalence::ProjectionMapping;
-use datafusion_physical_expr::expressions::Column;
-
-use futures::Stream;
-
+use crate::execution_plan::{Boundedness, EmissionType};
+use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
 use crate::ExecutionPlan;
+use crate::{common, RecordBatchStream};
+use crate::{DisplayAs, DisplayFormatType, PlanProperties};
+
+use arrow::array::{ArrayRef, Int32Array, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::{
+    config::ConfigOptions, internal_err, project_schema, Result, Statistics,
+};
+use datafusion_execution::{
+    memory_pool::MemoryReservation, SendableRecordBatchStream, TaskContext,
+};
+use datafusion_physical_expr::{
+    equivalence::ProjectionMapping, expressions::Column, utils::collect_columns,
+    EquivalenceProperties, LexOrdering, Partitioning,
+};
+
+use futures::Stream;
+use futures::{Future, FutureExt};
 
 pub mod exec;
 
-use std::any::Any;
-use std::fmt::{Debug, Formatter};
-
-use crate::execution_plan::{Boundedness, EmissionType};
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::{DisplayAs, DisplayFormatType, PlanProperties};
-
-use datafusion_common::config::ConfigOptions;
-use datafusion_common::{internal_err, Statistics};
-use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-
-/// Common behaviors in Data Sources for both from Files and MockMemory.
-/// See `MockMemorySourceConfig` for physical plan implementation
-// pub trait MockDataSource: Send + Sync {
-//     fn open(
-//         &self,
-//         partition: usize,
-//         context: Arc<TaskContext>,
-//     ) -> Result<SendableRecordBatchStream>;
-//     fn as_any(&self) -> &dyn Any;
-//     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
-//     fn repartitioned(
-//         &self,
-//         _target_partitions: usize,
-//         _repartition_file_min_size: usize,
-//         _output_ordering: Option<LexOrdering>,
-//     ) -> Result<Option<Arc<dyn MockDataSource>>> {
-//         Ok(None)
-//     }
-
-//     fn output_partitioning(&self) -> Partitioning;
-//     fn eq_properties(&self) -> EquivalenceProperties;
-//     fn statistics(&self) -> Result<Statistics>;
-//     fn fetch(&self) -> Option<usize>;
-//     fn metrics(&self) -> ExecutionPlanMetricsSet {
-//         ExecutionPlanMetricsSet::new()
-//     }
-// }
-
-// 
-
-/// Unified data source for file formats like JSON, CSV, AVRO, ARROW, PARQUET
-// #[derive(Clone, Debug)]
-// pub struct MockMemorySourceConfig {
-//     source: Arc<dyn MockDataSource>,
-//     cache: PlanProperties,
-// }
+#[derive(Clone, Debug)]
+pub struct MockMemorySourceConfig {
+    /// The partitions to query
+    partitions: Vec<Vec<RecordBatch>>,
+    /// Schema representing the data before projection
+    schema: SchemaRef,
+    /// Schema representing the data after the optional projection is applied
+    projected_schema: SchemaRef,
+    /// Optional projection
+    projection: Option<Vec<usize>>,
+    /// Sort information: one or more equivalent orderings
+    sort_information: Vec<LexOrdering>,
+    /// if partition sizes should be displayed
+    show_sizes: bool,
+    /// The maximum number of records to read from this plan. If `None`,
+    /// all records after filtering are returned.
+    fetch: Option<usize>,
+    cache: PlanProperties,
+}
 
 impl DisplayAs for MockMemorySourceConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
@@ -191,49 +169,6 @@ impl ExecutionPlan for MockMemorySourceConfig {
     }
 }
 
-// impl MockMemorySourceConfig {
-    // pub fn new(source: Arc<dyn MockDataSource>) -> Self {
-    //     let cache = Self::compute_properties(Arc::clone(&source));
-    //     Self { source, cache }
-    // }
-
-    /// Return the source object
-    // pub fn source(&self) -> &Arc<dyn MockDataSource> {
-    //     &self.source
-    // }
-
-    // fn compute_properties(source: Arc<dyn MockDataSource>) -> PlanProperties {
-    //     PlanProperties::new(
-    //         source.eq_properties(),
-    //         source.output_partitioning(),
-    //         EmissionType::Incremental,
-    //         Boundedness::Bounded,
-    //     )
-    // }
-// }
-
-/// Data source configuration for reading in-memory batches of data
-#[derive(Clone, Debug)]
-pub struct MockMemorySourceConfig {
-    /// The partitions to query
-    partitions: Vec<Vec<RecordBatch>>,
-    /// Schema representing the data before projection
-    schema: SchemaRef,
-    /// Schema representing the data after the optional projection is applied
-    projected_schema: SchemaRef,
-    /// Optional projection
-    projection: Option<Vec<usize>>,
-    /// Sort information: one or more equivalent orderings
-    sort_information: Vec<LexOrdering>,
-    /// if partition sizes should be displayed
-    show_sizes: bool,
-    /// The maximum number of records to read from this plan. If `None`,
-    /// all records after filtering are returned.
-    fetch: Option<usize>,
-    cache: PlanProperties,
-    // source: MockMemorySourceConfig
-}
-
 impl MockMemorySourceConfig {
     fn open(
         &self,
@@ -250,9 +185,6 @@ impl MockMemorySourceConfig {
         ))
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn compute_properties(&self) -> PlanProperties {
         PlanProperties::new(
             self.eq_properties(),
@@ -261,48 +193,6 @@ impl MockMemorySourceConfig {
             Boundedness::Bounded,
         )
     }
-
-    // fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-    //     match t {
-    //         DisplayFormatType::Default | DisplayFormatType::Verbose => {
-    //             let partition_sizes: Vec<_> =
-    //                 self.partitions.iter().map(|b| b.len()).collect();
-
-    //             let output_ordering = self
-    //                 .sort_information
-    //                 .first()
-    //                 .map(|output_ordering| {
-    //                     format!(", output_ordering={}", output_ordering)
-    //                 })
-    //                 .unwrap_or_default();
-
-    //             let eq_properties = self.eq_properties();
-    //             let constraints = eq_properties.constraints();
-    //             let constraints = if constraints.is_empty() {
-    //                 String::new()
-    //             } else {
-    //                 format!(", {}", constraints)
-    //             };
-
-    //             let limit = self
-    //                 .fetch
-    //                 .map_or(String::new(), |limit| format!(", fetch={}", limit));
-    //             if self.show_sizes {
-    //                 write!(
-    //                     f,
-    //                     "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-    //                     partition_sizes.len(),
-    //                 )
-    //             } else {
-    //                 write!(
-    //                     f,
-    //                     "partitions={}{limit}{output_ordering}{constraints}",
-    //                     partition_sizes.len(),
-    //                 )
-    //             }
-    //         }
-    //     }
-    
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(self.partitions.len())
@@ -322,11 +212,7 @@ impl MockMemorySourceConfig {
             self.projection.clone(),
         ))
     }
-// }
 
-// impl MockMemorySourceConfig {
-    /// Create a new `MockMemorySourceConfig` for reading in-memory record batches
-    /// The provided `schema` should not have the projection applied.
     pub fn try_new(
         partitions: &[Vec<RecordBatch>],
         schema: SchemaRef,
@@ -350,11 +236,10 @@ impl MockMemorySourceConfig {
             sort_information: vec![],
             show_sizes: true,
             fetch: None,
-            
         })
     }
 
-    /// Create a new `DataSourceExec` plan for reading in-memory record batches
+    /// Create a new `DataSourceExec` Equivalent plan for reading in-memory record batches
     /// The provided `schema` should not have the projection applied.
     pub fn try_new_exec(
         partitions: &[Vec<RecordBatch>],
@@ -366,14 +251,16 @@ impl MockMemorySourceConfig {
         source.cache = cache;
         Ok(Arc::new(source))
     }
+
+    // Equivalent of `DataSourceExec::new`
     pub fn new(source: Arc<MockMemorySourceConfig>) -> MockMemorySourceConfig {
-        // let source = source;
         let cache = source.compute_properties();
-        let source =  &*source;
+        let source = &*source;
         let mut source = source.clone();
         source.cache = cache;
         source
     }
+
     /// Set the limit of the files
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.fetch = limit;
@@ -658,7 +545,7 @@ pub fn scan_partitioned(partitions: usize) -> Arc<dyn ExecutionPlan> {
 
     let schema = data[0][0].schema();
     let projection = None;
-    
+
     MockMemorySourceConfig::try_new_exec(&data, schema, projection).unwrap()
 }
 

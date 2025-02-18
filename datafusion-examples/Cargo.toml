@@ -62,6 +62,7 @@ bytes = { workspace = true }
 dashmap = { workspace = true }
 # note only use main datafusion crate for examples
 datafusion = { workspace = true, default-features = true, features = ["avro"] }
+datafusion-datasource = { workspace = true }
 datafusion-proto = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }

@@ -56,18 +56,14 @@ pub mod coalesce_batches;
 pub mod coalesce_partitions;
 pub mod common;
 pub mod display;
-// pub mod empty;
 pub mod execution_plan;
 pub mod explain;
 pub mod filter;
 pub mod insert;
 pub mod joins;
 pub mod limit;
-// pub mod memory;
 pub mod metrics;
-// pub mod placeholder_row;
 pub mod projection;
-// pub mod recursive_query;
 pub mod repartition;
 pub mod sorts;
 pub mod spill;
@@ -76,16 +72,12 @@ pub mod streaming;
 pub mod tree_node;
 pub mod union;
 pub mod unnest;
-// pub mod values;
 pub mod windows;
-// pub mod work_table;
-
 pub mod udaf {
     pub use datafusion_expr::StatisticsArgs;
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 
 pub mod coalesce;
-// pub mod source;
 #[cfg(test)]
 pub mod test;
