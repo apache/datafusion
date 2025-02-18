@@ -31,7 +31,7 @@ use std::path::Path;
 /// Plans a sql and serializes the generated logical plan to bytes.
 /// The bytes are then written into a file at `path`.
 ///
-/// Returns an error if the file already exists and is not empty.
+/// Returns an error if the file already exists.
 pub async fn serialize(
     sql: &str,
     ctx: &SessionContext,
@@ -39,10 +39,7 @@ pub async fn serialize(
 ) -> Result<()> {
     let protobuf_out = serialize_bytes(sql, ctx).await;
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     file.write_all(&protobuf_out?)?;
     Ok(())
 }
