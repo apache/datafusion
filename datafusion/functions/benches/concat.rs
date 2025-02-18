@@ -40,10 +40,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         let mut group = c.benchmark_group("concat function");
         group.bench_function(BenchmarkId::new("concat", size), |b| {
             b.iter(|| {
+                let args_cloned = args.clone();
                 criterion::black_box(
                     concat()
                         .invoke_with_args(ScalarFunctionArgs {
-                            args: args.clone(),
+                            args: args_cloned,
                             number_rows: size,
                             return_type: &DataType::Utf8,
                         })

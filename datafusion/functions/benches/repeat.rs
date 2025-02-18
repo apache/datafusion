@@ -74,8 +74,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
+                    let args_cloned = args.clone();
                     black_box(repeat.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
+                        args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
                     }))
@@ -91,8 +92,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
+                    let args_cloned = args.clone();
                     black_box(repeat.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
+                        args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
                     }))
@@ -108,8 +110,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
+                    let args_cloned = args.clone();
                     black_box(repeat.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
+                        args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
                     }))
@@ -134,8 +137,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
+                    let args_cloned = args.clone();
                     black_box(repeat.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
+                        args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
                     }))
@@ -151,8 +155,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
+                    let args_cloned = args.clone();
                     black_box(repeat.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
+                        args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
                     }))
@@ -168,8 +173,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
+                    let args_cloned = args.clone();
                     black_box(repeat.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
+                        args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
                     }))
@@ -194,8 +200,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
+                    let args_cloned = args.clone();
                     black_box(repeat.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
+                        args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
                     }))

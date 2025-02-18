@@ -39,8 +39,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args(size, 32);
         c.bench_function("upper_all_values_are_ascii", |b| {
             b.iter(|| {
+                let args_cloned = args.clone();
                 black_box(upper.invoke_with_args(ScalarFunctionArgs {
-                    args: args.clone(),
+                    args: args_cloned,
                     number_rows: size,
                     return_type: &DataType::Utf8,
                 }))

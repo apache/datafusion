@@ -142,8 +142,9 @@ fn run_with_string_type<M: Measurement>(
         ),
         |b| {
             b.iter(|| {
+                let args_cloned = args.clone();
                 black_box(ltrim.invoke_with_args(ScalarFunctionArgs {
-                    args: args.clone(),
+                    args: args_cloned,
                     number_rows: size,
                     return_type: &DataType::Utf8,
                 }))

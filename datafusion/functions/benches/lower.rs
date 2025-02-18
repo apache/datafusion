@@ -126,8 +126,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args1(size, 32);
         c.bench_function(&format!("lower_all_values_are_ascii: {}", size), |b| {
             b.iter(|| {
+                let args_cloned = args.clone();
                 black_box(lower.invoke_with_args(ScalarFunctionArgs {
-                    args: args.clone(),
+                    args: args_cloned,
                     number_rows: size,
                     return_type: &DataType::Utf8,
                 }))
@@ -139,8 +140,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("lower_the_first_value_is_nonascii: {}", size),
             |b| {
                 b.iter(|| {
+                    let args_cloned = args.clone();
                     black_box(lower.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
+                        args: args_cloned,
                         number_rows: size,
                         return_type: &DataType::Utf8,
                     }))
@@ -153,8 +155,9 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("lower_the_middle_value_is_nonascii: {}", size),
             |b| {
                 b.iter(|| {
+                    let args_cloned = args.clone();
                     black_box(lower.invoke_with_args(ScalarFunctionArgs {
-                        args: args.clone(),
+                        args: args_cloned,
                         number_rows: size,
                         return_type: &DataType::Utf8,
                     }))
@@ -177,8 +180,9 @@ fn criterion_benchmark(c: &mut Criterion) {
                         &format!("lower_all_values_are_ascii_string_views: size: {}, str_len: {}, null_density: {}, mixed: {}",
                      size, str_len, null_density, mixed),
                         |b| b.iter(|| {
+                            let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
-                                args: args.clone(),
+                                args: args_cloned,
                                 number_rows: size,
                                 return_type: &DataType::Utf8,
                             }))
@@ -190,8 +194,9 @@ fn criterion_benchmark(c: &mut Criterion) {
                         &format!("lower_all_values_are_ascii_string_views: size: {}, str_len: {}, null_density: {}, mixed: {}",
                      size, str_len, null_density, mixed),
                         |b| b.iter(|| {
+                            let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
-                                args: args.clone(),
+                                args: args_cloned,
                                 number_rows: size,
                                 return_type: &DataType::Utf8,
                             }))
@@ -203,8 +208,9 @@ fn criterion_benchmark(c: &mut Criterion) {
                         &format!("lower_some_values_are_nonascii_string_views: size: {}, str_len: {}, non_ascii_density: {}, null_density: {}, mixed: {}",
                      size, str_len, 0.1, null_density, mixed),
                         |b| b.iter(|| {
+                            let args_cloned = args.clone();
                             black_box(lower.invoke_with_args(ScalarFunctionArgs{
-                                args: args.clone(),
+                                args: args_cloned,
                                 number_rows: size,
                                 return_type: &DataType::Utf8,
                             }))
