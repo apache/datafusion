@@ -60,7 +60,7 @@ order by
 logical_plan
 01)Sort: numwait DESC NULLS FIRST, supplier.s_name ASC NULLS LAST
 02)--Projection: supplier.s_name, count(*) AS numwait
-03)----Aggregate: groupBy=[[supplier.s_name]], aggr=[[count(Int64(1)) AS count(*)]]
+03)----Aggregate: groupBy=[[supplier.s_name]], aggr=[[count(*)]]
 04)------Projection: supplier.s_name
 05)--------LeftAnti Join: l1.l_orderkey = __correlated_sq_2.l_orderkey Filter: __correlated_sq_2.l_suppkey != l1.l_suppkey
 06)----------LeftSemi Join: l1.l_orderkey = __correlated_sq_1.l_orderkey Filter: __correlated_sq_1.l_suppkey != l1.l_suppkey

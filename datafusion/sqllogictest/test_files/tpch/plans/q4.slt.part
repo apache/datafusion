@@ -42,7 +42,7 @@ order by
 logical_plan
 01)Sort: orders.o_orderpriority ASC NULLS LAST
 02)--Projection: orders.o_orderpriority, count(*) AS order_count
-03)----Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[count(Int64(1)) AS count(*)]]
+03)----Aggregate: groupBy=[[orders.o_orderpriority]], aggr=[[count(*)]]
 04)------Projection: orders.o_orderpriority
 05)--------LeftSemi Join: orders.o_orderkey = __correlated_sq_1.l_orderkey
 06)----------Projection: orders.o_orderkey, orders.o_orderpriority

@@ -94,6 +94,8 @@ impl SessionStateDefaults {
                 feature = "unicode_expressions"
             ))]
             Arc::new(functions::planner::UserDefinedFunctionPlanner),
+            Arc::new(functions_aggregate::planner::AggregateFunctionPlanner),
+            Arc::new(functions_window::planner::WindowFunctionPlanner),
         ];
 
         expr_planners

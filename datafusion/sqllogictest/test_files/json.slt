@@ -54,7 +54,7 @@ query TT
 EXPLAIN SELECT count(*) from json_test
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+01)Aggregate: groupBy=[[]], aggr=[[count(*)]]
 02)--TableScan: json_test projection=[]
 physical_plan
 01)AggregateExec: mode=Final, gby=[], aggr=[count(*)]
