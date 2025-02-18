@@ -26,6 +26,7 @@ use arrow::csv::ReaderBuilder;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::TaskContext;
@@ -34,7 +35,6 @@ use datafusion::prelude::SessionContext;
 use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::{assert_batches_eq, DFSchema, ScalarValue};
-use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
 
 use async_trait::async_trait;

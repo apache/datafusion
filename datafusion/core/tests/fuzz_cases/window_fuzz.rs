@@ -22,6 +22,8 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
@@ -33,8 +35,6 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::HashMap;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_datasource::memory::MemorySourceConfig;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::type_coercion::functions::data_types_with_aggregate_udf;
 use datafusion_expr::{
     WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,

@@ -26,6 +26,8 @@ use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::JoinSide;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::BinaryExpr;
 use datafusion::physical_plan::collect;
@@ -36,8 +38,6 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::ScalarValue;
-use datafusion_datasource::memory::MemorySourceConfig;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::PhysicalExprRef;
 

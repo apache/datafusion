@@ -307,7 +307,7 @@ impl ListingOptions {
     /// ```
     /// # use std::sync::Arc;
     /// # use datafusion::prelude::SessionContext;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
@@ -329,7 +329,7 @@ impl ListingOptions {
     /// ```
     /// # use std::sync::Arc;
     /// # use datafusion::prelude::SessionContext;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     /// let extension = Some(".parquet");
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
@@ -392,7 +392,7 @@ impl ListingOptions {
     /// # use std::sync::Arc;
     /// # use arrow::datatypes::DataType;
     /// # use datafusion::prelude::col;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     /// // listing options for files with paths such as  `/mnt/data/col_a=x/col_b=y/data.parquet`
     /// // `col_a` and `col_b` will be included in the data read from those files
@@ -420,7 +420,7 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
@@ -438,7 +438,7 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()
@@ -457,7 +457,7 @@ impl ListingOptions {
     /// ```
     /// # use std::sync::Arc;
     /// # use datafusion::prelude::col;
-    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion_datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     ///  // Tell datafusion that the files are sorted by column "a"
     ///  let file_sort_order = vec![vec![
@@ -662,7 +662,7 @@ impl ListingOptions {
 /// # use datafusion::prelude::SessionContext;
 /// # use datafusion::error::Result;
 /// # use std::sync::Arc;
-/// # use datafusion::datasource::{
+/// # use datafusion_datasource::{
 /// #   listing::{
 /// #      ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 /// #   },

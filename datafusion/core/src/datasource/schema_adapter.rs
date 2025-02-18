@@ -159,7 +159,7 @@ pub trait SchemaMapper: Debug + Send + Sync {
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{DataType, Field, Schema};
-/// # use datafusion::datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapterFactory};
+/// # use datafusion_datasource::schema_adapter::{DefaultSchemaAdapterFactory, SchemaAdapterFactory};
 /// # use datafusion_common::record_batch;
 /// // Table has fields "a",  "b" and "c"
 /// let table_schema = Schema::new(vec![

@@ -32,6 +32,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::{AvroSource, CsvSource, FileScanConfig};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
@@ -65,7 +66,6 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use crate::common::{byte_to_string, str_to_byte};

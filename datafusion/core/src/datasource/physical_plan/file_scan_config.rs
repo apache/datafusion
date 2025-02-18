@@ -77,10 +77,10 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema};
-/// # use datafusion::datasource::listing::PartitionedFile;
-/// # use datafusion::datasource::physical_plan::FileScanConfig;
+/// # use datafusion_datasource::listing::PartitionedFile;
+/// # use datafusion_datasource::physical_plan::FileScanConfig;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
-/// # use datafusion::datasource::physical_plan::ArrowSource;
+/// # use datafusion_datasource::physical_plan::ArrowSource;
 /// # use datafusion_physical_plan::ExecutionPlan;
 /// # let file_schema = Arc::new(Schema::new(vec![
 /// #  Field::new("c1", DataType::Int32, false),

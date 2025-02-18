@@ -35,7 +35,6 @@ async-recursion = "1.0"
 async-trait = { workspace = true }
 chrono = { workspace = true }
 datafusion = { workspace = true }
-datafusion-datasource = { workspace = true }
 itertools = { workspace = true }
 object_store = { workspace = true }
 pbjson-types = { workspace = true }

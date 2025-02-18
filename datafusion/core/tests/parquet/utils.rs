@@ -18,7 +18,7 @@
 //! Utilities for parquet tests
 
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
-use datafusion_datasource::source::DataSourceExec;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion_physical_plan::metrics::MetricsSet;
 use datafusion_physical_plan::{accept, ExecutionPlan, ExecutionPlanVisitor};
 

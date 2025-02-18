@@ -22,12 +22,12 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::SessionContext;
 use datafusion_common::stats::Precision;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::cache::cache_manager::CacheManagerConfig;
 use datafusion_execution::cache::cache_unit::{
     DefaultFileStatisticsCache, DefaultListFilesCache,

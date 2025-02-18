@@ -44,8 +44,8 @@ mod sp_repartition_fuzz_tests {
     };
     use test_utils::add_empty_batches;
 
-    use datafusion_datasource::memory::MemorySourceConfig;
-    use datafusion_datasource::source::DataSourceExec;
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::datasource::source::DataSourceExec;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};

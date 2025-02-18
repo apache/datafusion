@@ -27,6 +27,8 @@ use arrow::array::{ArrayRef, DictionaryArray, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
 use datafusion::assert_batches_eq;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -38,8 +40,6 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
 use datafusion_common::{assert_contains, Result};
-use datafusion_datasource::memory::MemorySourceConfig;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::memory_pool::{
     GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };

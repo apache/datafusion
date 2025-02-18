@@ -24,13 +24,13 @@ use arrow::{
     compute::SortOptions,
     record_batch::RecordBatch,
 };
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
     sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use test_utils::{batches_to_vec, partitions_to_sorted_vec, stagger_batch_with_seed};

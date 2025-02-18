@@ -767,8 +767,8 @@ mod memory_exec_tests {
 mod tests {
     use super::*;
     use arrow::array::{ArrayRef, Int32Array};
-    use std::collections::HashMap;
     use datafusion_physical_plan::expressions::lit;
+    use std::collections::HashMap;
 
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::assert_batches_eq;

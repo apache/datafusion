@@ -24,13 +24,13 @@ use arrow::{
     compute::SortOptions,
     record_batch::RecordBatch,
 };
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::cast::as_int32_array;
-use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_execution::memory_pool::GreedyMemoryPool;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;

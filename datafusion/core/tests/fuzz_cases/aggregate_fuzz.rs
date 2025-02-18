@@ -30,6 +30,8 @@ use arrow::datatypes::{
 };
 use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::Result;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::aggregates::{
@@ -39,8 +41,6 @@ use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::HashMap;
-use datafusion_datasource::memory::MemorySourceConfig;
-use datafusion_datasource::source::DataSourceExec;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
