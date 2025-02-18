@@ -24,6 +24,7 @@ use arrow::array::{
     UInt8Array,
 };
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::utils::take_function_args;
 use datafusion_expr::TypeSignature;
 
 use datafusion_common::{
@@ -289,10 +290,12 @@ impl ScalarUDFImpl for StringToArray {
         &self,
         args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        let args = &args.args;
-        match args[0].data_type() {
-            Utf8 | Utf8View => make_scalar_function(string_to_array_inner::<i32>)(args),
-            LargeUtf8 => make_scalar_function(string_to_array_inner::<i64>)(args),
+        let [first_arg] = take_function_args(self.name(), &args.args)?;
+        match first_arg.data_type() {
+            Utf8 | Utf8View => {
+                make_scalar_function(string_to_array_inner::<i32>)(&args.args)
+            }
+            LargeUtf8 => make_scalar_function(string_to_array_inner::<i64>)(&args.args),
             other => {
                 exec_err!("unsupported type for string_to_array function as {other:?}")
             }
