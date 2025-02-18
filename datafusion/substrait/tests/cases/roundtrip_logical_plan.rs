@@ -309,6 +309,17 @@ async fn aggregate_grouping_rollup() -> Result<()> {
 }
 
 #[tokio::test]
+async fn multilayer_aggregate() -> Result<()> {
+    assert_expected_plan(
+        "SELECT a, sum(partial_count_b) FROM (SELECT a, count(b) as partial_count_b FROM data GROUP BY a) GROUP BY a",
+        "Aggregate: groupBy=[[data.a]], aggr=[[sum(count(data.b)) AS sum(partial_count_b)]]\
+        \n  Aggregate: groupBy=[[data.a]], aggr=[[count(data.b)]]\
+        \n    TableScan: data projection=[a, b]",
+        true
+    ).await
+}
+
+#[tokio::test]
 async fn decimal_literal() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE b > 2.5").await
 }
