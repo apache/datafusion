@@ -18,12 +18,13 @@
 extern crate criterion;
 
 use arrow::array::{ArrayRef, LargeStringArray, StringArray, StringViewArray};
+use arrow::datatypes::DataType;
 use criterion::{
     black_box, criterion_group, criterion_main, measurement::Measurement, BenchmarkGroup,
     Criterion, SamplingMode,
 };
 use datafusion_common::ScalarValue;
-use datafusion_expr::{ColumnarValue, ScalarUDF};
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF};
 use datafusion_functions::string;
 use rand::{distributions::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::{fmt, sync::Arc};
@@ -141,8 +142,11 @@ fn run_with_string_type<M: Measurement>(
         ),
         |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                black_box(ltrim.invoke_batch(&args, size))
+                black_box(ltrim.invoke_with_args(ScalarFunctionArgs {
+                    args: args.clone(),
+                    number_rows: size,
+                    return_type: &DataType::Utf8,
+                }))
             })
         },
     );

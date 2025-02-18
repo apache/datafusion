@@ -26,7 +26,7 @@ use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::datafusion_strsim;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -86,16 +86,14 @@ impl ScalarUDFImpl for LevenshteinFunc {
         utf8_to_int_type(&arg_types[0], "levenshtein")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {
-                make_scalar_function(levenshtein::<i32>, vec![])(args)
+                make_scalar_function(levenshtein::<i32>, vec![])(&args.args)
             }
-            DataType::LargeUtf8 => make_scalar_function(levenshtein::<i64>, vec![])(args),
+            DataType::LargeUtf8 => {
+                make_scalar_function(levenshtein::<i64>, vec![])(&args.args)
+            }
             other => {
                 exec_err!("Unsupported data type {other:?} for function levenshtein")
             }

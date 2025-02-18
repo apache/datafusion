@@ -18,11 +18,12 @@
 extern crate criterion;
 
 use arrow::array::{ArrayRef, StringArray, StringViewBuilder};
+use arrow::datatypes::DataType;
 use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
 use std::sync::Arc;
 
@@ -125,8 +126,11 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args1(size, 32);
         c.bench_function(&format!("lower_all_values_are_ascii: {}", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                black_box(lower.invoke_batch(&args, size))
+                black_box(lower.invoke_with_args(ScalarFunctionArgs {
+                    args: args.clone(),
+                    number_rows: size,
+                    return_type: &DataType::Utf8,
+                }))
             })
         });
 
@@ -135,8 +139,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("lower_the_first_value_is_nonascii: {}", size),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(lower.invoke_batch(&args, size))
+                    black_box(lower.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8,
+                    }))
                 })
             },
         );
@@ -146,8 +153,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("lower_the_middle_value_is_nonascii: {}", size),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(lower.invoke_batch(&args, size))
+                    black_box(lower.invoke_with_args(ScalarFunctionArgs {
+                        args: args.clone(),
+                        number_rows: size,
+                        return_type: &DataType::Utf8,
+                    }))
                 })
             },
         );
@@ -167,8 +177,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         &format!("lower_all_values_are_ascii_string_views: size: {}, str_len: {}, null_density: {}, mixed: {}",
                      size, str_len, null_density, mixed),
                         |b| b.iter(|| {
-                            // TODO use invoke_with_args
-                            black_box(lower.invoke_batch(&args, size))
+                            black_box(lower.invoke_with_args(ScalarFunctionArgs{
+                                args: args.clone(),
+                                number_rows: size,
+                                return_type: &DataType::Utf8,
+                            }))
                         }),
                     );
 
@@ -177,8 +190,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         &format!("lower_all_values_are_ascii_string_views: size: {}, str_len: {}, null_density: {}, mixed: {}",
                      size, str_len, null_density, mixed),
                         |b| b.iter(|| {
-                            // TODO use invoke_with_args
-                            black_box(lower.invoke_batch(&args, size))
+                            black_box(lower.invoke_with_args(ScalarFunctionArgs{
+                                args: args.clone(),
+                                number_rows: size,
+                                return_type: &DataType::Utf8,
+                            }))
                         }),
                     );
 
@@ -187,8 +203,11 @@ fn criterion_benchmark(c: &mut Criterion) {
                         &format!("lower_some_values_are_nonascii_string_views: size: {}, str_len: {}, non_ascii_density: {}, null_density: {}, mixed: {}",
                      size, str_len, 0.1, null_density, mixed),
                         |b| b.iter(|| {
-                            // TODO use invoke_with_args
-                            black_box(lower.invoke_batch(&args, size))
+                            black_box(lower.invoke_with_args(ScalarFunctionArgs{
+                                args: args.clone(),
+                                number_rows: size,
+                                return_type: &DataType::Utf8,
+                            }))
                         }),
                     );
                 }
