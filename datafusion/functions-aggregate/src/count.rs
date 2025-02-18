@@ -82,8 +82,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
     ))
 }
 
-/// Count(*), Count(), Count(1) are all equivalent expression
-/// In DataFusion, we convert them to Count(1) expression
+/// Creates aggregation to count all rows, equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`
 pub fn count_all() -> Expr {
     count(Expr::Literal(COUNT_STAR_EXPANSION))
 }

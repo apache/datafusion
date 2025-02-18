@@ -141,7 +141,7 @@ pub trait ExprPlanner: Debug + Send + Sync {
 
     /// Plan an array literal, such as `[1, 2, 3]`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_array_literal(
         &self,
         exprs: Vec<Expr>,
@@ -152,14 +152,14 @@ pub trait ExprPlanner: Debug + Send + Sync {
 
     /// Plan a `POSITION` expression, such as `POSITION(<expr> in <expr>)`
     ///
-    /// returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_position(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
     /// Plan a dictionary literal, such as `{ key: value, ...}`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_dictionary_literal(
         &self,
         expr: RawDictionaryExpr,
@@ -170,14 +170,14 @@ pub trait ExprPlanner: Debug + Send + Sync {
 
     /// Plan an extract expression, such as`EXTRACT(month FROM foo)`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
     /// Plan an substring expression, such as `SUBSTRING(<expr> [FROM <expr>] [FOR <expr>])`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_substring(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
@@ -198,14 +198,14 @@ pub trait ExprPlanner: Debug + Send + Sync {
 
     /// Plans an overlay expression, such as `overlay(str PLACING substr FROM pos [FOR count])`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_overlay(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
     /// Plans a `make_map` expression, such as `make_map(key1, value1, key2, value2, ...)`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_make_map(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
@@ -234,9 +234,9 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(expr))
     }
 
-    /// Plans Count(exprs), e.g., `COUNT(*) to Count(1)`
+    /// Plans aggregate functions, such as `COUNT(<expr>)`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_aggregate(
         &self,
         expr: RawAggregateExpr,
@@ -244,9 +244,9 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(expr))
     }
 
-    /// Plans Count(exprs), e.g., `COUNT(*) to Count(1)`
+    /// Plans window functions, such as `COUNT(<expr>)`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_window(&self, expr: RawWindowExpr) -> Result<PlannerResult<RawWindowExpr>> {
         Ok(PlannerResult::Original(expr))
     }
