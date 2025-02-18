@@ -2759,7 +2759,7 @@ fn fmt_function(
 ) -> fmt::Result {
     if fun == "count" && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
         // TODO: Call customizable `display_name()` of UDAF
-        write!(f, "count_star()")
+        write!(f, "count(*)")
     } else {
         let args: Vec<String> = match display {
             true => args.iter().map(|arg| format!("{arg}")).collect(),

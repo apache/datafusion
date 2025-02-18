@@ -17,7 +17,9 @@
 
 use ahash::RandomState;
 use datafusion_common::stats::Precision;
-use datafusion_expr::expr::{schema_name_from_exprs, schema_name_from_sorts, AggregateFunctionParams};
+use datafusion_expr::expr::{
+    schema_name_from_exprs, schema_name_from_sorts, AggregateFunctionParams,
+};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
@@ -155,18 +157,18 @@ impl AggregateUDFImpl for Count {
             null_treatment,
         } = params;
 
-        if !args.is_empty() && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
-            return Ok("count(*)".to_string());
-        }
-
         let mut schema_name = String::new();
 
-        schema_name.write_fmt(format_args!(
-            "{}({}{})",
-            self.name(),
-            if *distinct { "DISTINCT " } else { "" },
-            schema_name_from_exprs(args)?
-        ))?;
+        if !args.is_empty() && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
+            schema_name.write_str("count(*)")?;
+        } else {
+            schema_name.write_fmt(format_args!(
+                "{}({}{})",
+                self.name(),
+                if *distinct { "DISTINCT " } else { "" },
+                schema_name_from_exprs(args)?
+            ))?;
+        }
 
         if let Some(null_treatment) = null_treatment {
             schema_name.write_fmt(format_args!(" {}", null_treatment))?;
@@ -195,21 +197,21 @@ impl AggregateUDFImpl for Count {
             null_treatment,
         } = params;
 
-        if !args.is_empty() && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
-            return Ok("count(*)".to_string());
-        }
-
         let mut display_name = String::new();
 
-        display_name.write_fmt(format_args!(
-            "{}({}{})",
-            self.name(),
-            if *distinct { "DISTINCT " } else { "" },
-            args.iter()
-                .map(|arg| format!("{arg}"))
-                .collect::<Vec<String>>()
-                .join(", ")
-        ))?;
+        if !args.is_empty() && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
+            display_name.write_str("count(*)")?;
+        } else {
+            display_name.write_fmt(format_args!(
+                "{}({}{})",
+                self.name(),
+                if *distinct { "DISTINCT " } else { "" },
+                args.iter()
+                    .map(|arg| format!("{arg}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ))?;
+        }
 
         if let Some(nt) = null_treatment {
             display_name.write_fmt(format_args!(" {}", nt))?;

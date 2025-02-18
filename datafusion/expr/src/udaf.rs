@@ -30,7 +30,8 @@ use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics}
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
-    schema_name_from_exprs_comma_separated_without_space, schema_name_from_sorts, AggregateFunction, AggregateFunctionParams
+    schema_name_from_exprs_comma_separated_without_space, schema_name_from_sorts,
+    AggregateFunction, AggregateFunctionParams,
 };
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
