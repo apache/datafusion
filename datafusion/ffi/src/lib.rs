@@ -24,11 +24,11 @@ pub mod insert_op;
 pub mod plan_properties;
 pub mod record_batch_stream;
 pub mod session_config;
-pub mod signature;
 pub mod table_provider;
 pub mod table_source;
 pub mod udf;
 pub mod util;
+pub mod volatility;
 
 #[cfg(feature = "integration-tests")]
 pub mod tests;

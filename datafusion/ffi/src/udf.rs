@@ -38,7 +38,8 @@ use datafusion::{
 use crate::{
     arrow_wrappers::{WrappedArray, WrappedSchema},
     df_result, rresult, rresult_return,
-    signature::{self, rvec_wrapped_to_vec_datatype, FFI_Signature},
+    util::rvec_wrapped_to_vec_datatype,
+    volatility::FFI_Volatility,
 };
 
 /// A stable struct for sharing a [`ScalarUDF`] across FFI boundaries.
@@ -47,11 +48,11 @@ use crate::{
 #[allow(non_camel_case_types)]
 pub struct FFI_ScalarUDF {
     /// Return the udf name.
-    pub name: unsafe extern "C" fn(udf: &Self) -> RString,
+    pub name: RString,
 
-    pub signature: unsafe extern "C" fn(udf: &Self) -> RResult<FFI_Signature, RString>,
+    pub aliases: RVec<RString>,
 
-    pub aliases: unsafe extern "C" fn(udf: &Self) -> RVec<RString>,
+    pub volatility: FFI_Volatility,
 
     pub return_type: unsafe extern "C" fn(
         udf: &Self,
@@ -84,29 +85,6 @@ unsafe impl Sync for FFI_ScalarUDF {}
 
 pub struct ScalarUDFPrivateData {
     pub udf: Arc<ScalarUDF>,
-}
-
-unsafe extern "C" fn name_fn_wrapper(udf: &FFI_ScalarUDF) -> RString {
-    let private_data = udf.private_data as *const ScalarUDFPrivateData;
-    let udf = &(*private_data).udf;
-
-    udf.name().into()
-}
-
-unsafe extern "C" fn signature_fn_wrapper(
-    udf: &FFI_ScalarUDF,
-) -> RResult<FFI_Signature, RString> {
-    let private_data = udf.private_data as *const ScalarUDFPrivateData;
-    let udf = &(*private_data).udf;
-
-    rresult!(udf.signature().try_into())
-}
-
-unsafe extern "C" fn aliases_fn_wrapper(udf: &FFI_ScalarUDF) -> RVec<RString> {
-    let private_data = udf.private_data as *const ScalarUDFPrivateData;
-    let udf = &(*private_data).udf;
-
-    udf.aliases().iter().map(|s| s.to_owned().into()).collect()
 }
 
 unsafe extern "C" fn return_type_fn_wrapper(
@@ -191,12 +169,16 @@ impl Clone for FFI_ScalarUDF {
 
 impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
     fn from(udf: Arc<ScalarUDF>) -> Self {
+        let name = udf.name().into();
+        let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
+        let volatility = udf.signature().volatility.into();
+
         let private_data = Box::new(ScalarUDFPrivateData { udf });
 
         Self {
-            name: name_fn_wrapper,
-            signature: signature_fn_wrapper,
-            aliases: aliases_fn_wrapper,
+            name,
+            aliases,
+            volatility,
             invoke_with_args: invoke_with_args_fn_wrapper,
             short_circuits: short_circuits_fn_wrapper,
             return_type: return_type_fn_wrapper,
@@ -222,9 +204,9 @@ impl Drop for FFI_ScalarUDF {
 #[derive(Debug)]
 pub struct ForeignScalarUDF {
     name: String,
-    signature: Signature,
     aliases: Vec<String>,
     udf: FFI_ScalarUDF,
+    signature: Signature,
 }
 
 unsafe impl Send for ForeignScalarUDF {}
@@ -234,23 +216,17 @@ impl TryFrom<&FFI_ScalarUDF> for ForeignScalarUDF {
     type Error = DataFusionError;
 
     fn try_from(udf: &FFI_ScalarUDF) -> Result<Self, Self::Error> {
-        unsafe {
-            let name = (udf.name)(udf).into();
-            let ffi_signature = df_result!((udf.signature)(udf))?;
-            let signature = (&ffi_signature).try_into()?;
+        let name = udf.name.to_owned().into();
+        let signature = Signature::user_defined((&udf.volatility).into());
 
-            let aliases = (udf.aliases)(udf)
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect();
+        let aliases = udf.aliases.iter().map(|s| s.to_string()).collect();
 
-            Ok(Self {
-                name,
-                udf: udf.clone(),
-                signature,
-                aliases,
-            })
-        }
+        Ok(Self {
+            name,
+            udf: udf.clone(),
+            aliases,
+            signature,
+        })
     }
 }
 
@@ -268,7 +244,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let arg_types = signature::vec_datatype_to_rvec_wrapped(arg_types)?;
+        let arg_types = crate::util::vec_datatype_to_rvec_wrapped(arg_types)?;
 
         let result = unsafe { (self.udf.return_type)(&self.udf, arg_types) };
 
