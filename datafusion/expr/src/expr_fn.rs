@@ -19,7 +19,7 @@
 
 use crate::expr::{
     AggregateFunction, BinaryExpr, Cast, Exists, GroupingSet, InList, InSubquery,
-    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction,
+    Placeholder, TryCast, Unnest, WildcardOptions, WindowFunction, WindowFunctionParams,
 };
 use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
@@ -832,14 +832,22 @@ impl ExprFuncBuilder {
                 udaf.params.null_treatment = null_treatment;
                 Expr::AggregateFunction(udaf)
             }
-            ExprFuncKind::Window(mut udwf) => {
+            ExprFuncKind::Window(WindowFunction {
+                fun,
+                params: WindowFunctionParams { args, .. },
+            }) => {
                 let has_order_by = order_by.as_ref().map(|o| !o.is_empty());
-                udwf.order_by = order_by.unwrap_or_default();
-                udwf.partition_by = partition_by.unwrap_or_default();
-                udwf.window_frame =
-                    window_frame.unwrap_or(WindowFrame::new(has_order_by));
-                udwf.null_treatment = null_treatment;
-                Expr::WindowFunction(udwf)
+                Expr::WindowFunction(WindowFunction {
+                    fun,
+                    params: WindowFunctionParams {
+                        args,
+                        partition_by: partition_by.unwrap_or_default(),
+                        order_by: order_by.unwrap_or_default(),
+                        window_frame: window_frame
+                            .unwrap_or(WindowFrame::new(has_order_by)),
+                        null_treatment,
+                    },
+                })
             }
         };
 

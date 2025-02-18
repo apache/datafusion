@@ -1003,7 +1003,8 @@ impl OptimizerRule for PushDownFilter {
                 // Therefore, we need to ensure that any potential partition key returned is used in
                 // ALL window functions. Otherwise, filters cannot be pushed by through that column.
                 let extract_partition_keys = |func: &WindowFunction| {
-                    func.partition_by
+                    func.params
+                        .partition_by
                         .iter()
                         .map(|c| Column::from_qualified_name(c.schema_name().to_string()))
                         .collect::<HashSet<_>>()

@@ -20,7 +20,7 @@
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Cast,
     GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, TryCast, Unnest,
-    WindowFunction,
+    WindowFunction, WindowFunctionParams,
 };
 use crate::{Expr, ExprFunctionExt};
 
@@ -91,11 +91,11 @@ impl TreeNode for Expr {
             Expr::AggregateFunction(AggregateFunction { params: AggregateFunctionParams { args, filter, order_by, ..}, .. }) =>
                 (args, filter, order_by).apply_ref_elements(f),
             Expr::WindowFunction(WindowFunction {
-                                     args,
-                                     partition_by,
-                                     order_by,
-                                     ..
-                                 }) => {
+                params : WindowFunctionParams {
+                    args,
+                    partition_by,
+                    order_by,
+                    ..}, ..}) => {
                 (args, partition_by, order_by).apply_ref_elements(f)
             }
             Expr::InList(InList { expr, list, .. }) => {
@@ -224,12 +224,15 @@ impl TreeNode for Expr {
                 })?
             }
             Expr::WindowFunction(WindowFunction {
-                args,
                 fun,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
+                params:
+                    WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        null_treatment,
+                    },
             }) => (args, partition_by, order_by).map_elements(f)?.update_data(
                 |(new_args, new_partition_by, new_order_by)| {
                     Expr::WindowFunction(WindowFunction::new(fun, new_args))

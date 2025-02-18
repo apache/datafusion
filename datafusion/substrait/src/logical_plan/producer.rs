@@ -53,7 +53,7 @@ use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr::{
     AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
-    InSubquery, WindowFunction,
+    InSubquery, WindowFunction, WindowFunctionParams,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -1616,11 +1616,14 @@ pub fn from_window_function(
 ) -> Result<Expression> {
     let WindowFunction {
         fun,
-        args,
-        partition_by,
-        order_by,
-        window_frame,
-        null_treatment: _,
+        params:
+            WindowFunctionParams {
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+                null_treatment: _,
+            },
     } = window_fn;
     // function reference
     let function_anchor = producer.register_function(fun.to_string());
