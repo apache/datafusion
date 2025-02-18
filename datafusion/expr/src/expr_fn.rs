@@ -839,7 +839,7 @@ impl ExprFuncBuilder {
                 udwf.window_frame =
                     window_frame.unwrap_or(WindowFrame::new(has_order_by));
                 udwf.null_treatment = null_treatment;
-                Expr::WindowFunction(udwf)
+                Expr::from(udwf)
             }
         };
 
@@ -893,7 +893,7 @@ impl ExprFunctionExt for Expr {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
             }
             Expr::WindowFunction(udwf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
+                ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)))
             }
             _ => ExprFuncBuilder::new(None),
         };
@@ -933,7 +933,7 @@ impl ExprFunctionExt for Expr {
                 ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
             }
             Expr::WindowFunction(udwf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)))
+                ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)))
             }
             _ => ExprFuncBuilder::new(None),
         };
@@ -946,7 +946,7 @@ impl ExprFunctionExt for Expr {
     fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder {
         match self {
             Expr::WindowFunction(udwf) => {
-                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)));
+                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)));
                 builder.partition_by = Some(partition_by);
                 builder
             }
@@ -957,7 +957,7 @@ impl ExprFunctionExt for Expr {
     fn window_frame(self, window_frame: WindowFrame) -> ExprFuncBuilder {
         match self {
             Expr::WindowFunction(udwf) => {
-                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(udwf)));
+                let mut builder = ExprFuncBuilder::new(Some(ExprFuncKind::Window(*udwf)));
                 builder.window_frame = Some(window_frame);
                 builder
             }

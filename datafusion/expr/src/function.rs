@@ -78,6 +78,7 @@ pub type AggregateFunctionSimplification = Box<
 >;
 
 /// [crate::udwf::WindowUDFImpl::simplify] simplifier closure
+///
 /// A closure with two arguments:
 /// * 'window_function': [crate::expr::WindowFunction] for which simplified has been invoked
 /// * 'info': [crate::simplify::SimplifyInfo]
