@@ -15,23 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Logical Expr types and traits for [DataFusion]
-//!
-//! This crate contains types and traits that are used by both Logical and Physical expressions.
-//! They are kept in their own crate to avoid physical expressions depending on logical expressions.
-//!  
-//!
-//! [DataFusion]: <https://crates.io/crates/datafusion>
+//! Statistics and constraint propagation library
 
-// Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
-#![deny(clippy::clone_on_ref_ptr)]
-
-pub mod accumulator;
-pub mod columnar_value;
-pub mod groups_accumulator;
-pub mod interval_arithmetic;
-pub mod operator;
-pub mod signature;
-pub mod sort_properties;
-pub mod statistics;
-pub mod type_coercion;
+pub mod stats_solver;
