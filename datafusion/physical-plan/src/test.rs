@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array, RecordBatch};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use futures::{Future, FutureExt};
 
@@ -132,14 +132,45 @@ pub fn make_partition(sz: i32) -> RecordBatch {
     RecordBatch::try_new(schema, vec![arr]).unwrap()
 }
 
+pub fn make_partition_utf8(sz: i32) -> RecordBatch {
+    let seq_start = 0;
+    let seq_end = sz;
+    let values = (seq_start..seq_end)
+        .map(|i| format!("test_long_string_that_is_roughly_42_bytes_{}", i))
+        .collect::<Vec<_>>();
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Utf8, true)]));
+    let mut string_array = arrow::array::StringArray::from(values);
+    string_array.shrink_to_fit();
+    let arr = Arc::new(string_array);
+    let arr = arr as ArrayRef;
+
+    RecordBatch::try_new(schema, vec![arr]).unwrap()
+}
+
 /// Returns a `DataSourceExec` that scans `partitions` of 100 batches each
 pub fn scan_partitioned(partitions: usize) -> Arc<dyn ExecutionPlan> {
     Arc::new(mem_exec(partitions))
 }
 
+pub fn scan_partitioned_utf8(partitions: usize) -> Arc<dyn ExecutionPlan> {
+    Arc::new(mem_exec_utf8(partitions))
+}
+
 /// Returns a `DataSourceExec` that scans `partitions` of 100 batches each
 pub fn mem_exec(partitions: usize) -> DataSourceExec {
     let data: Vec<Vec<_>> = (0..partitions).map(|_| vec![make_partition(100)]).collect();
+
+    let schema = data[0][0].schema();
+    let projection = None;
+    DataSourceExec::new(Arc::new(
+        MemorySourceConfig::try_new(&data, schema, projection).unwrap(),
+    ))
+}
+
+pub fn mem_exec_utf8(partitions: usize) -> DataSourceExec {
+    let data: Vec<Vec<_>> = (0..partitions)
+        .map(|_| vec![make_partition_utf8(100)])
+        .collect();
 
     let schema = data[0][0].schema();
     let projection = None;
