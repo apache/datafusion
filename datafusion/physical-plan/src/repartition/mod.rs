@@ -1605,8 +1605,8 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
-    use crate::test::MockDataSourceExec;
     use crate::test::MockMemorySourceConfig;
+    // use crate::test::MockMemorySourceConfig;
     use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;
@@ -1719,7 +1719,7 @@ mod test {
         schema: &SchemaRef,
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
-        Arc::new(MockDataSourceExec::new(Arc::new(
+        Arc::new(MockMemorySourceConfig::new(Arc::new(
             MockMemorySourceConfig::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_exprs])

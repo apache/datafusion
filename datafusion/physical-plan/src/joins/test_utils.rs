@@ -24,8 +24,8 @@ use crate::joins::{
     HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
 use crate::repartition::RepartitionExec;
-use crate::test::MockDataSourceExec;
 use crate::test::MockMemorySourceConfig;
+// use crate::test::MockMemorySourceConfig;
 use crate::{common, ExecutionPlan, ExecutionPlanProperties, Partitioning};
 
 use arrow::array::{
@@ -536,8 +536,8 @@ pub fn create_memory_table(
     let right = MockMemorySourceConfig::try_new(&[right_partition], right_schema, None)?
         .try_with_sort_information(right_sorted)?;
     Ok((
-        Arc::new(MockDataSourceExec::new(Arc::new(left))),
-        Arc::new(MockDataSourceExec::new(Arc::new(right))),
+        Arc::new(MockMemorySourceConfig::new(Arc::new(left))),
+        Arc::new(MockMemorySourceConfig::new(Arc::new(right))),
     ))
 }
 

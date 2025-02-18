@@ -1030,8 +1030,8 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::test::MockDataSourceExec;
     use crate::test::MockMemorySourceConfig;
+    // use crate::test::MockMemorySourceConfig;
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
@@ -1090,7 +1090,7 @@ pub(crate) mod tests {
             source = source.try_with_sort_information(vec![sort_info]).unwrap();
         }
 
-        Arc::new(MockDataSourceExec::new(Arc::new(source)))
+        Arc::new(MockMemorySourceConfig::new(Arc::new(source)))
     }
 
     fn build_left_table() -> Arc<dyn ExecutionPlan> {
