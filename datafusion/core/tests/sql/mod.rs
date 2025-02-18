@@ -243,7 +243,7 @@ pub struct ExplainNormalizer {
 }
 
 impl ExplainNormalizer {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut replacements = vec![];
 
         let mut push_path = |path: PathBuf, key: &str| {
@@ -266,7 +266,7 @@ impl ExplainNormalizer {
         Self { replacements }
     }
 
-    fn normalize(&self, s: impl Into<String>) -> String {
+    pub(crate) fn normalize(&self, s: impl Into<String>) -> String {
         let mut s = s.into();
         for (from, to) in &self.replacements {
             s = s.replace(from, to);
