@@ -25,13 +25,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Context;
 
+use crate::common;
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
 use crate::ExecutionPlan;
-use crate::{common, RecordBatchStream};
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
