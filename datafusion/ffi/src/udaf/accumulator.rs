@@ -15,10 +15,7 @@ use datafusion::{
 };
 use prost::Message;
 
-use crate::{
-    arrow_wrappers::WrappedArray,
-    df_result, rresult, rresult_return,
-};
+use crate::{arrow_wrappers::WrappedArray, df_result, rresult, rresult_return};
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -51,7 +48,7 @@ pub struct FFI_Accumulator {
 
     /// Used to create a clone on the provider of the accumulator. This should
     /// only need to be called by the receiver of the accumulator.
-    pub clone: unsafe extern "C" fn(accumulator: &Self) -> Self,
+    // pub clone: unsafe extern "C" fn(accumulator: &Self) -> Self,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(accumulator: &mut Self),
@@ -65,7 +62,7 @@ unsafe impl Send for FFI_Accumulator {}
 unsafe impl Sync for FFI_Accumulator {}
 
 pub struct AccumulatorPrivateData {
-    pub accumulator: Arc<Mutex<dyn Accumulator>>,
+    pub accumulator: Box<dyn Accumulator>,
 }
 
 unsafe extern "C" fn update_batch_fn_wrapper(
@@ -81,12 +78,7 @@ unsafe extern "C" fn update_batch_fn_wrapper(
         .collect::<Result<Vec<ArrayRef>>>();
     let values_arrays = rresult_return!(values_arrays);
 
-    let mut accumulator = rresult_return!(accum_data
-        .accumulator
-        .lock()
-        .map_err(|e| DataFusionError::Execution(e.to_string())));
-
-    rresult!(accumulator.update_batch(&values_arrays))
+    rresult!(accum_data.accumulator.update_batch(&values_arrays))
 }
 
 unsafe extern "C" fn evaluate_fn_wrapper(
@@ -94,14 +86,8 @@ unsafe extern "C" fn evaluate_fn_wrapper(
 ) -> RResult<RVec<u8>, RString> {
     let private_data = accumulator.private_data as *mut AccumulatorPrivateData;
     let accum_data = &mut (*private_data);
-    let mut accumulator_internal = rresult_return!(accum_data
-        .accumulator
-        .lock()
-        .map_err(|_| DataFusionError::Execution(
-            "Unable to aquire lock on FFI Accumulator".to_string()
-        )));
 
-    let scalar_result = rresult_return!(accumulator_internal.evaluate());
+    let scalar_result = rresult_return!(accum_data.accumulator.evaluate());
     let proto_result: datafusion_proto::protobuf::ScalarValue =
         rresult_return!((&scalar_result).try_into());
 
@@ -112,11 +98,7 @@ unsafe extern "C" fn size_fn_wrapper(accumulator: &FFI_Accumulator) -> usize {
     let private_data = accumulator.private_data as *mut AccumulatorPrivateData;
     let accum_data = &mut (*private_data);
 
-    accum_data
-        .accumulator
-        .lock()
-        .map(|accum| accum.size())
-        .unwrap_or_default()
+    accum_data.accumulator.size()
 }
 
 unsafe extern "C" fn state_fn_wrapper(
@@ -124,14 +106,8 @@ unsafe extern "C" fn state_fn_wrapper(
 ) -> RResult<RVec<RVec<u8>>, RString> {
     let private_data = accumulator.private_data as *mut AccumulatorPrivateData;
     let accum_data = &mut (*private_data);
-    let mut accumulator_internal = rresult_return!(accum_data
-        .accumulator
-        .lock()
-        .map_err(|_| DataFusionError::Execution(
-            "Unable to aquire lock on FFI Accumulator".to_string()
-        )));
 
-    let state = rresult_return!(accumulator_internal.state());
+    let state = rresult_return!(accum_data.accumulator.state());
     let state = state
         .into_iter()
         .map(|state_val| {
@@ -145,53 +121,42 @@ unsafe extern "C" fn state_fn_wrapper(
     rresult!(state)
 }
 
-unsafe extern "C" fn merge_batch_fn_wrapper(accumulator: &mut FFI_Accumulator,
+unsafe extern "C" fn merge_batch_fn_wrapper(
+    accumulator: &mut FFI_Accumulator,
     states: RVec<WrappedArray>,
 ) -> RResult<(), RString> {
     let private_data = accumulator.private_data as *mut AccumulatorPrivateData;
     let accum_data = &mut (*private_data);
-    let mut accumulator_internal = rresult_return!(accum_data
-        .accumulator
-        .lock()
-        .map_err(|_| DataFusionError::Execution(
-            "Unable to aquire lock on FFI Accumulator".to_string()
-        )));
 
-    let states = rresult_return!(states.into_iter()
+    let states = rresult_return!(states
+        .into_iter()
         .map(|state| ArrayRef::try_from(state).map_err(DataFusionError::from))
         .collect::<Result<Vec<_>>>());
 
-    rresult!(accumulator_internal.merge_batch(&states))
+    rresult!(accum_data.accumulator.merge_batch(&states))
 }
 
-unsafe extern "C" fn retract_batch_fn_wrapper(accumulator: &mut FFI_Accumulator,
+unsafe extern "C" fn retract_batch_fn_wrapper(
+    accumulator: &mut FFI_Accumulator,
     values: RVec<WrappedArray>,
 ) -> RResult<(), RString> {
     let private_data = accumulator.private_data as *mut AccumulatorPrivateData;
     let accum_data = &mut (*private_data);
-    let mut accumulator_internal = rresult_return!(accum_data
-        .accumulator
-        .lock()
-        .map_err(|_| DataFusionError::Execution(
-            "Unable to aquire lock on FFI Accumulator".to_string()
-        )));
 
-    let values = rresult_return!(values.into_iter()
+    let values = rresult_return!(values
+        .into_iter()
         .map(|state| ArrayRef::try_from(state).map_err(DataFusionError::from))
         .collect::<Result<Vec<_>>>());
 
-    rresult!(accumulator_internal.retract_batch(&values))
+    rresult!(accum_data.accumulator.retract_batch(&values))
 }
 
-unsafe extern "C" fn supports_retract_batch_fn_wrapper(accumulator: &FFI_Accumulator,
+unsafe extern "C" fn supports_retract_batch_fn_wrapper(
+    accumulator: &FFI_Accumulator,
 ) -> bool {
     let private_data = accumulator.private_data as *mut AccumulatorPrivateData;
     let accum_data = &mut (*private_data);
-    accum_data
-        .accumulator
-        .lock()
-        .map(|accum| accum.supports_retract_batch())
-        .unwrap_or(false)
+    accum_data.accumulator.supports_retract_batch()
 }
 
 unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
@@ -200,23 +165,21 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
     drop(private_data);
 }
 
-unsafe extern "C" fn clone_fn_wrapper(accumulator: &FFI_Accumulator) -> FFI_Accumulator {
-    let private_data = accumulator.private_data as *const AccumulatorPrivateData;
-    let accum_data = &(*private_data);
+// unsafe extern "C" fn clone_fn_wrapper(accumulator: &FFI_Accumulator) -> FFI_Accumulator {
+//     let private_data = accumulator.private_data as *const AccumulatorPrivateData;
+//     let accum_data = &(*private_data);
 
-    Arc::clone(&accum_data.accumulator).into()
-}
+//     Box::new(accum_data.accumulator).into()
+// }
 
-impl Clone for FFI_Accumulator {
-    fn clone(&self) -> Self {
-        unsafe { (self.clone)(self) }
-    }
-}
+// impl Clone for FFI_Accumulator {
+//     fn clone(&self) -> Self {
+//         unsafe { (self.clone)(self) }
+//     }
+// }
 
-impl From<Arc<Mutex<dyn Accumulator>>> for FFI_Accumulator {
-    fn from(accumulator: Arc<Mutex<dyn Accumulator>>) -> Self {
-        let private_data = Box::new(AccumulatorPrivateData { accumulator });
-
+impl From<Box<dyn Accumulator>> for FFI_Accumulator {
+    fn from(accumulator: Box<dyn Accumulator>) -> Self {
         Self {
             update_batch: update_batch_fn_wrapper,
             evaluate: evaluate_fn_wrapper,
@@ -226,9 +189,9 @@ impl From<Arc<Mutex<dyn Accumulator>>> for FFI_Accumulator {
             retract_batch: retract_batch_fn_wrapper,
             supports_retract_batch: supports_retract_batch_fn_wrapper,
 
-            clone: clone_fn_wrapper,
+            // clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(accumulator) as *mut c_void,
         }
     }
 }
@@ -253,11 +216,9 @@ pub struct ForeignAccumulator {
 unsafe impl Send for ForeignAccumulator {}
 unsafe impl Sync for ForeignAccumulator {}
 
-impl From<&FFI_Accumulator> for ForeignAccumulator {
-    fn from(accumulator: &FFI_Accumulator) -> Self {
-        Self {
-            accumulator: accumulator.clone(),
-        }
+impl From<FFI_Accumulator> for ForeignAccumulator {
+    fn from(accumulator: FFI_Accumulator) -> Self {
+        Self { accumulator }
     }
 }
 

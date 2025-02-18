@@ -2027,6 +2027,7 @@ dependencies = [
  "async-trait",
  "datafusion",
  "datafusion-proto",
+ "datafusion-proto-common",
  "doc-comment",
  "futures",
  "log",
