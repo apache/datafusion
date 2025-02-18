@@ -30,8 +30,7 @@ use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue, Statistics}
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
 use crate::expr::{
-    schema_name_from_exprs_comma_separated_without_space, schema_name_from_sorts,
-    AggregateFunction, AggregateFunctionParams,
+    schema_name_from_exprs_comma_separated_without_space, schema_name_from_sorts, AggregateFunction, AggregateFunctionParams
 };
 use crate::function::{
     AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs,
@@ -451,9 +450,9 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             null_treatment,
         } = params;
 
-        let mut schema_name = String::new();
+        let mut display_name = String::new();
 
-        schema_name.write_fmt(format_args!(
+        display_name.write_fmt(format_args!(
             "{}({}{})",
             self.name(),
             if *distinct { "DISTINCT " } else { "" },
@@ -464,13 +463,13 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(nt) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", nt))?;
+            display_name.write_fmt(format_args!(" {}", nt))?;
         }
         if let Some(fe) = filter {
-            schema_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
+            display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
         }
         if let Some(ob) = order_by {
-            schema_name.write_fmt(format_args!(
+            display_name.write_fmt(format_args!(
                 " ORDER BY [{}]",
                 ob.iter()
                     .map(|o| format!("{o}"))
@@ -479,7 +478,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             ))?;
         }
 
-        Ok(schema_name)
+        Ok(display_name)
     }
 
     /// Returns the function's [`Signature`] for information about what input
