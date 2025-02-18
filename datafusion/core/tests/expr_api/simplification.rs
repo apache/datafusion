@@ -366,6 +366,33 @@ fn test_const_evaluator() {
 }
 
 #[test]
+fn test_const_evaluator_alias() {
+    // true --> true
+    test_evaluate(lit(true).alias("a"), lit(true));
+    // true or true --> true
+    test_evaluate(lit(true).alias("a").or(lit(true).alias("b")), lit(true));
+    // "foo" == "foo" --> true
+    test_evaluate(lit("foo").alias("a").eq(lit("foo").alias("b")), lit(true));
+    // c = 1 + 2 --> c + 3
+    test_evaluate(
+        col("c")
+            .alias("a")
+            .eq(lit(1).alias("b") + lit(2).alias("c")),
+        col("c").alias("a").eq(lit(3)),
+    );
+    // (foo != foo) OR (c = 1) --> false OR (c = 1)
+    test_evaluate(
+        lit("foo")
+            .alias("a")
+            .not_eq(lit("foo").alias("b"))
+            .alias("c")
+            .or(col("c").alias("d").eq(lit(1).alias("e")))
+            .alias("f"),
+        col("c").alias("d").eq(lit(1)).alias("f"),
+    );
+}
+
+#[test]
 fn test_const_evaluator_scalar_functions() {
     // concat("foo", "bar") --> "foobar"
     let expr = concat(vec![lit("foo"), lit("bar")]);
