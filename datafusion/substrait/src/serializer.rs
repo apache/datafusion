@@ -26,9 +26,30 @@ use substrait::proto::Plan;
 
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::path::Path;
 
-pub async fn serialize(sql: &str, ctx: &SessionContext, path: &str) -> Result<()> {
+/// Plans a sql and serializes the generated logical plan to bytes.
+/// The bytes are then written into a file at `path`.
+///
+/// Returns an error if the file already exists and is not empty.
+pub async fn serialize(
+    sql: &str,
+    ctx: &SessionContext,
+    path: impl AsRef<Path>,
+) -> Result<()> {
     let protobuf_out = serialize_bytes(sql, ctx).await;
+
+    match std::fs::metadata(path.as_ref()) {
+        Ok(meta) if meta.len() > 0 => {
+            return Err(DataFusionError::Substrait(format!(
+                "Failed to encode substrait plan: the file {} already exists and is not empty", 
+                path.as_ref().display())
+            ));
+        }
+        // Ignores other cases.
+        _ => {}
+    }
+
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
@@ -38,6 +59,7 @@ pub async fn serialize(sql: &str, ctx: &SessionContext, path: &str) -> Result<()
     Ok(())
 }
 
+/// Plans a sql and serializes the generated logical plan to bytes.
 pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec<u8>> {
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
@@ -50,6 +72,7 @@ pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec<u8>>
     Ok(protobuf_out)
 }
 
+/// Reads the file at `path` and deserializes a plan from the bytes.
 pub async fn deserialize(path: &str) -> Result<Box<Plan>> {
     let mut protobuf_in = Vec::<u8>::new();
 
@@ -59,6 +82,7 @@ pub async fn deserialize(path: &str) -> Result<Box<Plan>> {
     deserialize_bytes(protobuf_in).await
 }
 
+/// Deserializes a plan from the bytes.
 pub async fn deserialize_bytes(proto_bytes: Vec<u8>) -> Result<Box<Plan>> {
     Ok(Box::new(Message::decode(&*proto_bytes).map_err(|e| {
         DataFusionError::Substrait(format!("Failed to decode substrait plan: {e}"))
