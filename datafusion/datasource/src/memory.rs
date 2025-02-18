@@ -766,13 +766,26 @@ mod memory_exec_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test::{self, make_partition};
+    use arrow::array::{ArrayRef, Int32Array};
+    use std::collections::HashMap;
     use datafusion_physical_plan::expressions::lit;
 
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::assert_batches_eq;
     use datafusion_common::stats::{ColumnStatistics, Precision};
     use futures::StreamExt;
+
+    // Return a RecordBatch with a single Int32 array with values (0..sz) in a field named "i"
+    pub fn make_partition(sz: i32) -> RecordBatch {
+        let seq_start = 0;
+        let seq_end = sz;
+        let values = (seq_start..seq_end).collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let arr = Arc::new(Int32Array::from(values));
+        let arr = arr as ArrayRef;
+
+        RecordBatch::try_new(schema, vec![arr]).unwrap()
+    }
 
     #[tokio::test]
     async fn exec_with_limit() -> Result<()> {
@@ -800,9 +813,32 @@ mod tests {
         Ok(())
     }
 
+    /// Get the schema for the aggregate_test_* csv files
+    pub fn aggr_test_schema() -> SchemaRef {
+        let mut f1 = Field::new("c1", DataType::Utf8, false);
+        f1.set_metadata(HashMap::from_iter(vec![("testing".into(), "test".into())]));
+        let schema = Schema::new(vec![
+            f1,
+            Field::new("c2", DataType::UInt32, false),
+            Field::new("c3", DataType::Int8, false),
+            Field::new("c4", DataType::Int16, false),
+            Field::new("c5", DataType::Int32, false),
+            Field::new("c6", DataType::Int64, false),
+            Field::new("c7", DataType::UInt8, false),
+            Field::new("c8", DataType::UInt16, false),
+            Field::new("c9", DataType::UInt32, false),
+            Field::new("c10", DataType::UInt64, false),
+            Field::new("c11", DataType::Float32, false),
+            Field::new("c12", DataType::Float64, false),
+            Field::new("c13", DataType::Utf8, false),
+        ]);
+
+        Arc::new(schema)
+    }
+
     #[tokio::test]
     async fn values_empty_case() -> Result<()> {
-        let schema = test::aggr_test_schema();
+        let schema = aggr_test_schema();
         let empty = MemorySourceConfig::try_new_as_values(schema, vec![]);
         assert!(empty.is_err());
         Ok(())
