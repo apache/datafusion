@@ -2650,34 +2650,47 @@ impl Display for Expr {
             // Expr::ScalarFunction(ScalarFunction { func, args }) => {
             //     write!(f, "{}", func.display_name(args).unwrap())
             // }
-            Expr::WindowFunction(WindowFunction { fun, params }) => {
-                let WindowFunctionParams {
-                    args,
-                    partition_by,
-                    order_by,
-                    window_frame,
-                    null_treatment,
-                } = params;
-
-                fmt_function(f, &fun.to_string(), false, args, true)?;
-
-                if let Some(nt) = null_treatment {
-                    write!(f, "{}", nt)?;
+            Expr::WindowFunction(WindowFunction { fun, params }) => match fun {
+                WindowFunctionDefinition::AggregateUDF(fun) => {
+                    match fun.window_function_display_name(params) {
+                        Ok(name) => {
+                            write!(f, "{}", name)
+                        }
+                        Err(e) => {
+                            write!(f, "got error from window_function_display_name {}", e)
+                        }
+                    }
                 }
+                WindowFunctionDefinition::WindowUDF(fun) => {
+                    let WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        null_treatment,
+                    } = params;
 
-                if !partition_by.is_empty() {
-                    write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
+                    fmt_function(f, &fun.to_string(), false, args, true)?;
+
+                    if let Some(nt) = null_treatment {
+                        write!(f, "{}", nt)?;
+                    }
+
+                    if !partition_by.is_empty() {
+                        write!(f, " PARTITION BY [{}]", expr_vec_fmt!(partition_by))?;
+                    }
+                    if !order_by.is_empty() {
+                        write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
+                    }
+                    write!(
+                        f,
+                        " {} BETWEEN {} AND {}",
+                        window_frame.units,
+                        window_frame.start_bound,
+                        window_frame.end_bound
+                    )
                 }
-                if !order_by.is_empty() {
-                    write!(f, " ORDER BY [{}]", expr_vec_fmt!(order_by))?;
-                }
-                write!(
-                    f,
-                    " {} BETWEEN {} AND {}",
-                    window_frame.units, window_frame.start_bound, window_frame.end_bound
-                )?;
-                Ok(())
-            }
+            },
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.display_name(params) {
                     Ok(name) => {

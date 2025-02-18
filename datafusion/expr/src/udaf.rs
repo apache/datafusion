@@ -40,7 +40,7 @@ use crate::function::{
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::utils::format_state_name;
 use crate::utils::AggregateOrderSensitivity;
-use crate::{Accumulator, Expr};
+use crate::{expr_vec_fmt, Accumulator, Expr};
 use crate::{Documentation, Signature};
 
 /// Logical representation of a user-defined [aggregate function] (UDAF).
@@ -184,6 +184,13 @@ impl AggregateUDF {
     /// See [`AggregateUDFImpl::display_name`] for more details.
     pub fn display_name(&self, params: &AggregateFunctionParams) -> Result<String> {
         self.inner.display_name(params)
+    }
+
+    pub fn window_function_display_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        self.inner.window_function_display_name(params)
     }
 
     pub fn is_nullable(&self) -> bool {
@@ -507,10 +514,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             "{}({}{})",
             self.name(),
             if *distinct { "DISTINCT " } else { "" },
-            args.iter()
-                .map(|arg| format!("{arg}"))
-                .collect::<Vec<String>>()
-                .join(", ")
+            expr_vec_fmt!(args)
         ))?;
 
         if let Some(nt) = null_treatment {
@@ -519,17 +523,56 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         if let Some(fe) = filter {
             schema_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
         }
-        if let Some(ob) = order_by {
-            schema_name.write_fmt(format_args!(
-                " ORDER BY [{}]",
-                ob.iter()
-                    .map(|o| format!("{o}"))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            ))?;
+        if let Some(order_by) = order_by {
+            schema_name
+                .write_fmt(format_args!(" ORDER BY [{}]", expr_vec_fmt!(order_by)))?;
         }
 
         Ok(schema_name)
+    }
+
+    fn window_function_display_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        let WindowFunctionParams {
+            args,
+            partition_by,
+            order_by,
+            window_frame,
+            null_treatment,
+        } = params;
+
+        let mut display_name = String::new();
+
+        display_name.write_fmt(format_args!(
+            "{}({})",
+            self.name(),
+            expr_vec_fmt!(args)
+        ))?;
+
+        if let Some(null_treatment) = null_treatment {
+            display_name.write_fmt(format_args!(" {}", null_treatment))?;
+        }
+
+        if !partition_by.is_empty() {
+            display_name.write_fmt(format_args!(
+                " PARTITION BY [{}]",
+                expr_vec_fmt!(partition_by)
+            ))?;
+        }
+
+        if !order_by.is_empty() {
+            display_name
+                .write_fmt(format_args!(" ORDER BY [{}]", expr_vec_fmt!(order_by)))?;
+        };
+
+        display_name.write_fmt(format_args!(
+            " {} BETWEEN {} AND {}",
+            window_frame.units, window_frame.start_bound, window_frame.end_bound
+        ))?;
+
+        Ok(display_name)
     }
 
     /// Returns the function's [`Signature`] for information about what input
