@@ -33,7 +33,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_functions_aggregate::count::{count_udaf, count_wildcard};
+use datafusion_functions_aggregate::count::{count_udaf, count_all};
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,
 };
@@ -2464,8 +2464,8 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     let df_results = ctx
         .table("t1")
         .await?
-        .aggregate(vec![col("b")], vec![count_wildcard()])?
-        .sort(vec![count_wildcard().sort(true, false)])?
+        .aggregate(vec![col("b")], vec![count_all()])?
+        .sort(vec![count_all().sort(true, false)])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -2499,8 +2499,8 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
             Arc::new(
                 ctx.table("t2")
                     .await?
-                    .aggregate(vec![], vec![count_wildcard()])?
-                    .select(vec![count_wildcard()])?
+                    .aggregate(vec![], vec![count_all()])?
+                    .select(vec![count_all()])?
                     .into_optimized_plan()?,
             ),
         ))?
@@ -2533,8 +2533,8 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
         .filter(exists(Arc::new(
             ctx.table("t2")
                 .await?
-                .aggregate(vec![], vec![count_wildcard()])?
-                .select(vec![count_wildcard()])?
+                .aggregate(vec![], vec![count_all()])?
+                .select(vec![count_all()])?
                 .into_unoptimized_plan(),
             // Usually, into_optimized_plan() should be used here, but due to
             // https://github.com/apache/datafusion/issues/5771,
@@ -2608,8 +2608,8 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     let df_results = ctx
         .table("t1")
         .await?
-        .aggregate(vec![], vec![count_wildcard()])?
-        .select(vec![count_wildcard()])?
+        .aggregate(vec![], vec![count_all()])?
+        .select(vec![count_all()])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -2646,8 +2646,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
                 ctx.table("t2")
                     .await?
                     .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
-                    .aggregate(vec![], vec![count_wildcard()])?
-                    .select(vec![col(count_wildcard().to_string())])?
+                    .aggregate(vec![], vec![count_all()])?
+                    .select(vec![col(count_all().to_string())])?
                     .into_unoptimized_plan(),
             ))
             .gt(lit(ScalarValue::UInt8(Some(0)))),

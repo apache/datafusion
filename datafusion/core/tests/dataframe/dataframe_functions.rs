@@ -22,7 +22,7 @@ use arrow::{
     array::{Int32Array, StringArray},
     record_batch::RecordBatch,
 };
-use datafusion_functions_aggregate::count::count_wildcard;
+use datafusion_functions_aggregate::count::count_all;
 use std::sync::Arc;
 
 use datafusion::error::Result;
@@ -1136,11 +1136,11 @@ async fn test_count_wildcard() -> Result<()> {
 
     let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
     let plan = LogicalPlanBuilder::from(table_scan)
-        .aggregate(vec![col("b")], vec![count_wildcard()])
+        .aggregate(vec![col("b")], vec![count_all()])
         .unwrap()
-        .project(vec![count_wildcard()])
+        .project(vec![count_all()])
         .unwrap()
-        .sort(vec![count_wildcard().sort(true, false)])
+        .sort(vec![count_all().sort(true, false)])
         .unwrap()
         .build()
         .unwrap();
