@@ -22,8 +22,8 @@ use std::fmt::Debug;
 use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, ColumnarValue, PartitionEvaluator, ScalarUDFImpl,
-    Signature, Volatility, WindowUDFImpl,
+    Accumulator, AggregateUDFImpl, PartitionEvaluator, ScalarUDFImpl, Signature,
+    Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
@@ -68,13 +68,6 @@ impl ScalarUDFImpl for MyRegexUdf {
         } else {
             plan_err!("regex_udf only accepts Utf8 arguments")
         }
-    }
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> datafusion_common::Result<ColumnarValue> {
-        unimplemented!()
     }
     fn aliases(&self) -> &[String] {
         &self.aliases

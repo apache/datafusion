@@ -296,8 +296,11 @@ insert into table_without_values(field1) values(3);
 1
 
 # insert NULL values for the missing column (field1), but column is non-nullable
-statement error Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
+statement error
 insert into table_without_values(field2) values(300);
+----
+DataFusion error: Execution error: Invalid batch column at '0' has null but schema specifies non-nullable
+
 
 statement error Invalid argument error: Column 'column1' is declared as non-nullable but contains null values
 insert into table_without_values values(NULL, 300);
@@ -358,7 +361,7 @@ statement ok
 create table test_column_defaults(
   a int,
   b int not null default null,
-  c int default 100*2+300, 
+  c int default 100*2+300,
   d text default lower('DEFAULT_TEXT'),
   e timestamp default now()
 )
@@ -368,8 +371,11 @@ insert into test_column_defaults values(1, 10, 100, 'ABC', now())
 ----
 1
 
-statement error DataFusion error: Execution error: Invalid batch column at '1' has null but schema specifies non-nullable
+statement error
 insert into test_column_defaults(a) values(2)
+----
+DataFusion error: Execution error: Invalid batch column at '1' has null but schema specifies non-nullable
+
 
 query I
 insert into test_column_defaults(b) values(20)
@@ -412,7 +418,7 @@ statement ok
 create table test_column_defaults(
   a int,
   b int not null default null,
-  c int default 100*2+300, 
+  c int default 100*2+300,
   d text default lower('DEFAULT_TEXT'),
   e timestamp default now()
 ) as values(1, 10, 100, 'ABC', now())

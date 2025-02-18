@@ -44,7 +44,7 @@ use arrow::{
     buffer::BooleanBuffer,
 };
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+    downcast_value, internal_err, not_impl_err, Result, ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
