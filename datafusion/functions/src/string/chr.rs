@@ -38,9 +38,8 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 
     let mut builder = GenericStringBuilder::<i32>::with_capacity(
         integer_array.len(),
-        // This assumes the maximum length of a single character is 4 bytes,
-        // which might be overly pessimistic
-        integer_array.len() * 4,
+        // 1 byte per character, assuming that is the common case
+        integer_array.len(),
     );
 
     let mut buf = [0u8; 4];
