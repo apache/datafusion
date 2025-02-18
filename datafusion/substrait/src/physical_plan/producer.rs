@@ -23,9 +23,9 @@ use crate::variation_const::{
 };
 
 use datafusion::arrow::datatypes::DataType;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::{displayable, ExecutionPlan};
-use datafusion::datasource::source::DataSourceExec;
 
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use substrait::proto::expression::mask_expression::{StructItem, StructSelect};
