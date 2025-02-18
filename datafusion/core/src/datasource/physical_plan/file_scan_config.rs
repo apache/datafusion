@@ -330,6 +330,19 @@ impl FileScanConfig {
         self
     }
 
+    /// Refreshes the source with updated statistics.
+    /// Should be called after projection-related fields are updated.
+    pub fn refresh_source(mut self) -> Self {
+        let (
+            _projected_schema,
+            _constraints,
+            projected_statistics,
+            _projected_output_ordering,
+        ) = self.project();
+        self.source = self.source.with_statistics(projected_statistics);
+        self
+    }
+
     /// Set the table constraints of the files
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = constraints;
@@ -598,6 +611,7 @@ impl FileScanConfig {
     }
 
     /// Returns the file_source
+    /// If projection has changed since the last call, use [`FileScanConfig::refresh_source`] before
     pub fn file_source(&self) -> &Arc<dyn FileSource> {
         &self.source
     }
