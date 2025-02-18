@@ -3229,6 +3229,8 @@ async fn apply_enforce_distribution_multiple_times() -> Result<()> {
         .create_physical_plan(&optimized_logical_plan, &session_state)
         .await?;
 
+    // println!("{}", displayable(optimized_physical_plan.as_ref()).indent(true));
+
     let mut results = optimized_physical_plan
         .execute(0, ctx.task_ctx().clone())
         .unwrap();

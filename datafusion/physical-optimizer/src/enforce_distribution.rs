@@ -1016,10 +1016,9 @@ fn remove_dist_changing_operators(
         // All of above operators have a single child. First child is only child.
         // Remove any distribution changing operators at the beginning:
         distribution_context = distribution_context.children.swap_remove(0);
-        distribution_context.data.fetch = fetch;
         // Note that they will be re-inserted later on if necessary or helpful.
     }
-
+    distribution_context.data.fetch = fetch;
     Ok(distribution_context)
 }
 
@@ -1048,8 +1047,8 @@ fn replace_order_preserving_variants(
     let mut fetch = None;
     for child in context.children.into_iter() {
         if child.data.has_dist_changing {
-            let child = replace_order_preserving_variants(child)?;
-            fetch = child.data.fetch;
+            let mut child = replace_order_preserving_variants(child)?;
+            fetch = child.data.fetch.take();
             children.push(child);
         } else {
             children.push(child);
@@ -1219,6 +1218,7 @@ pub fn ensure_distribution(
         mut data,
         children,
     } = remove_dist_changing_operators(dist_context)?;
+    let mut fetch = data.fetch.take();
 
     if let Some(exec) = plan.as_any().downcast_ref::<WindowAggExec>() {
         if let Some(updated_window) = get_best_fitting_window(
@@ -1283,7 +1283,7 @@ pub fn ensure_distribution(
             // Satisfy the distribution requirement if it is unmet.
             match &requirement {
                 Distribution::SinglePartition => {
-                    child = add_spm_on_top(child, &mut data.fetch);
+                    child = add_spm_on_top(child, &mut fetch);
                 }
                 Distribution::HashPartitioned(exprs) => {
                     if add_roundrobin {
@@ -1319,10 +1319,10 @@ pub fn ensure_distribution(
                     && child.data.has_dist_changing
                 {
                     child = replace_order_preserving_variants(child)?;
+                    let fetch = child.data.fetch.take();
                     // If ordering requirements were satisfied before repartitioning,
                     // make sure ordering requirements are still satisfied after.
                     if ordering_satisfied {
-                        let fetch = child.data.fetch;
                         // Make sure to satisfy ordering requirement:
                         child = add_sort_above_with_check(
                             child,
@@ -1394,7 +1394,7 @@ pub fn ensure_distribution(
     // If `fetch` was not consumed, it means that there was `SortPreservingMergeExec` with fetch before
     // It was removed by `remove_dist_changing_operators`
     // and we need to add it back.
-    if data.fetch.is_some() {
+    if fetch.is_some() {
         plan = Arc::new(
             SortPreservingMergeExec::new(
                 plan.output_ordering()
@@ -1402,7 +1402,7 @@ pub fn ensure_distribution(
                     .clone(),
                 plan,
             )
-            .with_fetch(data.fetch.take()),
+            .with_fetch(fetch.take()),
         )
     }
 
