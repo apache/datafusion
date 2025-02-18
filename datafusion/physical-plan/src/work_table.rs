@@ -162,6 +162,9 @@ impl DisplayAs for WorkTableExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "WorkTableExec: name={}", self.name)
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

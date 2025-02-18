@@ -137,6 +137,9 @@ impl DisplayAs for FileGroupsDisplay<'_> {
                     FileGroupDisplay(group).fmt_as(t, f)
                 })?
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "")?; // TODO(renjj): add display info
+            }
         }
         write!(f, "]}}")
     }
@@ -174,6 +177,9 @@ impl DisplayAs for FileGroupDisplay<'_> {
                     }
                     Ok(())
                 })?
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "")?; // TODO(renjj): add display info
             }
         }
         write!(f, "]")

@@ -789,6 +789,9 @@ impl DisplayAs for AggregateExec {
                     write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
                 }
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "")?; // TODO(renjj): add display info
+            }
         }
         Ok(())
     }
@@ -1796,6 +1799,9 @@ mod tests {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "TestYieldingExec")
+                }
+                DisplayFormatType::TreeRender => {
+                    write!(f, "") // TODO(renjj): add display info
                 }
             }
         }

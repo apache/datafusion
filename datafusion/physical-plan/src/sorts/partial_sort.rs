@@ -226,6 +226,9 @@ impl DisplayAs for PartialSortExec {
                     None => write!(f, "PartialSortExec: expr=[{}], common_prefix_length=[{common_prefix_length}]", self.expr),
                 }
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

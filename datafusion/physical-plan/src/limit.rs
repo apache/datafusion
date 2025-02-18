@@ -108,6 +108,9 @@ impl DisplayAs for GlobalLimitExec {
                     self.fetch.map_or("None".to_string(), |x| x.to_string())
                 )
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }
@@ -260,6 +263,9 @@ impl DisplayAs for LocalLimitExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "LocalLimitExec: fetch={}", self.fetch)
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
             }
         }
     }

@@ -92,6 +92,9 @@ impl DisplayAs for CoalescePartitionsExec {
                 }
                 None => write!(f, "CoalescePartitionsExec"),
             },
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

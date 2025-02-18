@@ -185,6 +185,9 @@ impl DisplayAs for SortPreservingMergeExec {
 
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }
@@ -1384,6 +1387,9 @@ mod tests {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "CongestedExec",).unwrap()
+                }
+                DisplayFormatType::TreeRender => {
+                    write!(f, "").unwrap() // TODO(renjj): add display info
                 }
             }
             Ok(())

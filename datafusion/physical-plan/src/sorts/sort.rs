@@ -879,6 +879,9 @@ impl DisplayAs for SortExec {
                     None => write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr),
                 }
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }
@@ -1097,6 +1100,9 @@ mod tests {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "UnboundableExec",).unwrap()
+                }
+                DisplayFormatType::TreeRender => {
+                    write!(f, "").unwrap() // TODO(renjj): add display info
                 }
             }
             Ok(())

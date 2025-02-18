@@ -223,6 +223,9 @@ impl DisplayAs for RecursiveQueryExec {
                     self.name, self.is_distinct
                 )
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }

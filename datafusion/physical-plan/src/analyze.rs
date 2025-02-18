@@ -108,6 +108,9 @@ impl DisplayAs for AnalyzeExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "AnalyzeExec verbose={}", self.verbose)
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "") // TODO(renjj): add display info
+            }
         }
     }
 }
