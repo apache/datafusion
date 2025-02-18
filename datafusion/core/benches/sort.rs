@@ -79,12 +79,13 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::{
     execution::context::TaskContext,
     physical_plan::{
-        coalesce_partitions::CoalescePartitionsExec, memory::MemorySourceConfig,
+        coalesce_partitions::CoalescePartitionsExec,
         sorts::sort_preserving_merge::SortPreservingMergeExec, ExecutionPlan,
         ExecutionPlanProperties,
     },
     prelude::SessionContext,
 };
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 

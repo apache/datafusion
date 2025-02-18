@@ -31,12 +31,12 @@ use datafusion::execution::context::TaskContext;
 use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::{
     project_schema, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
 use datafusion::prelude::*;
+use datafusion_datasource::memory::MemoryStream;
 
 use datafusion::catalog::Session;
 use tokio::time::timeout;

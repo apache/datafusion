@@ -31,9 +31,9 @@ use datafusion::common::{plan_err, Column};
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::logical_expr::Expr;
-use datafusion::physical_plan::memory::MemorySourceConfig;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
+use datafusion_datasource::memory::MemorySourceConfig;
 
 use async_trait::async_trait;
 use parquet::basic::ConvertedType;

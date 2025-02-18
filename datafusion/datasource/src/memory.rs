@@ -22,16 +22,16 @@ use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::{
+use crate::source::{DataSource, DataSourceExec};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+};
+use datafusion_physical_plan::{
     common, ColumnarValue, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
     PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
     Statistics,
 };
-use crate::execution_plan::{Boundedness, EmissionType};
-use crate::projection::{
-    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
-};
-use crate::source::{DataSource, DataSourceExec};
 
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{Schema, SchemaRef};
@@ -968,7 +968,7 @@ mod memory_exec_tests {
 
     use crate::memory::MemorySourceConfig;
     use crate::source::DataSourceExec;
-    use crate::ExecutionPlan;
+    use datafusion_physical_plan::ExecutionPlan;
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1141,8 +1141,8 @@ mod lazy_memory_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::lit;
     use crate::test::{self, make_partition};
+    use datafusion_physical_plan::expressions::lit;
 
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::assert_batches_eq;

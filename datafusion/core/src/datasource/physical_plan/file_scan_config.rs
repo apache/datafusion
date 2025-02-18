@@ -36,13 +36,13 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning}
 
 use crate::datasource::data_source::FileSource;
 pub use datafusion_datasource::file_scan_config::*;
+use datafusion_datasource::source::{DataSource, DataSourceExec};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::display::{display_orderings, ProjectSchemaDisplay};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::{
     all_alias_free_columns, new_projections_for_columns, ProjectionExec,
 };
-use datafusion_physical_plan::source::{DataSource, DataSourceExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Convert type to a type suitable for use as a [`ListingTable`]

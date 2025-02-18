@@ -23,10 +23,10 @@ use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::SessionContext;
 use datafusion::physical_plan::metrics::MetricValue;
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::{
     execute_stream, visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor,
 };
+use datafusion_datasource::source::DataSourceExec;
 use futures::StreamExt;
 
 /// Example of collecting metrics after execution by visiting the `ExecutionPlan`

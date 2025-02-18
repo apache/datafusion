@@ -34,8 +34,8 @@ use datafusion::prelude::SessionContext;
 use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::{assert_batches_eq, DFSchema, ScalarValue};
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
-use datafusion_physical_plan::memory::MemorySourceConfig;
 
 use async_trait::async_trait;
 

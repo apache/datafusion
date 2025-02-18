@@ -20,13 +20,15 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use super::{
+use crate::memory::MemoryStream;
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution_plan::{Boundedness, EmissionType};
-use crate::memory::MemoryStream;
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
