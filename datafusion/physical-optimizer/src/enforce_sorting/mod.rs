@@ -192,7 +192,7 @@ fn update_coalesce_ctx_children(
             // halt coalesce removals at the sort
             false
         } else {
-            // propogate
+            // propagate
             child_context
                 .children
                 .iter()
