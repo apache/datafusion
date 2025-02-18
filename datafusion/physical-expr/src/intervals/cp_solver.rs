@@ -306,7 +306,7 @@ pub fn propagate_comparison(
             }
             Operator::NotEq | Operator::IsDistinctFrom => left_child
                 .union(right_child)
-                .map(|result| result.map(|unin| (unin.clone(), unin))),
+                .map(|union| Some((union.clone(), union.clone()))),
             Operator::Gt => satisfy_greater(left_child, right_child, true),
             Operator::GtEq => satisfy_greater(left_child, right_child, false),
             Operator::Lt => satisfy_greater(right_child, left_child, true)

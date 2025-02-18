@@ -419,21 +419,16 @@ impl PhysicalExpr for InListExpr {
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         let expr_bounds = children[0];
 
+        debug_assert!(
+            children.len() >= 2,
+            "InListExpr requires at least one list item"
+        );
+
         // conjunction of list item intervals
-        let mut list_bounds = children[1].clone();
-        if children.len() > 2 {
-            list_bounds = children[2..]
-                .iter()
-                .try_fold(Some(list_bounds), |acc, item| {
-                    if let Some(acc) = acc {
-                        acc.union(*item)
-                    } else {
-                        Some(Interval::make_unbounded(&expr_bounds.data_type()))
-                            .transpose()
-                    }
-                })?
-                .unwrap_or(Interval::make_unbounded(&expr_bounds.data_type())?);
-        }
+        let list_bounds = children
+            .iter()
+            .skip(2)
+            .try_fold(children[1].clone(), |acc, item| acc.union(*item))?;
 
         if self.negated {
             expr_bounds.contains(list_bounds)?.boolean_negate()
