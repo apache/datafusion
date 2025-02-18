@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -60,9 +63,6 @@ unicode_expressions = ["unicode-segmentation"]
 
 [lib]
 name = "datafusion_functions"
-path = "src/lib.rs"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 arrow = { workspace = true }

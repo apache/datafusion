@@ -27,6 +27,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }

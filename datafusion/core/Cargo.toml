@@ -29,12 +29,11 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
-
-[lib]
-name = "datafusion"
-path = "src/lib.rs"
 
 [features]
 nested_expressions = ["datafusion-functions-nested"]
