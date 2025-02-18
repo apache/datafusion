@@ -23,6 +23,8 @@ members = [
     "datafusion/catalog",
     "datafusion/catalog-listing",
     "datafusion/core",
+    "datafusion/excalibur/lib",
+    "datafusion/excalibur/macros",
     "datafusion/expr",
     "datafusion/expr-common",
     "datafusion/execution",
@@ -104,6 +106,8 @@ datafusion-common = { path = "datafusion/common", version = "45.0.0", default-fe
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "45.0.0" }
 datafusion-datasource = { path = "datafusion/datasource", version = "45.0.0", default-features = false }
 datafusion-doc = { path = "datafusion/doc", version = "45.0.0" }
+datafusion-excalibur = { path = "datafusion/excalibur/lib", version = "45.0.0" }
+datafusion-excalibur-macros = { path = "datafusion/excalibur/macros", version = "45.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "45.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "45.0.0" }
 datafusion-expr-common = { path = "datafusion/expr-common", version = "45.0.0" }
