@@ -1013,7 +1013,7 @@ fn project_with_column_index(
         .enumerate()
         .map(|(i, e)| match e {
             Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
-                Ok(e.unalias().alias(schema.field(i).name()))
+                Ok(e.alias(schema.field(i).name()))
             }
             Expr::Column(Column {
                 relation: _,
