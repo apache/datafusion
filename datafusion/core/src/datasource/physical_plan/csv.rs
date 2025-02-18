@@ -403,13 +403,13 @@ impl ExecutionPlan for CsvExec {
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion_datasource::{
+/// # use datafusion::datasource::{
 /// #     physical_plan::FileScanConfig,
 /// #     listing::PartitionedFile,
 /// # };
-/// # use datafusion_datasource::physical_plan::CsvSource;
+/// # use datafusion::datasource::physical_plan::CsvSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
-/// # use datafusion_datasource::source::DataSourceExec;
+/// # use datafusion::datasource::source::DataSourceExec;
 ///
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let file_schema = Arc::new(Schema::empty());

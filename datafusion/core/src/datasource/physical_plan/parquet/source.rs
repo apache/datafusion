@@ -76,12 +76,12 @@ use object_store::ObjectStore;
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion_datasource::physical_plan::FileScanConfig;
-/// # use datafusion_datasource::physical_plan::parquet::source::ParquetSource;
-/// # use datafusion_datasource::listing::PartitionedFile;
+/// # use datafusion::datasource::physical_plan::FileScanConfig;
+/// # use datafusion::datasource::physical_plan::parquet::source::ParquetSource;
+/// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_expr::expressions::lit;
-/// # use datafusion_datasource::source::DataSourceExec;
+/// # use datafusion::datasource::source::DataSourceExec;
 /// # use datafusion_common::config::TableParquetOptions;
 ///
 /// # let file_schema = Arc::new(Schema::empty());
@@ -158,9 +158,9 @@ use object_store::ObjectStore;
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion_datasource::physical_plan::FileScanConfig;
-/// # use datafusion_datasource::listing::PartitionedFile;
-/// # use datafusion_datasource::source::DataSourceExec;
+/// # use datafusion::datasource::physical_plan::FileScanConfig;
+/// # use datafusion::datasource::listing::PartitionedFile;
+/// # use datafusion::datasource::source::DataSourceExec;
 ///
 /// # fn parquet_exec() -> DataSourceExec { unimplemented!() }
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
@@ -197,12 +197,12 @@ use object_store::ObjectStore;
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Schema, SchemaRef};
-/// # use datafusion_datasource::listing::PartitionedFile;
-/// # use datafusion_datasource::physical_plan::parquet::ParquetAccessPlan;
-/// # use datafusion_datasource::physical_plan::FileScanConfig;
-/// # use datafusion_datasource::physical_plan::parquet::source::ParquetSource;
+/// # use datafusion::datasource::listing::PartitionedFile;
+/// # use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
+/// # use datafusion::datasource::physical_plan::FileScanConfig;
+/// # use datafusion::datasource::physical_plan::parquet::source::ParquetSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
-/// # use datafusion_datasource::source::DataSourceExec;
+/// # use datafusion::datasource::source::DataSourceExec;
 ///
 /// # fn schema() -> SchemaRef {
 /// #   Arc::new(Schema::empty())
