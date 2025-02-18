@@ -21,10 +21,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::memory::MemoryStream;
-use datafusion_physical_plan::{
-    common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics,
-};
-use datafusion_physical_plan::{
+use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{
     execution_plan::{Boundedness, EmissionType},
     DisplayFormatType, ExecutionPlan, Partitioning,
 };
@@ -163,7 +161,7 @@ impl ExecutionPlan for EmptyExec {
 mod tests {
     use super::*;
     use crate::test;
-    use datafusion_physical_plan::with_new_children_if_necessary;
+    use crate::with_new_children_if_necessary;
 
     #[tokio::test]
     async fn empty() -> Result<()> {

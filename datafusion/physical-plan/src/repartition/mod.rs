@@ -1719,7 +1719,7 @@ mod test {
         schema: &SchemaRef,
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
-        Arc::new(MockMemorySourceConfig::new(Arc::new(
+        Arc::new(MockMemorySourceConfig::update_cache(Arc::new(
             MockMemorySourceConfig::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_exprs])

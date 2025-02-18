@@ -23,7 +23,7 @@ use std::{any::Any, borrow::Cow};
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_catalog::Session;
-use datafusion_datasource::work_table::WorkTableExec;
+use datafusion_physical_plan::work_table::WorkTableExec;
 
 use crate::{
     error::Result,

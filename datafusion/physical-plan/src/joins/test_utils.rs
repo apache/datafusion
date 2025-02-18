@@ -536,8 +536,8 @@ pub fn create_memory_table(
     let right = MockMemorySourceConfig::try_new(&[right_partition], right_schema, None)?
         .try_with_sort_information(right_sorted)?;
     Ok((
-        Arc::new(MockMemorySourceConfig::new(Arc::new(left))),
-        Arc::new(MockMemorySourceConfig::new(Arc::new(right))),
+        Arc::new(MockMemorySourceConfig::update_cache(Arc::new(left))),
+        Arc::new(MockMemorySourceConfig::update_cache(Arc::new(right))),
     ))
 }
 

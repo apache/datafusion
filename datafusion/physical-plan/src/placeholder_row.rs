@@ -20,18 +20,16 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
+use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{DisplayFormatType, ExecutionPlan, Partitioning};
 use arrow::array::{ArrayRef, NullArray};
 use arrow::array::{RecordBatch, RecordBatchOptions};
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::{
-    common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics,
-};
-use datafusion_physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use log::trace;
 
@@ -181,7 +179,7 @@ impl ExecutionPlan for PlaceholderRowExec {
 mod tests {
     use super::*;
     use crate::test;
-    use datafusion_physical_plan::with_new_children_if_necessary;
+    use crate::with_new_children_if_necessary;
 
     #[test]
     fn with_new_children() -> Result<()> {

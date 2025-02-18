@@ -20,19 +20,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
+use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::{
+    ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
+};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;
-use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::{
-    common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics,
-};
-use datafusion_physical_plan::{
-    ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
-};
 
 /// Execution plan for values list based relation (produces constant rows)
 #[deprecated(
@@ -231,8 +229,8 @@ impl ExecutionPlan for ValuesExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expressions::lit;
     use crate::test::{self, make_partition};
-    use datafusion_physical_plan::expressions::lit;
 
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::stats::{ColumnStatistics, Precision};

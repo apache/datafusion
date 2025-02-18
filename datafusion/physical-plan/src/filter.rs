@@ -620,11 +620,10 @@ pub type EqualAndNonEqual<'a> =
 #[cfg(test)]
 mod tests {
     use super::*;
-    // use crate::empty::EmptyExec;
+    use crate::empty::EmptyExec;
     use crate::expressions::*;
     use crate::test;
     use crate::test::exec::StatisticsExec;
-    #[allow(unused_imports)]
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
     use datafusion_common::ScalarValue;
 
@@ -1281,36 +1280,36 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // fn test_equivalence_properties_union_type() -> Result<()> {
-    //     let union_type = DataType::Union(
-    //         UnionFields::new(
-    //             vec![0, 1],
-    //             vec![
-    //                 Field::new("f1", DataType::Int32, true),
-    //                 Field::new("f2", DataType::Utf8, true),
-    //             ],
-    //         ),
-    //         UnionMode::Sparse,
-    //     );
+    #[test]
+    fn test_equivalence_properties_union_type() -> Result<()> {
+        let union_type = DataType::Union(
+            UnionFields::new(
+                vec![0, 1],
+                vec![
+                    Field::new("f1", DataType::Int32, true),
+                    Field::new("f2", DataType::Utf8, true),
+                ],
+            ),
+            UnionMode::Sparse,
+        );
 
-    //     let schema = Arc::new(Schema::new(vec![
-    //         Field::new("c1", DataType::Int32, true),
-    //         Field::new("c2", union_type, true),
-    //     ]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", union_type, true),
+        ]));
 
-    //     let exec = FilterExec::try_new(
-    //         binary(
-    //             binary(col("c1", &schema)?, Operator::GtEq, lit(1i32), &schema)?,
-    //             Operator::And,
-    //             binary(col("c1", &schema)?, Operator::LtEq, lit(4i32), &schema)?,
-    //             &schema,
-    //         )?,
-    //         Arc::new(EmptyExec::new(Arc::clone(&schema))),
-    //     )?;
+        let exec = FilterExec::try_new(
+            binary(
+                binary(col("c1", &schema)?, Operator::GtEq, lit(1i32), &schema)?,
+                Operator::And,
+                binary(col("c1", &schema)?, Operator::LtEq, lit(4i32), &schema)?,
+                &schema,
+            )?,
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        )?;
 
-    //     exec.statistics().unwrap();
+        exec.statistics().unwrap();
 
-    //     Ok(())
-    // }
+        Ok(())
+    }
 }

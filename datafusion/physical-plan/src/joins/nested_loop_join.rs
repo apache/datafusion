@@ -1090,7 +1090,7 @@ pub(crate) mod tests {
             source = source.try_with_sort_information(vec![sort_info]).unwrap();
         }
 
-        Arc::new(MockMemorySourceConfig::new(Arc::new(source)))
+        Arc::new(MockMemorySourceConfig::update_cache(Arc::new(source)))
     }
 
     fn build_left_table() -> Arc<dyn ExecutionPlan> {

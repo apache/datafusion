@@ -126,7 +126,7 @@ impl ExecutionPlan for MockMemorySourceConfig {
     }
 
     fn properties(&self) -> &PlanProperties {
-        return &self.cache;
+        &self.cache
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -221,7 +221,7 @@ impl MockMemorySourceConfig {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
             partitions: partitions.to_vec(),
-            schema: schema,
+            schema,
             cache: PlanProperties::new(
                 EquivalenceProperties::new_with_orderings(
                     Arc::clone(&projected_schema),
@@ -231,8 +231,8 @@ impl MockMemorySourceConfig {
                 EmissionType::Incremental,
                 Boundedness::Bounded,
             ),
-            projected_schema: projected_schema,
-            projection: projection,
+            projected_schema,
+            projection,
             sort_information: vec![],
             show_sizes: true,
             fetch: None,
@@ -253,7 +253,7 @@ impl MockMemorySourceConfig {
     }
 
     // Equivalent of `DataSourceExec::new`
-    pub fn new(source: Arc<MockMemorySourceConfig>) -> MockMemorySourceConfig {
+    pub fn update_cache(source: Arc<MockMemorySourceConfig>) -> MockMemorySourceConfig {
         let cache = source.compute_properties();
         let source = &*source;
         let mut source = source.clone();

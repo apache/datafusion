@@ -865,11 +865,11 @@ mod tests {
                 .iter()
                 .map(|ordering| convert_to_sort_exprs(ordering))
                 .collect::<Vec<_>>();
-            let child1 = Arc::new(MockMemorySourceConfig::new(Arc::new(
+            let child1 = Arc::new(MockMemorySourceConfig::update_cache(Arc::new(
                 MockMemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(first_orderings)?,
             )));
-            let child2 = Arc::new(MockMemorySourceConfig::new(Arc::new(
+            let child2 = Arc::new(MockMemorySourceConfig::update_cache(Arc::new(
                 MockMemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(second_orderings)?,
             )));

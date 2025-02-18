@@ -81,7 +81,7 @@ use object_store::ObjectStore;
 /// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_expr::expressions::lit;
-/// # use datafusion_physical_plan::source::DataSourceExec;
+/// # use datafusion_datasource::source::DataSourceExec;
 /// # use datafusion_common::config::TableParquetOptions;
 ///
 /// # let file_schema = Arc::new(Schema::empty());
@@ -160,7 +160,7 @@ use object_store::ObjectStore;
 /// # use arrow::datatypes::Schema;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
 /// # use datafusion::datasource::listing::PartitionedFile;
-/// # use datafusion_physical_plan::source::DataSourceExec;
+/// # use datafusion_datasource::source::DataSourceExec;
 ///
 /// # fn parquet_exec() -> DataSourceExec { unimplemented!() }
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
@@ -202,7 +202,7 @@ use object_store::ObjectStore;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
 /// # use datafusion::datasource::physical_plan::parquet::source::ParquetSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
-/// # use datafusion_physical_plan::source::DataSourceExec;
+/// # use datafusion_datasource::source::DataSourceExec;
 ///
 /// # fn schema() -> SchemaRef {
 /// #   Arc::new(Schema::empty())
