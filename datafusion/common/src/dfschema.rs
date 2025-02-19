@@ -25,8 +25,8 @@ use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result, _plan_err, _schema_err};
 use crate::{
-    field_not_found, unqualified_field_not_found, Column, FunctionalDependencies,
-    SchemaError, TableReference,
+    field_not_found, unqualified_field_not_found, Column, Diagnostic,
+    FunctionalDependencies, SchemaError, TableReference,
 };
 
 use arrow::compute::can_cast_types;
@@ -230,6 +230,13 @@ impl DFSchema {
                     return _schema_err!(SchemaError::DuplicateQualifiedField {
                         qualifier: Box::new(qualifier.clone()),
                         name: field.name().to_string(),
+                    })
+                    .map_err(|err| {
+                        let diagnostic = Diagnostic::new_error(
+                            format!("duplicate qualified field name '{}'", field.name()),
+                            None,
+                        );
+                        err.with_diagnostic(diagnostic)
                     });
                 }
             } else if !unqualified_names.insert(field.name()) {

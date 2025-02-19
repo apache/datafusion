@@ -131,6 +131,14 @@ fn get_spans(query: &'static str) -> HashMap<String, Span> {
 }
 
 #[test]
+fn test_table_duplicate_name() -> Result<()> {
+    let query = "SELECT /*a*/id/*a*/ FROM person a, person a";
+    let diag = do_query(query);
+    assert_eq!(diag.message, "duplicate qualified field name 'id'");
+    Ok(())
+}
+
+#[test]
 fn test_table_not_found() -> Result<()> {
     let query = "SELECT * FROM /*a*/personx/*a*/";
     let spans = get_spans(query);
