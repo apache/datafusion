@@ -1,4 +1,3 @@
-
 # GSoC Project Ideas
 
 ## Introduction
