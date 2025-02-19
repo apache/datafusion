@@ -66,7 +66,7 @@ pub struct FFI_ScalarUDF {
         arg_types: RVec<WrappedSchema>,
     ) -> RResult<WrappedSchema, RString>,
 
-    /// Execute the underlying [`ScalarUDF`] and return the result as a [`FFI_ArrowArray`]
+    /// Execute the underlying [`ScalarUDF`] and return the result as a `FFI_ArrowArray`
     /// within an AbiStable wrapper.
     pub invoke_with_args: unsafe extern "C" fn(
         udf: &Self,
