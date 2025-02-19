@@ -21,7 +21,9 @@ use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::binary::try_type_union_resolution;
-use datafusion_expr::{ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use itertools::Itertools;
@@ -93,11 +95,8 @@ impl ScalarUDFImpl for CoalesceFunc {
     }
 
     /// coalesce evaluates to the first value which is not NULL
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = args.args;
         // do not accept 0 arguments.
         if args.is_empty() {
             return exec_err!(

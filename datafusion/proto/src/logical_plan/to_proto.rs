@@ -300,12 +300,15 @@ pub fn serialize_expr(
         }
         Expr::WindowFunction(expr::WindowFunction {
             ref fun,
-            ref args,
-            ref partition_by,
-            ref order_by,
-            ref window_frame,
-            // TODO: support null treatment in proto
-            null_treatment: _,
+            params:
+                expr::WindowFunctionParams {
+                    ref args,
+                    ref partition_by,
+                    ref order_by,
+                    ref window_frame,
+                    // TODO: support null treatment in proto
+                    null_treatment: _,
+                },
         }) => {
             let (window_function, fun_definition) = match fun {
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {

@@ -71,7 +71,7 @@ use datafusion_common::{
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
     physical_name, AggregateFunction, AggregateFunctionParams, Alias, GroupingSet,
-    WindowFunction,
+    WindowFunction, WindowFunctionParams,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -569,16 +569,24 @@ impl DefaultPhysicalPlanner {
 
                 let get_sort_keys = |expr: &Expr| match expr {
                     Expr::WindowFunction(WindowFunction {
-                        ref partition_by,
-                        ref order_by,
+                        params:
+                            WindowFunctionParams {
+                                ref partition_by,
+                                ref order_by,
+                                ..
+                            },
                         ..
                     }) => generate_sort_key(partition_by, order_by),
                     Expr::Alias(Alias { expr, .. }) => {
                         // Convert &Box<T> to &T
                         match &**expr {
                             Expr::WindowFunction(WindowFunction {
-                                ref partition_by,
-                                ref order_by,
+                                params:
+                                    WindowFunctionParams {
+                                        ref partition_by,
+                                        ref order_by,
+                                        ..
+                                    },
                                 ..
                             }) => generate_sort_key(partition_by, order_by),
                             _ => unreachable!(),
@@ -1509,11 +1517,14 @@ pub fn create_window_expr_with_name(
     match e {
         Expr::WindowFunction(WindowFunction {
             fun,
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment,
+            params:
+                WindowFunctionParams {
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                },
         }) => {
             let physical_args =
                 create_physical_exprs(args, logical_schema, execution_props)?;

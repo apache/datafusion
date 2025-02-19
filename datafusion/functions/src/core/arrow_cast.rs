@@ -29,8 +29,8 @@ use std::any::Any;
 
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl,
-    Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -138,11 +138,7 @@ impl ScalarUDFImpl for ArrowCastFunc {
             )
     }
 
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         internal_err!("arrow_cast should have been simplified to cast")
     }
 

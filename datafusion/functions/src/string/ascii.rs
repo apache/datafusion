@@ -22,7 +22,7 @@ use arrow::error::ArrowError;
 use datafusion_common::types::logical_string;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignatureClass};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -92,12 +92,8 @@ impl ScalarUDFImpl for AsciiFunc {
         Ok(Int32)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        make_scalar_function(ascii, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(ascii, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

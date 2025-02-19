@@ -17,21 +17,34 @@
 
 extern crate criterion;
 
-use arrow::datatypes::DataType;
+use arrow::{array::PrimitiveArray, datatypes::Int64Type, util::test_util::seedable_rng};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::ScalarFunctionArgs;
-use datafusion_functions::string;
+use datafusion_expr::ColumnarValue;
+use datafusion_functions::string::chr;
+use rand::Rng;
+
+use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let uuid = string::uuid();
-    c.bench_function("uuid", |b| {
-        b.iter(|| {
-            black_box(uuid.invoke_with_args(ScalarFunctionArgs {
-                args: vec![],
-                number_rows: 1024,
-                return_type: &DataType::Utf8,
-            }))
-        })
+    let cot_fn = chr();
+    let size = 1024;
+    let input: PrimitiveArray<Int64Type> = {
+        let null_density = 0.2;
+        let mut rng = seedable_rng();
+        (0..size)
+            .map(|_| {
+                if rng.gen::<f32>() < null_density {
+                    None
+                } else {
+                    Some(rng.gen_range::<i64, _>(1i64..10_000))
+                }
+            })
+            .collect()
+    };
+    let input = Arc::new(input);
+    let args = vec![ColumnarValue::Array(input)];
+    c.bench_function("chr", |b| {
+        b.iter(|| black_box(cot_fn.invoke_batch(&args, size).unwrap()))
     });
 }
 

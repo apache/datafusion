@@ -24,7 +24,9 @@ use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, utils::take_function_args, Result,
     ScalarValue,
 };
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -170,12 +172,8 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let [base, field_name] = take_function_args(self.name(), args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [base, field_name] = take_function_args(self.name(), args.args)?;
 
         if base.data_type().is_null() {
             return Ok(ColumnarValue::Scalar(ScalarValue::Null));
@@ -229,7 +227,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
             (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
                 let as_struct_array = as_struct_array(&array)?;
-                match as_struct_array.column_by_name(k) {
+                match as_struct_array.column_by_name(&k) {
                     None => exec_err!("get indexed field {k} not found in struct"),
                     Some(col) => Ok(ColumnarValue::Array(Arc::clone(col))),
                 }
