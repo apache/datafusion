@@ -53,11 +53,13 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
     ScalarValue, SchemaError, UnnestOptions,
 };
-use datafusion_expr::dml::InsertOp;
-use datafusion_expr::expr::{Alias, ScalarFunction};
-use datafusion_expr::{case, is_null, lit, SortExpr};
 use datafusion_expr::{
-    utils::COUNT_STAR_EXPANSION, TableProviderFilterPushDown, UNNAMED_TABLE,
+    case,
+    dml::InsertOp,
+    expr::{Alias, ScalarFunction},
+    is_null, lit,
+    utils::COUNT_STAR_EXPANSION,
+    SortExpr, TableProviderFilterPushDown, UNNAMED_TABLE,
 };
 use datafusion_functions::core::coalesce;
 use datafusion_functions_aggregate::expr_fn::{
