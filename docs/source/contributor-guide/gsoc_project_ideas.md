@@ -1,5 +1,3 @@
-gsoc_project_ideas.md
-
 # GSoC Project Ideas
 
 ## Introduction
