@@ -20,7 +20,8 @@ use super::basic::{sha384, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, ScalarFunctionArgs
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -78,10 +79,7 @@ impl ScalarUDFImpl for SHA384Func {
         utf8_or_binary_to_binary_type(&arg_types[0], self.name())
     }
 
-    fn invoke_with_args(
-        &self,
-        args: ScalarFunctionArgs,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         sha384(&args.args)
     }
 
