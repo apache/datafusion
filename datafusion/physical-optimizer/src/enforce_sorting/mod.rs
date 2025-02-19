@@ -398,9 +398,9 @@ pub fn ensure_sorting(
         return Ok(maybe_requirements);
     };
 
+    let plan = &requirements.plan;
     let mut updated_children = vec![];
-    for (idx, (required_ordering, mut child)) in requirements
-        .plan
+    for (idx, (required_ordering, mut child)) in plan
         .required_input_ordering()
         .into_iter()
         .zip(requirements.children.into_iter())
@@ -413,23 +413,18 @@ pub fn ensure_sorting(
             if !eq_properties.ordering_satisfy_requirement(&required) {
                 // Make sure we preserve the ordering requirements:
                 if physical_ordering.is_some() {
-                    child = update_child_to_remove_unnecessary_sort(
-                        idx,
-                        child,
-                        &requirements.plan,
-                    )?;
+                    child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 }
                 child = add_sort_above(child, required, None);
                 child = update_sort_ctx_children_data(child, true)?;
             }
         } else if physical_ordering.is_none()
-            || !requirements.plan.maintains_input_order()[idx]
-            || is_union(&requirements.plan)
+            || !plan.maintains_input_order()[idx]
+            || is_union(plan)
         {
             // We have a `SortExec` whose effect may be neutralized by another
             // order-imposing operator, remove this sort:
-            child =
-                update_child_to_remove_unnecessary_sort(idx, child, &requirements.plan)?;
+            child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
         }
         updated_children.push(child);
     }
@@ -447,7 +442,7 @@ pub fn ensure_sorting(
         // single partition and no fetch is required.
         let mut child_node = requirements.children.swap_remove(0);
         if let Some(fetch) = requirements.plan.fetch() {
-            // Add the limit exec if the spm has a fetch
+            // Add the limit exec if the original SPM had a fetch:
             child_node.plan =
                 Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
         }
