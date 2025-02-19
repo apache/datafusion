@@ -44,7 +44,6 @@ updates:
         patterns:
           - "prost*"
           - "pbjson*"
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
