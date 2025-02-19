@@ -69,8 +69,8 @@ fn sort_with_mem_limit_2_cols_2_runner() {
     spawn_test_process("sort_with_mem_limit_2_cols_2");
 }
 
-/// `spawn_test_process` might trigger multiple recompilation, and the test binary
-/// size might grow indifinitely. This initilizer ensures recompilation is only done
+/// `spawn_test_process` might trigger multiple recompilations and the test binary
+/// size might grow indefinitely. This initializer ensures recompilation is only done
 /// once and the target size is bounded.
 ///
 /// TODO: This is a hack, can be cleaned up if we have a better way to let multiple
