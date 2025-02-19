@@ -42,7 +42,7 @@ mod tests {
         serializer::serialize(sql, &ctx, path).await?;
         serializer::deserialize(path).await?;
 
-        // Test case 3: serializing to an existing file should fail.
+        // Test case 2: serializing to an existing file should fail.
         let got = serializer::serialize(sql, &ctx, path).await.unwrap_err();
         assert_contains!(got.to_string(), "File exists");
 
