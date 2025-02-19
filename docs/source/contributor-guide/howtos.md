@@ -19,6 +19,12 @@
 
 # HOWTOs
 
+## How to update the version of Rust used in CI tests
+
+- Make a PR to update the [rust-toolchain] file in the root of the repository:
+
+[rust-toolchain]: https://github.com/apache/datafusion/blob/main/rust-toolchain.toml
+
 ## How to add a new scalar function
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:

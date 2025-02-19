@@ -15,16 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::take_function_args;
 use arrow::array::{
     make_array, Array, Capacities, MutableArrayData, Scalar, StringArray,
 };
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
-    exec_err, internal_err, plan_datafusion_err, Result, ScalarValue,
+    exec_err, internal_err, plan_datafusion_err, utils::take_function_args, Result,
+    ScalarValue,
 };
-use datafusion_expr::{ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs};
+use datafusion_expr::{
+    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
+};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -115,14 +117,9 @@ impl ScalarUDFImpl for GetFieldFunc {
     }
 
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
-        if args.len() != 2 {
-            return exec_err!(
-                "get_field function requires 2 arguments, got {}",
-                args.len()
-            );
-        }
+        let [base, field_name] = take_function_args(self.name(), args)?;
 
-        let name = match &args[1] {
+        let name = match field_name {
             Expr::Literal(name) => name,
             _ => {
                 return exec_err!(
@@ -131,7 +128,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
         };
 
-        Ok(format!("{}[{}]", args[0].schema_name(), name))
+        Ok(format!("{}[{}]", base.schema_name(), name))
     }
 
     fn signature(&self) -> &Signature {
@@ -175,26 +172,18 @@ impl ScalarUDFImpl for GetFieldFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        if args.len() != 2 {
-            return exec_err!(
-                "get_field function requires 2 arguments, got {}",
-                args.len()
-            );
-        }
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [base, field_name] = take_function_args(self.name(), args.args)?;
 
-        if args[0].data_type().is_null() {
+        if base.data_type().is_null() {
             return Ok(ColumnarValue::Scalar(ScalarValue::Null));
         }
 
-        let arrays = ColumnarValue::values_to_arrays(args)?;
+        let arrays =
+            ColumnarValue::values_to_arrays(&[base.clone(), field_name.clone()])?;
         let array = Arc::clone(&arrays[0]);
 
-        let name = match &args[1] {
+        let name = match field_name {
             ColumnarValue::Scalar(name) => name,
             _ => {
                 return exec_err!(
@@ -238,7 +227,7 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
             (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
                 let as_struct_array = as_struct_array(&array)?;
-                match as_struct_array.column_by_name(k) {
+                match as_struct_array.column_by_name(&k) {
                     None => exec_err!("get indexed field {k} not found in struct"),
                     Some(col) => Ok(ColumnarValue::Array(Arc::clone(col))),
                 }

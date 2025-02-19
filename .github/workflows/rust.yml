@@ -41,7 +41,7 @@ on:
 jobs:
   # Check license header
   license-header-check:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     name: Check License Header
     steps:
       - uses: actions/checkout@v4

@@ -20,7 +20,8 @@ use crate::crypto::basic::md5;
 use arrow::datatypes::DataType;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -98,12 +99,8 @@ impl ScalarUDFImpl for Md5Func {
             }
         })
     }
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        md5(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        md5(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

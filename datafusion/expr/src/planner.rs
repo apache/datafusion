@@ -29,13 +29,18 @@ use sqlparser::ast;
 
 use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
 
-/// Provides the `SQL` query planner  meta-data about tables and
-/// functions referenced in SQL statements, without a direct dependency on other
-/// DataFusion structures
+/// Provides the `SQL` query planner meta-data about tables and
+/// functions referenced in SQL statements, without a direct dependency on the
+/// `datafusion` Catalog structures such as [`TableProvider`]
+///
+/// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
 pub trait ContextProvider {
-    /// Getter for a datasource
+    /// Returns a table by reference, if it exists
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
 
+    /// Return the type of a file based on its extension (e.g. `.parquet`)
+    ///
+    /// This is used to plan `COPY` statements
     fn get_file_type(&self, _ext: &str) -> Result<Arc<dyn FileType>> {
         not_impl_err!("Registered file types are not supported")
     }
@@ -49,11 +54,20 @@ pub trait ContextProvider {
         not_impl_err!("Table Functions are not supported")
     }
 
-    /// This provides a worktable (an intermediate table that is used to store the results of a CTE during execution)
-    /// We don't directly implement this in the logical plan's ['SqlToRel`]
-    /// because the sql code needs access to a table that contains execution-related types that can't be a direct dependency
-    /// of the sql crate (namely, the `CteWorktable`).
+    /// Provides an intermediate table that is used to store the results of a CTE during execution
+    ///
+    /// CTE stands for "Common Table Expression"
+    ///
+    /// # Notes
+    /// We don't directly implement this in [`SqlToRel`] as implementing this function
+    /// often requires access to a table that contains
+    /// execution-related types that can't be a direct dependency
+    /// of the sql crate (for example [`CteWorkTable`]).
+    ///
     /// The [`ContextProvider`] provides a way to "hide" this dependency.
+    ///
+    /// [`SqlToRel`]: https://docs.rs/datafusion/latest/datafusion/sql/planner/struct.SqlToRel.html
+    /// [`CteWorkTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/cte_worktable/struct.CteWorkTable.html
     fn create_cte_work_table(
         &self,
         _name: &str,
@@ -62,39 +76,44 @@ pub trait ContextProvider {
         not_impl_err!("Recursive CTE is not implemented")
     }
 
-    /// Getter for expr planners
+    /// Return [`ExprPlanner`] extensions for planning expressions
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
         &[]
     }
 
-    /// Getter for the data type planner
+    /// Return [`TypePlanner`] extensions for planning data types
     fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
         None
     }
 
-    /// Getter for a UDF description
+    /// Return the scalar function with a given name, if any
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
-    /// Getter for a UDAF description
+
+    /// Return the aggregate function with a given name, if any
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
-    /// Getter for a UDWF
+
+    /// Return the window function with a given name, if any
     fn get_window_meta(&self, name: &str) -> Option<Arc<WindowUDF>>;
-    /// Getter for system/user-defined variable type
+
+    /// Return the system/user-defined variable type, if any
+    ///
+    /// A user defined variable is typically accessed via `@var_name`
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType>;
 
-    /// Get configuration options
+    /// Return overall configuration options
     fn options(&self) -> &ConfigOptions;
 
-    /// Get all user defined scalar function names
+    /// Return all scalar function names
     fn udf_names(&self) -> Vec<String>;
 
-    /// Get all user defined aggregate function names
+    /// Return all aggregate function names
     fn udaf_names(&self) -> Vec<String>;
 
-    /// Get all user defined window function names
+    /// Return all window function names
     fn udwf_names(&self) -> Vec<String>;
 }
 
-/// This trait allows users to customize the behavior of the SQL planner
+/// Customize planning of SQL AST expressions to [`Expr`]s
 pub trait ExprPlanner: Debug + Send + Sync {
     /// Plan the binary operation between two expressions, returns original
     /// BinaryExpr if not possible
@@ -106,9 +125,9 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(expr))
     }
 
-    /// Plan the field access expression
+    /// Plan the field access expression, such as `foo.bar`
     ///
-    /// returns original FieldAccessExpr if not possible
+    /// returns original [`RawFieldAccessExpr`] if not possible
     fn plan_field_access(
         &self,
         expr: RawFieldAccessExpr,
@@ -117,7 +136,7 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(expr))
     }
 
-    /// Plan the array literal, returns OriginalArray if not possible
+    /// Plan an array literal, such as `[1, 2, 3]`
     ///
     /// Returns origin expression arguments if not possible
     fn plan_array_literal(
@@ -128,13 +147,14 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(exprs))
     }
 
-    // Plan the POSITION expression, e.g., POSITION(<expr> in <expr>)
-    // returns origin expression arguments if not possible
+    /// Plan a `POSITION` expression, such as `POSITION(<expr> in <expr>)`
+    ///
+    /// returns origin expression arguments if not possible
     fn plan_position(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
-    /// Plan the dictionary literal `{ key: value, ...}`
+    /// Plan a dictionary literal, such as `{ key: value, ...}`
     ///
     /// Returns origin expression arguments if not possible
     fn plan_dictionary_literal(
@@ -145,27 +165,26 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(expr))
     }
 
-    /// Plan an extract expression, e.g., `EXTRACT(month FROM foo)`
+    /// Plan an extract expression, such as`EXTRACT(month FROM foo)`
     ///
     /// Returns origin expression arguments if not possible
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
-    /// Plan an substring expression, e.g., `SUBSTRING(<expr> [FROM <expr>] [FOR <expr>])`
+    /// Plan an substring expression, such as `SUBSTRING(<expr> [FROM <expr>] [FOR <expr>])`
     ///
     /// Returns origin expression arguments if not possible
     fn plan_substring(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
-    /// Plans a struct `struct(expression1[, ..., expression_n])`
-    /// literal based on the given input expressions.
-    /// This function takes a vector of expressions and a boolean flag indicating whether
-    /// the struct uses the optional name
+    /// Plans a struct literal, such as  `{'field1' : expr1, 'field2' : expr2, ...}`
     ///
-    /// Returns a `PlannerResult` containing either the planned struct expressions or the original
-    /// input expressions if planning is not possible.
+    /// This function takes a vector of expressions and a boolean flag
+    /// indicating whether the struct uses the optional name
+    ///
+    /// Returns the original input expressions if planning is not possible.
     fn plan_struct_literal(
         &self,
         args: Vec<Expr>,
@@ -174,26 +193,26 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(args))
     }
 
-    /// Plans an overlay expression eg `overlay(str PLACING substr FROM pos [FOR count])`
+    /// Plans an overlay expression, such as `overlay(str PLACING substr FROM pos [FOR count])`
     ///
     /// Returns origin expression arguments if not possible
     fn plan_overlay(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
-    /// Plan a make_map expression, e.g., `make_map(key1, value1, key2, value2, ...)`
+    /// Plans a `make_map` expression, such as `make_map(key1, value1, key2, value2, ...)`
     ///
     /// Returns origin expression arguments if not possible
     fn plan_make_map(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
-    /// Plans compound identifier eg `db.schema.table` for non-empty nested names
+    /// Plans compound identifier such as `db.schema.table` for non-empty nested names
     ///
-    /// Note:
+    /// # Note:
     /// Currently compound identifier for outer query schema is not supported.
     ///
-    /// Returns planned expression
+    /// Returns original expression if not possible
     fn plan_compound_identifier(
         &self,
         _field: &Field,
@@ -205,7 +224,7 @@ pub trait ExprPlanner: Debug + Send + Sync {
         )
     }
 
-    /// Plans `ANY` expression, e.g., `expr = ANY(array_expr)`
+    /// Plans `ANY` expression, such as `expr = ANY(array_expr)`
     ///
     /// Returns origin binary expression if not possible
     fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
@@ -256,9 +275,9 @@ pub enum PlannerResult<T> {
     Original(T),
 }
 
-/// This trait allows users to customize the behavior of the data type planning
+/// Customize planning SQL types to DataFusion (Arrow) types.
 pub trait TypePlanner: Debug + Send + Sync {
-    /// Plan SQL type to DataFusion data type
+    /// Plan SQL [`ast::DataType`] to DataFusion [`DataType`]
     ///
     /// Returns None if not possible
     fn plan_type(&self, _sql_type: &ast::DataType) -> Result<Option<DataType>> {

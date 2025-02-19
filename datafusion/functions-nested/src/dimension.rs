@@ -28,7 +28,7 @@ use arrow::datatypes::{
 use std::any::Any;
 
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
 
 use crate::utils::{compute_array_dims, make_scalar_function};
 use datafusion_expr::{
@@ -106,12 +106,11 @@ impl ScalarUDFImpl for ArrayDims {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_dims_inner)(args)
+        make_scalar_function(array_dims_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -184,12 +183,11 @@ impl ScalarUDFImpl for ArrayNdims {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_ndims_inner)(args)
+        make_scalar_function(array_ndims_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -203,20 +201,18 @@ impl ScalarUDFImpl for ArrayNdims {
 
 /// Array_dims SQL function
 pub fn array_dims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_dims needs one argument");
-    }
+    let [array] = take_function_args("array_dims", args)?;
 
-    let data = match args[0].data_type() {
+    let data = match array.data_type() {
         List(_) => {
-            let array = as_list_array(&args[0])?;
+            let array = as_list_array(&array)?;
             array
                 .iter()
                 .map(compute_array_dims)
                 .collect::<Result<Vec<_>>>()?
         }
         LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
+            let array = as_large_list_array(&array)?;
             array
                 .iter()
                 .map(compute_array_dims)
@@ -234,9 +230,7 @@ pub fn array_dims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Array_ndims SQL function
 pub fn array_ndims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_ndims needs one argument");
-    }
+    let [array_dim] = take_function_args("array_ndims", args)?;
 
     fn general_list_ndims<O: OffsetSizeTrait>(
         array: &GenericListArray<O>,
@@ -254,13 +248,13 @@ pub fn array_ndims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 
         Ok(Arc::new(UInt64Array::from(data)) as ArrayRef)
     }
-    match args[0].data_type() {
+    match array_dim.data_type() {
         List(_) => {
-            let array = as_list_array(&args[0])?;
+            let array = as_list_array(&array_dim)?;
             general_list_ndims::<i32>(array)
         }
         LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
+            let array = as_large_list_array(&array_dim)?;
             general_list_ndims::<i64>(array)
         }
         array_type => exec_err!("array_ndims does not support type {array_type:?}"),

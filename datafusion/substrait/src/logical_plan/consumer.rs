@@ -27,7 +27,7 @@ use datafusion::common::{
     substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, TableReference,
 };
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
+use datafusion::logical_expr::expr::{Exists, InSubquery, Sort, WindowFunctionParams};
 
 use datafusion::logical_expr::{
     Aggregate, BinaryExpr, Case, Cast, EmptyRelation, Expr, ExprSchemable, Extension,
@@ -2223,12 +2223,19 @@ pub async fn from_window_function(
 
     Ok(Expr::WindowFunction(expr::WindowFunction {
         fun,
-        args: from_substrait_func_args(consumer, &window.arguments, input_schema).await?,
-        partition_by: from_substrait_rex_vec(consumer, &window.partitions, input_schema)
+        params: WindowFunctionParams {
+            args: from_substrait_func_args(consumer, &window.arguments, input_schema)
+                .await?,
+            partition_by: from_substrait_rex_vec(
+                consumer,
+                &window.partitions,
+                input_schema,
+            )
             .await?,
-        order_by,
-        window_frame,
-        null_treatment: None,
+            order_by,
+            window_frame,
+            null_treatment: None,
+        },
     }))
 }
 
@@ -3361,7 +3368,7 @@ mod test {
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
             Expr::WindowFunction(window_function) => {
-                assert_eq!(window_function.order_by.len(), 1)
+                assert_eq!(window_function.params.order_by.len(), 1)
             }
             _ => panic!("expr was not a WindowFunction"),
         };
