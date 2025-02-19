@@ -463,9 +463,19 @@ to infer the selectivity of the expression and the space of possible values it c
 take.
 
 ```rust
+# use std::sync::Arc;
+# use datafusion::prelude::*;
+# use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
+# use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+# use datafusion::common::stats::Precision;
+#
+# use datafusion::common::{ColumnStatistics, DFSchema};
+# use datafusion::common::{ScalarValue, ToDFSchema};
+# use datafusion::error::Result;
 fn analyze_filter_example() -> Result<()> {
     // Create a schema with an 'age' column
-    let schema = Arc::new(Schema::new(vec![make_field("age", DataType::Int64)]));
+    let age = Field::new("age", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(age));
 
     // Define column statistics
     let column_stats = ColumnStatistics {
