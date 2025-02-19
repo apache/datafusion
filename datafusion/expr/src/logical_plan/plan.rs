@@ -30,7 +30,7 @@ use super::invariants::{
 };
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
-use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
+use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams};
 use crate::expr_rewriter::{
     create_col_from_scalar_expr, normalize_cols, normalize_sorts, NamePreserver,
 };
@@ -2429,8 +2429,7 @@ impl Window {
             .filter_map(|(idx, expr)| {
                 if let Expr::WindowFunction(WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(udwf),
-                    partition_by,
-                    ..
+                    params: WindowFunctionParams { partition_by, .. },
                 }) = expr
                 {
                     // When there is no PARTITION BY, row number will be unique
