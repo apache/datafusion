@@ -513,9 +513,11 @@ const Search = {
     // perform the search on the required terms
     searchTerms.forEach((word) => {
       const files = [];
+      // find documents, if any, containing the query word in their text/title term indices
+      // use Object.hasOwnProperty to avoid mismatching against prototype properties
       const arr = [
-        { files: terms[word], score: Scorer.term },
-        { files: titleTerms[word], score: Scorer.title },
+        { files: terms.hasOwnProperty(word) ? terms[word] : undefined, score: Scorer.term },
+        { files: titleTerms.hasOwnProperty(word) ? titleTerms[word] : undefined, score: Scorer.title },
       ];
       // add support for partial matches
       if (word.length > 2) {
@@ -547,8 +549,9 @@ const Search = {
 
         // set score for the word in each file
         recordFiles.forEach((file) => {
-          if (!scoreMap.has(file)) scoreMap.set(file, {});
-          scoreMap.get(file)[word] = record.score;
+          if (!scoreMap.has(file)) scoreMap.set(file, new Map());
+          const fileScores = scoreMap.get(file);
+          fileScores.set(word, record.score);
         });
       });
 
@@ -587,7 +590,7 @@ const Search = {
         break;
 
       // select one (max) score for the file.
-      const score = Math.max(...wordList.map((w) => scoreMap.get(file)[w]));
+      const score = Math.max(...wordList.map((w) => scoreMap.get(file).get(w)));
       // add result to the result list
       results.push([
         docNames[file],

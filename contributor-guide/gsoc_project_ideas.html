@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>GSoC Project Ideas &#8212; Apache DataFusion  documentation</title>
+    
+    <link href="../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
+  
+    
+    <link rel="stylesheet"
+      href="../_static/vendor/fontawesome/5.13.0/css/all.min.css">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-solid-900.woff2">
+    <link rel="preload" as="font" type="font/woff2" crossorigin
+      href="../_static/vendor/fontawesome/5.13.0/webfonts/fa-brands-400.woff2">
+  
+    
+      
+  
+    
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/pydata-sphinx-theme.css?v=1140d252" />
+    <link rel="stylesheet" type="text/css" href="../_static/theme_overrides.css?v=c6d785ac" />
+    
+    <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf">
+  
+    <script src="../_static/documentation_options.js?v=8a448e45"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script async="true" defer="true" src="https://buttons.github.io/buttons.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="prev" title="GSoC Application Guidelines" href="gsoc_application_guidelines.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="docsearch:language" content="en">
+    
+
+    <!-- Google Analytics -->
+    
+  </head>
+  <body data-spy="scroll" data-target="#bd-toc-nav" data-offset="80">
+    
+    <div class="container-fluid" id="banner"></div>
+
+    
+
+
+    <div class="container-xl">
+      <div class="row">
+          
+            
+            <!-- Only show if we have sidebars configured, else just a small margin  -->
+            <div class="col-12 col-md-3 bd-sidebar">
+              <div class="sidebar-start-items">
+
+<form class="bd-search d-flex align-items-center" action="../search.html" method="get">
+  <i class="icon fas fa-search"></i>
+  <input type="search" class="form-control" name="q" id="search-input" placeholder="Search the docs ..." aria-label="Search the docs ..." autocomplete="off" >
+</form>
+
+<nav class="bd-links" id="bd-docs-nav" aria-label="Main navigation">
+  <div class="bd-toc-item active">
+    
+    <p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  ASF Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://apache.org">
+   Apache Software Foundation
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/licenses/">
+   License
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/sponsorship.html">
+   Donate
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/foundation/thanks.html">
+   Thanks
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://www.apache.org/security/">
+   Security
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Links
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion">
+   GitHub and Issue Tracker
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://crates.io/crates/datafusion">
+   crates.io
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/">
+   API Docs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/blog/">
+   Blog
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md">
+   Code of conduct
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../download.html">
+   Download
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  User Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/introduction.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/example-usage.html">
+   Example Usage
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/features.html">
+   Features
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/concepts-readings-events.html">
+   Concepts, Readings, Events
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/crate-configuration.html">
+   Crate Configuration
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../user-guide/cli/index.html">
+   DataFusion CLI
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" type="checkbox"/>
+  <label for="toctree-checkbox-1">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/overview.html">
+     Overview
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/installation.html">
+     Installation
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/usage.html">
+     Usage
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/cli/datasources.html">
+     Local Files / Directories
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/dataframe.html">
+   DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/expressions.html">
+   Expression API
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="../user-guide/sql/index.html">
+   SQL Reference
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" type="checkbox"/>
+  <label for="toctree-checkbox-2">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/data_types.html">
+     Data Types
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/select.html">
+     SELECT syntax
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/subqueries.html">
+     Subqueries
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/ddl.html">
+     DDL
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/dml.html">
+     DML
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/explain.html">
+     EXPLAIN
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/information_schema.html">
+     Information Schema
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/operators.html">
+     Operators
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/aggregate_functions.html">
+     Aggregate Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/window_functions.html">
+     Window Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/scalar_functions.html">
+     Scalar Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/special_functions.html">
+     Special Functions
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/write_options.html">
+     Write Options
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="../user-guide/sql/prepared_statements.html">
+     Prepared Statements
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/configs.html">
+   Configuration Settings
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/explain-usage.html">
+   Reading Explain Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../user-guide/faq.html">
+   Frequently Asked Questions
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Library User Guide
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/extensions.html">
+   Extensions List
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/using-the-sql-api.html">
+   Using the SQL API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/working-with-exprs.html">
+   Working with
+   <code class="docutils literal notranslate">
+    <span class="pre">
+     Expr
+    </span>
+   </code>
+   s
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/using-the-dataframe-api.html">
+   Using the DataFrame API
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/building-logical-plans.html">
+   Building Logical Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/catalogs.html">
+   Catalogs, Schemas, and Tables
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/adding-udfs.html">
+   Adding User Defined Functions: Scalar/Window/Aggregate/Table Functions
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/custom-table-providers.html">
+   Custom Table Provider
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/extending-operators.html">
+   Extending DataFusion’s operators: custom LogicalPlan and Execution Plans
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/profiling.html">
+   Profiling Cookbook
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/query-optimizer.html">
+   DataFusion Query Optimizer
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="../library-user-guide/api-health.html">
+   API health policy
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  Contributor Guide
+ </span>
+</p>
+<ul class="current nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference internal" href="index.html">
+   Introduction
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="communication.html">
+   Communication
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="getting_started.html">
+   Getting Started
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="architecture.html">
+   Architecture
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="testing.html">
+   Testing
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="howtos.html">
+   HOWTOs
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="roadmap.html">
+   Roadmap
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="governance.html">
+   Governance
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="inviting.html">
+   Inviting New Committers and PMC Members
+  </a>
+ </li>
+ <li class="toctree-l1 has-children">
+  <a class="reference internal" href="specification/index.html">
+   Specifications
+  </a>
+  <input class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" type="checkbox"/>
+  <label for="toctree-checkbox-3">
+   <i class="fas fa-chevron-down">
+   </i>
+  </label>
+  <ul>
+   <li class="toctree-l2">
+    <a class="reference internal" href="specification/invariants.html">
+     Invariants
+    </a>
+   </li>
+   <li class="toctree-l2">
+    <a class="reference internal" href="specification/output-field-name-semantic.html">
+     Output field name semantics
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference internal" href="gsoc_application_guidelines.html">
+   GSoC Application Guidelines
+  </a>
+ </li>
+ <li class="toctree-l1 current active">
+  <a class="current reference internal" href="#">
+   GSoC Project Ideas
+  </a>
+ </li>
+</ul>
+<p aria-level="2" class="caption" role="heading">
+ <span class="caption-text">
+  DataFusion Subprojects
+ </span>
+</p>
+<ul class="nav bd-sidenav">
+ <li class="toctree-l1">
+  <a class="reference external" href="https://arrow.apache.org/ballista/">
+   DataFusion Ballista
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/comet/">
+   DataFusion Comet
+  </a>
+ </li>
+ <li class="toctree-l1">
+  <a class="reference external" href="https://datafusion.apache.org/python/">
+   DataFusion Python
+  </a>
+ </li>
+</ul>
+
+    
+  </div>
+
+  <a class="navbar-brand" href="../index.html">
+    <img src="../_static/images/2x_bgwhite_original.png" class="logo" alt="logo">
+  </a>
+</nav>
+
+              </div>
+              <div class="sidebar-end-items">
+              </div>
+            </div>
+            
+          
+
+          
+          <div class="d-none d-xl-block col-xl-2 bd-toc">
+            
+              
+              <div class="toc-item">
+                
+<div class="tocsection onthispage pt-5 pb-3">
+    <i class="fas fa-list"></i> On this page
+</div>
+
+<nav id="bd-toc-nav">
+    <ul class="visible nav section-nav flex-column">
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#introduction">
+   Introduction
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#projects">
+   Projects
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#implement-continuous-monitoring-of-datafusion-performance">
+     Implement Continuous Monitoring of DataFusion Performance
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#supporting-correlated-subqueries">
+     Supporting Correlated Subqueries
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#improving-datafusion-dx-e-g-1-and-2">
+     Improving DataFusion DX (e.g. 1 and 2)
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#robust-wasm-support">
+     Robust WASM Support
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#high-performance-aggregations">
+     High Performance Aggregations
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#improving-python-bindings">
+     Improving Python Bindings
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#optimizing-datafusion-binary-size">
+     Optimizing DataFusion Binary Size
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#ergonomic-sql-features">
+     Ergonomic SQL Features
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#advanced-interval-analysis">
+     Advanced Interval Analysis
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#spark-compatible-functions-crate">
+     Spark-Compatible Functions Crate
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#sql-fuzzing-framework-in-rust">
+     SQL Fuzzing Framework in Rust
+    </a>
+   </li>
+  </ul>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#contact-us">
+   Contact Us
+  </a>
+ </li>
+</ul>
+
+</nav>
+              </div>
+              
+              <div class="toc-item">
+                
+
+<div class="tocsection editthispage">
+    <a href="https://github.com/apache/arrow-datafusion/edit/main/docs/source/contributor-guide/gsoc_project_ideas.md">
+        <i class="fas fa-pencil-alt"></i> Edit this page
+    </a>
+</div>
+
+              </div>
+              
+            
+          </div>
+          
+
+          
+          
+            
+          
+          <main class="col-12 col-md-9 col-xl-7 py-md-5 pl-md-5 pr-md-4 bd-content" role="main">
+              
+              <div>
+                
+  <section id="gsoc-project-ideas">
+<h1>GSoC Project Ideas<a class="headerlink" href="#gsoc-project-ideas" title="Link to this heading">¶</a></h1>
+<section id="introduction">
+<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">¶</a></h2>
+<p>Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas list. Below you can find information about the projects. Please refer to <a class="reference external" href="https://datafusion.apache.org/contributor-guide/gsoc_application_guidelines.html">this page</a> for application guidelines.</p>
+</section>
+<section id="projects">
+<h2>Projects<a class="headerlink" href="#projects" title="Link to this heading">¶</a></h2>
+<section id="implement-continuous-monitoring-of-datafusion-performance">
+<h3><a class="reference external" href="https://github.com/apache/datafusion/issues/5504">Implement Continuous Monitoring of DataFusion Performance</a><a class="headerlink" href="#implement-continuous-monitoring-of-datafusion-performance" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> DataFusion lacks continuous monitoring of how performance evolves over time – we do this somewhat manually today. Even though performance has been one of our top priorities for a while now, we didn’t build a continuous monitoring system yet. This linked issue contains a summary of all the previous efforts that made us inch closer to having such a system, but a functioning system needs to built on top of that progress. A student successfully completing this project would gain experience in building an end-to-end monitoring system that integrates with GitHub, scheduling/running benchmarks on some sort of a cloud infrastructure, and building a versatile web UI to expose the results. The outcome of this project will benefit Apache DataFusion on an ongoing basis in its quest for ever-more performance.</p></li>
+<li><p><strong>Category:</strong> Tooling</p></li>
+<li><p><strong>Difficulty:</strong> Medium</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/alamb">alamb</a> and <a class="reference external" href="https://github.com/mertak-synnada">mertak-synnada</a></p></li>
+<li><p><strong>Skills:</strong> DevOps, Cloud Computing, Web Development, Integrations</p></li>
+<li><p><strong>Expected Project Size:</strong> 175 to 350 hours*</p></li>
+</ul>
+</section>
+<section id="supporting-correlated-subqueries">
+<h3><a class="reference external" href="https://github.com/apache/datafusion/issues/5483">Supporting Correlated Subqueries</a><a class="headerlink" href="#supporting-correlated-subqueries" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> Correlated subqueries are an important SQL feature that enables some users to express their business logic more intuitively without thinking about “joins”. Even though DataFusion has decent join support, it doesn’t fully support correlated subqueries. The linked epic contains bite-size pieces of the steps necessary to achieve full support. For students interested in internals of data systems and databases, this project is a good opportunity to apply and/or improve their computer science knowledge. The experience of adding such a feature to a widely-used foundational query engine can also serve as a good opportunity to kickstart a career in the area of databases and data systems.</p></li>
+<li><p><strong>Category:</strong> Core</p></li>
+<li><p><strong>Difficulty:</strong> Advanced</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/jayzhan-synnada">jayzhan-synnada</a> and <a class="reference external" href="https://github.com/xudong963">xudong963</a></p></li>
+<li><p><strong>Skills:</strong> Databases, Algorithms, Data Structures, Testing Techniques</p></li>
+<li><p><strong>Expected Project Size:</strong> 350 hours</p></li>
+</ul>
+</section>
+<section id="improving-datafusion-dx-e-g-1-and-2">
+<h3>Improving DataFusion DX (e.g. <a class="reference external" href="https://github.com/apache/datafusion/issues/9371">1</a> and <a class="reference external" href="https://github.com/apache/datafusion/issues/14429">2</a>)<a class="headerlink" href="#improving-datafusion-dx-e-g-1-and-2" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> While performance, extensibility and customizability is DataFusion’s strong aspects, we have much work to do in terms of user-friendliness and ease of debug-ability. This project aims to make strides in these areas by improving terminal visualizations of query plans and increasing the “deployment” of the newly-added diagnostics framework. This project is a potential high-impact project with high output visibility, and reduce the barrier to entry to new users.</p></li>
+<li><p><strong>Category:</strong> DX</p></li>
+<li><p><strong>Difficulty:</strong> Medium</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/eliaperantoni">eliaperantoni</a> and <a class="reference external" href="https://github.com/mkarbo">mkarbo</a></p></li>
+<li><p><strong>Skills:</strong> Software Engineering, Terminal Visualizations</p></li>
+<li><p><strong>Expected Project Size:</strong> 175 to 350 hours*</p></li>
+</ul>
+</section>
+<section id="robust-wasm-support">
+<h3><a class="reference external" href="https://github.com/apache/datafusion/issues/13815">Robust WASM Support</a><a class="headerlink" href="#robust-wasm-support" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> DataFusion can be compiled today to WASM with some care. However, it is somewhat tricky and brittle. Having robust WASM support improves the <em>embeddability</em> aspect of DataFusion, and can enable many practical use cases. A good conclusion of this project would be the addition of a live demo sub-page to the DataFusion homepage.</p></li>
+<li><p><strong>Category:</strong> Build</p></li>
+<li><p><strong>Difficulty:</strong> Medium</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/alamb">alamb</a> and <a class="reference external" href="https://github.com/waynexia">waynexia</a></p></li>
+<li><p><strong>Skills:</strong> WASM, Advanced Rust, Web Development, Software Engineering</p></li>
+<li><p><strong>Expected Project Size:</strong> 175 to 350 hours*</p></li>
+</ul>
+</section>
+<section id="high-performance-aggregations">
+<h3><a class="reference external" href="https://github.com/apache/datafusion/issues/7000">High Performance Aggregations</a><a class="headerlink" href="#high-performance-aggregations" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> An aggregation is one of the most fundamental operations within a query engine. Practical performance in many use cases, and results in many well-known benchmarks (e.g. <a class="reference external" href="https://benchmark.clickhouse.com/">ClickBench</a>), depend heavily on aggregation performance. DataFusion community has been working on improving aggregation performance for a while now, but there is still work to do. A student working on this project will get the chance to hone their skills on high-performance, low(ish) level coding, intricacies of measuring performance, data structures and others.</p></li>
+<li><p><strong>Category:</strong> Core</p></li>
+<li><p><strong>Difficulty:</strong> Advanced</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/jayzhan-synnada">jayzhan-synnada</a> and <a class="reference external" href="https://github.com/Rachelint">Rachelint</a></p></li>
+<li><p><strong>Skills:</strong> Algorithms, Data Structures, Advanced Rust, Databases, Benchmarking Techniques</p></li>
+<li><p><strong>Expected Project Size:</strong> 350 hours</p></li>
+</ul>
+</section>
+<section id="improving-python-bindings">
+<h3><a class="reference external" href="https://github.com/apache/datafusion-python">Improving Python Bindings</a><a class="headerlink" href="#improving-python-bindings" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> DataFusion offers Python bindings that enable users to build data systems using Python. However, the Python bindings are still relatively low-level, and do not expose all APIs libraries like <a class="reference external" href="https://pandas.pydata.org/">Pandas</a> and <a class="reference external" href="https://pola.rs/">Polars</a> with a end-user focus offer. This project aims to improve DataFusion’s Python bindings to make progress towards moving it closer to such libraries in terms of built-in APIs and functionality.</p></li>
+<li><p><strong>Category:</strong> Python Bindings</p></li>
+<li><p><strong>Difficulty:</strong> Medium</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/timsaucer">timsaucer</a></p></li>
+<li><p><strong>Skills:</strong> APIs, FFIs, DataFrame Libraries</p></li>
+<li><p><strong>Expected Project Size:</strong> 175 to 350 hours*</p></li>
+</ul>
+</section>
+<section id="optimizing-datafusion-binary-size">
+<h3><a class="reference external" href="https://github.com/apache/datafusion/issues/13816">Optimizing DataFusion Binary Size</a><a class="headerlink" href="#optimizing-datafusion-binary-size" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> DataFusion is a foundational library with a large feature set. Even though we try to avoid adding too many dependencies and implement many low-level functionalities inside the codebase, the fast moving nature of the project results in an accumulation of dependencies over time. This inflates DataFusion’s binary size over time, which reduces portability and embeddability. This project involves a study of the codebase, using compiler tooling, to understand where code bloat comes from, simplifying/reducing the number of dependencies by efficient in-house implementations, and avoiding code duplications.</p></li>
+<li><p><strong>Category:</strong> Core/Build</p></li>
+<li><p><strong>Difficulty:</strong> Medium</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/comphead">comphead</a> and <a class="reference external" href="https://github.com/alamb">alamb</a></p></li>
+<li><p><strong>Skills:</strong> Software Engineering, Refactoring, Dependency Management, Compilers</p></li>
+<li><p><strong>Expected Project Size:</strong> 175 to 350 hours*</p></li>
+</ul>
+</section>
+<section id="ergonomic-sql-features">
+<h3><a class="reference external" href="https://github.com/apache/datafusion/issues/14514">Ergonomic SQL Features</a><a class="headerlink" href="#ergonomic-sql-features" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> <a class="reference external" href="https://duckdb.org/">DuckDB</a> has many innovative features that significantly improve the SQL UX. Even though some of those features are already implemented in DataFusion, there are many others we can implement (and get inspiration from). <a class="reference external" href="https://duckdb.org/docs/sql/dialect/friendly_sql.html">This page</a> contains a good summary of such features. Each such feature will serve as a bite-size, achievable milestone for a cool GSoC project that will have user-facing impact improving the UX on a broad basis. The project will start with a survey of what is already implemented, what is missing, and kick off with a prioritization proposal/implementation plan.</p></li>
+<li><p><strong>Category:</strong> SQL FE</p></li>
+<li><p><strong>Difficulty:</strong> Medium</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/berkaysynnada">berkaysynnada</a></p></li>
+<li><p><strong>Skills:</strong> SQL, Planning, Parsing, Software Engineering</p></li>
+<li><p><strong>Expected Project Size:</strong> 350 hours</p></li>
+</ul>
+</section>
+<section id="advanced-interval-analysis">
+<h3><a class="reference external" href="https://github.com/apache/datafusion/issues/14515">Advanced Interval Analysis</a><a class="headerlink" href="#advanced-interval-analysis" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> DataFusion implements interval arithmetic and utilizes it for range estimations, which enables use cases in data pruning, optimizations and statistics. However, the current implementation only works efficiently for forward evaluation; i.e. calculating the output range of an expression given input ranges (ranges of columns). When propagating constraints using the same graph, the current approach requires multiple bottom-up and top-down traversals to narrow column bounds fully. This project aims to fix this deficiency by utilizing a better algorithmic approach. Note that this is a <em>very advanced</em> project for students with a deep interest in computational methods, expression graphs, and constraint solvers.</p></li>
+<li><p><strong>Category:</strong> Core</p></li>
+<li><p><strong>Difficulty:</strong> Advanced</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/ozankabak">ozankabak</a> and <a class="reference external" href="https://github.com/berkaysynnada">berkaysynnada</a></p></li>
+<li><p><strong>Skills:</strong> Algorithms, Data Structures, Applied Mathematics, Software Engineering</p></li>
+<li><p><strong>Expected Project Size:</strong> 350 hours</p></li>
+</ul>
+</section>
+<section id="spark-compatible-functions-crate">
+<h3><a class="reference external" href="https://github.com/apache/datafusion/issues/5600">Spark-Compatible Functions Crate</a><a class="headerlink" href="#spark-compatible-functions-crate" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> In general, DataFusion aims to be compatible with PostgreSQL in terms of functions and behaviors. However, there are many users (and downstream projects, such as <a class="reference external" href="https://datafusion.apache.org/comet/">DataFusion Comet</a>) that desire compatibility with <a class="reference external" href="https://spark.apache.org/">Apache Spark</a>. This project aims to collect Spark-compatible functions into a separate crate to help such users and/or projects. The project will be an exercise in creating the right APIs, explaining how to use them, and then telling the world about them (e.g. via creating a compatibility-tracking page cataloging such functions, writing blog posts etc.).</p></li>
+<li><p><strong>Category:</strong> Extensions</p></li>
+<li><p><strong>Difficulty:</strong> Medium</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/alamb">alamb</a> and <a class="reference external" href="https://github.com/andygrove">andygrove</a></p></li>
+<li><p><strong>Skills:</strong> SQL, Spark, Software Engineering</p></li>
+<li><p><strong>Expected Project Size:</strong> 175 to 350 hours*</p></li>
+</ul>
+</section>
+<section id="sql-fuzzing-framework-in-rust">
+<h3><a class="reference external" href="https://github.com/apache/datafusion/issues/14535">SQL Fuzzing Framework in Rust</a><a class="headerlink" href="#sql-fuzzing-framework-in-rust" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Description and Outcomes:</strong> Fuzz testing is a very important technique we utilize often in DataFusion. Having SQL-level fuzz testing enables us to battle-test DataFusion in an end-to-end fashion. Initial version of our fuzzing framework is Java-based, but the time has come to migrate to Rust-native solution. This will simplify the overall implementation (by avoiding things like JDBC), enable us to implement more advanced algorithms for query generation, and attract more contributors over time. This project is a good blend of software engineering, algorithms and testing techniques (i.e. fuzzing techniques).</p></li>
+<li><p><strong>Category:</strong> Extensions</p></li>
+<li><p><strong>Difficulty:</strong> Advanced</p></li>
+<li><p><strong>Possible Mentor(s) and/or Helper(s):</strong> <a class="reference external" href="https://github.com/2010YOUY01">2010YOUY01</a></p></li>
+<li><p><strong>Skills:</strong> SQL, Testing Techniques, Advanced Rust, Software Engineering</p></li>
+<li><p><strong>Expected Project Size:</strong> 175 to 350 hours*</p></li>
+</ul>
+<p>*<em>There is enough material to make this a 350-hour project, but it is granular enough to make it a 175-hour project as well.</em></p>
+</section>
+</section>
+<section id="contact-us">
+<h2>Contact Us<a class="headerlink" href="#contact-us" title="Link to this heading">¶</a></h2>
+<p>You can join our <a class="reference external" href="mailto:dev&#37;&#52;&#48;datafusion&#46;apache&#46;org">mailing list</a> and <a class="reference external" href="https://discord.gg/Q9eh6S2T">Discord</a> to introduce yourself and ask questions.</p>
+</section>
+</section>
+
+
+              </div>
+              
+              
+              <!-- Previous / next buttons -->
+<div class='prev-next-area'>
+    <a class='left-prev' id="prev-link" href="gsoc_application_guidelines.html" title="previous page">
+        <i class="fas fa-angle-left"></i>
+        <div class="prev-next-info">
+            <p class="prev-next-subtitle">previous</p>
+            <p class="prev-next-title">GSoC Application Guidelines</p>
+        </div>
+    </a>
+</div>
+              
+          </main>
+          
+
+      </div>
+    </div>
+  
+    <script src="../_static/scripts/pydata-sphinx-theme.js?digest=1999514e3f237ded88cf"></script>
+  
+<!-- Based on pydata_sphinx_theme/footer.html -->
+<footer class="footer mt-5 mt-md-0">
+  <div class="container">
+    
+    <div class="footer-item">
+      <p class="copyright">
+    &copy; Copyright 2019-2024, Apache Software Foundation.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p class="sphinx-version">
+Created using <a href="http://sphinx-doc.org/">Sphinx</a> 8.2.0.<br>
+</p>
+    </div>
+    
+    <div class="footer-item">
+      <p>Apache DataFusion, Apache, the Apache feather logo, and the Apache DataFusion project logo</p>
+      <p>are either registered trademarks or trademarks of The Apache Software Foundation in the United States and other countries.</p>
+    </div>
+  </div>
+</footer>
+
+
+  </body>
+</html>
