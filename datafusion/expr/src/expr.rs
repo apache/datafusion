@@ -1288,6 +1288,16 @@ impl Expr {
     }
 
     /// Return `self AS name` alias expression
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// let expr = col("foo").alias("bar");
+    /// assert_eq!(expr.to_string(), "foo AS bar");
+    ///
+    /// // when aliasing over the exising alias, the previous one is removed
+    /// let expr = col("foo").alias("bar").alias("baz");
+    /// assert_eq!(expr.to_string(), "foo AS baz");
     pub fn alias(self, name: impl Into<String>) -> Expr {
         if let Expr::Alias(Alias { expr, .. }) = self {
             // reuse the existing layer if possible
