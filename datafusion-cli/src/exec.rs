@@ -263,7 +263,7 @@ pub(super) async fn exec_and_print(
                 results.push(batch);
                 if let MaxRows::Limited(max_rows) = print_options.maxrows {
                     // Stop collecting results if the number of rows exceeds the limit
-                    if results.len() >= max_rows {
+                    if results.len() >= max_rows && print_options.stop_after_max_rows {
                         break;
                     }
                 }

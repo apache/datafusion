@@ -121,6 +121,13 @@ struct Args {
     )]
     maxrows: MaxRows,
 
+    #[clap(
+        short,
+        long,
+        help = "Whether to stop early when max rows is reached, this will help reduce the memory usage when the result is large"
+    )]
+    stop_after_max_rows: bool,
+
     #[clap(long, help = "Enables console syntax highlighting")]
     color: bool,
 }
@@ -186,6 +193,7 @@ async fn main_inner() -> Result<()> {
         quiet: args.quiet,
         maxrows: args.maxrows,
         color: args.color,
+        stop_after_max_rows: args.stop_after_max_rows,
     };
 
     let commands = args.command;
