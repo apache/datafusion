@@ -88,6 +88,7 @@ pub async fn main() {
         format: datafusion_cli::print_format::PrintFormat::Automatic,
         quiet: false,
         maxrows: datafusion_cli::print_options::MaxRows::Unlimited,
+        stop_after_max_rows: false,
         color: true,
     };
 
