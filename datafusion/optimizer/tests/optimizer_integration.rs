@@ -268,7 +268,6 @@ fn join_keys_in_subquery_alias_1() {
 fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
-    println!("plan: {:?}", plan);
     let expected = "Projection: test.col_int32 + test.col_uint32 AS c, count(*)\
     \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(*)]]\
     \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
