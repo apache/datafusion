@@ -19,6 +19,7 @@ use super::{Between, Expr, Like};
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
     InSubquery, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    WindowFunctionParams,
 };
 use crate::type_coercion::functions::{
     data_types_with_aggregate_udf, data_types_with_scalar_udf, data_types_with_window_udf,
@@ -510,7 +511,11 @@ impl Expr {
         schema: &dyn ExprSchema,
         window_function: &WindowFunction,
     ) -> Result<(DataType, bool)> {
-        let WindowFunction { fun, args, .. } = window_function;
+        let WindowFunction {
+            fun,
+            params: WindowFunctionParams { args, .. },
+            ..
+        } = window_function;
 
         let data_types = args
             .iter()
