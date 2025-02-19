@@ -254,9 +254,7 @@ impl FileFormat for JsonFormat {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let source = Arc::new(JsonSource::new());
         conf.file_compression_type = FileCompressionType::from(self.options.compression);
-        conf = conf.with_source(source);
-
-        Ok(conf.new_exec())
+        Ok(conf.with_source(source).build())
     }
 
     async fn create_writer_physical_plan(

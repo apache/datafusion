@@ -482,6 +482,11 @@ impl DataFusionError {
         "".to_owned()
     }
 
+    /// Return a [`DataFusionErrorBuilder`] to build a [`DataFusionError`]
+    pub fn builder() -> DataFusionErrorBuilder {
+        DataFusionErrorBuilder::default()
+    }
+
     fn error_prefix(&self) -> &'static str {
         match self {
             DataFusionError::ArrowError(_, _) => "Arrow error: ",
@@ -616,6 +621,9 @@ impl DataFusionError {
         DiagnosticsIterator { head: self }.next()
     }
 
+    /// Return an iterator over this [`DataFusionError`] and any other
+    /// [`DataFusionError`]s in a [`DataFusionError::Collection`].
+    ///
     /// Sometimes DataFusion is able to collect multiple errors in a SQL query
     /// before terminating, e.g. across different expressions in a SELECT
     /// statements or different sides of a UNION. This method returns an
@@ -648,29 +656,71 @@ impl DataFusionError {
     }
 }
 
+/// A builder for [`DataFusionError`]
+///
+/// This builder can be used to collect multiple errors and return them as a
+/// [`DataFusionError::Collection`].
+///
+/// # Example: no errors
+/// ```
+/// # use datafusion_common::DataFusionError;
+/// let mut builder = DataFusionError::builder();
+/// // ok_or returns the value if no errors have been added
+/// assert_eq!(builder.error_or(42).unwrap(), 42);
+/// ```
+///
+/// # Example: with errors
+/// ```
+/// # use datafusion_common::{assert_contains, DataFusionError};
+/// let mut builder = DataFusionError::builder();
+/// builder.add_error(DataFusionError::Internal("foo".to_owned()));
+/// // ok_or returns the value if no errors have been added
+/// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+/// ```
+#[derive(Debug, Default)]
 pub struct DataFusionErrorBuilder(Vec<DataFusionError>);
 
 impl DataFusionErrorBuilder {
+    /// Create a new [`DataFusionErrorBuilder`]
     pub fn new() -> Self {
-        Self(Vec::new())
+        Default::default()
     }
 
+    /// Add an error to the in progress list
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_common::{assert_contains, DataFusionError};
+    /// let mut builder = DataFusionError::builder();
+    /// builder.add_error(DataFusionError::Internal("foo".to_owned()));
+    /// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+    /// ```
     pub fn add_error(&mut self, error: DataFusionError) {
         self.0.push(error);
     }
 
+    /// Add an error to the in progress list, returning the builder
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_common::{assert_contains, DataFusionError};
+    /// let builder = DataFusionError::builder()
+    ///   .with_error(DataFusionError::Internal("foo".to_owned()));
+    /// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+    /// ```
+    pub fn with_error(mut self, error: DataFusionError) -> Self {
+        self.0.push(error);
+        self
+    }
+
+    /// Returns `Ok(ok)` if no errors were added to the builder,
+    /// otherwise returns a `Result::Err`
     pub fn error_or<T>(self, ok: T) -> Result<T, DataFusionError> {
         match self.0.len() {
             0 => Ok(ok),
             1 => Err(self.0.into_iter().next().expect("length matched 1")),
             _ => Err(DataFusionError::Collection(self.0)),
         }
-    }
-}
-
-impl Default for DataFusionErrorBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

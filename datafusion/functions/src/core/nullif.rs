@@ -16,13 +16,11 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 
-use crate::utils::take_function_args;
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
-use datafusion_common::ScalarValue;
+use datafusion_common::{utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -103,12 +101,8 @@ impl ScalarUDFImpl for NullIfFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        nullif_func(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        nullif_func(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

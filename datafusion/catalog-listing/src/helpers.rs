@@ -20,11 +20,11 @@
 use std::mem;
 use std::sync::Arc;
 
-use super::ListingTableUrl;
-use super::PartitionedFile;
 use datafusion_catalog::Session;
 use datafusion_common::internal_err;
 use datafusion_common::{HashMap, Result, ScalarValue};
+use datafusion_datasource::ListingTableUrl;
+use datafusion_datasource::PartitionedFile;
 use datafusion_expr::{BinaryExpr, Operator};
 
 use arrow::{

@@ -214,6 +214,7 @@ mod tests {
     extensions_options! {
         struct TestExtension {
             value: usize, default = 42
+            option_value: Option<usize>, default = None
         }
     }
 
@@ -229,6 +230,7 @@ mod tests {
 
         let mut config = ConfigOptions::new().with_extensions(extensions);
         config.set("test.value", "24")?;
+        config.set("test.option_value", "42")?;
         let session_config = SessionConfig::from(config);
 
         let task_context = TaskContext::new(
@@ -249,6 +251,39 @@ mod tests {
         assert!(test.is_some());
 
         assert_eq!(test.unwrap().value, 24);
+        assert_eq!(test.unwrap().option_value, Some(42));
+
+        Ok(())
+    }
+
+    #[test]
+    fn task_context_extensions_default() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let mut extensions = Extensions::new();
+        extensions.insert(TestExtension::default());
+
+        let config = ConfigOptions::new().with_extensions(extensions);
+        let session_config = SessionConfig::from(config);
+
+        let task_context = TaskContext::new(
+            Some("task_id".to_string()),
+            "session_id".to_string(),
+            session_config,
+            HashMap::default(),
+            HashMap::default(),
+            HashMap::default(),
+            runtime,
+        );
+
+        let test = task_context
+            .session_config()
+            .options()
+            .extensions
+            .get::<TestExtension>();
+        assert!(test.is_some());
+
+        assert_eq!(test.unwrap().value, 42);
+        assert_eq!(test.unwrap().option_value, None);
 
         Ok(())
     }
