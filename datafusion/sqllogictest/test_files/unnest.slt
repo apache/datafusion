@@ -595,7 +595,7 @@ explain select unnest(unnest(column3)), column3 from recursive_unnest_table;
 ----
 logical_plan
 01)Unnest: lists[] structs[__unnest_placeholder(UNNEST(recursive_unnest_table.column3))]
-02)--Projection: __unnest_placeholder(recursive_unnest_table.column3,depth=1) AS UNNEST(recursive_unnest_table.column3) AS __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), recursive_unnest_table.column3
+02)--Projection: __unnest_placeholder(recursive_unnest_table.column3,depth=1) AS __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), recursive_unnest_table.column3
 03)----Unnest: lists[__unnest_placeholder(recursive_unnest_table.column3)|depth=1] structs[]
 04)------Projection: recursive_unnest_table.column3 AS __unnest_placeholder(recursive_unnest_table.column3), recursive_unnest_table.column3
 05)--------TableScan: recursive_unnest_table projection=[column3]
