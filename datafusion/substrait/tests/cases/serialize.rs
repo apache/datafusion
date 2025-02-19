@@ -42,14 +42,9 @@ mod tests {
         serializer::serialize(sql, &ctx, path).await?;
         serializer::deserialize(path).await?;
 
-        // Test case 2: serializing to a non-empty file should fail.
+        // Test case 3: serializing to an existing file should fail.
         let got = serializer::serialize(sql, &ctx, path).await.unwrap_err();
-        assert_contains!(got.to_string(), "already exists and is not empty");
-
-        // Test case 3: serializing to an empty file should succeed.
-        let _ = fs::File::create(path)?; // `create` will truncate the file.
-        serializer::serialize(sql, &ctx, path).await?;
-        serializer::deserialize(path).await?;
+        assert_contains!(got.to_string(), "File exists");
 
         fs::remove_file(path)?;
 
