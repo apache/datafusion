@@ -5343,9 +5343,7 @@ async fn test_insert_into_checking() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn test_fill_null() -> Result<()> {
-    // Create a simple table with nulls.
+async fn create_null_table() -> Result<DataFrame> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Utf8, true),
@@ -5361,6 +5359,12 @@ async fn test_fill_null() -> Result<()> {
     let table = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
     ctx.register_table("t_null", Arc::new(table))?;
     let df = ctx.table("t_null").await?;
+    Ok(df)
+}
+
+#[tokio::test]
+async fn test_fill_null() -> Result<()> {
+    let df = create_null_table().await?;
 
     // Use fill_null to replace nulls on each column.
     let df_filled = df
@@ -5369,6 +5373,45 @@ async fn test_fill_null() -> Result<()> {
             ScalarValue::Utf8(Some("default".to_string())),
             Some(vec!["b".to_string()]),
         )?;
+
+    let results = df_filled.collect().await?;
+    let expected = vec![
+        "+---+---------+",
+        "| a | b       |",
+        "+---+---------+",
+        "| 1 | x       |",
+        "| 0 | default |",
+        "| 3 | z       |",
+        "+---+---------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_null_all_columns() -> Result<()> {
+    let df = create_null_table().await?;
+
+    // Use fill_null to replace nulls on all columns.
+    // Only column "b" will be replaced since ScalarValue::Utf8(Some("default".to_string()))
+    // can be cast to Utf8.
+    let df_filled = df.fill_null(ScalarValue::Utf8(Some("default".to_string())), None)?;
+
+    let results = df_filled.clone().collect().await?;
+
+    let expected = vec![
+        "+---+---------+",
+        "| a | b       |",
+        "+---+---------+",
+        "| 1 | x       |",
+        "|   | default |",
+        "| 3 | z       |",
+        "+---+---------+",
+    ];
+
+    assert_batches_sorted_eq!(expected, &results);
+
+    let df_filled = df_filled.fill_null(ScalarValue::Int32(Some(0)), None)?;
 
     let results = df_filled.collect().await?;
     let expected = vec![
