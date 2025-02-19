@@ -64,6 +64,8 @@ macro_rules! rresult_return {
     };
 }
 
+/// This is a utility function to convert a slice of [`DataType`] to its equivalent
+/// FFI friendly counterpart, [`WrappedSchema`]
 pub fn vec_datatype_to_rvec_wrapped(
     data_types: &[DataType],
 ) -> Result<RVec<WrappedSchema>, arrow::error::ArrowError> {
@@ -76,6 +78,8 @@ pub fn vec_datatype_to_rvec_wrapped(
         .collect())
 }
 
+/// This is a utility function to convert an FFI friendly vector of [`WrappedSchema`]
+/// to their equivalent [`DataType`].
 pub fn rvec_wrapped_to_vec_datatype(
     data_types: &RVec<WrappedSchema>,
 ) -> Result<Vec<DataType>, arrow::error::ArrowError> {

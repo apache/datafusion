@@ -50,18 +50,24 @@ use crate::{
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_ScalarUDF {
-    /// Return the udf name.
+    /// FFI equivalent to the `name` of a [`ScalarUDF`]
     pub name: RString,
 
+    /// FFI equivalent to the `aliases` of a [`ScalarUDF`]
     pub aliases: RVec<RString>,
 
+    /// FFI equivalent to the `volatility` of a [`ScalarUDF`]
     pub volatility: FFI_Volatility,
 
+    /// Determines the return type of the underlying [`ScalarUDF`] based on the
+    /// argument types.
     pub return_type: unsafe extern "C" fn(
         udf: &Self,
         arg_types: RVec<WrappedSchema>,
     ) -> RResult<WrappedSchema, RString>,
 
+    /// Execute the underlying [`ScalarUDF`] and return the result as a [`FFI_ArrowArray`]
+    /// within an AbiStable wrapper.
     pub invoke_with_args: unsafe extern "C" fn(
         udf: &Self,
         args: RVec<WrappedArray>,
@@ -69,8 +75,13 @@ pub struct FFI_ScalarUDF {
         return_type: WrappedSchema,
     ) -> RResult<WrappedArray, RString>,
 
-    pub short_circuits: unsafe extern "C" fn(udf: &Self) -> bool,
+    /// See [`ScalarUDFImpl`] for details on short_circuits
+    pub short_circuits: bool,
 
+    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// user defined signatures, which will in turn call coerce_types to be called. This
+    /// call should be transparent to most users as the internal function performs the
+    /// appropriate calls on the underlying [`ScalarUDF`]
     pub coerce_types: unsafe extern "C" fn(
         udf: &Self,
         arg_types: RVec<WrappedSchema>,
@@ -164,13 +175,6 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
     })
 }
 
-unsafe extern "C" fn short_circuits_fn_wrapper(udf: &FFI_ScalarUDF) -> bool {
-    let private_data = udf.private_data as *const ScalarUDFPrivateData;
-    let udf = &(*private_data).udf;
-
-    udf.short_circuits()
-}
-
 unsafe extern "C" fn release_fn_wrapper(udf: &mut FFI_ScalarUDF) {
     let private_data = Box::from_raw(udf.private_data as *mut ScalarUDFPrivateData);
     drop(private_data);
@@ -194,6 +198,7 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
         let name = udf.name().into();
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();
+        let short_circuits = udf.short_circuits();
 
         let private_data = Box::new(ScalarUDFPrivateData { udf });
 
@@ -201,8 +206,8 @@ impl From<Arc<ScalarUDF>> for FFI_ScalarUDF {
             name,
             aliases,
             volatility,
+            short_circuits,
             invoke_with_args: invoke_with_args_fn_wrapper,
-            short_circuits: short_circuits_fn_wrapper,
             return_type: return_type_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -314,7 +319,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
     }
 
     fn short_circuits(&self) -> bool {
-        unsafe { (self.udf.short_circuits)(&self.udf) }
+        self.udf.short_circuits
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
