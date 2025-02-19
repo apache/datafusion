@@ -87,7 +87,7 @@ impl ScalarUDFImpl for InitcapFunc {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
         args: &[ColumnarValue],
         _number_rows: usize,

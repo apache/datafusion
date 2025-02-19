@@ -97,7 +97,7 @@ impl ScalarUDFImpl for LeftFunc {
         utf8_to_str_type(&arg_types[0], "left")
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
         args: &[ColumnarValue],
         _number_rows: usize,

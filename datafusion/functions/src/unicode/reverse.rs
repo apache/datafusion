@@ -85,7 +85,7 @@ impl ScalarUDFImpl for ReverseFunc {
         utf8_to_str_type(&arg_types[0], "reverse")
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
         args: &[ColumnarValue],
         _number_rows: usize,

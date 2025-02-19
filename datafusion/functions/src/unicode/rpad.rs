@@ -108,7 +108,7 @@ impl ScalarUDFImpl for RPadFunc {
         utf8_to_str_type(&arg_types[0], "rpad")
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
         args: &[ColumnarValue],
         _number_rows: usize,
