@@ -13,7 +13,7 @@ Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas
 - **Difficulty:** Medium
 - **Possible Mentor(s) and/or Helper(s):** [alamb](https://github.com/alamb) and [mertak-synnada](https://github.com/mertak-synnada)
 - **Skills:** DevOps, Cloud Computing, Web Development, Integrations
-- **Expected Project Size:** 175 to 350 hours*
+- **Expected Project Size:** 175 to 350 hours\*
 
 ### [Supporting Correlated Subqueries](https://github.com/apache/datafusion/issues/5483)
 
@@ -31,16 +31,16 @@ Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas
 - **Difficulty:** Medium
 - **Possible Mentor(s) and/or Helper(s):** [eliaperantoni](https://github.com/eliaperantoni) and [mkarbo](https://github.com/mkarbo)
 - **Skills:** Software Engineering, Terminal Visualizations
-- **Expected Project Size:** 175 to 350 hours*
+- **Expected Project Size:** 175 to 350 hours\*
 
 ### [Robust WASM Support](https://github.com/apache/datafusion/issues/13815)
 
-- **Description and Outcomes:** DataFusion can be compiled today to WASM with some care. However, it is somewhat tricky and brittle. Having robust WASM support improves the *embeddability* aspect of DataFusion, and can enable many practical use cases. A good conclusion of this project would be the addition of a live demo sub-page to the DataFusion homepage.
+- **Description and Outcomes:** DataFusion can be compiled today to WASM with some care. However, it is somewhat tricky and brittle. Having robust WASM support improves the _embeddability_ aspect of DataFusion, and can enable many practical use cases. A good conclusion of this project would be the addition of a live demo sub-page to the DataFusion homepage.
 - **Category:** Build
 - **Difficulty:** Medium
 - **Possible Mentor(s) and/or Helper(s):** [alamb](https://github.com/alamb) and [waynexia](https://github.com/waynexia)
 - **Skills:** WASM, Advanced Rust, Web Development, Software Engineering
-- **Expected Project Size:** 175 to 350 hours*
+- **Expected Project Size:** 175 to 350 hours\*
 
 ### [High Performance Aggregations](https://github.com/apache/datafusion/issues/7000)
 
@@ -58,7 +58,7 @@ Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas
 - **Difficulty:** Medium
 - **Possible Mentor(s) and/or Helper(s):** [timsaucer](https://github.com/timsaucer)
 - **Skills:** APIs, FFIs, DataFrame Libraries
-- **Expected Project Size:** 175 to 350 hours*
+- **Expected Project Size:** 175 to 350 hours\*
 
 ### [Optimizing DataFusion Binary Size](https://github.com/apache/datafusion/issues/13816)
 
@@ -67,7 +67,7 @@ Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas
 - **Difficulty:** Medium
 - **Possible Mentor(s) and/or Helper(s):** [comphead](https://github.com/comphead) and [alamb](https://github.com/alamb)
 - **Skills:** Software Engineering, Refactoring, Dependency Management, Compilers
-- **Expected Project Size:** 175 to 350 hours*
+- **Expected Project Size:** 175 to 350 hours\*
 
 ### [Ergonomic SQL Features](https://github.com/apache/datafusion/issues/14514)
 
@@ -80,7 +80,7 @@ Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas
 
 ### [Advanced Interval Analysis](https://github.com/apache/datafusion/issues/14515)
 
-- **Description and Outcomes:** DataFusion implements interval arithmetic and utilizes it for range estimations, which enables use cases in data pruning, optimizations and statistics. However, the current implementation only works efficiently for forward evaluation; i.e. calculating the output range of an expression given input ranges (ranges of columns). When propagating constraints using the same graph, the current approach requires multiple bottom-up and top-down traversals to narrow column bounds fully. This project aims to fix this deficiency by utilizing a better algorithmic approach. Note that this is a *very advanced* project for students with a deep interest in computational methods, expression graphs, and constraint solvers.
+- **Description and Outcomes:** DataFusion implements interval arithmetic and utilizes it for range estimations, which enables use cases in data pruning, optimizations and statistics. However, the current implementation only works efficiently for forward evaluation; i.e. calculating the output range of an expression given input ranges (ranges of columns). When propagating constraints using the same graph, the current approach requires multiple bottom-up and top-down traversals to narrow column bounds fully. This project aims to fix this deficiency by utilizing a better algorithmic approach. Note that this is a _very advanced_ project for students with a deep interest in computational methods, expression graphs, and constraint solvers.
 - **Category:** Core
 - **Difficulty:** Advanced
 - **Possible Mentor(s) and/or Helper(s):** [ozankabak](https://github.com/ozankabak) and [berkaysynnada](https://github.com/berkaysynnada)
@@ -94,7 +94,7 @@ Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas
 - **Difficulty:** Medium
 - **Possible Mentor(s) and/or Helper(s):** [alamb](https://github.com/alamb) and [andygrove](https://github.com/andygrove)
 - **Skills:** SQL, Spark, Software Engineering
-- **Expected Project Size:** 175 to 350 hours*
+- **Expected Project Size:** 175 to 350 hours\*
 
 ### [SQL Fuzzing Framework in Rust](https://github.com/apache/datafusion/issues/14535)
 
@@ -103,9 +103,9 @@ Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas
 - **Difficulty:** Advanced
 - **Possible Mentor(s) and/or Helper(s):** [2010YOUY01](https://github.com/2010YOUY01)
 - **Skills:** SQL, Testing Techniques, Advanced Rust, Software Engineering
-- **Expected Project Size:** 175 to 350 hours*
+- **Expected Project Size:** 175 to 350 hours\*
 
-**There is enough material to make this a 350-hour project, but it is granular enough to make it a 175-hour project as well.*
+\*_There is enough material to make this a 350-hour project, but it is granular enough to make it a 175-hour project as well._
 
 ## Contact Us
 
