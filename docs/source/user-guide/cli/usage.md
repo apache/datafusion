@@ -54,9 +54,6 @@ OPTIONS:
             The max number of rows to display for 'Table' format
             [possible values: numbers(0/10/...), inf(no limit)] [default: 40]
 
-        --stop-after-max-rows
-            Enable to stop early when maxrows is reached, default to false.
-
         --mem-pool-type <MEM_POOL_TYPE>
             Specify the memory pool type 'greedy' or 'fair', default to 'greedy'
 
