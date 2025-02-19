@@ -22,11 +22,12 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 
 use prost::Message;
-use substrait::proto::Plan;
-
-use std::fs::OpenOptions;
-use std::io::{Read, Write};
 use std::path::Path;
+use substrait::proto::Plan;
+use tokio::{
+    fs::OpenOptions,
+    io::{AsyncReadExt, AsyncWriteExt},
+};
 
 /// Plans a sql and serializes the generated logical plan to bytes.
 /// The bytes are then written into a file at `path`.
@@ -37,10 +38,14 @@ pub async fn serialize(
     ctx: &SessionContext,
     path: impl AsRef<Path>,
 ) -> Result<()> {
-    let protobuf_out = serialize_bytes(sql, ctx).await;
+    let protobuf_out = serialize_bytes(sql, ctx).await?;
 
-    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-    file.write_all(&protobuf_out?)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await?;
+    file.write_all(&protobuf_out).await?;
     Ok(())
 }
 
@@ -61,9 +66,9 @@ pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec<u8>>
 pub async fn deserialize(path: impl AsRef<Path>) -> Result<Box<Plan>> {
     let mut protobuf_in = Vec::<u8>::new();
 
-    let mut file = OpenOptions::new().read(true).open(path)?;
+    let mut file = OpenOptions::new().read(true).open(path).await?;
+    file.read_to_end(&mut protobuf_in).await?;
 
-    file.read_to_end(&mut protobuf_in)?;
     deserialize_bytes(protobuf_in).await
 }
 
