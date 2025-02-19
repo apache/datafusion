@@ -63,10 +63,13 @@ impl AnalysisContext {
         input_schema: &Schema,
         statistics: &[ColumnStatistics],
     ) -> Result<Self> {
-        statistics
+        input_schema
+            .fields
             .iter()
             .enumerate()
-            .map(|(idx, stats)| ExprBoundaries::try_from_column(input_schema, stats, idx))
+            .map(|(idx, stats)| {
+                ExprBoundaries::try_from_column(input_schema, &statistics[idx], idx)
+            })
             .collect::<Result<Vec<_>>>()
             .map(Self::new)
     }
