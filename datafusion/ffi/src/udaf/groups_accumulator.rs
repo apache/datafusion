@@ -1,7 +1,21 @@
-use std::{
-    ffi::c_void,
-    sync::{Arc, Mutex},
-};
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::ffi::c_void;
 
 use abi_stable::{
     std_types::{ROption, RResult, RString, RVec},
@@ -10,14 +24,12 @@ use abi_stable::{
 use arrow::{
     array::{Array, ArrayRef, BooleanArray},
     error::ArrowError,
-    ffi::{from_ffi, to_ffi, FFI_ArrowArray},
+    ffi::to_ffi,
 };
 use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::{EmitTo, GroupsAccumulator},
-    scalar::ScalarValue,
 };
-use prost::Message;
 
 use crate::{
     arrow_wrappers::{WrappedArray, WrappedSchema},
@@ -66,10 +78,6 @@ pub struct FFI_GroupsAccumulator {
 
     pub supports_convert_to_state: bool,
 
-    /// Used to create a clone on the provider of the accumulator. This should
-    /// only need to be called by the receiver of the accumulator.
-    // pub clone: unsafe extern "C" fn(accumulator: &Self) -> Self,
-
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(accumulator: &mut Self),
 
@@ -112,7 +120,7 @@ unsafe extern "C" fn update_batch_fn_wrapper(
             }
         }
     }).map(|arr| arr.into_data());
-    let opt_filter = maybe_filter.map(|arr| BooleanArray::from(arr));
+    let opt_filter = maybe_filter.map(BooleanArray::from);
 
     rresult!(accum_data.accumulator.update_batch(
         &values_arrays,
@@ -181,7 +189,7 @@ unsafe extern "C" fn merge_batch_fn_wrapper(
             }
         }
     }).map(|arr| arr.into_data());
-    let opt_filter = maybe_filter.map(|arr| BooleanArray::from(arr));
+    let opt_filter = maybe_filter.map(BooleanArray::from);
 
     rresult!(accum_data.accumulator.merge_batch(
         &values_arrays,
@@ -212,7 +220,7 @@ unsafe extern "C" fn convert_to_state_fn_wrapper(
                 None
             }
         }
-    }).map(|arr| arr.into_data()).map(|arr| BooleanArray::from(arr));
+    }).map(|arr| arr.into_data()).map(BooleanArray::from);
 
     let state = rresult_return!(accum_data
         .accumulator
