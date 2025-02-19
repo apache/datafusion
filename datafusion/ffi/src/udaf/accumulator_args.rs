@@ -1,14 +1,33 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::sync::Arc;
 
 use abi_stable::{
     std_types::{RString, RVec},
     StableAbi,
 };
-use arrow::{datatypes::Schema, ffi::FFI_ArrowSchema};
+use arrow::{
+    datatypes::{DataType, Schema},
+    ffi::FFI_ArrowSchema,
+};
 use datafusion::{
-    error::{DataFusionError, Result},
-    logical_expr::function::AccumulatorArgs,
-    prelude::SessionContext,
+    error::DataFusionError, logical_expr::function::AccumulatorArgs,
+    physical_expr::LexOrdering, physical_plan::PhysicalExpr, prelude::SessionContext,
 };
 use datafusion_proto::{
     physical_plan::{
@@ -20,7 +39,7 @@ use datafusion_proto::{
 };
 use prost::Message;
 
-use crate::{arrow_wrappers::WrappedSchema, rresult_return};
+use crate::arrow_wrappers::WrappedSchema;
 
 #[repr(C)]
 #[derive(Debug, StableAbi)]
@@ -33,51 +52,10 @@ pub struct FFI_AccumulatorArgs {
     physical_expr_def: RVec<u8>,
 }
 
-impl FFI_AccumulatorArgs {
-    pub fn to_accumulator_args(&self) -> Result<AccumulatorArgs> {
-        let proto_def =
-            PhysicalAggregateExprNode::decode(self.physical_expr_def.as_ref())
-                .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-        let return_type = &(&self.return_type.0).try_into()?;
-        let schema = &Arc::new(Schema::try_from(&self.schema.0)?);
-
-        let default_ctx = SessionContext::new();
-        let codex = DefaultPhysicalExtensionCodec {};
-
-        // let proto_ordering_req =
-        //     rresult_return!(PhysicalSortExprNodeCollection::decode(ordering_req.as_ref()));
-        let ordering_req = &parse_physical_sort_exprs(
-            &proto_def.ordering_req,
-            &default_ctx,
-            &schema,
-            &codex,
-        )?;
-
-        let exprs = &rresult_return!(parse_physical_exprs(
-            &proto_def.expr,
-            &default_ctx,
-            &schema,
-            &codex
-        ));
-
-        Ok(AccumulatorArgs {
-            return_type,
-            schema,
-            ignore_nulls: proto_def.ignore_nulls,
-            ordering_req,
-            is_reversed: self.is_reversed,
-            name: self.name.as_str(),
-            is_distinct: proto_def.distinct,
-            exprs,
-        })
-    }
-}
-
-impl<'a> TryFrom<AccumulatorArgs<'a>> for FFI_AccumulatorArgs {
+impl TryFrom<AccumulatorArgs<'_>> for FFI_AccumulatorArgs {
     type Error = DataFusionError;
 
-    fn try_from(args: AccumulatorArgs) -> std::result::Result<Self, Self::Error> {
+    fn try_from(args: AccumulatorArgs) -> Result<Self, Self::Error> {
         let return_type = WrappedSchema(FFI_ArrowSchema::try_from(args.return_type)?);
         let schema = WrappedSchema(FFI_ArrowSchema::try_from(args.schema)?);
 
@@ -104,5 +82,73 @@ impl<'a> TryFrom<AccumulatorArgs<'a>> for FFI_AccumulatorArgs {
             name: args.name.into(),
             physical_expr_def,
         })
+    }
+}
+
+/// This struct mirrors AccumulatorArgs except that it contains owned data.
+/// It is necessary to create this struct so that we can parse the protobuf
+/// data across the FFI boundary and turn it into owned data that
+/// AccumulatorArgs can then reference.
+pub struct ForeignAccumulatorArgs {
+    pub return_type: DataType,
+    pub schema: Schema,
+    pub ignore_nulls: bool,
+    pub ordering_req: LexOrdering,
+    pub is_reversed: bool,
+    pub name: String,
+    pub is_distinct: bool,
+    pub exprs: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+impl TryFrom<FFI_AccumulatorArgs> for ForeignAccumulatorArgs {
+    type Error = DataFusionError;
+
+    fn try_from(value: FFI_AccumulatorArgs) -> Result<Self, Self::Error> {
+        let proto_def =
+            PhysicalAggregateExprNode::decode(value.physical_expr_def.as_ref())
+                .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+        let return_type = (&value.return_type.0).try_into()?;
+        let schema = Schema::try_from(&value.schema.0)?;
+
+        let default_ctx = SessionContext::new();
+        let codex = DefaultPhysicalExtensionCodec {};
+
+        // let proto_ordering_req =
+        //     rresult_return!(PhysicalSortExprNodeCollection::decode(ordering_req.as_ref()));
+        let ordering_req = parse_physical_sort_exprs(
+            &proto_def.ordering_req,
+            &default_ctx,
+            &schema,
+            &codex,
+        )?;
+
+        let exprs = parse_physical_exprs(&proto_def.expr, &default_ctx, &schema, &codex)?;
+
+        Ok(Self {
+            return_type,
+            schema,
+            ignore_nulls: proto_def.ignore_nulls,
+            ordering_req,
+            is_reversed: value.is_reversed,
+            name: value.name.to_string(),
+            is_distinct: proto_def.distinct,
+            exprs,
+        })
+    }
+}
+
+impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
+    fn from(value: &'a ForeignAccumulatorArgs) -> Self {
+        Self {
+            return_type: &value.return_type,
+            schema: &value.schema,
+            ignore_nulls: value.ignore_nulls,
+            ordering_req: &value.ordering_req,
+            is_reversed: value.is_reversed,
+            name: value.name.as_str(),
+            is_distinct: value.is_distinct,
+            exprs: &value.exprs,
+        }
     }
 }
