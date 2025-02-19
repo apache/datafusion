@@ -53,9 +53,8 @@ use datafusion_physical_expr::{
     ConstExpr, EquivalenceProperties, LexOrdering, PhysicalSortRequirement,
 };
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use futures::StreamExt;
 
-use itertools::{iproduct, Itertools};
+use itertools::Itertools;
 
 /// Build field from window function and add it into schema
 pub fn schema_add_window_field(
