@@ -24,7 +24,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, Documentation, TypeSignature, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 /// Returns the longest string  with trailing characters removed. If the characters are not specified, whitespace is removed.
@@ -104,20 +104,16 @@ impl ScalarUDFImpl for RtrimFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => make_scalar_function(
                 rtrim::<i32>,
                 vec![Hint::Pad, Hint::AcceptsSingular],
-            )(args),
+            )(&args.args),
             DataType::LargeUtf8 => make_scalar_function(
                 rtrim::<i64>,
                 vec![Hint::Pad, Hint::AcceptsSingular],
-            )(args),
+            )(&args.args),
             other => exec_err!(
                 "Unsupported data type {other:?} for function rtrim,\
                 expected Utf8, LargeUtf8 or Utf8View."

@@ -22,7 +22,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction};
+use crate::expr::{Alias, Sort, WildcardOptions, WindowFunction, WindowFunctionParams};
 use crate::expr_rewriter::strip_outer_reference;
 use crate::{
     and, BinaryExpr, Expr, ExprSchemable, Filter, GroupingSet, LogicalPlan, Operator,
@@ -588,7 +588,7 @@ pub fn group_window_expr_by_sort_keys(
 ) -> Result<Vec<(WindowSortKey, Vec<Expr>)>> {
     let mut result = vec![];
     window_expr.into_iter().try_for_each(|expr| match &expr {
-        Expr::WindowFunction( WindowFunction{ partition_by, order_by, .. }) => {
+        Expr::WindowFunction( WindowFunction{ params: WindowFunctionParams { partition_by, order_by, ..}, .. }) => {
             let sort_key = generate_sort_key(partition_by, order_by)?;
             if let Some((_, values)) = result.iter_mut().find(
                 |group: &&mut (WindowSortKey, Vec<Expr>)| matches!(group, (key, _) if *key == sort_key),

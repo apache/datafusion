@@ -60,7 +60,7 @@ fn is_count_star_aggregate(aggregate_function: &AggregateFunction) -> bool {
 }
 
 fn is_count_star_window_aggregate(window_function: &WindowFunction) -> bool {
-    let args = &window_function.args;
+    let args = &window_function.params.args;
     matches!(window_function.fun,
         WindowFunctionDefinition::AggregateUDF(ref udaf)
             if udaf.name() == "count" && (args.len() == 1 && is_wildcard(&args[0]) || args.is_empty()))
@@ -74,7 +74,7 @@ fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
             Expr::WindowFunction(mut window_function)
                 if is_count_star_window_aggregate(&window_function) =>
             {
-                window_function.args = vec![lit(COUNT_STAR_EXPANSION)];
+                window_function.params.args = vec![lit(COUNT_STAR_EXPANSION)];
                 Ok(Transformed::yes(Expr::WindowFunction(window_function)))
             }
             Expr::AggregateFunction(mut aggregate_function)
