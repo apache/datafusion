@@ -396,11 +396,10 @@ relies on table and column level statistics to estimate selectivity; selectivity
 estimates are an important piece in cost analysis for filters and projections
 as they allow estimating the cost of joins and filters.
 
-An important piece of building these estimates is *boundary analysis* which uses
+An important piece of building these estimates is _boundary analysis_ which uses
 interval arithmetic to take an expression such as `a > 2500 AND a <= 5000` and
 build an accurate selectivity estimate that can then be used to find more efficient
 plans.
-
 
 #### `AnalysisContext` API
 
@@ -420,10 +419,10 @@ read from and write to this shared context, allowing for sophisticated boundary 
 Column statistics form the foundation of optimization decisions. Rather than just tracking
 simple metrics, DataFusion's `ColumnStatistics` provides a rich set of information including:
 
-* Null value counts
-* Maximum and minimum values
-* Value sums (for numeric columns)
-* Distinct value counts
+- Null value counts
+- Maximum and minimum values
+- Value sums (for numeric columns)
+- Distinct value counts
 
 Each of these statistics is wrapped in a `Precision` type that indicates whether the value is
 exact or estimated, allowing the optimizer to make informed decisions about the reliability
@@ -441,21 +440,21 @@ When analyzing expressions, DataFusion runs boundary analysis using interval ari
 Consider a simple predicate like age > 18 AND age <= 25. The analysis flows as follows:
 
 1. Context Initialization
-    * Begin with known column statistics
-    * Set up initial boundaries based on column constraints
-    * Initialize the shared analysis context
 
+   - Begin with known column statistics
+   - Set up initial boundaries based on column constraints
+   - Initialize the shared analysis context
 
 2. Expression Tree Walk
-    * Analyze each node in the expression tree
-    * Propagate boundary information upward
-    * Allow child nodes to influence parent boundaries
 
+   - Analyze each node in the expression tree
+   - Propagate boundary information upward
+   - Allow child nodes to influence parent boundaries
 
 3. Boundary Updates
-    * Each expression can update the shared context
-    * Changes flow through the entire expression tree
-    * Final boundaries inform optimization decisions
+   - Each expression can update the shared context
+   - Changes flow through the entire expression tree
+   - Final boundaries inform optimization decisions
 
 ### Working with the analysis API
 
