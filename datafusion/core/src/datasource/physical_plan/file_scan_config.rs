@@ -330,19 +330,6 @@ impl FileScanConfig {
         self
     }
 
-    /// Refreshes the source with updated statistics.
-    /// Should be called after projection-related fields are updated.
-    pub fn refresh_source(mut self) -> Self {
-        let (
-            _projected_schema,
-            _constraints,
-            projected_statistics,
-            _projected_output_ordering,
-        ) = self.project();
-        self.source = self.source.with_statistics(projected_statistics);
-        self
-    }
-
     /// Set the table constraints of the files
     pub fn with_constraints(mut self, constraints: Constraints) -> Self {
         self.constraints = constraints;
@@ -358,6 +345,32 @@ impl FileScanConfig {
     /// Set the projection of the files
     pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
         self.projection = projection;
+        self.with_updated_statistics()
+    }
+
+    // Update source statistics with the current projection data
+    fn with_updated_statistics(mut self) -> Self {
+        let max_projection_column = *self
+            .projection
+            .as_ref()
+            .and_then(|proj| proj.iter().max())
+            .unwrap_or(&0);
+
+        if max_projection_column
+            >= self.file_schema.fields().len() + self.table_partition_cols.len()
+        {
+            // we don't yet have enough information (file schema info or partition column info) to perform projection
+            return self;
+        }
+
+        let (
+            _projected_schema,
+            _constraints,
+            projected_statistics,
+            _projected_output_ordering,
+        ) = self.project();
+
+        self.source = self.source.with_statistics(projected_statistics);
         self
     }
 
@@ -396,7 +409,7 @@ impl FileScanConfig {
     /// Set the partitioning columns of the files
     pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
         self.table_partition_cols = table_partition_cols;
-        self
+        self.with_updated_statistics()
     }
 
     /// Set the output ordering of the files
@@ -611,7 +624,6 @@ impl FileScanConfig {
     }
 
     /// Returns the file_source
-    /// If projection has changed since the last call, use [`FileScanConfig::refresh_source`] before
     pub fn file_source(&self) -> &Arc<dyn FileSource> {
         &self.source
     }
@@ -751,6 +763,13 @@ mod tests {
             ),
         ];
         // create a projected schema
+
+        let statistics = Statistics {
+            num_rows: Precision::Inexact(3),
+            total_byte_size: Precision::Absent,
+            column_statistics: Statistics::unknown_column(&file_batch.schema()),
+        };
+
         let conf = config_for_projection(
             file_batch.schema(),
             // keep all cols from file and 2 from partitioning
@@ -761,10 +780,20 @@ mod tests {
                 file_batch.schema().fields().len(),
                 file_batch.schema().fields().len() + 2,
             ]),
-            Statistics::new_unknown(&file_batch.schema()),
+            statistics.clone(),
             to_partition_cols(partition_cols.clone()),
         );
+
+        let source_statistics = conf.source.statistics().unwrap();
+
+        // statistics should be preserved and passed into the source
+        assert_eq!(source_statistics.num_rows, Precision::Inexact(3));
+
+        // 3 original statistics + 2 partition statistics
+        assert_eq!(source_statistics.column_statistics.len(), 5);
+
         let (proj_schema, ..) = conf.project();
+
         // created a projector for that projected schema
         let mut proj = PartitionColumnProjector::new(
             proj_schema,
