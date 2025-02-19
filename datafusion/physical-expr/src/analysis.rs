@@ -63,7 +63,7 @@ impl AnalysisContext {
         input_schema: &Schema,
         statistics: &[ColumnStatistics],
     ) -> Result<Self> {
-        (0..statistics.len())
+        (0..input_schema.fields.len())
             .map(|idx| {
                 ExprBoundaries::try_from_column(input_schema, &statistics[idx], idx)
             })
