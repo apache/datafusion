@@ -256,6 +256,9 @@ config_namespace! {
         /// query (i.e. [`Span`](sqlparser::tokenizer::Span)) will be collected
         /// and recorded in the logical plan nodes.
         pub collect_spans: bool, default = false
+
+        /// Specifies the recursion depth limit when parsing complex SQL Queries
+        pub recursion_limit: usize, default = 50
     }
 }
 

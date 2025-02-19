@@ -257,6 +257,9 @@ fn ensure_not_set<T>(field: &Option<T>, name: &str) -> Result<(), ParserError> {
     Ok(())
 }
 
+/// Same as `sqlparser`
+const DEFAULT_RECURSION_LIMIT: usize = 50;
+
 /// DataFusion SQL Parser based on [`sqlparser`]
 ///
 /// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s [`Parser`].
@@ -283,11 +286,22 @@ impl<'a> DFParser<'a> {
         sql: &str,
         dialect: &'a dyn Dialect,
     ) -> Result<Self, ParserError> {
+        DFParser::new_with_dialect_limit(sql, dialect, DEFAULT_RECURSION_LIMIT)
+    }
+    /// Create a new parser for the specified tokens with the
+    /// specified dialect and recursion limit
+    pub fn new_with_dialect_limit(
+        sql: &str,
+        dialect: &'a dyn Dialect,
+        recursion_limit: usize,
+    ) -> Result<Self, ParserError> {
         let mut tokenizer = Tokenizer::new(dialect, sql);
         let tokens = tokenizer.tokenize_with_location()?;
 
         Ok(DFParser {
-            parser: Parser::new(dialect).with_tokens_with_locations(tokens),
+            parser: Parser::new(dialect)
+                .with_tokens_with_locations(tokens)
+                .with_recursion_limit(recursion_limit),
         })
     }
 
@@ -295,7 +309,7 @@ impl<'a> DFParser<'a> {
     /// [`GenericDialect`].
     pub fn parse_sql(sql: &str) -> Result<VecDeque<Statement>, ParserError> {
         let dialect = &GenericDialect {};
-        DFParser::parse_sql_with_dialect(sql, dialect)
+        DFParser::parse_sql_with_dialect_limit(sql, dialect, DEFAULT_RECURSION_LIMIT)
     }
 
     /// Parse a SQL string and produce one or more [`Statement`]s with
@@ -304,7 +318,17 @@ impl<'a> DFParser<'a> {
         sql: &str,
         dialect: &dyn Dialect,
     ) -> Result<VecDeque<Statement>, ParserError> {
-        let mut parser = DFParser::new_with_dialect(sql, dialect)?;
+        DFParser::parse_sql_with_dialect_limit(sql, dialect, DEFAULT_RECURSION_LIMIT)
+    }
+
+    /// Parse a SQL string and produce one or more [`Statement`]s with
+    /// with the specified dialect and recursion limit
+    pub fn parse_sql_with_dialect_limit(
+        sql: &str,
+        dialect: &dyn Dialect,
+        recursion_limit: usize,
+    ) -> Result<VecDeque<Statement>, ParserError> {
+        let mut parser = DFParser::new_with_dialect_limit(sql, dialect, recursion_limit)?;
         let mut stmts = VecDeque::new();
         let mut expecting_statement_delimiter = false;
         loop {
@@ -331,7 +355,19 @@ impl<'a> DFParser<'a> {
         sql: &str,
         dialect: &dyn Dialect,
     ) -> Result<ExprWithAlias, ParserError> {
-        let mut parser = DFParser::new_with_dialect(sql, dialect)?;
+        DFParser::parse_sql_into_expr_with_dialect_limit(
+            sql,
+            dialect,
+            DEFAULT_RECURSION_LIMIT,
+        )
+    }
+
+    pub fn parse_sql_into_expr_with_dialect_limit(
+        sql: &str,
+        dialect: &dyn Dialect,
+        recursion_limit: usize,
+    ) -> Result<ExprWithAlias, ParserError> {
+        let mut parser = DFParser::new_with_dialect_limit(sql, dialect, recursion_limit)?;
         parser.parse_expr()
     }
 
