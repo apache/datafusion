@@ -420,7 +420,7 @@ impl ListingOptions {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use datafusion_datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
+    /// # use datafusion::datasource::{listing::ListingOptions, file_format::parquet::ParquetFormat};
     ///
     /// let listing_options = ListingOptions::new(Arc::new(
     ///     ParquetFormat::default()

@@ -58,7 +58,7 @@ impl ReaderBuilder {
     /// ```
     /// use std::fs::File;
     ///
-    /// use datafusion_datasource::avro_to_arrow::{Reader, ReaderBuilder};
+    /// use datafusion::datasource::avro_to_arrow::{Reader, ReaderBuilder};
     ///
     /// fn example() -> Reader<'static, File> {
     ///     let file = File::open("test/data/basic.avro").unwrap();
