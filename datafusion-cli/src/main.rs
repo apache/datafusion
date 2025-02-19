@@ -193,7 +193,6 @@ async fn main_inner() -> Result<()> {
         quiet: args.quiet,
         maxrows: args.maxrows,
         color: args.color,
-        stop_after_max_rows: args.stop_after_max_rows,
     };
 
     let commands = args.command;

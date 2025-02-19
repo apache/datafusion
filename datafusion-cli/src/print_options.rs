@@ -72,7 +72,6 @@ pub struct PrintOptions {
     pub quiet: bool,
     pub maxrows: MaxRows,
     pub color: bool,
-    pub stop_after_max_rows: bool,
 }
 
 // Returns the query execution details formatted
