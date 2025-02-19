@@ -110,6 +110,11 @@ required-features = ["encoding_expressions"]
 
 [[bench]]
 harness = false
+name = "chr"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "uuid"
 required-features = ["string_expressions"]
 
