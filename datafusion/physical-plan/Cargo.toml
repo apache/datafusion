@@ -64,7 +64,6 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["async_futures"] }
-datafusion-datasource = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
 rand = { workspace = true }
@@ -75,10 +74,6 @@ tokio = { workspace = true, features = [
     "fs",
     "parking_lot",
 ] }
-
-[[bench]]
-harness = false
-name = "spm"
 
 [[bench]]
 harness = false

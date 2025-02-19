@@ -2258,7 +2258,6 @@ dependencies = [
  "criterion",
  "datafusion-common",
  "datafusion-common-runtime",
- "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-functions-aggregate",

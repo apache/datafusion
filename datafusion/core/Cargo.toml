@@ -222,3 +222,7 @@ required-features = ["nested_expressions"]
 [[bench]]
 harness = false
 name = "dataframe"
+
+[[bench]]
+harness = false
+name = "spm"
