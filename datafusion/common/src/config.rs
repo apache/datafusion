@@ -503,6 +503,9 @@ config_namespace! {
         /// (writing) Sets column index truncate length
         pub column_index_truncate_length: Option<usize>, default = Some(64)
 
+        /// (writing) Sets statictics truncate length
+        pub statistics_truncate_length: Option<usize>, default = None
+
         /// (writing) Sets best effort maximum number of rows in data page
         pub data_page_row_count_limit: usize, default = 20_000
 
