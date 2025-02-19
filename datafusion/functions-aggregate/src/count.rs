@@ -18,7 +18,8 @@
 use ahash::RandomState;
 use datafusion_common::stats::Precision;
 use datafusion_expr::expr::{
-    schema_name_from_exprs, schema_name_from_sorts, AggregateFunctionParams, WindowFunctionParams,
+    schema_name_from_exprs, schema_name_from_sorts, AggregateFunctionParams,
+    WindowFunctionParams,
 };
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_macros::user_doc;
@@ -50,11 +51,11 @@ use datafusion_common::{
     downcast_value, internal_err, not_impl_err, Result, ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::{expr_vec_fmt, Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     Documentation, EmitTo, GroupsAccumulator, SetMonotonicity, Signature, Volatility,
 };
-use datafusion_expr::{expr_vec_fmt, Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::{
     BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
     PrimitiveDistinctCountAccumulator,
@@ -277,7 +278,7 @@ impl AggregateUDFImpl for Count {
 
         Ok(display_name)
     }
-    
+
     fn window_function_display_name(
         &self,
         params: &WindowFunctionParams,
