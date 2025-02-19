@@ -70,7 +70,8 @@ pub trait FileSource: Send + Sync {
     /// by breaking up the input files into multiple smaller groups.
     fn supports_repartition(&self, config: &FileScanConfig) -> bool;
 
-    /// If supported by, redistribute files across partitions according to their size.
+    /// If supported by the [`FileSource`], redistribute files across partitions according to their size.
+    /// Allows custom file formats to implement their own repartitioning logic.
     ///
     /// Provides a default repartitioning behavior, see comments on [`FileGroupPartitioner`] for more detail.
     fn repartitioned(
