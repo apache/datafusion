@@ -83,7 +83,7 @@ arrow = { version = "54.2.0", features = [
     "chrono-tz",
 ] }
 arrow-buffer = { version = "54.1.0", default-features = false }
-arrow-flight = { version = "54.1.0", features = [
+arrow-flight = { version = "54.2.0", features = [
     "flight-sql-experimental",
 ] }
 arrow-ipc = { version = "54.2.0", default-features = false, features = [
