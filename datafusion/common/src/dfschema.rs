@@ -30,8 +30,9 @@ use crate::{
 };
 
 use arrow::compute::can_cast_types;
-use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-use arrow_schema::SchemaBuilder;
+use arrow::datatypes::{
+    DataType, Field, FieldRef, Fields, Schema, SchemaBuilder, SchemaRef,
+};
 
 /// A reference-counted reference to a [DFSchema].
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -56,7 +57,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 ///
 /// ```rust
 /// use datafusion_common::{DFSchema, Column};
-/// use arrow_schema::{DataType, Field, Schema};
+/// use arrow::datatypes::{DataType, Field, Schema};
 ///
 /// let arrow_schema = Schema::new(vec![
 ///    Field::new("c1", DataType::Int32, false),
@@ -77,7 +78,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 ///
 /// ```rust
 /// use datafusion_common::{DFSchema, Column};
-/// use arrow_schema::{DataType, Field, Schema};
+/// use arrow::datatypes::{DataType, Field, Schema};
 ///
 /// let arrow_schema = Schema::new(vec![
 ///    Field::new("c1", DataType::Int32, false),
@@ -94,8 +95,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 ///
 /// ```rust
 /// use datafusion_common::DFSchema;
-/// use arrow_schema::Schema;
-/// use arrow::datatypes::Field;
+/// use arrow::datatypes::{Schema, Field};
 /// use std::collections::HashMap;
 ///
 /// let df_schema = DFSchema::from_unqualified_fields(vec![
@@ -1470,12 +1470,14 @@ pub trait SchemaExt {
     /// It works the same as [`DFSchema::equivalent_names_and_types`].
     fn equivalent_names_and_types(&self, other: &Self) -> bool;
 
-    /// Returns true if the two schemas have the same qualified named
-    /// fields with logically equivalent data types. Returns false otherwise.
+    /// Returns nothing if the two schemas have the same qualified named
+    /// fields with logically equivalent data types. Returns internal error otherwise.
     ///
     /// Use [DFSchema]::equivalent_names_and_types for stricter semantic type
     /// equivalence checking.
-    fn logically_equivalent_names_and_types(&self, other: &Self) -> bool;
+    ///
+    /// It is only used by insert into cases.
+    fn logically_equivalent_names_and_types(&self, other: &Self) -> Result<()>;
 }
 
 impl SchemaExt for Schema {
@@ -1496,21 +1498,36 @@ impl SchemaExt for Schema {
             })
     }
 
-    fn logically_equivalent_names_and_types(&self, other: &Self) -> bool {
+    // It is only used by insert into cases.
+    fn logically_equivalent_names_and_types(&self, other: &Self) -> Result<()> {
+        // case 1 : schema length mismatch
         if self.fields().len() != other.fields().len() {
-            return false;
+            _plan_err!(
+                "Inserting query must have the same schema length as the table. \
+            Expected table schema length: {}, got: {}",
+                self.fields().len(),
+                other.fields().len()
+            )
+        } else {
+            // case 2 : schema length match, but fields mismatch
+            // check if the fields name are the same and have the same data types
+            self.fields()
+                .iter()
+                .zip(other.fields().iter())
+                .try_for_each(|(f1, f2)| {
+                    if f1.name() != f2.name() || !DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type()) {
+                        _plan_err!(
+                            "Inserting query schema mismatch: Expected table field '{}' with type {:?}, \
+                            but got '{}' with type {:?}.",
+                            f1.name(),
+                            f1.data_type(),
+                            f2.name(),
+                            f2.data_type())
+                    } else {
+                        Ok(())
+                    }
+                })
         }
-
-        self.fields()
-            .iter()
-            .zip(other.fields().iter())
-            .all(|(f1, f2)| {
-                f1.name() == f2.name()
-                    && DFSchema::datatype_is_logically_equal(
-                        f1.data_type(),
-                        f2.data_type(),
-                    )
-            })
     }
 }
 
@@ -1537,7 +1554,7 @@ mod tests {
             Column names are case sensitive. \
             You can use double quotes to refer to the \"\"t1.c0\"\" column \
             or set the datafusion.sql_parser.enable_ident_normalization configuration. \
-            Valid fields are t1.c0, t1.c1.";
+            Did you mean 't1.c0'?.";
         assert_eq!(err.strip_backtrace(), expected);
         Ok(())
     }

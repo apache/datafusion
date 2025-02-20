@@ -17,13 +17,13 @@
 
 use std::sync::{Arc, OnceLock};
 
-use arrow_array::{Array, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema};
+use arrow::array::{Array, RecordBatch, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use bytes::{BufMut, Bytes, BytesMut};
 use datafusion::{
     datasource::{
         listing::PartitionedFile,
-        physical_plan::{parquet::ParquetExecBuilder, FileScanConfig},
+        physical_plan::{FileScanConfig, ParquetSource},
     },
     prelude::*,
 };
@@ -111,8 +111,22 @@ async fn test_utf8_not_like_prefix() {
 }
 
 #[tokio::test]
+async fn test_utf8_not_like_ecsape() {
+    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{}%", value))))
+        .run()
+        .await;
+}
+
+#[tokio::test]
 async fn test_utf8_not_like_suffix() {
     Utf8Test::new(|value| col("a").not_like(lit(format!("{}%", value))))
+        .run()
+        .await;
+}
+
+#[tokio::test]
+async fn test_utf8_not_like_suffix_one() {
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{}_", value))))
         .run()
         .await;
 }
@@ -303,24 +317,25 @@ async fn execute_with_predicate(
     schema: Arc<Schema>,
     ctx: &SessionContext,
 ) -> Vec<String> {
-    let scan =
-        FileScanConfig::new(ObjectStoreUrl::parse("memory://").unwrap(), schema.clone())
-            .with_file_group(
-                files
-                    .iter()
-                    .map(|test_file| {
-                        PartitionedFile::new(
-                            test_file.path.clone(),
-                            test_file.size as u64,
-                        )
-                    })
-                    .collect(),
-            );
-    let mut builder = ParquetExecBuilder::new(scan);
-    if prune_stats {
-        builder = builder.with_predicate(predicate.clone())
-    }
-    let exec = Arc::new(builder.build()) as Arc<dyn ExecutionPlan>;
+    let parquet_source = if prune_stats {
+        ParquetSource::default().with_predicate(Arc::clone(&schema), predicate.clone())
+    } else {
+        ParquetSource::default()
+    };
+    let scan = FileScanConfig::new(
+        ObjectStoreUrl::parse("memory://").unwrap(),
+        schema.clone(),
+        Arc::new(parquet_source),
+    )
+    .with_file_group(
+        files
+            .iter()
+            .map(|test_file| {
+                PartitionedFile::new(test_file.path.clone(), test_file.size as u64)
+            })
+            .collect(),
+    );
+    let exec = scan.build();
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;
 

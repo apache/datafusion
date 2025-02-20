@@ -26,20 +26,23 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::{exec_err, internal_datafusion_err, not_impl_err, Result};
+use datafusion_common::{
+    internal_datafusion_err, not_impl_err, utils::take_function_args, Result,
+};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
-type MathArrayFunction = fn(&Vec<ArrayRef>) -> Result<ArrayRef>;
+type MathArrayFunction = fn(&ArrayRef) -> Result<ArrayRef>;
 
 macro_rules! make_abs_function {
     ($ARRAY_TYPE:ident) => {{
-        |args: &Vec<ArrayRef>| {
-            let array = downcast_named_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+        |input: &ArrayRef| {
+            let array = downcast_named_arg!(&input, "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array.unary(|x| x.abs());
             Ok(Arc::new(res) as ArrayRef)
         }
@@ -48,8 +51,8 @@ macro_rules! make_abs_function {
 
 macro_rules! make_try_abs_function {
     ($ARRAY_TYPE:ident) => {{
-        |args: &Vec<ArrayRef>| {
-            let array = downcast_named_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+        |input: &ArrayRef| {
+            let array = downcast_named_arg!(&input, "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array.try_unary(|x| {
                 x.checked_abs().ok_or_else(|| {
                     ArrowError::ComputeError(format!(
@@ -66,11 +69,11 @@ macro_rules! make_try_abs_function {
 
 macro_rules! make_decimal_abs_function {
     ($ARRAY_TYPE:ident) => {{
-        |args: &Vec<ArrayRef>| {
-            let array = downcast_named_arg!(&args[0], "abs arg", $ARRAY_TYPE);
+        |input: &ArrayRef| {
+            let array = downcast_named_arg!(&input, "abs arg", $ARRAY_TYPE);
             let res: $ARRAY_TYPE = array
                 .unary(|x| x.wrapping_abs())
-                .with_data_type(args[0].data_type().clone());
+                .with_data_type(input.data_type().clone());
             Ok(Arc::new(res) as ArrayRef)
         }
     }};
@@ -94,7 +97,7 @@ fn create_abs_function(input_data_type: &DataType) -> Result<MathArrayFunction> 
         | DataType::UInt8
         | DataType::UInt16
         | DataType::UInt32
-        | DataType::UInt64 => Ok(|args: &Vec<ArrayRef>| Ok(Arc::clone(&args[0]))),
+        | DataType::UInt64 => Ok(|input: &ArrayRef| Ok(Arc::clone(input))),
 
         // Decimal types
         DataType::Decimal128(_, _) => Ok(make_decimal_abs_function!(Decimal128Array)),
@@ -166,21 +169,14 @@ impl ScalarUDFImpl for AbsFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(&args.args)?;
+        let [input] = take_function_args(self.name(), args)?;
 
-        if args.len() != 1 {
-            return exec_err!("abs function requires 1 argument, got {}", args.len());
-        }
-
-        let input_data_type = args[0].data_type();
+        let input_data_type = input.data_type();
         let abs_fun = create_abs_function(input_data_type)?;
 
-        abs_fun(&args).map(ColumnarValue::Array)
+        abs_fun(&input).map(ColumnarValue::Array)
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {

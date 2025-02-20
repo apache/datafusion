@@ -29,7 +29,7 @@ use crate::expressions::Literal;
 use crate::utils::{build_dag, ExprTreeNode};
 use crate::PhysicalExpr;
 
-use arrow_schema::{DataType, Schema};
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::interval_arithmetic::{apply_operator, satisfy_greater, Interval};
 use datafusion_expr::Operator;
@@ -722,9 +722,8 @@ mod tests {
     use crate::expressions::{BinaryExpr, Column};
     use crate::intervals::test_utils::gen_conjunctive_numerical_expr;
 
-    use arrow::datatypes::TimeUnit;
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
-    use arrow_schema::Field;
+    use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+    use arrow::datatypes::{Field, TimeUnit};
     use datafusion_common::ScalarValue;
 
     use itertools::Itertools;

@@ -253,7 +253,7 @@ EXPLAIN SELECT id FROM t ORDER BY id ASC;
 logical_plan
 01)Sort: t.id ASC NULLS LAST
 02)--TableScan: t projection=[id]
-physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 ## Test a DESC order and verify that output_ordering is ASC from the previous OBRDER BY
 query TT
@@ -264,7 +264,7 @@ logical_plan
 02)--TableScan: t projection=[id]
 physical_plan
 01)SortExec: expr=[id@0 DESC], preserve_partitioning=[false]
-02)--ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 ASC NULLS LAST], file_type=parquet
 
 statement ok
 DROP TABLE t;
@@ -278,7 +278,7 @@ query TT
 EXPLAIN SELECT id FROM t;
 ----
 logical_plan TableScan: t projection=[id]
-physical_plan ParquetExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 DESC]
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/parquet-testing/data/alltypes_plain.parquet]]}, projection=[id], output_ordering=[id@0 DESC], file_type=parquet
 
 statement ok
 DROP TABLE t;

@@ -19,26 +19,24 @@
 mod dataframe_functions;
 mod describe;
 
-use arrow::datatypes::{DataType, Field, Float32Type, Int32Type, Schema, UInt64Type};
+use arrow::array::{
+    record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
+    FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder,
+    Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
+    StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray,
+};
+use arrow::buffer::ScalarBuffer;
+use arrow::datatypes::{
+    DataType, Field, Float32Type, Int32Type, Schema, SchemaRef, UInt64Type, UnionFields,
+    UnionMode,
+};
+use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
-use arrow::{
-    array::{
-        ArrayRef, FixedSizeListArray, FixedSizeListBuilder, Int32Array, Int32Builder,
-        LargeListArray, ListArray, ListBuilder, StringArray, StringBuilder,
-        StructBuilder, UInt32Array, UInt32Builder,
-    },
-    record_batch::RecordBatch,
-};
-use arrow_array::{
-    record_batch, Array, BooleanArray, DictionaryArray, Float32Array, Float64Array,
-    Int8Array, UnionArray,
-};
-use arrow_buffer::ScalarBuffer;
-use arrow_schema::{ArrowError, SchemaRef, UnionFields, UnionMode};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,
 };
+use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, row_number};
 use object_store::local::LocalFileSystem;
 use sqlparser::ast::NullTreatment;
@@ -65,7 +63,7 @@ use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_catalog::TableProvider;
 use datafusion_common::{
     assert_contains, Constraint, Constraints, DataFusionError, ParamValues, ScalarValue,
-    UnnestOptions,
+    TableReference, UnnestOptions,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::config::SessionConfig;
@@ -548,7 +546,7 @@ async fn test_aggregate_with_pk() -> Result<()> {
         &df,
         vec![
             "AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
-            "  MemoryExec: partitions=1, partition_sizes=[1]",
+            "  DataSourceExec: partitions=1, partition_sizes=[1]",
         ],
     )
     .await;
@@ -592,7 +590,7 @@ async fn test_aggregate_with_pk2() -> Result<()> {
             "CoalesceBatchesExec: target_batch_size=8192",
             "  FilterExec: id@0 = 1 AND name@1 = a",
             "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
-            "      MemoryExec: partitions=1, partition_sizes=[1]",
+            "      DataSourceExec: partitions=1, partition_sizes=[1]",
         ],
     )
     .await;
@@ -641,7 +639,7 @@ async fn test_aggregate_with_pk3() -> Result<()> {
             "CoalesceBatchesExec: target_batch_size=8192",
             "  FilterExec: id@0 = 1",
             "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
-            "      MemoryExec: partitions=1, partition_sizes=[1]",
+            "      DataSourceExec: partitions=1, partition_sizes=[1]",
         ],
     )
     .await;
@@ -692,7 +690,7 @@ async fn test_aggregate_with_pk4() -> Result<()> {
             "CoalesceBatchesExec: target_batch_size=8192",
             "  FilterExec: id@0 = 1",
             "    AggregateExec: mode=Single, gby=[id@0 as id], aggr=[]",
-            "      MemoryExec: partitions=1, partition_sizes=[1]",
+            "      DataSourceExec: partitions=1, partition_sizes=[1]",
         ],
     )
     .await;
@@ -1122,7 +1120,7 @@ async fn join() -> Result<()> {
 }
 
 #[tokio::test]
-async fn join_coercion_unnnamed() -> Result<()> {
+async fn join_coercion_unnamed() -> Result<()> {
     let ctx = SessionContext::new();
 
     // Test that join will coerce column types when necessary
@@ -1619,9 +1617,25 @@ async fn with_column_renamed() -> Result<()> {
         // accepts table qualifier
         .with_column_renamed("aggregate_test_100.c2", "two")?
         // no-op for missing column
-        .with_column_renamed("c4", "boom")?
-        .collect()
-        .await?;
+        .with_column_renamed("c4", "boom")?;
+
+    let references: Vec<_> = df_sum_renamed
+        .schema()
+        .iter()
+        .map(|(a, _)| a.cloned())
+        .collect();
+
+    assert_eq!(
+        references,
+        vec![
+            Some(TableReference::bare("aggregate_test_100")), // table name is preserved
+            Some(TableReference::bare("aggregate_test_100")),
+            Some(TableReference::bare("aggregate_test_100")),
+            None // total column
+        ]
+    );
+
+    let batches = &df_sum_renamed.collect().await?;
 
     assert_batches_sorted_eq!(
         [
@@ -1631,7 +1645,7 @@ async fn with_column_renamed() -> Result<()> {
             "| a   | 3   | -72 | -69   |",
             "+-----+-----+-----+-------+",
         ],
-        &df_sum_renamed
+        batches
     );
 
     Ok(())
@@ -3355,6 +3369,72 @@ async fn unnest_columns() -> Result<()> {
         .await?;
     assert_eq!(count, results.iter().map(|r| r.num_rows()).sum::<usize>());
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn unnest_dict_encoded_columns() -> Result<()> {
+    let strings = vec!["x", "y", "z"];
+    let keys = Int32Array::from_iter(0..strings.len() as i32);
+
+    let utf8_values = StringArray::from(strings.clone());
+    let utf8_dict = DictionaryArray::new(keys.clone(), Arc::new(utf8_values));
+
+    let make_array_udf_expr1 = make_array_udf().call(vec![col("column1")]);
+    let batch =
+        RecordBatch::try_from_iter(vec![("column1", Arc::new(utf8_dict) as ArrayRef)])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_batch("test", batch)?;
+    let df = ctx
+        .table("test")
+        .await?
+        .select(vec![
+            make_array_udf_expr1.alias("make_array_expr"),
+            col("column1"),
+        ])?
+        .unnest_columns(&["make_array_expr"])?;
+
+    let results = df.collect().await.unwrap();
+    let expected = [
+        "+-----------------+---------+",
+        "| make_array_expr | column1 |",
+        "+-----------------+---------+",
+        "| x               | x       |",
+        "| y               | y       |",
+        "| z               | z       |",
+        "+-----------------+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    // make_array(dict_encoded_string,literal string)
+    let make_array_udf_expr2 = make_array_udf().call(vec![
+        col("column1"),
+        lit(ScalarValue::new_utf8("fixed_string")),
+    ]);
+    let df = ctx
+        .table("test")
+        .await?
+        .select(vec![
+            make_array_udf_expr2.alias("make_array_expr"),
+            col("column1"),
+        ])?
+        .unnest_columns(&["make_array_expr"])?;
+
+    let results = df.collect().await.unwrap();
+    let expected = [
+        "+-----------------+---------+",
+        "| make_array_expr | column1 |",
+        "+-----------------+---------+",
+        "| x               | x       |",
+        "| fixed_string    | x       |",
+        "| y               | y       |",
+        "| fixed_string    | y       |",
+        "| z               | z       |",
+        "| fixed_string    | z       |",
+        "+-----------------+---------+",
+    ];
+    assert_batches_eq!(expected, &results);
     Ok(())
 }
 
@@ -5209,4 +5289,56 @@ async fn register_non_parquet_file() {
         err.unwrap_err().to_string(),
         "1.json' does not match the expected extension '.parquet'"
     );
+}
+
+// Test inserting into checking.
+#[tokio::test]
+async fn test_insert_into_checking() -> Result<()> {
+    // Create a new schema with one field called "a" of type Int64, and setting nullable to false
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+
+    let session_ctx = SessionContext::new();
+
+    // Create and register the initial table with the provided schema and data
+    let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
+    session_ctx.register_table("t", initial_table.clone())?;
+
+    // There are two cases we need to check
+    // 1. The len of the schema of the plan and the schema of the table should be the same
+    // 2. The datatype of the schema of the plan and the schema of the table should be the same
+
+    // Test case 1:
+    let write_df = session_ctx.sql("values (1, 2), (3, 4)").await.unwrap();
+
+    let e = write_df
+        .write_table("t", DataFrameWriteOptions::new())
+        .await
+        .unwrap_err();
+
+    assert_contains!(
+        e.to_string(),
+        "Inserting query must have the same schema length as the table."
+    );
+
+    // Setting nullable to true
+    // Make sure the nullable check go through
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+
+    let session_ctx = SessionContext::new();
+
+    // Create and register the initial table with the provided schema and data
+    let initial_table = Arc::new(MemTable::try_new(schema.clone(), vec![vec![]])?);
+    session_ctx.register_table("t", initial_table.clone())?;
+
+    // Test case 2:
+    let write_df = session_ctx.sql("values ('a123'), ('b456')").await.unwrap();
+
+    let e = write_df
+        .write_table("t", DataFrameWriteOptions::new())
+        .await
+        .unwrap_err();
+
+    assert_contains!(e.to_string(), "Inserting query schema mismatch: Expected table field 'a' with type Int64, but got 'column1' with type Utf8");
+
+    Ok(())
 }

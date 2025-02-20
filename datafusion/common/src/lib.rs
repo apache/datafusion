@@ -105,21 +105,84 @@ pub type HashSet<T, S = DefaultHashBuilder> = hashbrown::HashSet<T, S>;
 #[macro_export]
 macro_rules! downcast_value {
     ($Value: expr, $Type: ident) => {{
-        use std::any::type_name;
-        $Value.as_any().downcast_ref::<$Type>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast value to {}",
-                type_name::<$Type>()
-            ))
-        })?
+        use $crate::__private::DowncastArrayHelper;
+        $Value.downcast_array_helper::<$Type>()?
     }};
     ($Value: expr, $Type: ident, $T: tt) => {{
-        use std::any::type_name;
-        $Value.as_any().downcast_ref::<$Type<$T>>().ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "could not cast value to {}",
-                type_name::<$Type<$T>>()
-            ))
-        })?
+        use $crate::__private::DowncastArrayHelper;
+        $Value.downcast_array_helper::<$Type<$T>>()?
     }};
+}
+
+// Not public API.
+#[doc(hidden)]
+pub mod __private {
+    use crate::error::_internal_datafusion_err;
+    use crate::Result;
+    use arrow::array::Array;
+    use std::any::{type_name, Any};
+
+    #[doc(hidden)]
+    pub trait DowncastArrayHelper {
+        fn downcast_array_helper<U: Any>(&self) -> Result<&U>;
+    }
+
+    impl<T: Array + ?Sized> DowncastArrayHelper for T {
+        fn downcast_array_helper<U: Any>(&self) -> Result<&U> {
+            self.as_any().downcast_ref().ok_or_else(|| {
+                _internal_datafusion_err!(
+                    "could not cast array of type {} to {}",
+                    self.data_type(),
+                    type_name::<U>()
+                )
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{ArrayRef, Int32Array, UInt64Array};
+    use std::any::{type_name, type_name_of_val};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_downcast_value() -> crate::Result<()> {
+        let boxed: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let array = downcast_value!(&boxed, Int32Array);
+        assert_eq!(type_name_of_val(&array), type_name::<&Int32Array>());
+
+        let expected: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+        assert_eq!(array, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_downcast_value_err_message() {
+        let boxed: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let error: crate::DataFusionError = (|| {
+            downcast_value!(&boxed, UInt64Array);
+            Ok(())
+        })()
+        .err()
+        .unwrap();
+
+        assert_starts_with(
+            error.to_string(),
+            "Internal error: could not cast array of type Int32 to arrow_array::array::primitive_array::PrimitiveArray<arrow_array::types::UInt64Type>"
+        );
+    }
+
+    // `err.to_string()` depends on backtrace being present (may have backtrace appended)
+    // `err.strip_backtrace()` also depends on backtrace being present (may have "This was likely caused by ..." stripped)
+    fn assert_starts_with(actual: impl AsRef<str>, expected_prefix: impl AsRef<str>) {
+        let actual = actual.as_ref();
+        let expected_prefix = expected_prefix.as_ref();
+        assert!(
+            actual.starts_with(expected_prefix),
+            "Expected '{}' to start with '{}'",
+            actual,
+            expected_prefix
+        );
+    }
 }

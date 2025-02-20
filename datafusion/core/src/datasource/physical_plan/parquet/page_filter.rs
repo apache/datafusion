@@ -24,8 +24,10 @@ use super::metrics::ParquetFileMetrics;
 use crate::datasource::physical_plan::parquet::ParquetAccessPlan;
 
 use arrow::array::BooleanArray;
-use arrow::{array::ArrayRef, datatypes::SchemaRef};
-use arrow_schema::Schema;
+use arrow::{
+    array::ArrayRef,
+    datatypes::{Schema, SchemaRef},
+};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};

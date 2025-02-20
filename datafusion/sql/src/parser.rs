@@ -354,6 +354,14 @@ impl<'a> DFParser<'a> {
                         self.parse_create()
                     }
                     Keyword::COPY => {
+                        if let Token::Word(w) = self.parser.peek_nth_token(1).token {
+                            // use native parser for COPY INTO
+                            if w.keyword == Keyword::INTO {
+                                return Ok(Statement::Statement(Box::from(
+                                    self.parser.parse_statement()?,
+                                )));
+                            }
+                        }
                         self.parser.next_token(); // COPY
                         self.parse_copy()
                     }
@@ -563,7 +571,7 @@ impl<'a> DFParser<'a> {
 
         loop {
             if let Token::Word(_) = self.parser.peek_token().token {
-                let identifier = self.parser.parse_identifier(false)?;
+                let identifier = self.parser.parse_identifier()?;
                 partitions.push(identifier.to_string());
             } else {
                 return self.expected("partition name", self.parser.peek_token());
@@ -666,7 +674,7 @@ impl<'a> DFParser<'a> {
     }
 
     fn parse_column_def(&mut self) -> Result<ColumnDef, ParserError> {
-        let name = self.parser.parse_identifier(false)?;
+        let name = self.parser.parse_identifier()?;
         let data_type = self.parser.parse_data_type()?;
         let collation = if self.parser.parse_keyword(Keyword::COLLATE) {
             Some(self.parser.parse_object_name(false)?)
@@ -676,7 +684,7 @@ impl<'a> DFParser<'a> {
         let mut options = vec![];
         loop {
             if self.parser.parse_keyword(Keyword::CONSTRAINT) {
-                let name = Some(self.parser.parse_identifier(false)?);
+                let name = Some(self.parser.parse_identifier()?);
                 if let Some(option) = self.parser.parse_optional_column_option()? {
                     options.push(ColumnOptionDef { name, option });
                 } else {
@@ -877,6 +885,7 @@ mod tests {
     use super::*;
     use sqlparser::ast::Expr::Identifier;
     use sqlparser::ast::{BinaryOperator, DataType, Expr, Ident};
+    use sqlparser::dialect::SnowflakeDialect;
     use sqlparser::tokenizer::Span;
 
     fn expect_parse_ok(sql: &str, expected: Statement) -> Result<(), ParserError> {
@@ -1400,6 +1409,23 @@ mod tests {
         });
 
         assert_eq!(verified_stmt(sql), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn skip_copy_into_snowflake() -> Result<(), ParserError> {
+        let sql = "COPY INTO foo FROM @~/staged FILE_FORMAT = (FORMAT_NAME = 'mycsv');";
+        let dialect = Box::new(SnowflakeDialect);
+        let statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
+
+        assert_eq!(
+            statements.len(),
+            1,
+            "Expected to parse exactly one statement"
+        );
+        if let Statement::CopyTo(_) = &statements[0] {
+            panic!("Expected non COPY TO statement, but was successful: {statements:?}");
+        }
         Ok(())
     }
 

@@ -19,8 +19,9 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::{
     parse_interval_month_day_nano_config, IntervalParseConfig, IntervalUnit,
 };
-use arrow::datatypes::{i256, DECIMAL128_MAX_PRECISION};
-use arrow_schema::{DataType, DECIMAL256_MAX_PRECISION};
+use arrow::datatypes::{
+    i256, DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+};
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
 use datafusion_common::{

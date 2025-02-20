@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::error::ArrowError;
-use datafusion_common::DataFusionError;
+use datafusion::error::DataFusionError;
 use sqllogictest::TestError;
 use sqlparser::parser::ParserError;
 use thiserror::Error;
@@ -30,7 +30,7 @@ pub enum DFSqlLogicTestError {
     #[error("SqlLogicTest error(from sqllogictest-rs crate): {0}")]
     SqlLogicTest(#[from] TestError),
     /// Error from datafusion
-    #[error("DataFusion error: {0}")]
+    #[error("DataFusion error: {}", .0.strip_backtrace())]
     DataFusion(#[from] DataFusionError),
     /// Error returned when SQL is syntactically incorrect.
     #[error("SQL Parser error: {0}")]

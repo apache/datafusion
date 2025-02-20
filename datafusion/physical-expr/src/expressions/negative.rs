@@ -178,8 +178,8 @@ mod tests {
     use crate::expressions::{col, Column};
 
     use arrow::array::*;
+    use arrow::datatypes::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
     use arrow::datatypes::*;
-    use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::DataFusionError;
 

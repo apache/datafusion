@@ -18,27 +18,32 @@
 //! [`FileScanConfig`] to configure scanning of possibly partitioned
 //! file sources.
 
-use std::{
-    borrow::Cow, collections::HashMap, fmt::Debug, marker::PhantomData, mem::size_of,
-    sync::Arc, vec,
+use super::{
+    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
+    FileGroupsDisplay, FileStream,
 };
-
-use super::{get_projected_output_ordering, statistics::MinMaxStatistics};
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
+use std::any::Any;
+use std::fmt::Formatter;
+use std::{fmt, sync::Arc};
 
-use arrow::array::{ArrayData, BufferBuilder};
-use arrow::buffer::Buffer;
-use arrow::datatypes::{ArrowNativeType, UInt16Type};
-use arrow_array::{ArrayRef, DictionaryArray, RecordBatch, RecordBatchOptions};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
-use datafusion_common::{
-    exec_err, ColumnStatistics, Constraints, DataFusionError, Statistics,
-};
-use datafusion_physical_expr::LexOrdering;
+use datafusion_common::{ColumnStatistics, Constraints, Statistics};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
 
-use log::warn;
+use crate::datasource::data_source::FileSource;
+pub use datafusion_datasource::file_scan_config::*;
+use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_physical_plan::display::{display_orderings, ProjectSchemaDisplay};
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion_physical_plan::projection::{
+    all_alias_free_columns, new_projections_for_columns, ProjectionExec,
+};
+use datafusion_physical_plan::source::{DataSource, DataSourceExec};
+use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is
@@ -63,20 +68,30 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
     ScalarValue::Dictionary(Box::new(DataType::UInt16), Box::new(val))
 }
 
-/// The base configurations to provide when creating a physical plan for
+/// The base configurations for a [`DataSourceExec`], the a physical plan for
 /// any given file format.
+///
+/// Use [`Self::build`] to create a [`DataSourceExec`] from a ``FileScanConfig`.
 ///
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::Schema;
-/// use datafusion::datasource::listing::PartitionedFile;
+/// # use arrow::datatypes::{Field, Fields, DataType, Schema};
+/// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
-/// # let file_schema = Arc::new(Schema::empty());
-/// // create FileScan config for reading data from file://
+/// # use datafusion::datasource::physical_plan::ArrowSource;
+/// # use datafusion_physical_plan::ExecutionPlan;
+/// # let file_schema = Arc::new(Schema::new(vec![
+/// #  Field::new("c1", DataType::Int32, false),
+/// #  Field::new("c2", DataType::Int32, false),
+/// #  Field::new("c3", DataType::Int32, false),
+/// #  Field::new("c4", DataType::Int32, false),
+/// # ]));
+/// // create FileScan config for reading arrow files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
-/// let config = FileScanConfig::new(object_store_url, file_schema)
+/// let file_source = Arc::new(ArrowSource::default());
+/// let config = FileScanConfig::new(object_store_url, file_schema, file_source)
 ///   .with_limit(Some(1000))            // read only the first 1000 records
 ///   .with_projection(Some(vec![2, 3])) // project columns 2 and 3
 ///    // Read /tmp/file1.parquet with known size of 1234 bytes in a single group
@@ -87,6 +102,8 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 ///    PartitionedFile::new("file2.parquet", 56),
 ///    PartitionedFile::new("file3.parquet", 78),
 ///   ]);
+/// // create an execution plan from the config
+/// let plan: Arc<dyn ExecutionPlan> = config.build();
 /// ```
 #[derive(Clone)]
 pub struct FileScanConfig {
@@ -131,22 +148,158 @@ pub struct FileScanConfig {
     pub table_partition_cols: Vec<Field>,
     /// All equivalent lexicographical orderings that describe the schema.
     pub output_ordering: Vec<LexOrdering>,
+    /// File compression type
+    pub file_compression_type: FileCompressionType,
+    /// Are new lines in values supported for CSVOptions
+    pub new_lines_in_values: bool,
+    /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
+    pub source: Arc<dyn FileSource>,
+}
+
+impl DataSource for FileScanConfig {
+    fn open(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        let object_store = context.runtime_env().object_store(&self.object_store_url);
+
+        let source = self
+            .source
+            .with_batch_size(context.session_config().batch_size())
+            .with_schema(Arc::clone(&self.file_schema))
+            .with_projection(self);
+
+        let opener = source.create_file_opener(object_store, self, partition)?;
+
+        let stream = FileStream::new(self, partition, opener, source.metrics())?;
+        Ok(Box::pin(stream))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        let (schema, _, _, orderings) = self.project();
+
+        write!(f, "file_groups=")?;
+        FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+
+        if !schema.fields().is_empty() {
+            write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
+        }
+
+        if let Some(limit) = self.limit {
+            write!(f, ", limit={limit}")?;
+        }
+
+        display_orderings(f, &orderings)?;
+
+        if !self.constraints.is_empty() {
+            write!(f, ", {}", self.constraints)?;
+        }
+
+        self.fmt_file_source(t, f)
+    }
+
+    /// Redistribute files across partitions according to their size
+    /// See comments on [`FileGroupPartitioner`] for more detail.
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+        output_ordering: Option<LexOrdering>,
+    ) -> Result<Option<Arc<dyn DataSource>>> {
+        if !self.source.supports_repartition(self) {
+            return Ok(None);
+        }
+
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .with_preserve_order_within_groups(output_ordering.is_some())
+            .repartition_file_groups(&self.file_groups);
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let mut source = self.clone();
+            source.file_groups = repartitioned_file_groups;
+            return Ok(Some(Arc::new(source)));
+        }
+        Ok(None)
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        Partitioning::UnknownPartitioning(self.file_groups.len())
+    }
+
+    fn eq_properties(&self) -> EquivalenceProperties {
+        let (schema, constraints, _, orderings) = self.project();
+        EquivalenceProperties::new_with_orderings(schema, orderings.as_slice())
+            .with_constraints(constraints)
+    }
+
+    fn statistics(&self) -> Result<Statistics> {
+        self.source.statistics()
+    }
+
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
+        let source = self.clone();
+        Some(Arc::new(source.with_limit(limit)))
+    }
+
+    fn fetch(&self) -> Option<usize> {
+        self.limit
+    }
+
+    fn metrics(&self) -> ExecutionPlanMetricsSet {
+        self.source.metrics().clone()
+    }
+
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        // If there is any non-column or alias-carrier expression, Projection should not be removed.
+        // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
+        Ok(all_alias_free_columns(projection.expr()).then(|| {
+            let file_scan = self.clone();
+            let source = Arc::clone(&file_scan.source);
+            let new_projections = new_projections_for_columns(
+                projection,
+                &file_scan
+                    .projection
+                    .clone()
+                    .unwrap_or((0..self.file_schema.fields().len()).collect()),
+            );
+            file_scan
+                // Assign projected statistics to source
+                .with_projection(Some(new_projections))
+                .with_source(source)
+                .build() as _
+        }))
+    }
 }
 
 impl FileScanConfig {
-    /// Create a new `FileScanConfig` with default settings for scanning files.
+    /// Create a new [`FileScanConfig`] with default settings for scanning files.
     ///
     /// See example on [`FileScanConfig`]
     ///
-    /// No file groups are added by default. See [`Self::with_file`], [`Self::with_file_group]` and
+    /// No file groups are added by default. See [`Self::with_file`], [`Self::with_file_group`] and
     /// [`Self::with_file_groups`].
     ///
     /// # Parameters:
     /// * `object_store_url`: See [`Self::object_store_url`]
     /// * `file_schema`: See [`Self::file_schema`]
-    pub fn new(object_store_url: ObjectStoreUrl, file_schema: SchemaRef) -> Self {
+    pub fn new(
+        object_store_url: ObjectStoreUrl,
+        file_schema: SchemaRef,
+        file_source: Arc<dyn FileSource>,
+    ) -> Self {
         let statistics = Statistics::new_unknown(&file_schema);
-        Self {
+
+        let mut config = Self {
             object_store_url,
             file_schema,
             file_groups: vec![],
@@ -156,7 +309,25 @@ impl FileScanConfig {
             limit: None,
             table_partition_cols: vec![],
             output_ordering: vec![],
-        }
+            file_compression_type: FileCompressionType::UNCOMPRESSED,
+            new_lines_in_values: false,
+            source: Arc::clone(&file_source),
+        };
+
+        config = config.with_source(Arc::clone(&file_source));
+        config
+    }
+
+    /// Set the file source
+    pub fn with_source(mut self, source: Arc<dyn FileSource>) -> Self {
+        let (
+            _projected_schema,
+            _constraints,
+            projected_statistics,
+            _projected_output_ordering,
+        ) = self.project();
+        self.source = source.with_statistics(projected_statistics);
+        self
     }
 
     /// Set the table constraints of the files
@@ -219,6 +390,32 @@ impl FileScanConfig {
     pub fn with_output_ordering(mut self, output_ordering: Vec<LexOrdering>) -> Self {
         self.output_ordering = output_ordering;
         self
+    }
+
+    /// Set the file compression type
+    pub fn with_file_compression_type(
+        mut self,
+        file_compression_type: FileCompressionType,
+    ) -> Self {
+        self.file_compression_type = file_compression_type;
+        self
+    }
+
+    /// Set the new_lines_in_values property
+    pub fn with_newlines_in_values(mut self, new_lines_in_values: bool) -> Self {
+        self.new_lines_in_values = new_lines_in_values;
+        self
+    }
+
+    /// Specifies whether newlines in (quoted) values are supported.
+    ///
+    /// Parsing newlines in quoted values may be affected by execution behaviour such as
+    /// parallel file scanning. Setting this to `true` ensures that newlines in values are
+    /// parsed successfully, which may reduce performance.
+    ///
+    /// The default behaviour depends on the `datafusion.catalog.newlines_in_values` setting.
+    pub fn newlines_in_values(&self) -> bool {
+        self.new_lines_in_values
     }
 
     /// Project the schema, constraints, and the statistics on the given column indices
@@ -387,262 +584,32 @@ impl FileScanConfig {
             })
             .collect())
     }
-}
 
-/// A helper that projects partition columns into the file record batches.
-///
-/// One interesting trick is the usage of a cache for the key buffers of the partition column
-/// dictionaries. Indeed, the partition columns are constant, so the dictionaries that represent them
-/// have all their keys equal to 0. This enables us to re-use the same "all-zero" buffer across batches,
-/// which makes the space consumption of the partition columns O(batch_size) instead of O(record_count).
-pub struct PartitionColumnProjector {
-    /// An Arrow buffer initialized to zeros that represents the key array of all partition
-    /// columns (partition columns are materialized by dictionary arrays with only one
-    /// value in the dictionary, thus all the keys are equal to zero).
-    key_buffer_cache: ZeroBufferGenerators,
-    /// Mapping between the indexes in the list of partition columns and the target
-    /// schema. Sorted by index in the target schema so that we can iterate on it to
-    /// insert the partition columns in the target record batch.
-    projected_partition_indexes: Vec<(usize, usize)>,
-    /// The schema of the table once the projection was applied.
-    projected_schema: SchemaRef,
-}
-
-impl PartitionColumnProjector {
-    // Create a projector to insert the partitioning columns into batches read from files
-    // - `projected_schema`: the target schema with both file and partitioning columns
-    // - `table_partition_cols`: all the partitioning column names
-    pub fn new(projected_schema: SchemaRef, table_partition_cols: &[String]) -> Self {
-        let mut idx_map = HashMap::new();
-        for (partition_idx, partition_name) in table_partition_cols.iter().enumerate() {
-            if let Ok(schema_idx) = projected_schema.index_of(partition_name) {
-                idx_map.insert(partition_idx, schema_idx);
-            }
-        }
-
-        let mut projected_partition_indexes: Vec<_> = idx_map.into_iter().collect();
-        projected_partition_indexes.sort_by(|(_, a), (_, b)| a.cmp(b));
-
-        Self {
-            projected_partition_indexes,
-            key_buffer_cache: Default::default(),
-            projected_schema,
-        }
+    // TODO: This function should be moved into DataSourceExec once FileScanConfig moved out of datafusion/core
+    /// Returns a new [`DataSourceExec`] to scan the files specified by this config
+    pub fn build(self) -> Arc<DataSourceExec> {
+        Arc::new(DataSourceExec::new(Arc::new(self)))
     }
 
-    // Transform the batch read from the file by inserting the partitioning columns
-    // to the right positions as deduced from `projected_schema`
-    // - `file_batch`: batch read from the file, with internal projection applied
-    // - `partition_values`: the list of partition values, one for each partition column
-    pub fn project(
-        &mut self,
-        file_batch: RecordBatch,
-        partition_values: &[ScalarValue],
-    ) -> Result<RecordBatch> {
-        let expected_cols =
-            self.projected_schema.fields().len() - self.projected_partition_indexes.len();
-
-        if file_batch.columns().len() != expected_cols {
-            return exec_err!(
-                "Unexpected batch schema from file, expected {} cols but got {}",
-                expected_cols,
-                file_batch.columns().len()
-            );
-        }
-
-        let mut cols = file_batch.columns().to_vec();
-        for &(pidx, sidx) in &self.projected_partition_indexes {
-            let p_value =
-                partition_values
-                    .get(pidx)
-                    .ok_or(DataFusionError::Execution(
-                        "Invalid partitioning found on disk".to_string(),
-                    ))?;
-
-            let mut partition_value = Cow::Borrowed(p_value);
-
-            // check if user forgot to dict-encode the partition value
-            let field = self.projected_schema.field(sidx);
-            let expected_data_type = field.data_type();
-            let actual_data_type = partition_value.data_type();
-            if let DataType::Dictionary(key_type, _) = expected_data_type {
-                if !matches!(actual_data_type, DataType::Dictionary(_, _)) {
-                    warn!("Partition value for column {} was not dictionary-encoded, applied auto-fix.", field.name());
-                    partition_value = Cow::Owned(ScalarValue::Dictionary(
-                        key_type.clone(),
-                        Box::new(partition_value.as_ref().clone()),
-                    ));
-                }
-            }
-
-            cols.insert(
-                sidx,
-                create_output_array(
-                    &mut self.key_buffer_cache,
-                    partition_value.as_ref(),
-                    file_batch.num_rows(),
-                )?,
-            )
-        }
-
-        RecordBatch::try_new_with_options(
-            Arc::clone(&self.projected_schema),
-            cols,
-            &RecordBatchOptions::new().with_row_count(Some(file_batch.num_rows())),
-        )
-        .map_err(Into::into)
-    }
-}
-
-#[derive(Debug, Default)]
-struct ZeroBufferGenerators {
-    gen_i8: ZeroBufferGenerator<i8>,
-    gen_i16: ZeroBufferGenerator<i16>,
-    gen_i32: ZeroBufferGenerator<i32>,
-    gen_i64: ZeroBufferGenerator<i64>,
-    gen_u8: ZeroBufferGenerator<u8>,
-    gen_u16: ZeroBufferGenerator<u16>,
-    gen_u32: ZeroBufferGenerator<u32>,
-    gen_u64: ZeroBufferGenerator<u64>,
-}
-
-/// Generate a arrow [`Buffer`] that contains zero values.
-#[derive(Debug, Default)]
-struct ZeroBufferGenerator<T>
-where
-    T: ArrowNativeType,
-{
-    cache: Option<Buffer>,
-    _t: PhantomData<T>,
-}
-
-impl<T> ZeroBufferGenerator<T>
-where
-    T: ArrowNativeType,
-{
-    const SIZE: usize = size_of::<T>();
-
-    fn get_buffer(&mut self, n_vals: usize) -> Buffer {
-        match &mut self.cache {
-            Some(buf) if buf.len() >= n_vals * Self::SIZE => {
-                buf.slice_with_length(0, n_vals * Self::SIZE)
-            }
-            _ => {
-                let mut key_buffer_builder = BufferBuilder::<T>::new(n_vals);
-                key_buffer_builder.advance(n_vals); // keys are all 0
-                self.cache.insert(key_buffer_builder.finish()).clone()
-            }
-        }
-    }
-}
-
-fn create_dict_array<T>(
-    buffer_gen: &mut ZeroBufferGenerator<T>,
-    dict_val: &ScalarValue,
-    len: usize,
-    data_type: DataType,
-) -> Result<ArrayRef>
-where
-    T: ArrowNativeType,
-{
-    let dict_vals = dict_val.to_array()?;
-
-    let sliced_key_buffer = buffer_gen.get_buffer(len);
-
-    // assemble pieces together
-    let mut builder = ArrayData::builder(data_type)
-        .len(len)
-        .add_buffer(sliced_key_buffer);
-    builder = builder.add_child_data(dict_vals.to_data());
-    Ok(Arc::new(DictionaryArray::<UInt16Type>::from(
-        builder.build().unwrap(),
-    )))
-}
-
-fn create_output_array(
-    key_buffer_cache: &mut ZeroBufferGenerators,
-    val: &ScalarValue,
-    len: usize,
-) -> Result<ArrayRef> {
-    if let ScalarValue::Dictionary(key_type, dict_val) = &val {
-        match key_type.as_ref() {
-            DataType::Int8 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_i8,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::Int16 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_i16,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::Int32 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_i32,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::Int64 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_i64,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::UInt8 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_u8,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::UInt16 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_u16,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::UInt32 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_u32,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            DataType::UInt64 => {
-                return create_dict_array(
-                    &mut key_buffer_cache.gen_u64,
-                    dict_val,
-                    len,
-                    val.data_type(),
-                );
-            }
-            _ => {}
-        }
+    /// Write the data_type based on file_source
+    fn fmt_file_source(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
+        write!(f, ", file_type={}", self.source.file_type())?;
+        self.source.fmt_extra(t, f)
     }
 
-    val.to_array_of_size(len)
+    /// Returns the file_source
+    pub fn file_source(&self) -> &Arc<dyn FileSource> {
+        &self.source
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::Int32Array;
-
     use super::*;
+    use crate::datasource::physical_plan::ArrowSource;
     use crate::{test::columns, test_util::aggr_test_schema};
+    use arrow::array::{Int32Array, RecordBatch};
+    use std::collections::HashMap;
 
     #[test]
     fn physical_plan_config_no_projection() {
@@ -1243,10 +1210,14 @@ mod tests {
         statistics: Statistics,
         table_partition_cols: Vec<Field>,
     ) -> FileScanConfig {
-        FileScanConfig::new(ObjectStoreUrl::parse("test:///").unwrap(), file_schema)
-            .with_projection(projection)
-            .with_statistics(statistics)
-            .with_table_partition_cols(table_partition_cols)
+        FileScanConfig::new(
+            ObjectStoreUrl::parse("test:///").unwrap(),
+            file_schema,
+            Arc::new(ArrowSource::default()),
+        )
+        .with_projection(projection)
+        .with_statistics(statistics)
+        .with_table_partition_cols(table_partition_cols)
     }
 
     /// Convert partition columns from Vec<String DataType> to Vec<Field>
