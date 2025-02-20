@@ -200,7 +200,7 @@ impl ScalarUDFImpl for DateBinFunc {
         _ => unreachable!(),
     };
 
-    date_bin_impl(stride, array, origin)
+    date_bin_impl(stride, array, origin.expect("Origin argument must be provided"))
 }
 
 

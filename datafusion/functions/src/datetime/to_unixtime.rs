@@ -19,8 +19,9 @@ use super::to_timestamp::ToTimestampSecondsFunc;
 use crate::datetime::common::*;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{exec_err, Result};
+use datafusion_common::DataFusionError;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility, ScalarFunctionArgs,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -113,7 +114,7 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
             .cast_to(&DataType::Timestamp(TimeUnit::Second, tz), None)?
             .cast_to(&DataType::Int64, None),
         DataType::Utf8 => {
-            let timestamp_result = ToTimestampSecondsFunc::new().invoke_with_args(args)?;
+            let timestamp_result = ToTimestampSecondsFunc::new().invoke_with_args(ScalarFunctionArgs::new(args))?;
             timestamp_result.cast_to(&DataType::Int64, None)
         }
         other => {
