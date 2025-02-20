@@ -99,15 +99,15 @@ impl ArraySort {
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                         arguments: vec![
                             ArrayFunctionArgument::Array,
-                            ArrayFunctionArgument::DataType(DataType::Utf8),
+                            ArrayFunctionArgument::String,
                         ],
                         array_coercion: None,
                     }),
                     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
                         arguments: vec![
                             ArrayFunctionArgument::Array,
-                            ArrayFunctionArgument::DataType(DataType::Utf8),
-                            ArrayFunctionArgument::DataType(DataType::Utf8),
+                            ArrayFunctionArgument::String,
+                            ArrayFunctionArgument::String,
                         ],
                         array_coercion: None,
                     }),

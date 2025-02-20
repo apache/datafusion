@@ -387,7 +387,7 @@ fn get_valid_types(
                     new_base_type =
                         coerce_array_types(function_name, current_type, &new_base_type)?;
                 }
-                ArrayFunctionArgument::Index | ArrayFunctionArgument::DataType(_) => {}
+                ArrayFunctionArgument::Index | ArrayFunctionArgument::String => {}
             }
         }
         let new_array_type = datafusion_common::utils::coerced_type_with_base_type_only(
@@ -408,7 +408,7 @@ fn get_valid_types(
             let valid_type = match argument_type {
                 ArrayFunctionArgument::Element => new_elem_type.clone(),
                 ArrayFunctionArgument::Index => DataType::Int64,
-                ArrayFunctionArgument::DataType(data_type) => data_type.clone(),
+                ArrayFunctionArgument::String => DataType::Utf8,
                 ArrayFunctionArgument::Array => {
                     let Some(current_type) = array(current_type) else {
                         return Ok(vec![vec![]]);
