@@ -16,9 +16,12 @@
 // under the License.
 
 use arrow::array::{
-    make_array, Array, Capacities, MutableArrayData, Scalar, StringArray,
+    make_array, make_comparator, Array, BooleanArray, Capacities, MutableArrayData,
+    Scalar,
 };
+use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
+use arrow_buffer::NullBuffer;
 use datafusion_common::cast::{as_map_array, as_struct_array};
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, utils::take_function_args, Result,
@@ -106,11 +109,7 @@ impl ScalarUDFImpl for GetFieldFunc {
 
         let name = match field_name {
             Expr::Literal(name) => name,
-            _ => {
-                return exec_err!(
-                    "get_field function requires the argument field_name to be a string"
-                );
-            }
+            other => &ScalarValue::Utf8(Some(other.schema_name().to_string())),
         };
 
         Ok(format!("{base}[{name}]"))
@@ -118,14 +117,9 @@ impl ScalarUDFImpl for GetFieldFunc {
 
     fn schema_name(&self, args: &[Expr]) -> Result<String> {
         let [base, field_name] = take_function_args(self.name(), args)?;
-
         let name = match field_name {
             Expr::Literal(name) => name,
-            _ => {
-                return exec_err!(
-                    "get_field function requires the argument field_name to be a string"
-                );
-            }
+            other => &ScalarValue::Utf8(Some(other.schema_name().to_string())),
         };
 
         Ok(format!("{}[{}]", base.schema_name(), name))
@@ -182,7 +176,6 @@ impl ScalarUDFImpl for GetFieldFunc {
         let arrays =
             ColumnarValue::values_to_arrays(&[base.clone(), field_name.clone()])?;
         let array = Arc::clone(&arrays[0]);
-
         let name = match field_name {
             ColumnarValue::Scalar(name) => name,
             _ => {
@@ -192,38 +185,70 @@ impl ScalarUDFImpl for GetFieldFunc {
             }
         };
 
-        match (array.data_type(), name) {
-            (DataType::Map(_, _), ScalarValue::Utf8(Some(k))) => {
-                let map_array = as_map_array(array.as_ref())?;
-                let key_scalar: Scalar<arrow::array::GenericByteArray<arrow::datatypes::GenericStringType<i32>>> = Scalar::new(StringArray::from(vec![k.clone()]));
-                let keys = arrow::compute::kernels::cmp::eq(&key_scalar, map_array.keys())?;
+        fn process_map_array(
+            array: Arc<dyn Array>,
+            key_array: Arc<dyn Array>,
+        ) -> Result<ColumnarValue> {
+            let map_array = as_map_array(array.as_ref())?;
+            let keys = if key_array.data_type().is_nested() {
+                let comparator = make_comparator(
+                    map_array.keys().as_ref(),
+                    key_array.as_ref(),
+                    SortOptions::default(),
+                )?;
+                let len = map_array.keys().len().min(key_array.len());
+                let values = (0..len).map(|i| comparator(i, i).is_eq()).collect();
+                let nulls =
+                    NullBuffer::union(map_array.keys().nulls(), key_array.nulls());
+                BooleanArray::new(values, nulls)
+            } else {
+                let be_compared = Scalar::new(key_array);
+                arrow::compute::kernels::cmp::eq(&be_compared, map_array.keys())?
+            };
 
-                // note that this array has more entries than the expected output/input size
-                // because map_array is flattened
-                let original_data =  map_array.entries().column(1).to_data();
-                let capacity = Capacities::Array(original_data.len());
-                let mut mutable =
-                    MutableArrayData::with_capacities(vec![&original_data], true,
-                         capacity);
+            let original_data = map_array.entries().column(1).to_data();
+            let capacity = Capacities::Array(original_data.len());
+            let mut mutable =
+                MutableArrayData::with_capacities(vec![&original_data], true, capacity);
 
-                for entry in 0..map_array.len(){
-                    let start = map_array.value_offsets()[entry] as usize;
-                    let end = map_array.value_offsets()[entry + 1] as usize;
+            for entry in 0..map_array.len() {
+                let start = map_array.value_offsets()[entry] as usize;
+                let end = map_array.value_offsets()[entry + 1] as usize;
 
-                    let maybe_matched =
-                                        keys.slice(start, end-start).
-                                        iter().enumerate().
-                                        find(|(_, t)| t.unwrap());
-                    if maybe_matched.is_none() {
-                        mutable.extend_nulls(1);
-                        continue
-                    }
-                    let (match_offset,_) = maybe_matched.unwrap();
-                    mutable.extend(0, start + match_offset, start + match_offset + 1);
+                let maybe_matched = keys
+                    .slice(start, end - start)
+                    .iter()
+                    .enumerate()
+                    .find(|(_, t)| t.unwrap());
+
+                if maybe_matched.is_none() {
+                    mutable.extend_nulls(1);
+                    continue;
                 }
-                let data = mutable.freeze();
-                let data = make_array(data);
-                Ok(ColumnarValue::Array(data))
+                let (match_offset, _) = maybe_matched.unwrap();
+                mutable.extend(0, start + match_offset, start + match_offset + 1);
+            }
+
+            let data = mutable.freeze();
+            let data = make_array(data);
+            Ok(ColumnarValue::Array(data))
+        }
+
+        match (array.data_type(), name) {
+            (DataType::Map(_, _), ScalarValue::List(arr)) => {
+                let key_array: Arc<dyn Array> = Arc::new((**arr).clone());
+                process_map_array(array, key_array)
+            }
+            (DataType::Map(_, _), ScalarValue::Struct(arr)) => {
+                process_map_array(array, Arc::clone(arr) as Arc<dyn Array>)
+            }
+            (DataType::Map(_, _), other) => {
+                let data_type = other.data_type();
+                if data_type.is_nested() {
+                    exec_err!("unsupported type {:?} for map access", data_type)
+                } else {
+                    process_map_array(array, other.to_array()?)
+                }
             }
             (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
                 let as_struct_array = as_struct_array(&array)?;
