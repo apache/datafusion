@@ -586,7 +586,4 @@ impl FileSource for ParquetSource {
             }
         }
     }
-    fn supports_repartition(&self, _config: &FileScanConfig) -> bool {
-        true
-    }
 }

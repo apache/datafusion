@@ -64,11 +64,6 @@ pub trait FileSource: Send + Sync {
     fn fmt_extra(&self, _t: DisplayFormatType, _f: &mut Formatter) -> fmt::Result {
         Ok(())
     }
-    /// Return true if the file format supports repartition
-    ///
-    /// If this returns true, the DataSourceExec may repartition the data
-    /// by breaking up the input files into multiple smaller groups.
-    fn supports_repartition(&self, config: &FileScanConfig) -> bool;
 
     /// If supported by the [`FileSource`], redistribute files across partitions according to their size.
     /// Allows custom file formats to implement their own repartitioning logic.
@@ -81,7 +76,7 @@ pub trait FileSource: Send + Sync {
         output_ordering: Option<LexOrdering>,
         config: &FileScanConfig,
     ) -> datafusion_common::Result<Option<FileScanConfig>> {
-        if !self.supports_repartition(config) {
+        if config.file_compression_type.is_compressed() || config.new_lines_in_values {
             return Ok(None);
         }
 
