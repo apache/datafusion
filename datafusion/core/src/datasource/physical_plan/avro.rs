@@ -255,6 +255,16 @@ impl FileSource for AvroSource {
     fn file_type(&self) -> &str {
         "avro"
     }
+
+    fn repartitioned(
+        &self,
+        _target_partitions: usize,
+        _repartition_file_min_size: usize,
+        _output_ordering: Option<LexOrdering>,
+        _config: &FileScanConfig,
+    ) -> Result<Option<FileScanConfig>> {
+        Ok(None)
+    }
 }
 
 #[cfg(feature = "avro")]
