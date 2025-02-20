@@ -43,9 +43,8 @@ use groups_accumulator::{FFI_GroupsAccumulator, ForeignGroupsAccumulator};
 use crate::{
     arrow_wrappers::WrappedSchema,
     df_result, rresult, rresult_return,
-    signature::{
-        rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped, FFI_Signature,
-    },
+    util::{rvec_wrapped_to_vec_datatype, vec_datatype_to_rvec_wrapped},
+    volatility::FFI_Volatility,
 };
 use prost::{DecodeError, Message};
 
@@ -58,12 +57,14 @@ mod groups_accumulator;
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
 pub struct FFI_AggregateUDF {
-    /// Return the udaf name.
+    /// FFI equivalent to the `name` of a [`AggregateUDF`]
     pub name: RString,
 
-    pub signature: unsafe extern "C" fn(udaf: &Self) -> RResult<FFI_Signature, RString>,
+    /// FFI equivalent to the `name` of a [`AggregateUDF`]
+    pub aliases: RVec<RString>,
 
-    pub aliases: unsafe extern "C" fn(udaf: &Self) -> RVec<RString>,
+    /// FFI equivalent to the `name` of a [`AggregateUDF`]
+    pub volatility: FFI_Volatility,
 
     pub return_type: unsafe extern "C" fn(
         udaf: &Self,
@@ -135,20 +136,6 @@ impl FFI_AggregateUDF {
         let private_data = self.private_data as *const AggregateUDFPrivateData;
         &(*private_data).udaf
     }
-}
-
-unsafe extern "C" fn signature_fn_wrapper(
-    udaf: &FFI_AggregateUDF,
-) -> RResult<FFI_Signature, RString> {
-    let udaf = udaf.inner();
-
-    rresult!(udaf.signature().try_into())
-}
-
-unsafe extern "C" fn aliases_fn_wrapper(udaf: &FFI_AggregateUDF) -> RVec<RString> {
-    let udaf = udaf.inner();
-
-    udaf.aliases().iter().map(|s| s.to_owned().into()).collect()
 }
 
 unsafe extern "C" fn return_type_fn_wrapper(
@@ -301,15 +288,17 @@ impl Clone for FFI_AggregateUDF {
 impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
     fn from(udaf: Arc<AggregateUDF>) -> Self {
         let name = udaf.name().into();
+        let aliases = udaf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let is_nullable = udaf.is_nullable();
+        let volatility = udaf.signature().volatility.into();
 
         let private_data = Box::new(AggregateUDFPrivateData { udaf });
 
         Self {
             name,
             is_nullable,
-            signature: signature_fn_wrapper,
-            aliases: aliases_fn_wrapper,
+            volatility,
+            aliases,
             return_type: return_type_fn_wrapper,
             accumulator: accumulator_fn_wrapper,
             create_sliding_accumulator: create_sliding_accumulator_fn_wrapper,
@@ -351,21 +340,14 @@ impl TryFrom<&FFI_AggregateUDF> for ForeignAggregateUDF {
     type Error = DataFusionError;
 
     fn try_from(udaf: &FFI_AggregateUDF) -> Result<Self, Self::Error> {
-        unsafe {
-            let ffi_signature = df_result!((udaf.signature)(udaf))?;
-            let signature = (&ffi_signature).try_into()?;
+        let signature = Signature::user_defined((&udaf.volatility).into());
+        let aliases = udaf.aliases.iter().map(|s| s.to_string()).collect();
 
-            let aliases = (udaf.aliases)(udaf)
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect();
-
-            Ok(Self {
-                udaf: udaf.clone(),
-                signature,
-                aliases,
-            })
-        }
+        Ok(Self {
+            udaf: udaf.clone(),
+            signature,
+            aliases,
+        })
     }
 }
 
