@@ -115,20 +115,20 @@ impl ScalarUDFImpl for RPadFunc {
             args.get(2).map(|arg| arg.data_type()),
         ) {
             (2, Utf8 | Utf8View, _) => {
-                make_scalar_function(rpad::<i32, i32>, vec![])(args)
+                make_scalar_function(rpad::<i32, i32>, vec![])(args.args())
             }
-            (2, LargeUtf8, _) => make_scalar_function(rpad::<i64, i64>, vec![])(args),
+            (2, LargeUtf8, _) => make_scalar_function(rpad::<i64, i64>, vec![])(args.args()),
             (3, Utf8 | Utf8View, Some(Utf8 | Utf8View)) => {
-                make_scalar_function(rpad::<i32, i32>, vec![])(args)
+                make_scalar_function(rpad::<i32, i32>, vec![])(args.args())
             }
             (3, LargeUtf8, Some(LargeUtf8)) => {
-                make_scalar_function(rpad::<i64, i64>, vec![])(args)
+                make_scalar_function(rpad::<i64, i64>, vec![])(args.args())
             }
             (3, Utf8 | Utf8View, Some(LargeUtf8)) => {
-                make_scalar_function(rpad::<i32, i64>, vec![])(args)
+                make_scalar_function(rpad::<i32, i64>, vec![])(args.args())
             }
             (3, LargeUtf8, Some(Utf8 | Utf8View)) => {
-                make_scalar_function(rpad::<i64, i32>, vec![])(args)
+                make_scalar_function(rpad::<i64, i32>, vec![])(args.args())
             }
             (_, _, _) => {
                 exec_err!("Unsupported combination of data types for function rpad")

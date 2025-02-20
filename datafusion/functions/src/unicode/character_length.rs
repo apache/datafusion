@@ -89,7 +89,7 @@ impl ScalarUDFImpl for CharacterLengthFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(character_length, vec![])(args)
+        make_scalar_function(character_length, vec![])(args.args())
     }
 
     fn aliases(&self) -> &[String] {

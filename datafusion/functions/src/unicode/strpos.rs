@@ -84,7 +84,7 @@ impl ScalarUDFImpl for StrposFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(strpos, vec![])(args)
+        make_scalar_function(strpos, vec![])(args.args())
     }
 
     fn aliases(&self) -> &[String] {

@@ -96,7 +96,7 @@ impl ScalarUDFImpl for SubstrFunc {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(substr, vec![])(args)
+        make_scalar_function(substr, vec![])(args.args())
     }
 
     fn aliases(&self) -> &[String] {
