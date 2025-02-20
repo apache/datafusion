@@ -1192,7 +1192,7 @@ mod tests {
     use crate::expressions::PhysicalSortExpr;
     use crate::projection::ProjectionExec;
     use crate::streaming::{PartitionStream, StreamingTableExec};
-    use crate::test::MockMemorySourceConfig;
+    use crate::test::TestMemoryExec;
     use crate::windows::{
         create_udwf_window_expr, create_window_expr, BoundedWindowAggExec, InputOrderMode,
     };
@@ -1551,7 +1551,7 @@ mod tests {
             vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
-        let memory_exec = MockMemorySourceConfig::try_new_exec(
+        let memory_exec = TestMemoryExec::try_new_exec(
             &[vec![batch.clone(), batch.clone(), batch.clone()]],
             Arc::clone(&schema),
             None,

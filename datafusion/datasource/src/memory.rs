@@ -708,7 +708,7 @@ impl MemorySourceConfig {
 }
 
 #[cfg(test)]
-mod memory_exec_tests {
+mod memory_source_tests {
     use std::sync::Arc;
 
     use crate::memory::MemorySourceConfig;

@@ -641,9 +641,8 @@ mod tests {
     use super::*;
     use crate::collect;
     use crate::test;
-    use crate::test::MockMemorySourceConfig;
+    use crate::test::TestMemoryExec;
 
-    // use crate::test::MockMemorySourceConfig;
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
@@ -865,12 +864,12 @@ mod tests {
                 .iter()
                 .map(|ordering| convert_to_sort_exprs(ordering))
                 .collect::<Vec<_>>();
-            let child1 = Arc::new(MockMemorySourceConfig::update_cache(Arc::new(
-                MockMemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
+            let child1 = Arc::new(TestMemoryExec::update_cache(Arc::new(
+                TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(first_orderings)?,
             )));
-            let child2 = Arc::new(MockMemorySourceConfig::update_cache(Arc::new(
-                MockMemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
+            let child2 = Arc::new(TestMemoryExec::update_cache(Arc::new(
+                TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(second_orderings)?,
             )));
 

@@ -1350,7 +1350,7 @@ mod tests {
     use crate::metrics::MetricValue;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::test::MockMemorySourceConfig;
+    use crate::test::TestMemoryExec;
     use crate::RecordBatchStream;
 
     use arrow::array::{
@@ -2207,7 +2207,7 @@ mod tests {
             vec![test_last_value_agg_expr(&schema, sort_options)?]
         };
 
-        let memory_exec = MockMemorySourceConfig::try_new_exec(
+        let memory_exec = TestMemoryExec::try_new_exec(
             &[
                 vec![partition1],
                 vec![partition2],
@@ -2442,11 +2442,8 @@ mod tests {
             })
             .collect();
 
-        let input = MockMemorySourceConfig::try_new_exec(
-            &[input_batches],
-            Arc::clone(&schema),
-            None,
-        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
 
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Single,
@@ -2557,7 +2554,7 @@ mod tests {
         .build()
         .map(Arc::new)?];
 
-        let input = MockMemorySourceConfig::try_new_exec(
+        let input = TestMemoryExec::try_new_exec(
             &[vec![batch.clone()]],
             Arc::<Schema>::clone(&batch.schema()),
             None,
@@ -2626,11 +2623,8 @@ mod tests {
             .unwrap(),
         ];
 
-        let input = MockMemorySourceConfig::try_new_exec(
-            &[input_data],
-            Arc::clone(&schema),
-            None,
-        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by,
@@ -2716,11 +2710,8 @@ mod tests {
             .unwrap(),
         ];
 
-        let input = MockMemorySourceConfig::try_new_exec(
-            &[input_data],
-            Arc::clone(&schema),
-            None,
-        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by,
@@ -2835,7 +2826,7 @@ mod tests {
             create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
         ];
         let plan: Arc<dyn ExecutionPlan> =
-            MockMemorySourceConfig::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
 
         let grouping_set = PhysicalGroupBy::new(
             vec![(col("a", &schema)?, "a".to_string())],

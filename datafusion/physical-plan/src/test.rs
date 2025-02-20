@@ -49,8 +49,15 @@ use futures::{Future, FutureExt};
 
 pub mod exec;
 
+/// `TestMemoryExec` is a mock equivalent to [`MemorySourceConfig`] with [`ExecutionPlan`] implemented for testing.
+/// i.e. It has some but not all the functionality of [`MemorySourceConfig`].
+/// This implements an in-memory DataSource rather than explicitly implementing a trait.
+/// It is implemented in this manner to keep relevant unit tests in place
+/// while avoiding circular dependencies between `datafusion-physical-plan` and `datafusion-datasource`.
+///
+/// [`MemorySourceConfig`]: https://github.com/apache/datafusion/tree/main/datafusion/datasource/src/memory.rs
 #[derive(Clone, Debug)]
-pub struct MockMemorySourceConfig {
+pub struct TestMemoryExec {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
     /// Schema representing the data before projection
@@ -69,7 +76,7 @@ pub struct MockMemorySourceConfig {
     cache: PlanProperties,
 }
 
-impl DisplayAs for MockMemorySourceConfig {
+impl DisplayAs for TestMemoryExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         write!(f, "DataSourceExec: ")?;
         match t {
@@ -114,7 +121,7 @@ impl DisplayAs for MockMemorySourceConfig {
     }
 }
 
-impl ExecutionPlan for MockMemorySourceConfig {
+impl ExecutionPlan for TestMemoryExec {
     fn name(&self) -> &'static str {
         "DataSourceExec"
     }
@@ -167,7 +174,7 @@ impl ExecutionPlan for MockMemorySourceConfig {
     }
 }
 
-impl MockMemorySourceConfig {
+impl TestMemoryExec {
     fn open(
         &self,
         partition: usize,
@@ -243,7 +250,7 @@ impl MockMemorySourceConfig {
         partitions: &[Vec<RecordBatch>],
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
-    ) -> Result<Arc<MockMemorySourceConfig>> {
+    ) -> Result<Arc<TestMemoryExec>> {
         let mut source = Self::try_new(partitions, schema, projection)?;
         let cache = source.compute_properties();
         source.cache = cache;
@@ -251,7 +258,7 @@ impl MockMemorySourceConfig {
     }
 
     // Equivalent of `DataSourceExec::new`
-    pub fn update_cache(source: Arc<MockMemorySourceConfig>) -> MockMemorySourceConfig {
+    pub fn update_cache(source: Arc<TestMemoryExec>) -> TestMemoryExec {
         let cache = source.compute_properties();
         let source = &*source;
         let mut source = source.clone();
@@ -280,25 +287,8 @@ impl MockMemorySourceConfig {
         &self.sort_information
     }
 
-    /// A memory table can be ordered by multiple expressions simultaneously.
-    /// [`EquivalenceProperties`] keeps track of expressions that describe the
-    /// global ordering of the schema. These columns are not necessarily same; e.g.
-    /// ```text
-    /// ┌-------┐
-    /// | a | b |
-    /// |---|---|
-    /// | 1 | 9 |
-    /// | 2 | 8 |
-    /// | 3 | 7 |
-    /// | 5 | 5 |
-    /// └---┴---┘
-    /// ```
-    /// where both `a ASC` and `b DESC` can describe the table ordering. With
-    /// [`EquivalenceProperties`], we can keep track of these equivalences
-    /// and treat `a ASC` and `b DESC` as the same ordering requirement.
-    ///
-    /// Note that if there is an internal projection, that projection will be
-    /// also applied to the given `sort_information`.
+    /// refer to `try_with_sort_information` at MemorySourceConfig for more information.
+    /// https://github.com/apache/datafusion/tree/main/datafusion/datasource/src/memory.rs
     pub fn try_with_sort_information(
         mut self,
         mut sort_information: Vec<LexOrdering>,
@@ -317,7 +307,7 @@ impl MockMemorySourceConfig {
             });
         if let Some(col) = ambiguous_column {
             return internal_err!(
-                "Column {:?} is not found in the original schema of the MockMemorySourceConfig",
+                "Column {:?} is not found in the original schema of the TestMemoryExec",
                 col
             );
         }
@@ -437,7 +427,7 @@ pub fn build_table_scan_i32(
 ) -> Arc<dyn ExecutionPlan> {
     let batch = build_table_i32(a, b, c);
     let schema = batch.schema();
-    MockMemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+    TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
 }
 
 /// Return a RecordBatch with a single Int32 array with values (0..sz) in a field named "i"
@@ -477,16 +467,16 @@ pub fn scan_partitioned_utf8(partitions: usize) -> Arc<dyn ExecutionPlan> {
 }
 
 /// Returns a `DataSourceExec` that scans `partitions` of 100 batches each
-pub fn mem_exec(partitions: usize) -> MockMemorySourceConfig {
+pub fn mem_exec(partitions: usize) -> TestMemoryExec {
     let data: Vec<Vec<_>> = (0..partitions).map(|_| vec![make_partition(100)]).collect();
 
     let schema = data[0][0].schema();
     let projection = None;
 
-    MockMemorySourceConfig::try_new(&data, schema, projection).unwrap()
+    TestMemoryExec::try_new(&data, schema, projection).unwrap()
 }
 
-pub fn mem_exec_utf8(partitions: usize) -> MockMemorySourceConfig {
+pub fn mem_exec_utf8(partitions: usize) -> TestMemoryExec {
     let data: Vec<Vec<_>> = (0..partitions)
         .map(|_| vec![make_partition_utf8(100)])
         .collect();
@@ -494,7 +484,7 @@ pub fn mem_exec_utf8(partitions: usize) -> MockMemorySourceConfig {
     let schema = data[0][0].schema();
     let projection = None;
 
-    MockMemorySourceConfig::try_new(&data, schema, projection).unwrap()
+    TestMemoryExec::try_new(&data, schema, projection).unwrap()
 }
 
 // Construct a stream partition for test purposes
