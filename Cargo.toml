@@ -77,9 +77,11 @@ arrow-array = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.
     "chrono-tz",
 ] }
 arrow-buffer = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.0-tonic-downgrade", default-features = false }
-arrow-flight = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.0-tonic-downgrade", features = ["flight-sql-experimental"]}
+arrow-flight = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.0-tonic-downgrade", features = [
+    "flight-sql-experimental",
+] }
 
-arrow-ipc =  { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.0-tonic-downgrade", default-features = false, features = [
+arrow-ipc = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.0-tonic-downgrade", default-features = false, features = [
     "lz4",
 ] }
 arrow-ord = { git = "https://github.com/Coralogix/arrow-rs.git", tag = "v53.3.0-tonic-downgrade", default-features = false }

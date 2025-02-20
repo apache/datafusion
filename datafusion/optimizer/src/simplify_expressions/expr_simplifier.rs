@@ -45,13 +45,12 @@ use datafusion_expr::{
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 use indexmap::IndexSet;
 
+use super::inlist_simplifier::ShortenInListSimplifier;
+use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
-
-use super::inlist_simplifier::ShortenInListSimplifier;
-use super::utils::*;
 
 /// This structure handles API for expression simplification
 ///
@@ -514,30 +513,27 @@ impl<'a> TreeNodeRewriter for ConstEvaluator<'a> {
 
         // NB: do not short circuit recursion even if we find a non
         // evaluatable node (so we can fold other children, args to
-        // functions, etc)
+        // functions, etc.)
         Ok(Transformed::no(expr))
     }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match self.can_evaluate.pop() {
-            // Certain expressions such as `CASE` and `COALESCE` are short circuiting
-            // and may not evaluate all their sub expressions. Thus if
-            // if any error is countered during simplification, return the original
+            // Certain expressions such as `CASE` and `COALESCE` are short-circuiting
+            // and may not evaluate all their sub expressions. Thus, if
+            // any error is countered during simplification, return the original
             // so that normal evaluation can occur
-            Some(true) => {
-                let result = self.evaluate_to_scalar(expr);
-                match result {
-                    ConstSimplifyResult::Simplified(s) => {
-                        Ok(Transformed::yes(Expr::Literal(s)))
-                    }
-                    ConstSimplifyResult::NotSimplified(s) => {
-                        Ok(Transformed::no(Expr::Literal(s)))
-                    }
-                    ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
-                        Ok(Transformed::yes(expr))
-                    }
+            Some(true) => match self.evaluate_to_scalar(expr) {
+                ConstSimplifyResult::Simplified(s) => {
+                    Ok(Transformed::yes(Expr::Literal(s)))
                 }
-            }
+                ConstSimplifyResult::NotSimplified(s) => {
+                    Ok(Transformed::no(Expr::Literal(s)))
+                }
+                ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
+                    Ok(Transformed::yes(expr))
+                }
+            },
             Some(false) => Ok(Transformed::no(expr)),
             _ => internal_err!("Failed to pop can_evaluate"),
         }
@@ -585,9 +581,7 @@ impl<'a> ConstEvaluator<'a> {
         // added they can be checked for their ability to be evaluated
         // at plan time
         match expr {
-            // Has no runtime cost, but needed during planning
-            Expr::Alias(..)
-            | Expr::AggregateFunction { .. }
+            Expr::AggregateFunction { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
@@ -602,6 +596,7 @@ impl<'a> ConstEvaluator<'a> {
                 Self::volatility_ok(func.signature().volatility)
             }
             Expr::Literal(_)
+            | Expr::Alias(..)
             | Expr::Unnest(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
