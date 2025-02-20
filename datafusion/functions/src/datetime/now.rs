@@ -88,13 +88,17 @@ impl ScalarUDFImpl for NowFunc {
         internal_err!("return_type_from_args should be called instead")
     }
 
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        internal_err!("invoke should not be called on a simplified now() function")
+ fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if !args.is_empty() {
+        return Err(DataFusionError::Execution(
+            "now() takes 0 arguments".to_string(),
+        ));
     }
+
+    Err(DataFusionError::Internal(
+        "invoke should not be called on a simplified now() function".to_string(),
+    ))
+}
 
     fn simplify(
         &self,

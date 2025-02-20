@@ -78,15 +78,19 @@ impl ScalarUDFImpl for CurrentTimeFunc {
         Ok(Time64(Nanosecond))
     }
 
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        internal_err!(
-            "invoke should not be called on a simplified current_time() function"
-        )
+    fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if !args.is_empty() {
+        return Err(DataFusionError::Execution(
+            "current_time() takes 0 arguments".to_string(),
+        ));
     }
+
+    let current_time = chrono::Utc::now().time();
+    let nanos_since_midnight = current_time.num_seconds_from_midnight() as i64 * 1_000_000_000
+        + current_time.nanosecond() as i64;
+    let array: ArrayRef = Arc::new(Time64NanosecondArray::from_value(nanos_since_midnight, 1));
+    Ok(ColumnarValue::Array(array))
+}
 
     fn simplify(
         &self,

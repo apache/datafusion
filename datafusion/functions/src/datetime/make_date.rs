@@ -106,21 +106,18 @@ impl ScalarUDFImpl for MakeDateFunc {
         Ok(Date32)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        // first, identify if any of the arguments is an Array. If yes, store its `len`,
-        // as any scalar will need to be converted to an array of len `len`.
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
+    fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 3 {
+        return Err(DataFusionError::Execution(format!(
+            "{} function requires 3 arguments, got {}",
+            self.name(),
+            args.len()
+        )));
+    }
 
-        let [years, months, days] = take_function_args(self.name(), args)?;
+    let [years, months, days] = args else {
+        return Err(DataFusionError::Internal("Expected 3 arguments".to_string()));
+    };
 
         let years = years.cast_to(&Int32, None)?;
         let months = months.cast_to(&Int32, None)?;

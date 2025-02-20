@@ -366,15 +366,11 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let [time_value] = take_function_args(self.name(), args)?;
+    fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let [time_value] = take_function_args(self.name(), args)?;
+    self.to_local_time(&[time_value.clone()])
+}
 
-        self.to_local_time(&[time_value.clone()])
-    }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 1 {

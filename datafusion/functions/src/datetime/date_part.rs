@@ -167,12 +167,18 @@ impl ScalarUDFImpl for DatePartFunc {
             )
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let [part, array] = take_function_args(self.name(), args)?;
+    fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 2 {
+        return Err(DataFusionError::Execution(format!(
+            "{} function requires 2 arguments, got {}",
+            self.name(),
+            args.len()
+        )));
+    }
+
+    let [part, array] = args else {
+        return Err(DataFusionError::Internal("Expected 2 arguments".to_string()));
+    };
 
         let part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = part {
             v

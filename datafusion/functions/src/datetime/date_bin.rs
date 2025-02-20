@@ -187,24 +187,22 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        if args.len() == 2 {
-            // Default to unix EPOCH
-            let origin = ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                Some(0),
-                Some("+00:00".into()),
-            ));
-            date_bin_impl(&args[0], &args[1], &origin)
-        } else if args.len() == 3 {
-            date_bin_impl(&args[0], &args[1], &args[2])
-        } else {
-            exec_err!("DATE_BIN expected two or three arguments")
-        }
+    fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 2 && args.len() != 3 {
+        return Err(DataFusionError::Execution(
+            "DATE_BIN expected two or three arguments".to_string(),
+        ));
     }
+
+    let (stride, array, origin) = match args.len() {
+        2 => (&args[0], &args[1], None),
+        3 => (&args[0], &args[1], Some(&args[2])),
+        _ => unreachable!(),
+    };
+
+    date_bin_impl(stride, array, origin)
+}
+
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // The DATE_BIN function preserves the order of its second argument.

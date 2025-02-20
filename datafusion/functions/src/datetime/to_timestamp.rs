@@ -299,44 +299,40 @@ impl ScalarUDFImpl for ToTimestampFunc {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        if args.is_empty() {
-            return exec_err!(
-                "to_timestamp function requires 1 or more arguments, got {}",
-                args.len()
-            );
-        }
+    fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.is_empty() {
+        return Err(DataFusionError::Execution(
+            "to_timestamp function requires 1 or more arguments".to_string(),
+        ));
+    }
 
-        // validate that any args after the first one are Utf8
-        if args.len() > 1 {
-            validate_data_types(args, "to_timestamp")?;
-        }
+    // validate that any args after the first one are Utf8
+    if args.len() > 1 {
+        validate_data_types(args, "to_timestamp")?;
+    }
 
-        match args[0].data_type() {
-            Int32 | Int64 => args[0]
-                .cast_to(&Timestamp(Second, None), None)?
-                .cast_to(&Timestamp(Nanosecond, None), None),
-            Null | Float64 | Timestamp(_, None) => {
-                args[0].cast_to(&Timestamp(Nanosecond, None), None)
-            }
-            Timestamp(_, Some(tz)) => {
-                args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
-            }
-            Utf8View | LargeUtf8 | Utf8 => {
-                to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
-            }
-            other => {
-                exec_err!(
-                    "Unsupported data type {:?} for function to_timestamp",
-                    other
-                )
-            }
+    match args[0].data_type() {
+        Int32 | Int64 => args[0]
+            .cast_to(&Timestamp(Second, None), None)?
+            .cast_to(&Timestamp(Nanosecond, None), None),
+        Null | Float64 | Timestamp(_, None) => {
+            args[0].cast_to(&Timestamp(Nanosecond, None), None)
+        }
+        Timestamp(_, Some(tz)) => {
+            args[0].cast_to(&Timestamp(Nanosecond, Some(tz)), None)
+        }
+        Utf8View | LargeUtf8 | Utf8 => {
+            to_timestamp_impl::<TimestampNanosecondType>(args, "to_timestamp")
+        }
+        other => {
+            Err(DataFusionError::Execution(format!(
+                "Unsupported data type {:?} for function to_timestamp",
+                other
+            )))
         }
     }
+}
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }

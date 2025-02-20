@@ -117,18 +117,14 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         internal_err!("call return_type_from_args instead")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let len = args.len();
-        if len != 1 && len != 2 {
-            return exec_err!(
-                "from_unixtime function requires 1 or 2 argument, got {}",
-                args.len()
-            );
-        }
+    fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    let len = args.len();
+    if len != 1 && len != 2 {
+        return Err(DataFusionError::Execution(format!(
+            "from_unixtime function requires 1 or 2 arguments, got {}",
+            args.len()
+        )));
+    }
 
         if args[0].data_type() != Int64 {
             return exec_err!(
