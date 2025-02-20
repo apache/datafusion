@@ -27,6 +27,9 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [features]
 compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
