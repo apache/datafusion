@@ -121,13 +121,6 @@ struct Args {
     )]
     maxrows: MaxRows,
 
-    #[clap(
-        short,
-        long,
-        help = "Whether to stop early when max rows is reached, this will help reduce the memory usage when the result is large"
-    )]
-    stop_after_max_rows: bool,
-
     #[clap(long, help = "Enables console syntax highlighting")]
     color: bool,
 }
