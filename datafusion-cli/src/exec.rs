@@ -271,7 +271,9 @@ pub(super) async fn exec_and_print(
                 }
                 row_count += curr_num_rows;
             }
-            adjusted.into_inner().print_batches(schema, &results, now, row_count)?;
+            adjusted
+                .into_inner()
+                .print_batches(schema, &results, now, row_count)?;
             reservation.free();
         }
     }
