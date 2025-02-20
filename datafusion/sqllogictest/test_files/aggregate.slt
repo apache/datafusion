@@ -6276,6 +6276,26 @@ physical_plan
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], file_type=csv, has_header=true
 
+# test count(null) case (null with type)
+
+statement count 0
+create table t(a int, b int) as values (1, 3), (2, 4), (3, 5);
+
+query I
+select count(null::bigint) from t;
+----
+0
+
+query TT
+explain select count(null::bigint) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(NULL)) AS count(NULL)]]
+02)--TableScan: t projection=[]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[count(NULL)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
 #######
 # Group median test
 #######

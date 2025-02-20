@@ -551,7 +551,7 @@ fn is_count_wildcard(args: &[Expr]) -> bool {
     match args {
         [] => true, // count()
         // All const should be coerced to int64 or rejected by the signature
-        [Expr::Literal(ScalarValue::Int64(_))] => true, // count(1)
+        [Expr::Literal(ScalarValue::Int64(Some(_)))] => true, // count(1)
         _ => false, // More than one argument or non-matching cases
     }
 }
