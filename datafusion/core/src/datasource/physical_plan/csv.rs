@@ -567,12 +567,12 @@ impl FileSource for CsvSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(CsvOpener {
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(CsvOpener {
             config: Arc::new(self.clone()),
             file_compression_type: base_config.file_compression_type,
             object_store,
-        }))
+        })
     }
 
     fn as_any(&self) -> &dyn Any {

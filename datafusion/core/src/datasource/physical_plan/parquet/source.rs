@@ -466,7 +466,7 @@ impl FileSource for ParquetSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
+    ) -> Arc<dyn FileOpener> {
         let projection = base_config
             .file_column_projection_indices()
             .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
@@ -480,7 +480,7 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
-        Ok(Arc::new(ParquetOpener {
+        Arc::new(ParquetOpener {
             partition_index: partition,
             projection: Arc::from(projection),
             batch_size: self
@@ -499,7 +499,7 @@ impl FileSource for ParquetSource {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             schema_adapter_factory,
-        }))
+        })
     }
 
     fn as_any(&self) -> &dyn Any {

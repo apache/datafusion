@@ -214,11 +214,11 @@ impl FileSource for ArrowSource {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(ArrowOpener {
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(ArrowOpener {
             object_store,
             projection: base_config.file_column_projection_indices(),
-        }))
+        })
     }
 
     fn as_any(&self) -> &dyn Any {

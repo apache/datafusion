@@ -197,11 +197,11 @@ impl FileSource for AvroSource {
         object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(private::AvroOpener {
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(private::AvroOpener {
             config: Arc::new(self.clone()),
             object_store,
-        }))
+        })
     }
 
     #[cfg(not(feature = "avro"))]
@@ -210,7 +210,7 @@ impl FileSource for AvroSource {
         _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
+    ) -> Arc<dyn FileOpener> {
         panic!("Avro feature is not enabled in this build")
     }
 

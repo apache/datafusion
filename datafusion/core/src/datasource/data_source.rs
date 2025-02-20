@@ -41,7 +41,7 @@ pub trait FileSource: Send + Sync {
         object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> datafusion_common::Result<Arc<dyn FileOpener>>;
+    ) -> Arc<dyn FileOpener>;
     /// Any
     fn as_any(&self) -> &dyn Any;
     /// Initialize new type with batch size configuration
