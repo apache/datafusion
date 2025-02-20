@@ -1989,12 +1989,9 @@ impl DataFrame {
         names
             .iter()
             .map(|name| {
-                schema
-                    .field_with_name(None, name)
-                    .map(|f| f.clone())
-                    .map_err(|_| {
-                        DataFusionError::Plan(format!("Column '{}' not found", name))
-                    })
+                schema.field_with_name(None, name).cloned().map_err(|_| {
+                    DataFusionError::Plan(format!("Column '{}' not found", name))
+                })
             })
             .collect()
     }

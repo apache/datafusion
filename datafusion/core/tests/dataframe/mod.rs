@@ -5375,7 +5375,7 @@ async fn test_fill_null() -> Result<()> {
         )?;
 
     let results = df_filled.collect().await?;
-    let expected = vec![
+    let expected = [
         "+---+---------+",
         "| a | b       |",
         "+---+---------+",
@@ -5399,7 +5399,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
 
     let results = df_filled.clone().collect().await?;
 
-    let expected = vec![
+    let expected = [
         "+---+---------+",
         "| a | b       |",
         "+---+---------+",
@@ -5414,7 +5414,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
     let df_filled = df_filled.fill_null(ScalarValue::Int32(Some(0)), None)?;
 
     let results = df_filled.collect().await?;
-    let expected = vec![
+    let expected = [
         "+---+---------+",
         "| a | b       |",
         "+---+---------+",
