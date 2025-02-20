@@ -5344,6 +5344,14 @@ async fn test_insert_into_checking() -> Result<()> {
 }
 
 async fn create_null_table() -> Result<DataFrame> {
+    // create a DataFrame with null values
+    //    "+---+----+",
+    //    "| a | b |",
+    //    "+---+---+",
+    //    "| 1 | x |",
+    //    "|   |   |",
+    //    "| 3 | z |",
+    //    "+---+---+",
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),
         Field::new("b", DataType::Utf8, true),
@@ -5411,6 +5419,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
 
     assert_batches_sorted_eq!(expected, &results);
 
+    // Fill column "a" null values with a value that cannot be cast to Int32.
     let df_filled = df_filled.fill_null(ScalarValue::Int32(Some(0)), None)?;
 
     let results = df_filled.collect().await?;
