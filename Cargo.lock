@@ -361,9 +361,9 @@ dependencies = [
 
 [[package]]
 name = "arrow-flight"
-version = "54.1.0"
+version = "54.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9b3aaba47ed4b6146563c8b79ad0f7aa283f794cde0c057c656291b81196746"
+checksum = "cf7806ee3d229ee866013e83446e937ab3c8a9e6a664b259d41dd960b309c5d0"
 dependencies = [
  "arrow-arith",
  "arrow-array",
@@ -5363,9 +5363,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.138"
+version = "1.0.139"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d434192e7da787e94a6ea7e9670b26a036d0ca41e0b7efb2676dd32bae872949"
+checksum = "44f86c3acccc9c65b153fe1b85a3be07fe5515274ec9f0653b4a0875731c72a6"
 dependencies = [
  "itoa",
  "memchr",

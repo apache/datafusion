@@ -22,42 +22,59 @@ use datafusion::error::Result;
 use datafusion::prelude::*;
 
 use prost::Message;
+use std::path::Path;
 use substrait::proto::Plan;
+use tokio::{
+    fs::OpenOptions,
+    io::{AsyncReadExt, AsyncWriteExt},
+};
 
-use std::fs::OpenOptions;
-use std::io::{Read, Write};
+/// Plans a sql and serializes the generated logical plan to bytes.
+/// The bytes are then written into a file at `path`.
+///
+/// Returns an error if the file already exists.
+pub async fn serialize(
+    sql: &str,
+    ctx: &SessionContext,
+    path: impl AsRef<Path>,
+) -> Result<()> {
+    let protobuf_out = serialize_bytes(sql, ctx).await?;
 
-#[allow(clippy::suspicious_open_options)]
-pub async fn serialize(sql: &str, ctx: &SessionContext, path: &str) -> Result<()> {
-    let protobuf_out = serialize_bytes(sql, ctx).await;
-    let mut file = OpenOptions::new().create(true).write(true).open(path)?;
-    file.write_all(&protobuf_out?)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await?;
+    file.write_all(&protobuf_out).await?;
     Ok(())
 }
 
+/// Plans a sql and serializes the generated logical plan to bytes.
 pub async fn serialize_bytes(sql: &str, ctx: &SessionContext) -> Result<Vec<u8>> {
     let df = ctx.sql(sql).await?;
     let plan = df.into_optimized_plan()?;
     let proto = producer::to_substrait_plan(&plan, &ctx.state())?;
 
     let mut protobuf_out = Vec::<u8>::new();
-    proto.encode(&mut protobuf_out).map_err(|e| {
-        DataFusionError::Substrait(format!("Failed to encode substrait plan: {e}"))
-    })?;
+    proto
+        .encode(&mut protobuf_out)
+        .map_err(|e| DataFusionError::Substrait(format!("Failed to encode plan: {e}")))?;
     Ok(protobuf_out)
 }
 
-pub async fn deserialize(path: &str) -> Result<Box<Plan>> {
+/// Reads the file at `path` and deserializes a plan from the bytes.
+pub async fn deserialize(path: impl AsRef<Path>) -> Result<Box<Plan>> {
     let mut protobuf_in = Vec::<u8>::new();
 
-    let mut file = OpenOptions::new().read(true).open(path)?;
+    let mut file = OpenOptions::new().read(true).open(path).await?;
+    file.read_to_end(&mut protobuf_in).await?;
 
-    file.read_to_end(&mut protobuf_in)?;
     deserialize_bytes(protobuf_in).await
 }
 
+/// Deserializes a plan from the bytes.
 pub async fn deserialize_bytes(proto_bytes: Vec<u8>) -> Result<Box<Plan>> {
     Ok(Box::new(Message::decode(&*proto_bytes).map_err(|e| {
-        DataFusionError::Substrait(format!("Failed to decode substrait plan: {e}"))
+        DataFusionError::Substrait(format!("Failed to decode plan: {e}"))
     })?))
 }
