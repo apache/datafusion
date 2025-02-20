@@ -97,11 +97,7 @@ impl ScalarUDFImpl for RightFunc {
         utf8_to_str_type(&arg_types[0], "right")
     }
 
-    fn invoke_with_args(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => {
                 make_scalar_function(right::<i32>, vec![])(args)

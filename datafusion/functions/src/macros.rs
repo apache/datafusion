@@ -331,10 +331,7 @@ macro_rules! make_math_binary_udf {
                     $OUTPUT_ORDERING(input)
                 }
 
-                fn invoke_with_args(
-                    &self,
-                    args: ScalarFunctionArgs,
-                ) -> Result<ColumnarValue> {
+                fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
                     let args = ColumnarValue::values_to_arrays(&args.args)?;
                     let arr: ArrayRef = match args[0].data_type() {
                         DataType::Float64 => {
@@ -364,9 +361,10 @@ macro_rules! make_math_binary_udf {
                             )
                         }
                     };
-
+                
                     Ok(ColumnarValue::Array(arr))
                 }
+                
 
                 fn documentation(&self) -> Option<&Documentation> {
                     Some($GET_DOC())

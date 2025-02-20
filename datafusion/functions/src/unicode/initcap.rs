@@ -87,11 +87,7 @@ impl ScalarUDFImpl for InitcapFunc {
         }
     }
 
-    fn invoke_with_args(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 => make_scalar_function(initcap::<i32>, vec![])(args),
             DataType::LargeUtf8 => make_scalar_function(initcap::<i64>, vec![])(args),
