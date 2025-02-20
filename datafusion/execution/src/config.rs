@@ -571,6 +571,13 @@ impl SessionConfig {
             .cloned()
             .map(|ext| Arc::downcast(ext).expect("TypeId unique"))
     }
+
+    /// Get ObjectStore-compatible extensions.
+    pub fn clone_extensions_for_object_store(&self) -> object_store::Extensions {
+        let exts: HashMap<TypeId, Arc<dyn Any + Send + Sync + 'static>> =
+            self.extensions.clone().into_iter().collect();
+        exts.into()
+    }
 }
 
 impl From<ConfigOptions> for SessionConfig {

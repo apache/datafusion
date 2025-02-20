@@ -3955,6 +3955,7 @@ dependencies = [
 [[package]]
 name = "object_store"
 version = "0.11.2"
+source = "git+https://github.com/waynr/arrow-rs?branch=object_store/introduce-extensions#41ca3a42a4f0d623e45188817e62e6f21aa48a5b"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

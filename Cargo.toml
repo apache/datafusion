@@ -192,4 +192,5 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
 
 [patch.crates-io]
-object_store = { path = "../../../apache/arrow-rs/object_store" }
+#object_store = { path = "../../../apache/arrow-rs/object_store" }
+object_store = { git = "https://github.com/waynr/arrow-rs", branch = "object_store/introduce-extensions" }

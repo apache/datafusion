@@ -26,13 +26,19 @@ use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 use std::any::Any;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 use std::{fmt, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Constraints, Statistics};
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning};
+use futures::stream::BoxStream;
+use object_store::path::Path;
+use object_store::{
+    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult,
+};
 
 use crate::datasource::data_source::FileSource;
 pub use datafusion_datasource::file_scan_config::*;
@@ -156,13 +162,98 @@ pub struct FileScanConfig {
     pub source: Arc<dyn FileSource>,
 }
 
+#[derive(Debug)]
+struct ContextualizedObjectStore {
+    inner: Arc<dyn ObjectStore>,
+    extensions: object_store::Extensions,
+}
+
+impl ContextualizedObjectStore {
+    fn new(inner: Arc<dyn ObjectStore>, extensions: object_store::Extensions) -> Self {
+        Self { inner, extensions }
+    }
+}
+
+impl Display for ContextualizedObjectStore {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "ContextualizedObjectStore({})", self.inner)
+    }
+}
+
+#[async_trait::async_trait]
+impl ObjectStore for ContextualizedObjectStore {
+    async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+        self.inner.copy(from, to).await
+    }
+
+    async fn copy_if_not_exists(
+        &self,
+        from: &Path,
+        to: &Path,
+    ) -> object_store::Result<()> {
+        self.inner.copy_if_not_exists(from, to).await
+    }
+
+    async fn delete(&self, location: &Path) -> object_store::Result<()> {
+        self.inner.delete(location).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        mut options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        options.extensions = self.extensions.clone();
+        self.inner.get_opts(location, options).await
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+}
+
 impl DataSource for FileScanConfig {
     fn open(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let object_store = context.runtime_env().object_store(&self.object_store_url);
+        let object_store = context
+            .runtime_env()
+            .object_store(&self.object_store_url)
+            .map(|i| -> Arc<dyn ObjectStore> {
+                Arc::new(ContextualizedObjectStore::new(
+                    i,
+                    context.session_config().clone_extensions_for_object_store(),
+                ))
+            });
 
         let source = self
             .source
