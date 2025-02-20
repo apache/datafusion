@@ -211,12 +211,12 @@ pub struct ArrowSource {
 impl FileSource for ArrowSource {
     fn create_file_opener(
         &self,
-        object_store: Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
         Ok(Arc::new(ArrowOpener {
-            object_store: object_store?,
+            object_store,
             projection: base_config.file_column_projection_indices(),
         }))
     }

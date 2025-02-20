@@ -194,20 +194,20 @@ impl FileSource for AvroSource {
     #[cfg(feature = "avro")]
     fn create_file_opener(
         &self,
-        object_store: Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {
         Ok(Arc::new(private::AvroOpener {
             config: Arc::new(self.clone()),
-            object_store: object_store?,
+            object_store,
         }))
     }
 
     #[cfg(not(feature = "avro"))]
     fn create_file_opener(
         &self,
-        _object_store: Result<Arc<dyn ObjectStore>>,
+        _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
     ) -> Result<Arc<dyn FileOpener>> {

@@ -38,7 +38,7 @@ pub trait FileSource: Send + Sync {
     /// Creates a `dyn FileOpener` based on given parameters
     fn create_file_opener(
         &self,
-        object_store: datafusion_common::Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
     ) -> datafusion_common::Result<Arc<dyn FileOpener>>;

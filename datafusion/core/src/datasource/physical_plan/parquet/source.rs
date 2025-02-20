@@ -463,7 +463,7 @@ impl ParquetSource {
 impl FileSource for ParquetSource {
     fn create_file_opener(
         &self,
-        object_store: datafusion_common::Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
     ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
@@ -475,15 +475,10 @@ impl FileSource for ParquetSource {
             .clone()
             .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
 
-        let parquet_file_reader_factory = self
-            .parquet_file_reader_factory
-            .as_ref()
-            .map(|f| Ok(Arc::clone(f)))
-            .unwrap_or_else(|| {
-                object_store.map(|store| {
-                    Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
-                })
-            })?;
+        let parquet_file_reader_factory =
+            self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
+                Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
+            });
 
         Ok(Arc::new(ParquetOpener {
             partition_index: partition,
@@ -586,6 +581,7 @@ impl FileSource for ParquetSource {
             }
         }
     }
+
     fn supports_repartition(&self, _config: &FileScanConfig) -> bool {
         true
     }
