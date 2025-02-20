@@ -54,7 +54,7 @@ paste = "1.0.14"
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
-criterion = "0.5"
+criterion = { workspace = true }
 rand = { workspace = true }
 
 [[bench]]
