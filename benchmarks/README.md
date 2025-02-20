@@ -243,26 +243,36 @@ The `dfbench` program contains subcommands to run the various
 benchmarks. When benchmarking, it should always be built in release
 mode using `--release`.
 
-Full help for each benchmark can be found in the relevant sub
-command. For example to get help for tpch, run
+Full help for each benchmark can be found in the relevant
+subcommand. For example, to get help for tpch, run:
 
 ```shell
-cargo run --release --bin dfbench  --help
+cargo run --release --bin dfbench -- tpch --help
 ...
-datafusion-benchmarks 27.0.0
-benchmark command
+dfbench-tpch 45.0.0
+Run the tpch benchmark.
+
+This benchmarks is derived from the [TPC-H][1] version
+[2.17.1]. The data and answers are generated using `tpch-gen` from
+[2].
+
+[1]: http://www.tpc.org/tpch/
+[2]: https://github.com/databricks/tpch-dbgen.git,
+[2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
 
 USAGE:
-    dfbench <SUBCOMMAND>
+    dfbench tpch [FLAGS] [OPTIONS] --path <path>
 
-SUBCOMMANDS:
-    clickbench        Run the clickbench benchmark
-    help              Prints this message or the help of the given subcommand(s)
-    parquet-filter    Test performance of parquet filter pushdown
-    sort              Test performance of parquet filter pushdown
-    tpch              Run the tpch benchmark.
-    tpch-convert      Convert tpch .slt files to .parquet or .csv files
+FLAGS:
+    -d, --debug
+            Activate debug mode to see more details
 
+    -S, --disable-statistics
+            Whether to disable collection of statistics (and cost based optimizations) or not
+
+    -h, --help
+            Prints help information
+...
 ```
 
 # Benchmarks
