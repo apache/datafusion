@@ -159,7 +159,7 @@ impl AggregateUDFImpl for Count {
 
         let mut schema_name = String::new();
 
-        if !args.is_empty() && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
+        if is_count_wildcard(args) {
             schema_name.write_str("count(*)")?;
         } else {
             schema_name.write_fmt(format_args!(
@@ -202,7 +202,7 @@ impl AggregateUDFImpl for Count {
 
         let mut schema_name = String::new();
 
-        if !args.is_empty() && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
+        if is_count_wildcard(args) {
             schema_name.write_str("count(*)")?;
         } else {
             schema_name.write_fmt(format_args!(
@@ -246,7 +246,7 @@ impl AggregateUDFImpl for Count {
 
         let mut display_name = String::new();
 
-        if !args.is_empty() && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
+        if is_count_wildcard(args) {
             display_name.write_str("count(*)")?;
         } else {
             display_name.write_fmt(format_args!(
@@ -293,7 +293,7 @@ impl AggregateUDFImpl for Count {
 
         let mut display_name = String::new();
 
-        if !args.is_empty() && args[0] == Expr::Literal(COUNT_STAR_EXPANSION) {
+        if is_count_wildcard(args) {
             display_name.write_str("count(*)")?;
         } else {
             display_name.write_fmt(format_args!(
@@ -544,6 +544,15 @@ impl AggregateUDFImpl for Count {
         // `COUNT` is monotonically increasing as it always increases or stays
         // the same as new values are seen.
         SetMonotonicity::Increasing
+    }
+}
+
+fn is_count_wildcard(args: &[Expr]) -> bool {
+    match args {
+        [] => true, // count()
+        // All const should be coerced to int64 or rejected by the signature
+        [Expr::Literal(ScalarValue::Int64(_))] => true, // count(1)
+        _ => false, // More than one argument or non-matching cases
     }
 }
 
