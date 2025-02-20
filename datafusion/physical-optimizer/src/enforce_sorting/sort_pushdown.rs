@@ -24,13 +24,14 @@ use crate::utils::{
 
 use arrow_schema::SchemaRef;
 use datafusion_common::tree_node::{
-    ConcreteTreeNode, Transformed, TreeNode, TreeNodeRecursion,
+    ConcreteTreeNode, Transformed, TreeNode, TreeNodeRecursion, TreeNodeVisitor,
 };
 use datafusion_common::{plan_err, HashSet, JoinSide, Result};
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::PhysicalSortRequirement;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
@@ -50,7 +51,7 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// of the parent node as its data.
 ///
 /// [`EnforceSorting`]: crate::enforce_sorting::EnforceSorting
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct ParentRequirements {
     ordering_requirement: Option<LexRequirement>,
     fetch: Option<usize>,
@@ -183,6 +184,9 @@ fn pushdown_requirement_to_children(
         let required_input_ordering = plan.required_input_ordering();
         let request_child = required_input_ordering[0].clone().unwrap_or_default();
         let child_plan = plan.children().swap_remove(0);
+        let avoid_pushdown = !plan
+            .equivalence_properties()
+            .ordering_satisfy_requirement(parent_required);
 
         match determine_children_requirement(parent_required, &request_child, child_plan)
         {
@@ -192,6 +196,9 @@ fn pushdown_requirement_to_children(
                 Ok(Some(vec![req]))
             }
             RequirementsCompatibility::Compatible(mut adjusted) => {
+                if avoid_pushdown {
+                    return Ok(None);
+                }
                 adjusted = adjusted.map(|adj| {
                     let mut new = adj.to_vec();
                     new.retain(|req| {

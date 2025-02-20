@@ -40,7 +40,8 @@ use arrow::datatypes::Schema;
 use arrow_schema::{DataType, Field, SchemaRef, SortOptions};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
-    PartitionEvaluator, ReversedUDWF, WindowFrame, WindowFunctionDefinition, WindowUDF,
+    PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
+    WindowFunctionDefinition, WindowUDF,
 };
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -409,12 +410,46 @@ pub(crate) fn window_equivalence_properties(
                 aggregate_udf_window_expr
                     .add_equal_orderings(&mut window_eq_properties, window_expr_index);
             }
+        } else if let Some(sliding_expr) =
+            expr.as_any().downcast_ref::<SlidingAggregateWindowExpr>()
+        {
+            if sliding_expr.partition_by().is_empty()
+                && sliding_expr.get_window_frame().end_bound.is_unbounded()
+                && sliding_expr
+                    .get_aggregate_expr()
+                    .set_monotonicity()
+                    .ne(&SetMonotonicity::NotMonotonic)
+            {
+                let new_ordering = if sliding_expr
+                    .get_aggregate_expr()
+                    .set_monotonicity()
+                    .eq(&SetMonotonicity::Increasing)
+                {
+                    vec![LexOrdering::new(vec![PhysicalSortExpr::new(
+                        Arc::new(Column::new(
+                            expr.name(),
+                            i + input.schema().fields().len(),
+                        )),
+                        SortOptions::new(true, true),
+                    )])]
+                } else {
+                    vec![LexOrdering::new(vec![PhysicalSortExpr::new(
+                        Arc::new(Column::new(
+                            expr.name(),
+                            i + input.schema().fields().len(),
+                        )),
+                        SortOptions::new(false, true),
+                    )])]
+                };
+                window_eq_properties.add_new_orderings(new_ordering);
+            }
+            // TODO: SlidingAggregateWindowExpr cannot introduce a new ordering for
+            //       the cases where window frame has a bounded end, yet. Because
+            //       we cannot determine whether the window's incoming elements
+            //       are greater than its outgoing elements. However, we do have
+            //       the necessary tools to support this, and we can extend support
+            //       for these cases in the future.
         }
-        // TODO: SlidingAggregateWindowExpr cannot introduce a new ordering yet
-        //       because we cannot determine whether the window's incoming elements
-        //       are greater than its outgoing elements. However, we do have
-        //       the necessary tools to support this, and we can extend support
-        //       for these cases in the future.
     }
     window_eq_properties
 }

@@ -234,6 +234,21 @@ impl OrderingEquivalenceClass {
         }
         None
     }
+
+    pub fn singleton_options(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
+        let mut count = 0;
+        for ordering in self.iter() {
+            let leading_ordering = &ordering[0];
+            if leading_ordering.expr.eq(expr) {
+                count += 1;
+            }
+        }
+        if count == 4 {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Convert the `OrderingEquivalenceClass` into an iterator of LexOrderings
