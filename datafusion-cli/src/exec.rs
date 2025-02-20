@@ -257,20 +257,21 @@ pub(super) async fn exec_and_print(
             let schema = physical_plan.schema();
             let mut stream = execute_stream(physical_plan, task_ctx.clone())?;
             let mut results = vec![];
-            let mut curr_rows = 0usize;
+            let mut row_count = 0_usize;
             while let Some(batch) = stream.next().await {
+                let batch = batch?;
+                let curr_num_rows = batch.num_rows();
                 if let MaxRows::Limited(max_rows) = print_options.maxrows {
-                    let batch = batch?;
                     // Stop collecting results if the number of rows exceeds the limit
-                    if curr_rows < max_rows {
-                        curr_rows += batch.num_rows();
+                    if row_count + curr_num_rows < max_rows {
                         // Try to grow the reservation to accommodate the batch in memory
                         reservation.try_grow(get_record_batch_memory_size(&batch))?;
                         results.push(batch);
                     }
                 }
+                row_count += curr_num_rows;
             }
-            adjusted.into_inner().print_batches(schema, &results, now)?;
+            adjusted.into_inner().print_batches(schema, &results, now, row_count)?;
             reservation.free();
         }
     }
