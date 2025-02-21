@@ -30,9 +30,9 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
 };
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, Operator};
 
-use super::{Column, Literal};
+use super::{BinaryExpr, CastExpr, Column, Literal};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use itertools::Itertools;
 
@@ -67,6 +67,12 @@ enum EvalMethod {
     ///
     /// CASE WHEN condition THEN expression ELSE expression END
     ExpressionOrExpression,
+    /// This is a specialization that fuses a greater-than-zero guard with division so
+    /// so don't need to be lazy. This is a very common guard in TPC-DS as well as normal
+    /// human expressions.
+    ///
+    /// CASE WHEN y > 0 THEN x / y ELSE NULL END
+    DivideGtZero,
 }
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
@@ -158,6 +164,10 @@ impl CaseExpr {
                 EvalMethod::ScalarOrScalar
             } else if when_then_expr.len() == 1 && else_expr.is_some() {
                 EvalMethod::ExpressionOrExpression
+            } else if when_then_expr.len() == 1
+                && CaseExpr::is_divide_if_gt_0(&when_then_expr[0])
+            {
+                EvalMethod::DivideGtZero
             } else {
                 EvalMethod::NoExpression
             };
@@ -184,6 +194,49 @@ impl CaseExpr {
     /// Optional "else" expression
     pub fn else_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
         self.else_expr.as_ref()
+    }
+
+    /// Look for `WHEN a > 0 THEN b / a`
+    fn is_divide_if_gt_0(when_then_expr: &WhenThen) -> bool {
+        // NOCOMMIT is this the right way to do all this casting? I'm the dog working on a car here.
+
+        // WHEN a > 0
+        let Some(when) = when_then_expr.0.as_any().downcast_ref::<BinaryExpr>() else {
+            return false;
+        };
+        if *when.op() != Operator::Gt {
+            return false;
+        };
+        let Some(when_lhs) = when.left().as_any().downcast_ref::<Column>() else {
+            return false;
+        };
+        let Some(when_rhs) = when.right().as_any().downcast_ref::<Literal>() else {
+            return false;
+        };
+        let Ok(zero) = ScalarValue::new_zero(&when_rhs.value().data_type()) else {
+            return false;
+        };
+        if when_rhs.value() != &zero {
+            return false;
+        }
+
+        println!("SADFDSAF {when_then_expr:?}");
+        // THEN b / a
+        let Some(then) = when_then_expr.1.as_any().downcast_ref::<BinaryExpr>() else {
+            return false;
+        };
+        println!("SADFDSAF {then:?}");
+        if *then.op() != Operator::Divide {
+            return false;
+        }
+        let mut then_rhs = then.right();
+        if let Some(cast) = then_rhs.as_any().downcast_ref::<CastExpr>() {
+            then_rhs = cast.expr();
+        };
+        let Some(then_rhs) = then_rhs.as_any().downcast_ref::<Column>() else {
+            return false;
+        };
+        then_rhs == when_lhs
     }
 }
 
@@ -444,6 +497,63 @@ impl CaseExpr {
 
         Ok(ColumnarValue::Array(zip(&remainder, &else_, &then_value)?))
     }
+
+    /// This is a specialization that fuses a greater-than-zero guard with division so
+    /// so don't need to be lazy. This is a very common guard in TPC-DS as well as normal
+    /// human expressions.
+    ///
+    /// `CASE WHEN y > 0 THEN x / y ELSE NULL END`
+    ///
+    /// It is executed as though `x / NULL_IF(y <= 0, y)` which is safe because arrow-rs
+    /// skips evaluating fallible functions if one of their inputs is null.
+    fn div_gt_0(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        use arrow::compute::kernels::cmp::lt_eq;
+        use arrow::compute::kernels::numeric::div;
+        use datafusion_physical_expr_common::datum::{
+            apply, apply_cmp, apply_cmp_for_nested,
+        };
+
+        let return_type = self.data_type(&batch.schema())?;
+
+        let when_then = &self.when_then_expr[0];
+        let when = when_then.0.as_any().downcast_ref::<BinaryExpr>().unwrap();
+        let then = when_then.1.as_any().downcast_ref::<BinaryExpr>().unwrap();
+
+        // NOCOMMIT are these ok? This seems like an important assertion.
+        debug_assert_eq!(None, self.else_expr);
+
+        let divisor = then.right().evaluate(batch)?;
+        let zero = ColumnarValue::Scalar(ScalarValue::new_zero(&divisor.data_type())?);
+        // NOCOMMIT should I manually launch the lt_eq? That could prevent the funny to_array below.
+        // NOCOMMIT instead of nullif we could replace `inf` with null?
+        match apply_cmp(&divisor, &zero, lt_eq)? {
+            ColumnarValue::Array(mask) => {
+                let mask = as_boolean_array(&mask)?;
+                // Divisor is already an array if we got here because comparing it to 0 made an array.
+                let masked = nullif(&divisor.to_array(batch.num_rows())?, mask)?;
+                apply(
+                    &then.left().evaluate(batch)?,
+                    &ColumnarValue::Array(masked),
+                    div,
+                )
+            }
+            ColumnarValue::Scalar(mask) => {
+                println!("scalarasdf {mask:?}");
+                if mask.is_null() {
+                    // Always null, return null
+                    return Ok(ColumnarValue::Scalar(return_type.try_into()?));
+                }
+                let bool_value: bool = mask.try_into()?;
+                if bool_value {
+                    // All <= 0, return null
+                    Ok(ColumnarValue::Scalar(return_type.try_into()?))
+                } else {
+                    // All > 0, divide everything
+                    when_then.1.evaluate(batch)
+                }
+            }
+        }
+    }
 }
 
 impl PhysicalExpr for CaseExpr {
@@ -508,6 +618,7 @@ impl PhysicalExpr for CaseExpr {
             }
             EvalMethod::ScalarOrScalar => self.scalar_or_scalar(batch),
             EvalMethod::ExpressionOrExpression => self.expr_or_expr(batch),
+            EvalMethod::DivideGtZero => self.div_gt_0(batch),
         }
     }
 
@@ -578,11 +689,11 @@ mod tests {
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
-    use datafusion_common::cast::{as_float64_array, as_int32_array};
+    use arrow_schema::ArrowError;
+    use datafusion_common::cast::{as_float64_array, as_int32_array, as_int64_array};
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
-    use datafusion_expr::Operator;
 
     #[test]
     fn case_with_expr() -> Result<()> {
@@ -667,6 +778,11 @@ mod tests {
             Some(else_value),
             schema.as_ref(),
         )?;
+        let case = expr
+            .as_any()
+            .downcast_ref::<CaseExpr>()
+            .expect("expected case expression");
+        assert_eq!(case.eval_method, EvalMethod::WithExpression);
         let result = expr
             .evaluate(&batch)?
             .into_array(batch.num_rows())
@@ -759,31 +875,199 @@ mod tests {
         let schema = batch.schema();
 
         // CASE WHEN a > 0 THEN 25.0 / cast(a, float64) ELSE float64(null) END
-        let when1 = binary(col("a", &schema)?, Operator::Gt, lit(0i32), &batch.schema())?;
-        let then1 = binary(
+        let result = case_div_0_test(
+            &batch,
+            col("a", &schema)?,
+            lit(0i32),
             lit(25.0f64),
-            Operator::Divide,
             cast(col("a", &schema)?, &batch.schema(), Float64)?,
-            &batch.schema(),
-        )?;
-        let x = lit(ScalarValue::Float64(None));
-
-        let expr = generate_case_when_with_type_coercion(
             None,
-            vec![(when1, then1)],
-            Some(x),
-            schema.as_ref(),
+            EvalMethod::DivideGtZero,
         )?;
-        let result = expr
-            .evaluate(&batch)?
-            .into_array(batch.num_rows())
-            .expect("Failed to convert to array");
         let result =
             as_float64_array(&result).expect("failed to downcast to Float64Array");
 
         let expected = &Float64Array::from(vec![Some(25.0), None, None, Some(5.0)]);
 
         assert_eq!(expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_without_expr_divide_by_zero_else() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        // CASE WHEN a > 0 THEN 25.0 / cast(a, float64) ELSE float64(0.0) END
+        let result = case_div_0_test(
+            &batch,
+            col("a", &schema)?,
+            lit(0i32),
+            lit(25.0f64),
+            cast(col("a", &schema)?, &batch.schema(), Float64)?,
+            Some(lit(0.0f64)),
+            EvalMethod::ExpressionOrExpression,
+        )?;
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
+
+        let expected =
+            &Float64Array::from(vec![Some(25.0), Some(0.0), Some(0.0), Some(5.0)]);
+
+        assert_eq!(expected, result);
+        Ok(())
+    }
+
+    fn case_div_0_test(
+        batch: &RecordBatch,
+        guard: Arc<dyn PhysicalExpr>,
+        zero: Arc<dyn PhysicalExpr>,
+        numerator: Arc<dyn PhysicalExpr>,
+        denominator: Arc<dyn PhysicalExpr>,
+        else_: Option<Arc<dyn PhysicalExpr>>,
+        expected_eval_method: EvalMethod,
+    ) -> Result<ArrayRef> {
+        let when1 = binary(guard, Operator::Gt, zero, &batch.schema())?;
+        let then1 = binary(numerator, Operator::Divide, denominator, &batch.schema())?;
+
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when1, then1)],
+            else_,
+            batch.schema().as_ref(),
+        )?;
+        let case = expr
+            .as_any()
+            .downcast_ref::<CaseExpr>()
+            .expect("expected case expression");
+        assert_eq!(case.eval_method, expected_eval_method);
+        Ok(expr
+            .evaluate(batch)?
+            .into_array(batch.num_rows())
+            .expect("Failed to convert to array"))
+    }
+
+    #[test]
+    fn case_without_expr_divide_by_zero_no_cast() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        // CASE WHEN a > 0 THEN 25 / a ELSE null END
+        let result = case_div_0_test(
+            &batch,
+            col("a", &schema)?,
+            lit(0i32),
+            lit(25i32),
+            col("a", &schema)?,
+            None,
+            EvalMethod::DivideGtZero,
+        )?;
+        let result = as_int32_array(&result).expect("failed to downcast to Int32Array");
+
+        let expected = &Int32Array::from(vec![Some(25), None, None, Some(5)]);
+
+        assert_eq!(expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_without_expr_divide_by_zero_always_divide() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        // CASE WHEN 2 > 0 THEN a / 2 ELSE null END
+        let result = case_div_0_test(
+            &batch,
+            lit(2i32),
+            lit(0i32),
+            col("a", &schema)?,
+            lit(2i32),
+            None,
+            EvalMethod::NoExpression,
+        )?;
+        let result = as_int32_array(&result).expect("failed to downcast to Int32Array");
+
+        let expected = &Int32Array::from(vec![Some(0), Some(0), None, Some(2)]);
+
+        assert_eq!(expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_without_expr_divide_by_zero_no_const() -> Result<()> {
+        let batch = case_test_batch3_floats()?;
+        let schema = batch.schema();
+
+        // CASE WHEN y > 0 THEN x / y ELSE null END
+        let result = case_div_0_test(
+            &batch,
+            col("y", &schema)?,
+            lit(0i32),
+            col("x", &schema)?,
+            col("y", &schema)?,
+            None,
+            EvalMethod::DivideGtZero,
+        )?;
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
+        let expected =
+            &Float64Array::from(vec![Some(68.85714285714286), None, None, Some(1.0)]);
+
+        assert_eq!(expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_without_expr_divide_by_zero_broken_guard_inf() -> Result<()> {
+        let batch = case_test_batch3_floats()?;
+        let schema = batch.schema();
+
+        // CASE WHEN a > 0 THEN x / y ELSE NULL END
+        // which hits an infinity
+        let result = case_div_0_test(
+            &batch,
+            col("a", &schema)?,
+            lit(0.0f64),
+            col("x", &schema)?,
+            col("y", &schema)?,
+            None,
+            EvalMethod::NoExpression,
+        )?;
+        let result =
+            as_float64_array(&result).expect("failed to downcast to Float64Array");
+
+        let expected = &Float64Array::from(vec![
+            Some(68.85714285714286),
+            Some(f64::INFINITY),
+            None,
+            None,
+        ]);
+
+        assert_eq!(expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn case_without_expr_divide_by_zero_broken_guard_error() -> Result<()> {
+        let batch = case_test_batch3_ints()?;
+        let schema = batch.schema();
+
+        // CASE WHEN a > 0 THEN x / y ELSE NULL END
+        // which hits an error
+        let result = case_div_0_test(
+            &batch,
+            col("a", &schema)?,
+            lit(0i32),
+            col("x", &schema)?,
+            col("y", &schema)?,
+            None,
+            EvalMethod::NoExpression,
+        );
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::ArrowError(ArrowError::DivideByZero, None)
+        ));
 
         Ok(())
     }
@@ -792,6 +1076,38 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let a = Int32Array::from(vec![Some(1), Some(0), None, Some(5)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        Ok(batch)
+    }
+
+    fn case_test_batch3_floats() -> Result<RecordBatch> {
+        let schema = Schema::new(vec![
+            Field::new("a", Float64, true),
+            Field::new("x", Float64, true),
+            Field::new("y", Float64, true),
+        ]);
+        let a = Float64Array::from(vec![Some(1.0), Some(1.0), None, Some(-1.0)]);
+        let x = Float64Array::from(vec![Some(77.12), Some(10.0), Some(111.2), Some(5.0)]);
+        let y = Float64Array::from(vec![Some(1.12), Some(0.0), None, Some(5.0)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(x), Arc::new(y)],
+        )?;
+        Ok(batch)
+    }
+
+    fn case_test_batch3_ints() -> Result<RecordBatch> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("x", DataType::Int32, true),
+            Field::new("y", DataType::Int32, true),
+        ]);
+        let a = Int32Array::from(vec![Some(1), Some(1), None, Some(-1)]);
+        let x = Int32Array::from(vec![Some(77), Some(10), Some(111), Some(5)]);
+        let y = Int32Array::from(vec![Some(1), Some(0), None, Some(5)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(a), Arc::new(x), Arc::new(y)],
+        )?;
         Ok(batch)
     }
 
