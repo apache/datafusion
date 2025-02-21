@@ -742,7 +742,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         source,
     };
 
-    roundtrip_test(scan_config.new_exec())
+    roundtrip_test(scan_config.build())
 }
 
 #[tokio::test]
@@ -773,7 +773,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         source,
     };
 
-    roundtrip_test(scan_config.new_exec())
+    roundtrip_test(scan_config.build())
 }
 
 #[test]
@@ -919,7 +919,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         }
     }
 
-    let exec_plan = scan_config.new_exec();
+    let exec_plan = scan_config.build();
 
     let ctx = SessionContext::new();
     roundtrip_test_and_return(exec_plan, &ctx, &CustomPhysicalExtensionCodec {})?;

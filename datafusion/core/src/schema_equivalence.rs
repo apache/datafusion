@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::{DataType, Field, Fields, Schema};
+use arrow::datatypes::{DataType, Field, Fields, Schema};
 
 /// Verifies whether the original planned schema can be satisfied with data
 /// adhering to the candidate schema. In practice, this is equality check on the

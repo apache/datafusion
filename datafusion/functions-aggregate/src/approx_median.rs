@@ -20,8 +20,8 @@
 use std::any::Any;
 use std::fmt::Debug;
 
-use arrow::{datatypes::DataType, datatypes::Field};
-use arrow_schema::DataType::{Float64, UInt64};
+use arrow::datatypes::DataType::{Float64, UInt64};
+use arrow::datatypes::{DataType, Field};
 
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};

@@ -115,7 +115,7 @@ WINDOW w AS (PARTITION BY depname ORDER BY salary DESC);
 
 The syntax for the OVER-clause is
 
-```
+```sql
 function([expr])
   OVER(
     [PARTITION BY expr[, …]]
@@ -126,7 +126,7 @@ function([expr])
 
 where **frame_clause** is one of:
 
-```
+```sql
   { RANGE | ROWS | GROUPS } frame_start
   { RANGE | ROWS | GROUPS } BETWEEN frame_start AND frame_end
 ```
@@ -162,7 +162,7 @@ All [aggregate functions](aggregate_functions.md) can be used as window function
 
 Relative rank of the current row: (number of rows preceding or peer with current row) / (total rows).
 
-```
+```sql
 cume_dist()
 ```
 
@@ -170,7 +170,7 @@ cume_dist()
 
 Returns the rank of the current row without gaps. This function ranks rows in a dense manner, meaning consecutive ranks are assigned even for identical values.
 
-```
+```sql
 dense_rank()
 ```
 
@@ -178,7 +178,7 @@ dense_rank()
 
 Integer ranging from 1 to the argument value, dividing the partition as equally as possible
 
-```
+```sql
 ntile(expression)
 ```
 
@@ -190,7 +190,7 @@ ntile(expression)
 
 Returns the percentage rank of the current row within its partition. The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.
 
-```
+```sql
 percent_rank()
 ```
 
@@ -198,7 +198,7 @@ percent_rank()
 
 Returns the rank of the current row within its partition, allowing gaps between ranks. This function provides a ranking similar to `row_number`, but skips ranks for identical values.
 
-```
+```sql
 rank()
 ```
 
@@ -206,7 +206,7 @@ rank()
 
 Number of the current row within its partition, counting from 1.
 
-```
+```sql
 row_number()
 ```
 
@@ -222,7 +222,7 @@ row_number()
 
 Returns value evaluated at the row that is the first row of the window frame.
 
-```
+```sql
 first_value(expression)
 ```
 
@@ -234,7 +234,7 @@ first_value(expression)
 
 Returns value evaluated at the row that is offset rows before the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
 
-```
+```sql
 lag(expression, offset, default)
 ```
 
@@ -248,7 +248,7 @@ lag(expression, offset, default)
 
 Returns value evaluated at the row that is the last row of the window frame.
 
-```
+```sql
 last_value(expression)
 ```
 
@@ -260,7 +260,7 @@ last_value(expression)
 
 Returns value evaluated at the row that is offset rows after the current row within the partition; if there is no such row, instead return default (which must be of the same type as value).
 
-```
+```sql
 lead(expression, offset, default)
 ```
 
@@ -274,7 +274,7 @@ lead(expression, offset, default)
 
 Returns value evaluated at the row that is the nth row of the window frame (counting from 1); null if no such row.
 
-```
+```sql
 nth_value(expression, n)
 ```
 

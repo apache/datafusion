@@ -27,6 +27,7 @@ use std::io;
 use std::result;
 use std::sync::Arc;
 
+use crate::utils::datafusion_strsim::normalized_levenshtein;
 use crate::utils::quote_identifier;
 use crate::{Column, DFSchema, Diagnostic, TableReference};
 #[cfg(feature = "avro")]
@@ -190,6 +191,11 @@ impl Display for SchemaError {
                     .iter()
                     .map(|column| column.flat_name().to_lowercase())
                     .collect::<Vec<String>>();
+
+                let valid_fields_names = valid_fields
+                    .iter()
+                    .map(|column| column.flat_name())
+                    .collect::<Vec<String>>();
                 if lower_valid_fields.contains(&field.flat_name().to_lowercase()) {
                     write!(
                         f,
@@ -198,7 +204,15 @@ impl Display for SchemaError {
                         field.quoted_flat_name()
                     )?;
                 }
-                if !valid_fields.is_empty() {
+                let field_name = field.name();
+                if let Some(matched) = valid_fields_names
+                    .iter()
+                    .filter(|str| normalized_levenshtein(str, field_name) >= 0.5)
+                    .collect::<Vec<&String>>()
+                    .first()
+                {
+                    write!(f, ". Did you mean '{matched}'?")?;
+                } else if !valid_fields.is_empty() {
                     write!(
                         f,
                         ". Valid fields are {}",
@@ -468,6 +482,11 @@ impl DataFusionError {
         "".to_owned()
     }
 
+    /// Return a [`DataFusionErrorBuilder`] to build a [`DataFusionError`]
+    pub fn builder() -> DataFusionErrorBuilder {
+        DataFusionErrorBuilder::default()
+    }
+
     fn error_prefix(&self) -> &'static str {
         match self {
             DataFusionError::ArrowError(_, _) => "Arrow error: ",
@@ -602,6 +621,9 @@ impl DataFusionError {
         DiagnosticsIterator { head: self }.next()
     }
 
+    /// Return an iterator over this [`DataFusionError`] and any other
+    /// [`DataFusionError`]s in a [`DataFusionError::Collection`].
+    ///
     /// Sometimes DataFusion is able to collect multiple errors in a SQL query
     /// before terminating, e.g. across different expressions in a SELECT
     /// statements or different sides of a UNION. This method returns an
@@ -634,29 +656,71 @@ impl DataFusionError {
     }
 }
 
+/// A builder for [`DataFusionError`]
+///
+/// This builder can be used to collect multiple errors and return them as a
+/// [`DataFusionError::Collection`].
+///
+/// # Example: no errors
+/// ```
+/// # use datafusion_common::DataFusionError;
+/// let mut builder = DataFusionError::builder();
+/// // ok_or returns the value if no errors have been added
+/// assert_eq!(builder.error_or(42).unwrap(), 42);
+/// ```
+///
+/// # Example: with errors
+/// ```
+/// # use datafusion_common::{assert_contains, DataFusionError};
+/// let mut builder = DataFusionError::builder();
+/// builder.add_error(DataFusionError::Internal("foo".to_owned()));
+/// // ok_or returns the value if no errors have been added
+/// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+/// ```
+#[derive(Debug, Default)]
 pub struct DataFusionErrorBuilder(Vec<DataFusionError>);
 
 impl DataFusionErrorBuilder {
+    /// Create a new [`DataFusionErrorBuilder`]
     pub fn new() -> Self {
-        Self(Vec::new())
+        Default::default()
     }
 
+    /// Add an error to the in progress list
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_common::{assert_contains, DataFusionError};
+    /// let mut builder = DataFusionError::builder();
+    /// builder.add_error(DataFusionError::Internal("foo".to_owned()));
+    /// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+    /// ```
     pub fn add_error(&mut self, error: DataFusionError) {
         self.0.push(error);
     }
 
+    /// Add an error to the in progress list, returning the builder
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_common::{assert_contains, DataFusionError};
+    /// let builder = DataFusionError::builder()
+    ///   .with_error(DataFusionError::Internal("foo".to_owned()));
+    /// assert_contains!(builder.error_or(42).unwrap_err().to_string(), "Internal error: foo");
+    /// ```
+    pub fn with_error(mut self, error: DataFusionError) -> Self {
+        self.0.push(error);
+        self
+    }
+
+    /// Returns `Ok(ok)` if no errors were added to the builder,
+    /// otherwise returns a `Result::Err`
     pub fn error_or<T>(self, ok: T) -> Result<T, DataFusionError> {
         match self.0.len() {
             0 => Ok(ok),
             1 => Err(self.0.into_iter().next().expect("length matched 1")),
             _ => Err(DataFusionError::Collection(self.0)),
         }
-    }
-}
-
-impl Default for DataFusionErrorBuilder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -825,6 +889,27 @@ pub fn unqualified_field_not_found(name: &str, schema: &DFSchema) -> DataFusionE
         field: Box::new(Column::new_unqualified(name)),
         valid_fields: schema.columns().to_vec(),
     })
+}
+
+pub fn add_possible_columns_to_diag(
+    diagnostic: &mut Diagnostic,
+    field: &Column,
+    valid_fields: &[Column],
+) {
+    let field_names: Vec<String> = valid_fields
+        .iter()
+        .filter_map(|f| {
+            if normalized_levenshtein(f.name(), field.name()) >= 0.5 {
+                Some(f.flat_name())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for name in field_names {
+        diagnostic.add_note(format!("possible column {}", name), None);
+    }
 }
 
 #[cfg(test)]

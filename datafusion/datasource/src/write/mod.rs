@@ -21,30 +21,30 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use crate::datasource::file_format::file_compression_type::FileCompressionType;
-use crate::datasource::physical_plan::FileSinkConfig;
-use crate::error::Result;
+use crate::file_compression_type::FileCompressionType;
+use crate::file_sink_config::FileSinkConfig;
+use datafusion_common::error::Result;
 
 use arrow::array::RecordBatch;
-use arrow_schema::Schema;
+use arrow::datatypes::Schema;
 use bytes::Bytes;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use tokio::io::AsyncWrite;
 
-pub(crate) mod demux;
-pub(crate) mod orchestration;
+pub mod demux;
+pub mod orchestration;
 
 /// A buffer with interior mutability shared by the SerializedFileWriter and
 /// ObjectStore writer
 #[derive(Clone)]
-pub(crate) struct SharedBuffer {
+pub struct SharedBuffer {
     /// The inner buffer for reading and writing
     ///
     /// The lock is used to obtain internal mutability, so no worry about the
     /// lock contention.
-    pub(crate) buffer: Arc<futures::lock::Mutex<Vec<u8>>>,
+    pub buffer: Arc<futures::lock::Mutex<Vec<u8>>>,
 }
 
 impl SharedBuffer {
@@ -79,7 +79,7 @@ pub trait BatchSerializer: Sync + Send {
 /// with the specified compression.
 /// We drop the `AbortableWrite` struct and the writer will not try to cleanup on failure.
 /// Users can configure automatic cleanup with their cloud provider.
-pub(crate) async fn create_writer(
+pub async fn create_writer(
     file_compression_type: FileCompressionType,
     location: &Path,
     object_store: Arc<dyn ObjectStore>,
@@ -91,7 +91,7 @@ pub(crate) async fn create_writer(
 /// Converts table schema to writer schema, which may differ in the case
 /// of hive style partitioning where some columns are removed from the
 /// underlying files.
-pub(crate) fn get_writer_schema(config: &FileSinkConfig) -> Arc<Schema> {
+pub fn get_writer_schema(config: &FileSinkConfig) -> Arc<Schema> {
     if !config.table_partition_cols.is_empty() && !config.keep_partition_by_columns {
         let schema = config.output_schema();
         let partition_names: Vec<_> =

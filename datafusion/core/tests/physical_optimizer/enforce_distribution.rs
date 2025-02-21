@@ -182,7 +182,7 @@ fn parquet_exec_multiple_sorted(
         vec![PartitionedFile::new("y".to_string(), 100)],
     ])
     .with_output_ordering(output_ordering)
-    .new_exec()
+    .build()
 }
 
 fn csv_exec() -> Arc<DataSourceExec> {
@@ -197,7 +197,7 @@ fn csv_exec_with_sort(output_ordering: Vec<LexOrdering>) -> Arc<DataSourceExec> 
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(output_ordering)
-    .new_exec()
+    .build()
 }
 
 fn csv_exec_multiple() -> Arc<DataSourceExec> {
@@ -216,7 +216,7 @@ fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSource
         vec![PartitionedFile::new("y".to_string(), 100)],
     ])
     .with_output_ordering(output_ordering)
-    .new_exec()
+    .build()
 }
 
 fn projection_exec_with_alias(
@@ -2368,7 +2368,7 @@ fn parallelization_compressed_csv() -> Result<()> {
             )
             .with_file(PartitionedFile::new("x".to_string(), 100))
             .with_file_compression_type(compression_type)
-            .new_exec(),
+            .build(),
             vec![("a".to_string(), "a".to_string())],
         );
         assert_optimized!(expected, plan, true, 2, true, 10, false);

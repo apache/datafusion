@@ -22,7 +22,7 @@ use crate::utils::{
     add_sort_above, is_sort, is_sort_preserving_merge, is_union, is_window,
 };
 
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{
     ConcreteTreeNode, Transformed, TreeNode, TreeNodeRecursion,
 };

@@ -25,7 +25,9 @@ use crate::arrow::util::pretty;
 use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::format_as_file_type;
 use crate::datasource::file_format::json::JsonFormatFactory;
-use crate::datasource::{provider_as_source, MemTable, TableProvider};
+use crate::datasource::{
+    provider_as_source, DefaultTableSource, MemTable, TableProvider,
+};
 use crate::error::Result;
 use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
@@ -45,8 +47,7 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, StringArray};
 use arrow::compute::{cast, concat};
-use arrow::datatypes::{DataType, Field};
-use arrow_schema::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
     exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
@@ -63,6 +64,7 @@ use datafusion_functions_aggregate::expr_fn::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_sql::TableReference;
 
 /// Contains options that control how data is
 /// written out from a DataFrame
@@ -1527,8 +1529,6 @@ impl DataFrame {
         table_name: &str,
         write_options: DataFrameWriteOptions,
     ) -> Result<Vec<RecordBatch>, DataFusionError> {
-        let arrow_schema = Schema::from(self.schema());
-
         let plan = if write_options.sort_by.is_empty() {
             self.plan
         } else {
@@ -1537,10 +1537,19 @@ impl DataFrame {
                 .build()?
         };
 
+        let table_ref: TableReference = table_name.into();
+        let table_schema = self.session_state.schema_for_ref(table_ref.clone())?;
+        let target = match table_schema.table(table_ref.table()).await? {
+            Some(ref provider) => Ok(Arc::clone(provider)),
+            _ => plan_err!("No table named '{table_name}'"),
+        }?;
+
+        let target = Arc::new(DefaultTableSource::new(target));
+
         let plan = LogicalPlanBuilder::insert_into(
             plan,
-            table_name.to_owned(),
-            &arrow_schema,
+            table_ref,
+            target,
             write_options.insert_op,
         )?
         .build()?;
@@ -1802,7 +1811,8 @@ impl DataFrame {
             .iter()
             .map(|(qualifier, field)| {
                 if qualifier.eq(&qualifier_rename) && field.as_ref() == field_rename {
-                    col(Column::from((qualifier, field))).alias(new_name)
+                    col(Column::from((qualifier, field)))
+                        .alias_qualified(qualifier.cloned(), new_name)
                 } else {
                     col(Column::from((qualifier, field)))
                 }

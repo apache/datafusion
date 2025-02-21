@@ -119,6 +119,7 @@ Here are some active projects using DataFusion:
 - [ROAPI](https://github.com/roapi/roapi)
 - [Sail](https://github.com/lakehq/sail) Unifying stream, batch, and AI workloads with Apache Spark compatibility
 - [Seafowl](https://github.com/splitgraph/seafowl) CDN-friendly analytical database
+- [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
 - [Spice.ai](https://github.com/spiceai/spiceai) Unified SQL query interface & materialization engine
 - [Synnada](https://synnada.ai/) Streaming-first framework for data products
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar

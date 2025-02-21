@@ -32,7 +32,8 @@ use crate::{
     PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow::compute::SortOptions;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     internal_err, plan_err, Constraint, Constraints, HashMap, JoinSide, JoinType, Result,
@@ -99,7 +100,7 @@ use itertools::Itertools;
 /// # Code Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::{Schema, Field, DataType, SchemaRef};
+/// # use arrow::datatypes::{Schema, Field, DataType, SchemaRef};
 /// # use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 /// # use datafusion_physical_expr::expressions::col;
 /// use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -2403,8 +2404,7 @@ mod tests {
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::ScalarFunctionExpr;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{Fields, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
     use datafusion_common::{Constraint, ScalarValue};
     use datafusion_expr::Operator;
 

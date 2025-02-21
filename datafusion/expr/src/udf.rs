@@ -899,13 +899,8 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_type_from_args(args)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
-        self.inner.invoke_batch(args, number_rows)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        self.inner.invoke_with_args(args)
     }
 
     fn simplify(
@@ -980,6 +975,7 @@ pub mod scalar_doc_sections {
             DOC_SECTION_STRUCT,
             DOC_SECTION_MAP,
             DOC_SECTION_HASHING,
+            DOC_SECTION_UNION,
             DOC_SECTION_OTHER,
         ]
     }
@@ -996,6 +992,7 @@ pub mod scalar_doc_sections {
             DOC_SECTION_STRUCT,
             DOC_SECTION_MAP,
             DOC_SECTION_HASHING,
+            DOC_SECTION_UNION,
             DOC_SECTION_OTHER,
         ]
     }
@@ -1069,5 +1066,11 @@ The following regular expression functions are supported:"#,
         include: true,
         label: "Other Functions",
         description: None,
+    };
+
+    pub const DOC_SECTION_UNION: DocSection = DocSection {
+        include: true,
+        label: "Union Functions",
+        description: Some("Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator"),
     };
 }

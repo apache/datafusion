@@ -32,7 +32,8 @@ use crate::datasource::physical_plan::{
 };
 use crate::datasource::schema_adapter::SchemaAdapterFactory;
 
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 use datafusion_common::{exec_err, Result};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;

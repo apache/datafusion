@@ -24,8 +24,8 @@ use crate::aggregates::{
 };
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
+use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::print_batches;
-use arrow_schema::SchemaRef;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_execution::TaskContext;

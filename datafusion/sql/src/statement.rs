@@ -29,7 +29,7 @@ use crate::planner::{
 };
 use crate::utils::normalize_ident;
 
-use arrow_schema::{DataType, Fields};
+use arrow::datatypes::{DataType, Fields};
 use datafusion_common::error::_plan_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
@@ -1709,14 +1709,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
-        let schema = (*table_source.schema()).clone();
-        let schema = DFSchema::try_from(schema)?;
-        let scan = LogicalPlanBuilder::scan(
-            object_name_to_string(&table_name),
-            table_source,
-            None,
-        )?
-        .build()?;
+        let schema = table_source.schema().to_dfschema_ref()?;
+        let scan =
+            LogicalPlanBuilder::scan(table_ref.clone(), Arc::clone(&table_source), None)?
+                .build()?;
         let mut planner_context = PlannerContext::new();
 
         let source = match predicate_expr {
@@ -1724,7 +1720,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(predicate_expr) => {
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, &schema, &mut planner_context)?;
-                let schema = Arc::new(schema.clone());
+                let schema = Arc::new(schema);
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
@@ -1738,7 +1734,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let plan = LogicalPlan::Dml(DmlStatement::new(
             table_ref,
-            schema.into(),
+            table_source,
             WriteOp::Delete,
             Arc::new(source),
         ));
@@ -1851,7 +1847,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let plan = LogicalPlan::Dml(DmlStatement::new(
             table_name,
-            table_schema,
+            table_source,
             WriteOp::Update,
             Arc::new(source),
         ));
@@ -1980,7 +1976,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let plan = LogicalPlan::Dml(DmlStatement::new(
             table_name,
-            Arc::new(table_schema),
+            Arc::clone(&table_source),
             WriteOp::Insert(insert_op),
             Arc::new(source),
         ));
