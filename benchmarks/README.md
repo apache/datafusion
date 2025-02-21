@@ -275,6 +275,60 @@ FLAGS:
 ...
 ```
 
+# Writing a new benchmark
+
+## Creating or downloading data outside of the benchmark
+
+If you want to create or download the data with Rust as part of running the benchmark, see the next
+section on adding a benchmark subcommand and add code to create or download data as part of its
+`run` function.
+
+If you want to create or download the data with shell commands, in `benchmarks/bench.sh`, define a
+new function named `data_[your benchmark name]` and call that function in the `data` command case
+as a subcommand case named for your benchmark. Also call the new function in the `data all` case.
+
+## Adding the benchmark subcommand
+
+In `benchmarks/bench.sh`, define a new function named `run_[your benchmark name]` following the
+example of existing `run_*` functions. Call that function in the `run` command case as a subcommand
+case named for your benchmark. subcommand for your benchmark. Also call the new function in the
+`run all` case. Add documentation for your benchmark to the text in the `usage` function.
+
+In `benchmarks/src/bin/dfbench.rs`, add a `dfbench` subcommand for your benchmark by:
+
+- Adding a new variant to the `Options` enum
+- Adding corresponding code to handle the new variant in the `main` function, similar to the other
+  variants
+- Adding a module to the `use datafusion_benchmarks::{}` statement
+
+In `benchmarks/src/lib.rs`, declare the new module you imported in `dfbench.rs` and create the
+corresponding file(s) for the module's code.
+
+In the module, following the pattern of other existing benchmarks, define a `RunOpt` struct with:
+
+- A doc comment that will become the `--help` output for the subcommand
+- A `run` method that the `dfbench` `main` function will call.
+- A `--path` structopt field that the `bench.sh` script should use with `${DATA_DIR}` to define
+  where the input data should be stored.
+- An `--output` structopt field that the `bench.sh` script should use with `"${RESULTS_FILE}"` to
+  define where the benchmark's results should be stored.
+
+### Creating or downloading data as part of the benchmark
+
+Use the `--path` structopt field defined on the `RunOpt` struct to know where to store or look for
+the data. Generate the data using whatever Rust code you'd like, before the code that will be
+measuring an operation.
+
+### Collecting data
+
+Your benchmark should create and use an instance of `BenchmarkRun` defined in `benchmarks/src/util/run.rs` as follows:
+
+- Call its `start_new_case` method with a string that will appear in the "Query" column of the
+  compare output.
+- Use `write_iter` to record elapsed times for the behavior you're benchmarking.
+- When all cases are done, call the `BenchmarkRun`'s `maybe_write_json` method, giving it the value
+  of the `--output` structopt field on `RunOpt`.
+
 # Benchmarks
 
 The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience
