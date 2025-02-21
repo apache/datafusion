@@ -62,7 +62,9 @@ impl Command {
             Self::Help => {
                 let now = Instant::now();
                 let command_batch = all_commands_info();
-                print_options.print_batches(command_batch.schema(), &[command_batch], now)
+                let schema = command_batch.schema();
+                let num_rows = command_batch.num_rows();
+                print_options.print_batches(schema, &[command_batch], now, num_rows)
             }
             Self::ListTables => {
                 exec_and_print(ctx, print_options, "SHOW TABLES".into()).await

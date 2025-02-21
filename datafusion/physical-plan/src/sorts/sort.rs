@@ -1142,10 +1142,10 @@ mod tests {
     use crate::collect;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
-    use crate::memory::MemorySourceConfig;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::TestMemoryExec;
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
@@ -1531,7 +1531,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data]).unwrap();
         let input =
-            MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
                 .unwrap();
 
         let sort_exec = Arc::new(SortExec::new(
@@ -1602,7 +1602,7 @@ mod tests {
                     },
                 },
             ]),
-            MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?,
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?,
         ));
 
         assert_eq!(DataType::Int32, *sort_exec.schema().field(0).data_type());
@@ -1688,7 +1688,7 @@ mod tests {
                     },
                 },
             ]),
-            MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?,
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?,
         ));
 
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());

@@ -32,6 +32,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::{AvroSource, CsvSource, FileScanConfig};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
@@ -57,7 +58,6 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};

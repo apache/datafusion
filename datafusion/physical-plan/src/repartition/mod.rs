@@ -1051,6 +1051,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::test::TestMemoryExec;
     use crate::{
         test::{
             assert_is_pending,
@@ -1059,7 +1060,7 @@ mod tests {
                 ErrorExec, MockExec,
             },
         },
-        {collect, expressions::col, memory::MemorySourceConfig},
+        {collect, expressions::col},
     };
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
@@ -1164,11 +1165,8 @@ mod tests {
     ) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(TaskContext::default());
         // create physical plan
-        let exec = MemorySourceConfig::try_new_exec(
-            &input_partitions,
-            Arc::clone(schema),
-            None,
-        )?;
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(schema), None)?;
         let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // execute and collect results
@@ -1559,11 +1557,8 @@ mod tests {
         let task_ctx = Arc::new(task_ctx);
 
         // create physical plan
-        let exec = MemorySourceConfig::try_new_exec(
-            &input_partitions,
-            Arc::clone(&schema),
-            None,
-        )?;
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
         let exec = RepartitionExec::try_new(exec, partitioning)?;
 
         // pull partitions
@@ -1604,8 +1599,7 @@ mod test {
     use arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
-    use crate::memory::MemorySourceConfig;
-    use crate::source::DataSourceExec;
+    use crate::test::TestMemoryExec;
     use crate::union::UnionExec;
 
     use datafusion_physical_expr::expressions::col;
@@ -1711,15 +1705,15 @@ mod test {
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-        MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
+        TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
     }
 
     fn sorted_memory_exec(
         schema: &SchemaRef,
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
-        Arc::new(DataSourceExec::new(Arc::new(
-            MemorySourceConfig::try_new(&[vec![]], Arc::clone(schema), None)
+        Arc::new(TestMemoryExec::update_cache(Arc::new(
+            TestMemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_exprs])
                 .unwrap(),

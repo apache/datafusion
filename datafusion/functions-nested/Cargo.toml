@@ -53,8 +53,8 @@ log = { workspace = true }
 paste = "1.0.14"
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["async_tokio"] }
-rand = "0.8.5"
+criterion = { workspace = true, features = ["async_tokio"] }
+rand = { workspace = true }
 
 [[bench]]
 harness = false
