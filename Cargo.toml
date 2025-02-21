@@ -193,4 +193,5 @@ unused_qualifications = "deny"
 
 [patch.crates-io]
 #object_store = { path = "../../../apache/arrow-rs/object_store" }
-object_store = { git = "https://github.com/waynr/arrow-rs", branch = "object_store/introduce-extensions" }
+#object_store = { git = "https://github.com/waynr/arrow-rs", branch = "object_store/introduce-extensions" }
+object_store = { git = "https://github.com/waynr/arrow-rs", rev = "3c4a84376a25af362597dad66821ff55777fd370" }
