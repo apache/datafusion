@@ -23,11 +23,14 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{assert_contains, plan_err, Result, TableReference};
+use datafusion_expr::planner::ExprPlanner;
 use datafusion_expr::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_functions_aggregate::planner::AggregateFunctionPlanner;
+use datafusion_functions_window::planner::WindowFunctionPlanner;
 use datafusion_optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
@@ -195,7 +198,7 @@ fn between_date32_plus_interval() -> Result<()> {
     WHERE col_date32 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(*)]]\
         \n  Projection: \
         \n    Filter: test.col_date32 >= Date32(\"1998-03-18\") AND test.col_date32 <= Date32(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date32]";
@@ -209,7 +212,7 @@ fn between_date64_plus_interval() -> Result<()> {
     WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(*)]]\
         \n  Projection: \
         \n    Filter: test.col_date64 >= Date64(\"1998-03-18\") AND test.col_date64 <= Date64(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date64]";
@@ -266,7 +269,7 @@ fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
     let expected = "Projection: test.col_int32 + test.col_uint32 AS c, count(*)\
-    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(Int64(1)) AS count(*)]]\
+    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(*)]]\
     \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan}"));
@@ -311,7 +314,7 @@ fn eliminate_redundant_null_check_on_count() {
     let plan = test_sql(sql).unwrap();
     let expected = "\
         Projection: test.col_int32, count(*) AS c\
-        \n  Aggregate: groupBy=[[test.col_int32]], aggr=[[count(Int64(1)) AS count(*)]]\
+        \n  Aggregate: groupBy=[[test.col_int32]], aggr=[[count(*)]]\
         \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan}"));
 }
@@ -422,7 +425,12 @@ fn test_sql(sql: &str) -> Result<LogicalPlan> {
     let context_provider = MyContextProvider::default()
         .with_udaf(sum_udaf())
         .with_udaf(count_udaf())
-        .with_udaf(avg_udaf());
+        .with_udaf(avg_udaf())
+        .with_expr_planners(vec![
+            Arc::new(AggregateFunctionPlanner),
+            Arc::new(WindowFunctionPlanner),
+        ]);
+
     let sql_to_rel = SqlToRel::new(&context_provider);
     let plan = sql_to_rel.sql_statement_to_plan(statement.clone())?;
 
@@ -440,12 +448,18 @@ fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 struct MyContextProvider {
     options: ConfigOptions,
     udafs: HashMap<String, Arc<AggregateUDF>>,
+    expr_planners: Vec<Arc<dyn ExprPlanner>>,
 }
 
 impl MyContextProvider {
     fn with_udaf(mut self, udaf: Arc<AggregateUDF>) -> Self {
         // TODO: change to to_string() if all the function name is converted to lowercase
         self.udafs.insert(udaf.name().to_lowercase(), udaf);
+        self
+    }
+
+    fn with_expr_planners(mut self, expr_planners: Vec<Arc<dyn ExprPlanner>>) -> Self {
+        self.expr_planners = expr_planners;
         self
     }
 }
@@ -515,6 +529,10 @@ impl ContextProvider for MyContextProvider {
 
     fn udwf_names(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.expr_planners
     }
 }
 
