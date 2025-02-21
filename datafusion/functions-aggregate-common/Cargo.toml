@@ -44,7 +44,7 @@ datafusion-expr-common = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = { workspace = true }
 rand = { workspace = true }
 
 [[bench]]

@@ -55,7 +55,7 @@ petgraph = "0.7.1"
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
-criterion = "0.5"
+criterion = { workspace = true }
 datafusion-functions = { workspace = true }
 rand = { workspace = true }
 rstest = { workspace = true }

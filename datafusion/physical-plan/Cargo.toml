@@ -65,7 +65,7 @@ pin-project-lite = "^0.2.7"
 tokio = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["async_futures"] }
+criterion = { workspace = true, features = ["async_futures"] }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-window = { workspace = true }
 rand = { workspace = true }

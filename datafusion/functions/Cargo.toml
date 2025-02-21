@@ -89,7 +89,7 @@ uuid = { version = "1.13", features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
-criterion = "0.5"
+criterion = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 

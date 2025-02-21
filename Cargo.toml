@@ -95,6 +95,7 @@ async-trait = "0.1.73"
 bigdecimal = "0.4.7"
 bytes = "1.10"
 chrono = { version = "0.4.38", default-features = false }
+criterion = "0.5.1"
 ctor = "0.2.9"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "45.0.0", default-features = false }
@@ -144,7 +145,7 @@ pbjson-types = "0.7"
 # Should match arrow-flight's version of prost.
 prost = "0.13.1"
 prost-derive = "0.13.1"
-rand = "0.8"
+rand = "0.8.5"
 recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.24.0"
