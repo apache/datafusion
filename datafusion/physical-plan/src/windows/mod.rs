@@ -517,31 +517,46 @@ pub(crate) fn window_equivalence_properties(
                 let mut perm = pb_all_lex_combinations
                     .into_iter()
                     .multi_cartesian_product();
+                let mut asc = false;
                 if perm.any(|order| {
-                    window_eq_properties.ordering_satisfy(&LexOrdering::new(order))
+                    if window_eq_properties
+                        .ordering_satisfy(&LexOrdering::new(order.clone()))
+                    {
+                        asc = !order.first().unwrap().options.descending;
+                        true
+                    } else {
+                        false
+                    }
                 }) {
-                    let new_ordering = if sliding_expr
+                    if sliding_expr
                         .get_aggregate_expr()
                         .set_monotonicity()
                         .eq(&SetMonotonicity::Increasing)
+                        && (asc || sliding_expr.partition_by().is_empty())
                     {
-                        vec![LexOrdering::new(vec![PhysicalSortExpr::new(
+                        let new_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
                             Arc::new(Column::new(
                                 expr.name(),
                                 i + input.schema().fields().len(),
                             )),
-                            SortOptions::new(true, true),
-                        )])]
-                    } else {
-                        vec![LexOrdering::new(vec![PhysicalSortExpr::new(
+                            SortOptions::new(false, false),
+                        )]);
+                        window_eq_properties.add_new_ordering(new_ordering);
+                    } else if sliding_expr
+                        .get_aggregate_expr()
+                        .set_monotonicity()
+                        .eq(&SetMonotonicity::Decreasing)
+                        && (!asc || sliding_expr.partition_by().is_empty())
+                    {
+                        let new_ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
                             Arc::new(Column::new(
                                 expr.name(),
                                 i + input.schema().fields().len(),
                             )),
-                            SortOptions::new(false, true),
-                        )])]
+                            SortOptions::new(true, false),
+                        )]);
+                        window_eq_properties.add_new_ordering(new_ordering);
                     };
-                    window_eq_properties.add_new_orderings(new_ordering);
                 }
             }
         }
