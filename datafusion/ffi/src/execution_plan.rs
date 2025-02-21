@@ -383,9 +383,7 @@ mod tests {
             &foreign_plan,
         );
 
-        let mut buf = String::new();
-        write!(&mut buf, "{}", display.one_line()).unwrap();
-        let buf = buf.trim();
+        let buf = display.one_line().to_string().trim();
         assert_eq!(buf, "FFI_ExecutionPlan(number_of_children=0)");
 
         Ok(())
