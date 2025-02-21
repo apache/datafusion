@@ -269,6 +269,11 @@ pub(super) async fn exec_and_print(
                         reservation.try_grow(get_record_batch_memory_size(&batch))?;
                         results.push(batch);
                     }
+                } else if let MaxRows::Unlimited = print_options.maxrows {
+                    // Collect all results for unlimited maxrows
+                    // Try to grow the reservation to accommodate the batch in memory
+                    reservation.try_grow(get_record_batch_memory_size(&batch))?;
+                    results.push(batch);
                 }
                 row_count += curr_num_rows;
             }
