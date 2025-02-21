@@ -243,11 +243,7 @@ impl OrderingEquivalenceClass {
                 count += 1;
             }
         }
-        if count == 4 {
-            true
-        } else {
-            false
-        }
+        count == 4
     }
 }
 

@@ -195,32 +195,19 @@ pub fn bounded_window_exec(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
-    bounded_window_exec_with_partition(col_name, sort_exprs, &[], input, false)
-}
-
-pub fn bounded_window_exec_with_partition(
-    col_name: &str,
-    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
-    partition_by: &[Arc<dyn PhysicalExpr>],
-    input: Arc<dyn ExecutionPlan>,
-    should_reverse: bool,
-) -> Arc<dyn ExecutionPlan> {
     let sort_exprs: LexOrdering = sort_exprs.into_iter().collect();
     let schema = input.schema();
-    let mut window_expr = create_window_expr(
+    let window_expr = create_window_expr(
         &WindowFunctionDefinition::AggregateUDF(count_udaf()),
         "count".to_owned(),
         &[col(col_name, &schema).unwrap()],
-        partition_by,
+        &[],
         sort_exprs.as_ref(),
         Arc::new(WindowFrame::new(Some(false))),
         schema.as_ref(),
         false,
     )
     .unwrap();
-    if should_reverse {
-        window_expr = window_expr.get_reverse_expr().unwrap();
-    }
 
     Arc::new(
         BoundedWindowAggExec::try_new(

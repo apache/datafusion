@@ -37,6 +37,7 @@ use crate::{
 };
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::SortOptions;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
     PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,
@@ -359,7 +360,7 @@ pub(crate) fn window_equivalence_properties(
             partition_by_order.into_iter().multi_cartesian_product();
         let mut all_lexs = all_orders_cartesian
             .into_iter()
-            .map(|inner| LexOrdering::new(inner))
+            .map(LexOrdering::new)
             .collect::<Vec<_>>();
         if !expr.partition_by().is_empty()
             && all_lexs
@@ -498,15 +499,15 @@ pub(crate) fn window_equivalence_properties(
                     .map(|pb| {
                         vec![
                             PhysicalSortExpr::new(
-                                pb.clone(),
+                                Arc::clone(&pb),
                                 SortOptions::new(false, false),
                             ),
                             PhysicalSortExpr::new(
-                                pb.clone(),
+                                Arc::clone(&pb),
                                 SortOptions::new(false, true),
                             ),
                             PhysicalSortExpr::new(
-                                pb.clone(),
+                                Arc::clone(&pb),
                                 SortOptions::new(true, false),
                             ),
                             PhysicalSortExpr::new(pb, SortOptions::new(true, true)),

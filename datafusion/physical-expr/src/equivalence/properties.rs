@@ -1464,11 +1464,10 @@ fn update_properties(
     let normalized_expr = eq_properties
         .eq_group
         .normalize_expr(Arc::clone(&node.expr));
-    if eq_properties.is_expr_constant(&normalized_expr) {
-        node.data.sort_properties = SortProperties::Singleton;
-    } else if eq_properties
-        .normalized_oeq_class()
-        .singleton_options(&normalized_expr)
+    if eq_properties.is_expr_constant(&normalized_expr)
+        || eq_properties
+            .normalized_oeq_class()
+            .singleton_options(&normalized_expr)
     {
         node.data.sort_properties = SortProperties::Singleton;
     } else if let Some(options) = eq_properties

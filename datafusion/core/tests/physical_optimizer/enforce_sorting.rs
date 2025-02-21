@@ -20,18 +20,19 @@ use std::sync::Arc;
 use crate::physical_optimizer::test_utils::{
     aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
     coalesce_partitions_exec, create_test_schema, create_test_schema2,
-    create_test_schema3, create_test_schema4, filter_exec, global_limit_exec,
-    hash_join_exec, limit_exec, local_limit_exec, memory_exec, parquet_exec,
-    repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
-    sort_preserving_merge_exec, sort_preserving_merge_exec_with_fetch,
-    spr_repartition_exec, stream_exec_ordered, union_exec, RequirementsTestExec,
+    create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec,
+    local_limit_exec, memory_exec, parquet_exec, repartition_exec, sort_exec, sort_expr,
+    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,
+    sort_preserving_merge_exec_with_fetch, spr_repartition_exec, stream_exec_ordered,
+    union_exec, RequirementsTestExec,
 };
 
 use datafusion_physical_plan::{displayable, InputOrderMode};
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::Result;
-use datafusion_expr::JoinType;
+use arrow_schema::DataType;
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{JoinType, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
 use datafusion_physical_expr::expressions::{col, Column, NotExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_expr::Partitioning;
@@ -3318,7 +3319,6 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
                 case.partition_by,
             )?) as _
         };
-
         let output_schema = window_exec.schema();
         let sort_expr = case
             .required_sort_columns
@@ -3335,6 +3335,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             })
             .collect::<Vec<_>>();
         let physical_plan = sort_exec(sort_expr, window_exec);
+
         assert_optimized!(
             case.initial_plan,
             case.expected_plan,
