@@ -364,8 +364,6 @@ mod tests {
 
     #[test]
     fn test_round_trip_ffi_execution_plan() -> Result<()> {
-        use std::fmt::Write;
-
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
         let ctx = SessionContext::new();
@@ -383,8 +381,8 @@ mod tests {
             &foreign_plan,
         );
 
-        let buf = display.one_line().to_string().trim();
-        assert_eq!(buf, "FFI_ExecutionPlan(number_of_children=0)");
+        let buf = display.one_line().to_string();
+        assert_eq!(buf.trim(), "FFI_ExecutionPlan(number_of_children=0)");
 
         Ok(())
     }
