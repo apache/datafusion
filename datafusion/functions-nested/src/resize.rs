@@ -127,6 +127,7 @@ impl ScalarUDFImpl for ArrayResize {
         match &arg_types[0] {
             List(field) | FixedSizeList(field, _) => Ok(List(Arc::clone(field))),
             LargeList(field) => Ok(LargeList(Arc::clone(field))),
+            DataType::Null => Ok(DataType::Null),
             _ => exec_err!(
                 "Not reachable, data_type should be List, LargeList or FixedSizeList"
             ),
@@ -158,10 +159,11 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let array = &arg[0];
 
     // Checks if entire array is null
-    if array.null_count() == array.len() {
+    if array.logical_null_count() == array.len() {
         let return_type = match array.data_type() {
             List(field) => List(Arc::clone(field)),
             LargeList(field) => LargeList(Arc::clone(field)),
+            DataType::Null => DataType::Null,
             _ => {
                 return exec_err!(
                     "array_resize does not support type '{:?}'.",
