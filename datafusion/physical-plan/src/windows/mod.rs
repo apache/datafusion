@@ -350,6 +350,26 @@ pub(crate) fn window_equivalence_properties(
     let window_expr_indices =
         ((schema_len - window_exprs.len())..schema_len).collect::<Vec<_>>();
     for (i, expr) in window_exprs.iter().enumerate() {
+        let mut partition_by_order = vec![];
+        for order in expr.partition_by() {
+            let all_orders_at_current_level =
+                all_possible_sort_options(Arc::clone(order));
+            partition_by_order.push(all_orders_at_current_level);
+        }
+        let all_orders_cartesian =
+            partition_by_order.into_iter().multi_cartesian_product();
+        let mut all_lexs = all_orders_cartesian
+            .into_iter()
+            .map(|inner| LexOrdering::new(inner))
+            .collect::<Vec<_>>();
+        if !expr.partition_by().is_empty()
+            && all_lexs
+                .iter()
+                .all(|lex| !window_eq_properties.ordering_satisfy(lex))
+        {
+            return window_eq_properties;
+        }
+
         if let Some(udf_window_expr) = expr.as_any().downcast_ref::<StandardWindowExpr>()
         {
             udf_window_expr.add_equal_orderings(&mut window_eq_properties);
@@ -374,18 +394,6 @@ pub(crate) fn window_equivalence_properties(
                 .end_bound
                 .is_unbounded()
             {
-                let mut partition_by_order = vec![];
-                for order in aggregate_udf_window_expr.partition_by() {
-                    let all_orders_at_current_level =
-                        all_possible_sort_options(Arc::clone(order));
-                    partition_by_order.push(all_orders_at_current_level);
-                }
-                let all_orders_cartesian =
-                    partition_by_order.into_iter().multi_cartesian_product();
-                let mut all_lexs = all_orders_cartesian
-                    .into_iter()
-                    .map(|inner| LexOrdering::new(inner))
-                    .collect::<Vec<_>>();
                 all_lexs.retain(|lex| window_eq_properties.ordering_satisfy(lex));
                 let mut new_lexs = vec![];
                 for lex in all_lexs.iter() {
@@ -442,13 +450,100 @@ pub(crate) fn window_equivalence_properties(
                     )])]
                 };
                 window_eq_properties.add_new_orderings(new_ordering);
+            } else if sliding_expr.get_window_frame().end_bound.is_unbounded()
+                && sliding_expr
+                    .get_aggregate_expr()
+                    .set_monotonicity()
+                    .ne(&SetMonotonicity::NotMonotonic)
+            {
+                all_lexs.retain(|lex| window_eq_properties.ordering_satisfy(lex));
+
+                if sliding_expr
+                    .get_aggregate_expr()
+                    .set_monotonicity()
+                    .eq(&SetMonotonicity::Increasing)
+                {
+                    for lex in all_lexs.iter() {
+                        let mut existing = lex.clone().to_vec();
+                        existing.push(PhysicalSortExpr::new(
+                            Arc::new(Column::new(
+                                expr.name(),
+                                i + input.schema().fields().len(),
+                            )),
+                            SortOptions::new(true, true),
+                        ));
+                        window_eq_properties.add_new_ordering(LexOrdering::new(existing));
+                    }
+                } else {
+                    for lex in all_lexs.iter() {
+                        let mut existing = lex.clone().to_vec();
+                        existing.push(PhysicalSortExpr::new(
+                            Arc::new(Column::new(
+                                expr.name(),
+                                i + input.schema().fields().len(),
+                            )),
+                            SortOptions::new(false, true),
+                        ));
+                        window_eq_properties.add_new_ordering(LexOrdering::new(existing));
+                    }
+                }
+            } else if sliding_expr.get_window_frame().is_causal()
+                && sliding_expr
+                    .get_aggregate_expr()
+                    .set_monotonicity()
+                    .ne(&SetMonotonicity::NotMonotonic)
+            {
+                let pb_expr = sliding_expr.get_aggregate_expr().expressions().to_vec();
+                let pb_all_lex_combinations = pb_expr
+                    .into_iter()
+                    .map(|pb| {
+                        vec![
+                            PhysicalSortExpr::new(
+                                pb.clone(),
+                                SortOptions::new(false, false),
+                            ),
+                            PhysicalSortExpr::new(
+                                pb.clone(),
+                                SortOptions::new(false, true),
+                            ),
+                            PhysicalSortExpr::new(
+                                pb.clone(),
+                                SortOptions::new(true, false),
+                            ),
+                            PhysicalSortExpr::new(pb, SortOptions::new(true, true)),
+                        ]
+                    })
+                    .collect::<Vec<_>>();
+                let mut perm = pb_all_lex_combinations
+                    .into_iter()
+                    .multi_cartesian_product();
+                if perm.any(|order| {
+                    window_eq_properties.ordering_satisfy(&LexOrdering::new(order))
+                }) {
+                    let new_ordering = if sliding_expr
+                        .get_aggregate_expr()
+                        .set_monotonicity()
+                        .eq(&SetMonotonicity::Increasing)
+                    {
+                        vec![LexOrdering::new(vec![PhysicalSortExpr::new(
+                            Arc::new(Column::new(
+                                expr.name(),
+                                i + input.schema().fields().len(),
+                            )),
+                            SortOptions::new(true, true),
+                        )])]
+                    } else {
+                        vec![LexOrdering::new(vec![PhysicalSortExpr::new(
+                            Arc::new(Column::new(
+                                expr.name(),
+                                i + input.schema().fields().len(),
+                            )),
+                            SortOptions::new(false, true),
+                        )])]
+                    };
+                    window_eq_properties.add_new_orderings(new_ordering);
+                }
             }
-            // TODO: SlidingAggregateWindowExpr cannot introduce a new ordering for
-            //       the cases where window frame has a bounded end, yet. Because
-            //       we cannot determine whether the window's incoming elements
-            //       are greater than its outgoing elements. However, we do have
-            //       the necessary tools to support this, and we can extend support
-            //       for these cases in the future.
         }
     }
     window_eq_properties
