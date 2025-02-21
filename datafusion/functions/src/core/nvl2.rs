@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::utils::take_function_args;
 use arrow::array::Array;
 use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{internal_err, utils::take_function_args, Result};
 use datafusion_expr::{
     type_coercion::binary::comparison_coercion, ColumnarValue, Documentation,
-    ScalarUDFImpl, Signature, Volatility,
+    ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
@@ -96,12 +95,8 @@ impl ScalarUDFImpl for NVL2Func {
         Ok(arg_types[1].clone())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        nvl2_func(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        nvl2_func(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {

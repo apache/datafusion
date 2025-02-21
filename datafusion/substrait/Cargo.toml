@@ -41,6 +41,7 @@ pbjson-types = { workspace = true }
 prost = { workspace = true }
 substrait = { version = "0.53", features = ["serde"] }
 url = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 datafusion = { workspace = true, features = ["nested_expressions"] }

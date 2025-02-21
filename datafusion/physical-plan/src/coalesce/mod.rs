@@ -20,7 +20,7 @@ use arrow::array::{
     RecordBatchOptions,
 };
 use arrow::compute::concat_batches;
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use std::sync::Arc;
 
 /// Concatenate multiple [`RecordBatch`]es

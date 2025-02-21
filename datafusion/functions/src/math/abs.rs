@@ -20,18 +20,20 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::utils::take_function_args;
 use arrow::array::{
     ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int16Array,
     Int32Array, Int64Array, Int8Array,
 };
 use arrow::datatypes::DataType;
 use arrow::error::ArrowError;
-use datafusion_common::{internal_datafusion_err, not_impl_err, Result};
+use datafusion_common::{
+    internal_datafusion_err, not_impl_err, utils::take_function_args, Result,
+};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -167,12 +169,8 @@ impl ScalarUDFImpl for AbsFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(&args.args)?;
         let [input] = take_function_args(self.name(), args)?;
 
         let input_data_type = input.data_type();

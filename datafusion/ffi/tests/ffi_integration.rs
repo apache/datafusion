@@ -21,10 +21,13 @@
 mod tests {
 
     use abi_stable::library::RootModule;
+    use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
-    use datafusion::prelude::SessionContext;
+    use datafusion::logical_expr::ScalarUDF;
+    use datafusion::prelude::{col, SessionContext};
     use datafusion_ffi::table_provider::ForeignTableProvider;
-    use datafusion_ffi::tests::TableProviderModuleRef;
+    use datafusion_ffi::tests::{create_record_batch, ForeignLibraryModuleRef};
+    use datafusion_ffi::udf::ForeignScalarUDF;
     use std::path::Path;
     use std::sync::Arc;
 
@@ -61,11 +64,7 @@ mod tests {
         Ok(best_path)
     }
 
-    /// It is important that this test is in the `tests` directory and not in the
-    /// library directory so we can verify we are building a dynamic library and
-    /// testing it via a different executable.
-    #[cfg(feature = "integration-tests")]
-    async fn test_table_provider(synchronous: bool) -> Result<()> {
+    fn get_module() -> Result<ForeignLibraryModuleRef> {
         let expected_version = datafusion_ffi::version();
 
         let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -80,21 +79,29 @@ mod tests {
         // so you will need to change the approach here based on your use case.
         // let target: &std::path::Path = "../../../../target/".as_ref();
         let library_path =
-            compute_library_path::<TableProviderModuleRef>(target_dir.as_path())
+            compute_library_path::<ForeignLibraryModuleRef>(target_dir.as_path())
                 .map_err(|e| DataFusionError::External(Box::new(e)))?
                 .join("deps");
 
         // Load the module
-        let table_provider_module =
-            TableProviderModuleRef::load_from_directory(&library_path)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let module = ForeignLibraryModuleRef::load_from_directory(&library_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         assert_eq!(
-            table_provider_module
+            module
                 .version()
                 .expect("Unable to call version on FFI module")(),
             expected_version
         );
+
+        Ok(module)
+    }
+
+    /// It is important that this test is in the `tests` directory and not in the
+    /// library directory so we can verify we are building a dynamic library and
+    /// testing it via a different executable.
+    async fn test_table_provider(synchronous: bool) -> Result<()> {
+        let table_provider_module = get_module()?;
 
         // By calling the code below, the table provided will be created within
         // the module's code.
@@ -116,9 +123,9 @@ mod tests {
         let results = df.collect().await?;
 
         assert_eq!(results.len(), 3);
-        assert_eq!(results[0], datafusion_ffi::tests::create_record_batch(1, 5));
-        assert_eq!(results[1], datafusion_ffi::tests::create_record_batch(6, 1));
-        assert_eq!(results[2], datafusion_ffi::tests::create_record_batch(7, 5));
+        assert_eq!(results[0], create_record_batch(1, 5));
+        assert_eq!(results[1], create_record_batch(6, 1));
+        assert_eq!(results[2], create_record_batch(7, 5));
 
         Ok(())
     }
@@ -131,5 +138,45 @@ mod tests {
     #[tokio::test]
     async fn sync_test_table_provider() -> Result<()> {
         test_table_provider(true).await
+    }
+
+    /// This test validates that we can load an external module and use a scalar
+    /// udf defined in it via the foreign function interface. In this case we are
+    /// using the abs() function as our scalar UDF.
+    #[tokio::test]
+    async fn test_scalar_udf() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_abs_func =
+            module
+                .create_scalar_udf()
+                .ok_or(DataFusionError::NotImplemented(
+                    "External table provider failed to implement create_scalar_udf"
+                        .to_string(),
+                ))?();
+        let foreign_abs_func: ForeignScalarUDF = (&ffi_abs_func).try_into()?;
+
+        let udf: ScalarUDF = foreign_abs_func.into();
+
+        let ctx = SessionContext::default();
+        let df = ctx.read_batch(create_record_batch(-5, 5))?;
+
+        let df = df
+            .with_column("abs_a", udf.call(vec![col("a")]))?
+            .with_column("abs_b", udf.call(vec![col("b")]))?;
+
+        let result = df.collect().await?;
+
+        let expected = record_batch!(
+            ("a", Int32, vec![-5, -4, -3, -2, -1]),
+            ("b", Float64, vec![-5., -4., -3., -2., -1.]),
+            ("abs_a", Int32, vec![5, 4, 3, 2, 1]),
+            ("abs_b", Float64, vec![5., 4., 3., 2., 1.])
+        )?;
+
+        assert!(result.len() == 1);
+        assert!(result[0] == expected);
+
+        Ok(())
     }
 }

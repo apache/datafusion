@@ -21,8 +21,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
-use arrow_schema::TimeUnit::Nanosecond;
-use arrow_schema::*;
+use arrow::datatypes::{TimeUnit::Nanosecond, *};
 use common::MockContextProvider;
 use datafusion_common::{
     assert_contains, DataFusionError, ParamValues, Result, ScalarValue,
@@ -31,8 +30,8 @@ use datafusion_expr::{
     col,
     logical_plan::{LogicalPlan, Prepare},
     test::function_stub::sum_udaf,
-    ColumnarValue, CreateIndex, DdlStatement, ScalarUDF, ScalarUDFImpl, Signature,
-    Statement, Volatility,
+    CreateIndex, DdlStatement, ScalarUDF, ScalarUDFImpl, Signature, Statement,
+    Volatility,
 };
 use datafusion_functions::{string, unicode};
 use datafusion_sql::{
@@ -551,6 +550,19 @@ fn plan_delete() {
 Dml: op=[Delete] table=[person]
   Filter: id = Int64(1)
     TableScan: person
+    "#
+    .trim();
+    quick_test(sql, plan);
+}
+
+#[test]
+fn plan_delete_quoted_identifier_case_sensitive() {
+    let sql =
+        "DELETE FROM \"SomeCatalog\".\"SomeSchema\".\"UPPERCASE_test\" WHERE \"Id\" = 1";
+    let plan = r#"
+Dml: op=[Delete] table=[SomeCatalog.SomeSchema.UPPERCASE_test]
+  Filter: Id = Int64(1)
+    TableScan: SomeCatalog.SomeSchema.UPPERCASE_test
     "#
     .trim();
     quick_test(sql, plan);
@@ -2102,8 +2114,60 @@ fn union() {
 }
 
 #[test]
+fn union_by_name_different_columns() {
+    let sql = "SELECT order_id from orders UNION BY NAME SELECT order_id, 1 FROM orders";
+    let expected = "\
+        Distinct:\
+        \n  Union\
+        \n    Projection: NULL AS Int64(1), order_id\
+        \n      Projection: orders.order_id\
+        \n        TableScan: orders\
+        \n    Projection: orders.order_id, Int64(1)\
+        \n      TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn union_by_name_same_column_names() {
+    let sql = "SELECT order_id from orders UNION SELECT order_id FROM orders";
+    let expected = "\
+        Distinct:\
+        \n  Union\
+        \n    Projection: orders.order_id\
+        \n      TableScan: orders\
+        \n    Projection: orders.order_id\
+        \n      TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
 fn union_all() {
     let sql = "SELECT order_id from orders UNION ALL SELECT order_id FROM orders";
+    let expected = "Union\
+            \n  Projection: orders.order_id\
+            \n    TableScan: orders\
+            \n  Projection: orders.order_id\
+            \n    TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn union_all_by_name_different_columns() {
+    let sql =
+        "SELECT order_id from orders UNION ALL BY NAME SELECT order_id, 1 FROM orders";
+    let expected = "\
+        Union\
+        \n  Projection: NULL AS Int64(1), order_id\
+        \n    Projection: orders.order_id\
+        \n      TableScan: orders\
+        \n  Projection: orders.order_id, Int64(1)\
+        \n    TableScan: orders";
+    quick_test(sql, expected);
+}
+
+#[test]
+fn union_all_by_name_same_column_names() {
+    let sql = "SELECT order_id from orders UNION ALL BY NAME SELECT order_id FROM orders";
     let expected = "Union\
             \n  Projection: orders.order_id\
             \n    TableScan: orders\
@@ -2633,14 +2697,6 @@ impl ScalarUDFImpl for DummyUDF {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
-    }
-
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        unimplemented!("DummyUDF::invoke")
     }
 }
 

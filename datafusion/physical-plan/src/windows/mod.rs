@@ -36,8 +36,7 @@ use crate::{
     InputOrderMode, PhysicalExpr,
 };
 
-use arrow::datatypes::Schema;
-use arrow_schema::{DataType, Field, SchemaRef, SortOptions};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{
     PartitionEvaluator, ReversedUDWF, SetMonotonicity, WindowFrame,

@@ -56,7 +56,7 @@ regex_expressions = ["regex"]
 # enable string functions
 string_expressions = ["uuid"]
 # enable unicode functions
-unicode_expressions = ["hashbrown", "unicode-segmentation"]
+unicode_expressions = ["unicode-segmentation"]
 
 [lib]
 name = "datafusion_functions"
@@ -69,7 +69,7 @@ arrow = { workspace = true }
 arrow-buffer = { workspace = true }
 base64 = { version = "0.22", optional = true }
 blake2 = { version = "^0.10.2", optional = true }
-blake3 = { version = "1.0", optional = true }
+blake3 = { version = "1.6", optional = true }
 chrono = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
@@ -77,7 +77,6 @@ datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
 datafusion-expr-common = { workspace = true }
 datafusion-macros = { workspace = true }
-hashbrown = { workspace = true, optional = true }
 hex = { version = "0.4", optional = true }
 itertools = { workspace = true }
 log = { workspace = true }
@@ -86,7 +85,7 @@ rand = { workspace = true }
 regex = { workspace = true, optional = true }
 sha2 = { version = "^0.10.1", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
-uuid = { version = "1.7", features = ["v4"], optional = true }
+uuid = { version = "1.13", features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
@@ -111,6 +110,21 @@ required-features = ["encoding_expressions"]
 
 [[bench]]
 harness = false
+name = "chr"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "uuid"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "to_hex"
+required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
 name = "regx"
 required-features = ["regex_expressions"]
 
@@ -132,6 +146,11 @@ required-features = ["core_expressions"]
 [[bench]]
 harness = false
 name = "date_bin"
+required-features = ["datetime_expressions"]
+
+[[bench]]
+harness = false
+name = "date_trunc"
 required-features = ["datetime_expressions"]
 
 [[bench]]

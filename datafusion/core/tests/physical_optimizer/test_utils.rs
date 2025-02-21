@@ -22,8 +22,9 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow::array::Int32Array;
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion_common::config::ConfigOptions;
@@ -73,7 +74,7 @@ pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {
         Arc::new(ParquetSource::default()),
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
-    .new_exec()
+    .build()
 }
 
 /// Create a single parquet file that is sorted
@@ -87,7 +88,7 @@ pub(crate) fn parquet_exec_with_sort(
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(output_ordering)
-    .new_exec()
+    .build()
 }
 
 pub fn schema() -> SchemaRef {
@@ -245,6 +246,15 @@ pub fn sort_preserving_merge_exec(
 ) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
     Arc::new(SortPreservingMergeExec::new(sort_exprs, input))
+}
+
+pub fn sort_preserving_merge_exec_with_fetch(
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    input: Arc<dyn ExecutionPlan>,
+    fetch: usize,
+) -> Arc<dyn ExecutionPlan> {
+    let sort_exprs = sort_exprs.into_iter().collect();
+    Arc::new(SortPreservingMergeExec::new(sort_exprs, input).with_fetch(Some(fetch)))
 }
 
 pub fn union_exec(input: Vec<Arc<dyn ExecutionPlan>>) -> Arc<dyn ExecutionPlan> {

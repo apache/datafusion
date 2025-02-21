@@ -19,7 +19,7 @@
 
 use std::str::FromStr;
 
-use crate::error::{DataFusionError, Result};
+use datafusion_common::error::{DataFusionError, Result};
 
 use datafusion_common::parsers::CompressionTypeVariant::{self, *};
 use datafusion_common::GetExt;
@@ -254,8 +254,8 @@ pub trait FileTypeExt {
 mod tests {
     use std::str::FromStr;
 
-    use crate::datasource::file_format::file_compression_type::FileCompressionType;
-    use crate::error::DataFusionError;
+    use super::FileCompressionType;
+    use datafusion_common::error::DataFusionError;
 
     use bytes::Bytes;
     use futures::StreamExt;

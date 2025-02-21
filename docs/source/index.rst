@@ -103,6 +103,7 @@ To get started, see
 
    user-guide/introduction
    user-guide/example-usage
+   user-guide/features
    user-guide/concepts-readings-events
    user-guide/crate-configuration
    user-guide/cli/index
@@ -148,6 +149,8 @@ To get started, see
    contributor-guide/governance
    contributor-guide/inviting
    contributor-guide/specification/index
+   contributor-guide/gsoc_application_guidelines
+   contributor-guide/gsoc_project_ideas
 
 .. _toc.subprojects:
 

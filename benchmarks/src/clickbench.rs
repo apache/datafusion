@@ -124,7 +124,8 @@ impl RunOpt {
             parquet_options.binary_as_string = true;
         }
 
-        let ctx = SessionContext::new_with_config(config);
+        let rt_builder = self.common.runtime_env_builder()?;
+        let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
         self.register_hits(&ctx).await?;
 
         let iterations = self.common.iterations;

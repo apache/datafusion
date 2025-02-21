@@ -265,8 +265,8 @@ impl FileSource for AvroSource {
 #[cfg(feature = "avro")]
 mod private {
     use super::*;
-    use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
     use crate::datasource::physical_plan::FileMeta;
+    use crate::datasource::physical_plan::{FileOpenFuture, FileOpener};
 
     use bytes::Buf;
     use futures::StreamExt;
@@ -399,7 +399,7 @@ mod tests {
                 .with_file(meta.into())
                 .with_projection(Some(vec![0, 1, 2]));
 
-        let source_exec = conf.new_exec();
+        let source_exec = conf.build();
         assert_eq!(
             source_exec
                 .properties()
@@ -472,7 +472,7 @@ mod tests {
             .with_file(meta.into())
             .with_projection(projection);
 
-        let source_exec = conf.new_exec();
+        let source_exec = conf.build();
         assert_eq!(
             source_exec
                 .properties()
@@ -546,7 +546,7 @@ mod tests {
             .with_file(partitioned_file)
             .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)]);
 
-        let source_exec = conf.new_exec();
+        let source_exec = conf.build();
 
         assert_eq!(
             source_exec

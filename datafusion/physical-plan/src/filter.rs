@@ -625,8 +625,7 @@ mod tests {
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
-    use arrow::datatypes::{Field, Schema};
-    use arrow_schema::{UnionFields, UnionMode};
+    use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
     use datafusion_common::ScalarValue;
 
     #[tokio::test]

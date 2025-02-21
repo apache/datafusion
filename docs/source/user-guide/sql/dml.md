@@ -28,7 +28,7 @@ Copies the contents of a table or query to file(s). Supported file
 formats are `parquet`, `csv`, `json`, and `arrow`.
 
 <pre>
-COPY { <i><b>table_name</i></b> | <i><b>query</i></b> } 
+COPY { <i><b>table_name</i></b> | <i><b>query</i></b> }
 TO '<i><b>file_name</i></b>'
 [ STORED AS <i><b>format</i></b> ]
 [ PARTITIONED BY <i><b>column_name</i></b> [, ...] ]
@@ -91,7 +91,7 @@ of hive-style partitioned parquet files:
 If the the data contains values of `x` and `y` in column1 and only `a` in
 column2, output files will appear in the following directory structure:
 
-```
+```text
 dir_name/
   column1=x/
     column2=a/

@@ -24,9 +24,9 @@ use arrow::datatypes::DataType;
 use crate::utils::{make_scalar_function, utf8_to_int_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::utils::datafusion_strsim;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{ColumnarValue, Documentation};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -86,16 +86,14 @@ impl ScalarUDFImpl for LevenshteinFunc {
         utf8_to_int_type(&arg_types[0], "levenshtein")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 => {
-                make_scalar_function(levenshtein::<i32>, vec![])(args)
+                make_scalar_function(levenshtein::<i32>, vec![])(&args.args)
             }
-            DataType::LargeUtf8 => make_scalar_function(levenshtein::<i64>, vec![])(args),
+            DataType::LargeUtf8 => {
+                make_scalar_function(levenshtein::<i64>, vec![])(&args.args)
+            }
             other => {
                 exec_err!("Unsupported data type {other:?} for function levenshtein")
             }
@@ -110,17 +108,12 @@ impl ScalarUDFImpl for LevenshteinFunc {
 ///Returns the Levenshtein distance between the two given strings.
 /// LEVENSHTEIN('kitten', 'sitting') = 3
 pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!(
-            "levenshtein function requires two arguments, got {}",
-            args.len()
-        );
-    }
+    let [str1, str2] = take_function_args("levenshtein", args)?;
 
-    match args[0].data_type() {
+    match str1.data_type() {
         DataType::Utf8View => {
-            let str1_array = as_string_view_array(&args[0])?;
-            let str2_array = as_string_view_array(&args[1])?;
+            let str1_array = as_string_view_array(&str1)?;
+            let str2_array = as_string_view_array(&str2)?;
             let result = str1_array
                 .iter()
                 .zip(str2_array.iter())
@@ -134,8 +127,8 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         DataType::Utf8 => {
-            let str1_array = as_generic_string_array::<T>(&args[0])?;
-            let str2_array = as_generic_string_array::<T>(&args[1])?;
+            let str1_array = as_generic_string_array::<T>(&str1)?;
+            let str2_array = as_generic_string_array::<T>(&str2)?;
             let result = str1_array
                 .iter()
                 .zip(str2_array.iter())
@@ -149,8 +142,8 @@ pub fn levenshtein<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             Ok(Arc::new(result) as ArrayRef)
         }
         DataType::LargeUtf8 => {
-            let str1_array = as_generic_string_array::<T>(&args[0])?;
-            let str2_array = as_generic_string_array::<T>(&args[1])?;
+            let str1_array = as_generic_string_array::<T>(&str1)?;
+            let str2_array = as_generic_string_array::<T>(&str2)?;
             let result = str1_array
                 .iter()
                 .zip(str2_array.iter())

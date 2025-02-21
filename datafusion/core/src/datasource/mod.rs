@@ -47,7 +47,8 @@ pub use crate::logical_expr::TableType;
 pub use datafusion_execution::object_store;
 pub use statistics::get_statistics_with_limit;
 
-use arrow_schema::{Schema, SortOptions};
+use arrow::compute::SortOptions;
+use arrow::datatypes::Schema;
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::{Expr, SortExpr};
 use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};

@@ -21,7 +21,7 @@ use super::{
 };
 use crate::error::{Result, _internal_err};
 use arrow::compute::can_cast_types;
-use arrow_schema::{
+use arrow::datatypes::{
     DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit, UnionFields,
 };
 use std::{fmt::Display, sync::Arc};
@@ -126,7 +126,7 @@ pub enum NativeType {
     /// nevertheless correct).
     ///
     /// ```
-    /// # use arrow_schema::{DataType, TimeUnit};
+    /// # use arrow::datatypes::{DataType, TimeUnit};
     /// DataType::Timestamp(TimeUnit::Second, None);
     /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
@@ -198,6 +198,11 @@ impl LogicalType for NativeType {
         TypeSignature::Native(self)
     }
 
+    /// Returns the default casted type for the given arrow type
+    ///
+    /// For types like String or Date, multiple arrow types mapped to the same logical type
+    /// If the given arrow type is one of them, we return the same type
+    /// Otherwise, we define the default casted type for the given arrow type
     fn default_cast_for(&self, origin: &DataType) -> Result<DataType> {
         use DataType::*;
 
@@ -226,6 +231,10 @@ impl LogicalType for NativeType {
             (Self::Decimal(p, s), _) if p <= &38 => Decimal128(*p, *s),
             (Self::Decimal(p, s), _) => Decimal256(*p, *s),
             (Self::Timestamp(tu, tz), _) => Timestamp(*tu, tz.clone()),
+            // If given type is Date, return the same type
+            (Self::Date, origin) if matches!(origin, Date32 | Date64) => {
+                origin.to_owned()
+            }
             (Self::Date, _) => Date32,
             (Self::Time(tu), _) => match tu {
                 TimeUnit::Second | TimeUnit::Millisecond => Time32(*tu),

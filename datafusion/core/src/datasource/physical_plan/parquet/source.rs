@@ -31,7 +31,7 @@ use crate::datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 
-use arrow_schema::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::Statistics;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -94,7 +94,7 @@ use object_store::ObjectStore;
 /// // Create a DataSourceExec for reading `file1.parquet` with a file size of 100MB
 /// let file_scan_config = FileScanConfig::new(object_store_url, file_schema, source)
 ///    .with_file(PartitionedFile::new("file1.parquet", 100*1024*1024));
-/// let exec = file_scan_config.new_exec();
+/// let exec = file_scan_config.build();
 /// ```
 ///
 /// # Features
@@ -176,7 +176,7 @@ use object_store::ObjectStore;
 ///         .clone()
 ///        .with_file_groups(vec![file_group.clone()]);
 ///
-///     new_config.new_exec()
+///     new_config.build()
 ///   })
 ///   .collect::<Vec<_>>();
 /// ```
@@ -196,7 +196,7 @@ use object_store::ObjectStore;
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::{Schema, SchemaRef};
+/// # use arrow::datatypes::{Schema, SchemaRef};
 /// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
@@ -219,7 +219,7 @@ use object_store::ObjectStore;
 ///     .with_file(partitioned_file);
 /// // this parquet DataSourceExec will not even try to read row groups 2 and 4. Additional
 /// // pruning based on predicates may also happen
-/// let exec = file_scan_config.new_exec();
+/// let exec = file_scan_config.build();
 /// ```
 ///
 /// For a complete example, see the [`advanced_parquet_index` example]).

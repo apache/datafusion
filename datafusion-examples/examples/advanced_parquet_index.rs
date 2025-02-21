@@ -504,7 +504,7 @@ impl TableProvider for IndexTableProvider {
             .with_file(partitioned_file);
 
         // Finally, put it all together into a DataSourceExec
-        Ok(file_scan_config.new_exec())
+        Ok(file_scan_config.build())
     }
 
     /// Tell DataFusion to push filters down to the scan method
