@@ -50,10 +50,10 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Constraints;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::source::DataSourceExec;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
@@ -579,10 +579,10 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_datasource::source::DataSourceExec;
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-    use datafusion_physical_plan::source::DataSourceExec;
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use crate::datasource::physical_plan::parquet::source::ParquetSource;
