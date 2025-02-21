@@ -15,22 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![doc(
-    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
-    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
-)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
-#![doc = include_str!("../README.md")]
-pub const DATAFUSION_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
+use abi_stable::StableAbi;
+use datafusion::logical_expr::Volatility;
 
-pub mod catalog;
-pub mod cli_context;
-pub mod command;
-pub mod exec;
-pub mod functions;
-pub mod helper;
-pub mod highlighter;
-pub mod object_storage;
-pub mod pool_type;
-pub mod print_format;
-pub mod print_options;
+#[repr(C)]
+#[derive(Debug, StableAbi)]
+#[allow(non_camel_case_types)]
+pub enum FFI_Volatility {
+    Immutable,
+    Stable,
+    Volatile,
+}
+
+impl From<Volatility> for FFI_Volatility {
+    fn from(value: Volatility) -> Self {
+        match value {
+            Volatility::Immutable => Self::Immutable,
+            Volatility::Stable => Self::Stable,
+            Volatility::Volatile => Self::Volatile,
+        }
+    }
+}
+
+impl From<&FFI_Volatility> for Volatility {
+    fn from(value: &FFI_Volatility) -> Self {
+        match value {
+            FFI_Volatility::Immutable => Self::Immutable,
+            FFI_Volatility::Stable => Self::Stable,
+            FFI_Volatility::Volatile => Self::Volatile,
+        }
+    }
+}

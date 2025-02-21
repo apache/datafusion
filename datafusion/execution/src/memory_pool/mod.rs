@@ -55,7 +55,10 @@ pub use pool::*;
 /// "large" amounts of memory (proportional to number of input rows), such as
 /// `GroupByHashExec`. It does NOT track and limit memory used internally by
 /// other operators such as `DataSourceExec` or the `RecordBatch`es that flow
-/// between operators.
+/// between operators. Furthermore, operators should not reserve memory for the
+/// batches they produce. Instead, if a parent operator needs to hold batches
+/// from its children in memory for an extended period, it is the parent
+/// operator's responsibility to reserve the necessary memory for those batches.
 ///
 /// In order to avoid allocating memory until the OS or the container system
 /// kills the process, DataFusion `ExecutionPlan`s (operators) that consume
