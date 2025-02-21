@@ -236,11 +236,11 @@ impl ScalarUDFImpl for GetFieldFunc {
 
         match (array.data_type(), name) {
             (DataType::Map(_, _), ScalarValue::List(arr)) => {
-                let key_array: Arc<dyn Array> = Arc::new((**arr).clone());
+                let key_array: Arc<dyn Array> = arr;
                 process_map_array(array, key_array)
             }
             (DataType::Map(_, _), ScalarValue::Struct(arr)) => {
-                process_map_array(array, Arc::clone(arr) as Arc<dyn Array>)
+                process_map_array(array, arr as Arc<dyn Array>)
             }
             (DataType::Map(_, _), other) => {
                 let data_type = other.data_type();
