@@ -24,10 +24,10 @@ use arrow::{
     compute::SortOptions,
     record_batch::RecordBatch,
 };
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
-    memory::MemorySourceConfig,
     sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
