@@ -255,10 +255,15 @@ impl FileSource for AvroSource {
     fn file_type(&self) -> &str {
         "avro"
     }
-    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
-        !(config.file_compression_type.is_compressed()
-            || config.new_lines_in_values
-            || self.as_any().downcast_ref::<AvroSource>().is_some())
+
+    fn repartitioned(
+        &self,
+        _target_partitions: usize,
+        _repartition_file_min_size: usize,
+        _output_ordering: Option<LexOrdering>,
+        _config: &FileScanConfig,
+    ) -> Result<Option<FileScanConfig>> {
+        Ok(None)
     }
 }
 
