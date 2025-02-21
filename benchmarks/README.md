@@ -85,7 +85,7 @@ git checkout main
 # Gather baseline data for tpch benchmark
 ./benchmarks/bench.sh run tpch
 
-# Switch to the branch the branch name is mybranch and gather data
+# Switch to the branch named mybranch and gather data
 git checkout mybranch
 ./benchmarks/bench.sh run tpch
 
@@ -158,21 +158,21 @@ Benchmark tpch_mem.json
 ```
 
 Note that you can also execute an automatic comparison of the changes in a given PR against the base
-just by including the trigger `/benchmark` in any comment.
+by including the trigger `/benchmark` in any comment.
 
 ### Running Benchmarks Manually
 
-Assuming data in the `data` directory, the `tpch` benchmark can be run with a command like this
+Assuming data is in the `data` directory, the `tpch` benchmark can be run with a command like this:
 
 ```bash
 cargo run --release --bin dfbench -- tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
 ```
 
-See the help for more details
+See the help for more details.
 
 ### Different features
 
-You can enable `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`. For example
+You can enable `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`. For example:
 
 ```shell
 cargo run --release --features "mimalloc" --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
@@ -184,6 +184,7 @@ The benchmark program also supports CSV and Parquet input file formats and a uti
 ```bash
 cargo run --release --bin tpch -- convert --input ./data --output /mnt/tpch-parquet --format parquet
 ```
+
 Or if you want to verify and run all the queries in the benchmark, you can just run `cargo test`.
 
 ### Comparing results between runs
@@ -206,7 +207,7 @@ $ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path .
 ./compare.py /tmp/output_main/tpch-summary--1679330119.json  /tmp/output_branch/tpch-summary--1679328405.json
 ```
 
-This will produce output like
+This will produce output like:
 
 ```
 ┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
