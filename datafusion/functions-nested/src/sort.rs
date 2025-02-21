@@ -139,6 +139,7 @@ impl ScalarUDFImpl for ArraySort {
                 field.data_type().clone(),
                 true,
             )))),
+            DataType::Null => Ok(DataType::Null),
             _ => exec_err!(
                 "Not reachable, data_type should be List, LargeList or FixedSizeList"
             ),
@@ -167,7 +168,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_sort expects one to three arguments");
     }
 
-    if args[1..].iter().any(|array| array.logical_null_count() > 0) {
+    if args.iter().any(|array| array.logical_null_count() > 0) {
         return Ok(new_null_array(args[0].data_type(), 1));
     }
 

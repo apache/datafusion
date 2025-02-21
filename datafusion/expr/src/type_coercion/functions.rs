@@ -400,6 +400,7 @@ fn get_valid_types(
             DataType::List(ref field)
             | DataType::LargeList(ref field)
             | DataType::FixedSizeList(ref field, _) => field.data_type(),
+            DataType::Null => &DataType::Null,
             _ => return Ok(vec![vec![]]),
         };
 
@@ -434,7 +435,9 @@ fn get_valid_types(
 
     fn array(array_type: &DataType) -> Option<DataType> {
         match array_type {
-            DataType::List(_) | DataType::LargeList(_) => Some(array_type.clone()),
+            DataType::List(_) | DataType::LargeList(_) | DataType::Null => {
+                Some(array_type.clone())
+            }
             DataType::FixedSizeList(field, _) => Some(DataType::List(Arc::clone(field))),
             _ => None,
         }
