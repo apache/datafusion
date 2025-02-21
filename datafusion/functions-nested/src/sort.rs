@@ -18,9 +18,7 @@
 //! [`ScalarUDFImpl`] definitions for array_sort function.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{
-    make_array, Array, ArrayData, ArrayRef, ListArray, NullBufferBuilder,
-};
+use arrow::array::{new_null_array, Array, ArrayRef, ListArray, NullBufferBuilder};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType::{FixedSizeList, LargeList, List};
 use arrow::datatypes::{DataType, Field};
@@ -170,10 +168,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 
     if args[1..].iter().any(|array| array.logical_null_count() > 0) {
-        return Ok(Arc::new(make_array(ArrayData::new_null(
-            args[0].data_type(),
-            1,
-        ))));
+        return Ok(new_null_array(args[0].data_type(), 1));
     }
 
     let sort_option = match args.len() {
