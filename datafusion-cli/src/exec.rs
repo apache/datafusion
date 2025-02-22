@@ -31,7 +31,10 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
-
+use arrow::array::RecordBatch;
+use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
+use arrow::util::display::{ArrayFormatter, ValueFormatter};
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
@@ -49,6 +52,7 @@ use datafusion::sql::sqlparser;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use tokio::signal;
+use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
 
 /// run and execute SQL statements and commands, against a context with the given print options
 pub async fn exec_from_commands(
@@ -256,33 +260,204 @@ pub(super) async fn exec_and_print(
             // Bounded stream; collected results size is limited by the maxrows option
             let schema = physical_plan.schema();
             let mut stream = execute_stream(physical_plan, task_ctx.clone())?;
-            let mut results = vec![];
-            let mut row_count = 0_usize;
             let max_rows = match print_options.maxrows {
                 MaxRows::Unlimited => usize::MAX,
                 MaxRows::Limited(n) => n,
             };
+
+            let preview_limit: usize = 1000;
+            let mut preview_batches: Vec<RecordBatch> = vec![];
+            let mut preview_row_count = 0_usize;
+            let mut total_printed = 0_usize;
+            let mut precomputed_widths: Option<Vec<usize>> = None;
+            let mut header_printed = false;
+
+            let stdout = std::io::stdout();
+            let mut writer = stdout.lock();
+
+            // 循环处理流中每个 batch
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
-                let curr_num_rows = batch.num_rows();
-                // Stop collecting results if the number of rows exceeds the limit
-                // results batch should include the last batch that exceeds the limit
-                if row_count < max_rows + curr_num_rows {
-                    // Try to grow the reservation to accommodate the batch in memory
-                    reservation.try_grow(get_record_batch_memory_size(&batch))?;
-                    results.push(batch);
+                let batch_rows = batch.num_rows();
+
+                // 判断是否超出最大行数限制
+                if total_printed + batch_rows > max_rows {
+                    // 只处理需要的部分行
+                    let needed = max_rows - total_printed;
+                    let batch = batch.slice(0, needed);
+                    process_batch(
+                        &batch,
+                        schema.clone(),
+                        &mut preview_batches,
+                        &mut preview_row_count,
+                        preview_limit,
+                        &mut precomputed_widths,
+                        &mut header_printed,
+                        &mut writer,
+                    )?;
+                    total_printed += needed;
+                    break;
+                } else {
+                    process_batch(
+                        &batch,
+                        schema.clone(),
+                        &mut preview_batches,
+                        &mut preview_row_count,
+                        preview_limit,
+                        &mut precomputed_widths,
+                        &mut header_printed,
+                        &mut writer,
+                    )?;
+                    total_printed += batch_rows;
                 }
-                row_count += curr_num_rows;
             }
-            adjusted
-                .into_inner()
-                .print_batches(schema, &results, now, row_count)?;
+
+            // 若仍未达到预览阈值，则延后计算并打印（例如总行数非常少）
+            if precomputed_widths.is_none() && !preview_batches.is_empty() {
+                let widths = compute_column_widths(&preview_batches, schema.clone())?;
+                precomputed_widths = Some(widths.clone());
+                print_header(&schema, &widths, &mut writer)?;
+                header_printed = true;
+                for batch in preview_batches.iter() {
+                    print_batch_with_widths(batch, &widths, &mut writer)?;
+                }
+            }
+
+            // // 打印执行详情（可选）
+            // let formatted_exec_details = get_execution_details_formatted(
+            //     total_printed,
+            //     if print_options.format == PrintFormat::Table {
+            //         print_options.maxrows
+            //     } else {
+            //         MaxRows::Unlimited
+            //     },
+            //     Instant::now(), // 或传入查询开始时间
+            // );
+
+            // if !print_options.quiet {
+            //     writeln!(writer, "{}", formatted_exec_details)?;
+            // }
             reservation.free();
         }
     }
 
     Ok(())
 }
+
+fn process_batch(
+    batch: &RecordBatch,
+    schema: SchemaRef,
+    preview_batches: &mut Vec<RecordBatch>,
+    preview_row_count: &mut usize,
+    preview_limit: usize,
+    precomputed_widths: &mut Option<Vec<usize>>,
+    header_printed: &mut bool,
+    writer: &mut impl std::io::Write,
+) -> Result<()> {
+    if precomputed_widths.is_none() {
+        // 仍处于预览阶段
+        preview_batches.push(batch.clone());
+        *preview_row_count += batch.num_rows();
+        if *preview_row_count >= preview_limit {
+            // 达到预览阈值，计算列宽
+            let widths = compute_column_widths(preview_batches, schema.clone())?;
+            *precomputed_widths = Some(widths.clone());
+            // 打印表头
+            print_header(&schema, &widths, writer)?;
+            *header_printed = true;
+            // 打印预览阶段缓存的所有 batch
+            for preview_batch in preview_batches.drain(..) {
+                print_batch_with_widths(&preview_batch, &widths, writer)?;
+            }
+        }
+    } else {
+        // 预览阶段结束，直接流式打印
+        let widths = precomputed_widths.as_ref().unwrap();
+        if !*header_printed {
+            print_header(&schema, widths, writer)?;
+            *header_printed = true;
+        }
+        print_batch_with_widths(batch, widths, writer)?;
+    }
+    Ok(())
+}
+
+/// 根据预览批次计算各列的最大宽度（考虑表头和各行值的长度）
+fn compute_column_widths(batches: &Vec<RecordBatch>, schema: SchemaRef) -> Result<Vec<usize>> {
+    // 以表头作为初始宽度
+    let mut widths: Vec<usize> = schema
+        .fields()
+        .iter()
+        .map(|f| f.name().len())
+        .collect();
+    // 遍历所有 batch 计算各列宽度
+    for batch in batches {
+        let formatters = batch
+            .columns()
+            .iter()
+            .map(|c| ArrayFormatter::try_new(c.as_ref(), &DEFAULT_CLI_FORMAT_OPTIONS))
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+        for row in 0..batch.num_rows() {
+            for (i, formatter) in formatters.iter().enumerate() {
+                let cell = formatter.value(row);
+                widths[i] = widths[i].max(cell.to_string().len());
+            }
+        }
+    }
+    Ok(widths)
+}
+
+/// 打印表头，并使用分隔符
+fn print_header(
+    schema: &SchemaRef,
+    widths: &Vec<usize>,
+    writer: &mut impl std::io::Write,
+) -> Result<()> {
+    let header: Vec<String> = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, field)| pad_cell(field.name(), widths[i]))
+        .collect();
+    writeln!(writer, "{}", header.join(" | "))?;
+    // 打印分隔行
+    let separator: Vec<String> = widths.iter().map(|w| "-".repeat(*w)).collect();
+    writeln!(writer, "{}", separator.join("-+-"))?;
+    Ok(())
+}
+
+/// 根据预计算的列宽打印 batch 中的所有行
+fn print_batch_with_widths(
+    batch: &RecordBatch,
+    widths: &Vec<usize>,
+    writer: &mut impl std::io::Write,
+) -> Result<()> {
+    let formatters = batch
+        .columns()
+        .iter()
+        .map(|c| ArrayFormatter::try_new(c.as_ref(), &DEFAULT_CLI_FORMAT_OPTIONS))
+        .collect::<Result<Vec<_>, ArrowError>>()?;
+    for row in 0..batch.num_rows() {
+        let cells: Vec<String> = formatters
+            .iter()
+            .enumerate()
+            .map(|(i, formatter)| pad_value(&formatter.value(row), widths[i]))
+            .collect();
+        writeln!(writer, "{}", cells.join(" | "))?;
+    }
+    Ok(())
+}
+
+/// 为单元格内容补齐空格（左对齐）
+fn pad_cell(cell: &str, width: usize) -> String {
+    format!("{:<width$}", cell, width = width)
+}
+
+fn pad_value(formatter: &ValueFormatter, width: usize) -> String {
+    let s = formatter.try_to_string().unwrap_or_default();
+    format!("{:<width$}", s, width = width)
+}
+
 
 /// Track adjustments to the print options based on the plan / statement being executed
 #[derive(Debug)]

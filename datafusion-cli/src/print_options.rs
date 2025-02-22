@@ -75,7 +75,7 @@ pub struct PrintOptions {
 }
 
 // Returns the query execution details formatted
-fn get_execution_details_formatted(
+pub fn get_execution_details_formatted(
     row_count: usize,
     maxrows: MaxRows,
     query_start_time: Instant,
