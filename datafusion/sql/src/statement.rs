@@ -441,7 +441,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             plan
                         };
 
-                        let constraints = Self::new_constraint_from_table_constraints(
+                        let constraints = self.new_constraint_from_table_constraints(
                             &all_constraints,
                             plan.schema(),
                         )?;
@@ -465,7 +465,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             schema,
                         };
                         let plan = LogicalPlan::EmptyRelation(plan);
-                        let constraints = Self::new_constraint_from_table_constraints(
+                        let constraints = self.new_constraint_from_table_constraints(
                             &all_constraints,
                             plan.schema(),
                         )?;
@@ -1434,7 +1434,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let name = self.object_name_to_table_reference(name)?;
         let constraints =
-            Self::new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
+            self.new_constraint_from_table_constraints(&all_constraints, &df_schema)?;
         Ok(LogicalPlan::Ddl(DdlStatement::CreateExternalTable(
             PlanCreateExternalTable {
                 schema: df_schema,
@@ -1454,8 +1454,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )))
     }
 
+    /// Get the indices of the constraint columns in the schema.
+    /// If any column is not found, return an error.
+    fn get_constraint_column_indices(
+        &self,
+        df_schema: &DFSchemaRef,
+        columns: &[Ident],
+        constraint_name: &str,
+    ) -> Result<Vec<usize>> {
+        let field_names = df_schema.field_names();
+        columns
+            .iter()
+            .map(|ident| {
+                let column = self.ident_normalizer.normalize(ident.clone());
+                field_names
+                    .iter()
+                    .position(|item| *item == column)
+                    .ok_or_else(|| {
+                        plan_datafusion_err!(
+                            "Column for {constraint_name} not found in schema: {column}"
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()
+    }
+
     /// Convert each [TableConstraint] to corresponding [Constraint]
     fn new_constraint_from_table_constraints(
+        &self,
         constraints: &[TableConstraint],
         df_schema: &DFSchemaRef,
     ) -> Result<Constraints> {
@@ -1463,46 +1489,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .iter()
             .map(|c: &TableConstraint| match c {
                 TableConstraint::Unique { name, columns, .. } => {
-                    let field_names = df_schema.field_names();
-                    // Get unique constraint indices in the schema:
-                    let indices = columns
-                        .iter()
-                        .map(|u| {
-                            let idx = field_names
-                                .iter()
-                                .position(|item| *item == u.value)
-                                .ok_or_else(|| {
-                                    let name = name
-                                        .as_ref()
-                                        .map(|name| format!("with name '{name}' "))
-                                        .unwrap_or("".to_string());
-                                    DataFusionError::Execution(
-                                        format!("Column for unique constraint {}not found in schema: {}", name,u.value)
-                                    )
-                                })?;
-                            Ok(idx)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
+                    let constraint_name = match name {
+                        Some(name) => &format!("unique constraint with name '{name}'"),
+                        None => "unique constraint",
+                    };
+                    // Get unique constraint indices in the schema
+                    let indices = self.get_constraint_column_indices(
+                        df_schema,
+                        columns,
+                        constraint_name,
+                    )?;
                     Ok(Constraint::Unique(indices))
                 }
                 TableConstraint::PrimaryKey { columns, .. } => {
-                    let field_names = df_schema.field_names();
-                    // Get primary key indices in the schema:
-                    let indices = columns
-                        .iter()
-                        .map(|pk| {
-                            let idx = field_names
-                                .iter()
-                                .position(|item| *item == pk.value)
-                                .ok_or_else(|| {
-                                    DataFusionError::Execution(format!(
-                                        "Column for primary key not found in schema: {}",
-                                        pk.value
-                                    ))
-                                })?;
-                            Ok(idx)
-                        })
-                        .collect::<Result<Vec<_>>>()?;
+                    // Get primary key indices in the schema
+                    let indices = self.get_constraint_column_indices(
+                        df_schema,
+                        columns,
+                        "primary key",
+                    )?;
                     Ok(Constraint::PrimaryKey(indices))
                 }
                 TableConstraint::ForeignKey { .. } => {
