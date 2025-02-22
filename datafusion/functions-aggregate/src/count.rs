@@ -559,7 +559,7 @@ impl AggregateUDFImpl for Count {
 fn is_count_wildcard(args: &[Expr]) -> bool {
     match args {
         [] => true, // count()
-        // All const should be coerced to int64 or rejected by the signature
+        // Only count(1) is considered special count wildcard case, other constants are not (although they are equivalent)
         [Expr::Literal(ScalarValue::Int64(Some(1)))] => true, // count(1)
         _ => false, // More than one argument or non-matching cases
     }
