@@ -1460,13 +1460,13 @@ fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby()
 #[test]
 fn select_simple_aggregate_with_groupby_can_use_positions() {
     quick_test(
-        "SELECT state, age AS b, count(1) FROM person GROUP BY 1, 2",
+        "SELECT state, age AS b, count() FROM person GROUP BY 1, 2",
         "Projection: person.state, person.age AS b, count(*)\
              \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[count(*)]]\
              \n    TableScan: person",
     );
     quick_test(
-        "SELECT state, age AS b, count(1) FROM person GROUP BY 2, 1",
+        "SELECT state, age AS b, count() FROM person GROUP BY 2, 1",
         "Projection: person.state, person.age AS b, count(*)\
              \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[count(*)]]\
              \n    TableScan: person",
@@ -1630,8 +1630,8 @@ fn test_wildcard() {
 #[test]
 fn select_count_one() {
     let sql = "SELECT count(1) FROM person";
-    let expected = "Projection: count(*)\
-                        \n  Aggregate: groupBy=[[]], aggr=[[count(*)]]\
+    let expected = "Projection: count(Int64(1))\
+                        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
                         \n    TableScan: person";
     quick_test(sql, expected);
 }
