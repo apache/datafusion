@@ -1235,8 +1235,9 @@ fn evaluate(
 ) -> Result<Vec<ArrayRef>> {
     // handle count() case
     if expr.is_empty() {
-        let arr = Arc::new(Int64Array::from(vec![0; batch.num_rows()])) as ArrayRef;
-        return Ok(vec![arr]);
+        return Ok(vec![
+            Arc::new(Int64Array::from(vec![1; batch.num_rows()])) as ArrayRef
+        ]);
     }
 
     expr.iter()

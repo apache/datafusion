@@ -223,20 +223,13 @@ fn aggregate_batch(
             let n_rows = batch.num_rows();
 
             // 1.3
-            // special case for count(*), create the array similar to count(1)
+            // Handle count(*) case
             let values = if expr.is_empty() {
-                let arr = Arc::new(Int64Array::from(vec![1; n_rows])) as ArrayRef;
-                vec![arr]
+                vec![Arc::new(Int64Array::from(vec![1; n_rows])) as ArrayRef]
             } else {
-                let values = expr
-                    .iter()
-                    .map(|e| {
-                        e.evaluate(&batch)
-                            .and_then(|v| v.into_array(batch.num_rows()))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                values
+                expr.iter()
+                    .map(|e| e.evaluate(&batch).and_then(|v| v.into_array(n_rows)))
+                    .collect::<Result<Vec<_>>>()?
             };
 
             // 1.4
