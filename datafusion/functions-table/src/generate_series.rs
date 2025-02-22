@@ -264,3 +264,16 @@ impl TableFunctionImpl for GenerateSeriesFunc {
         impl_func.call(exprs)
     }
 }
+
+#[derive(Debug)]
+pub struct RangeFunc {}
+
+impl TableFunctionImpl for RangeFunc {
+    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        let impl_func = GenerateSeriesFuncImpl {
+            name: "range",
+            include_end: false,
+        };
+        impl_func.call(exprs)
+    }
+}
