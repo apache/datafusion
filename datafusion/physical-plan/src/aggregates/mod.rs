@@ -34,7 +34,9 @@ use crate::{
     SendableRecordBatchStream, Statistics,
 };
 
-use arrow::array::{ArrayRef, UInt16Array, UInt32Array, UInt64Array, UInt8Array};
+use arrow::array::{
+    ArrayRef, Int64Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
@@ -1231,6 +1233,12 @@ fn evaluate(
     expr: &[Arc<dyn PhysicalExpr>],
     batch: &RecordBatch,
 ) -> Result<Vec<ArrayRef>> {
+    // handle count() case
+    if expr.is_empty() {
+        let arr = Arc::new(Int64Array::from(vec![0; batch.num_rows()])) as ArrayRef;
+        return Ok(vec![arr]);
+    }
+
     expr.iter()
         .map(|expr| {
             expr.evaluate(batch)

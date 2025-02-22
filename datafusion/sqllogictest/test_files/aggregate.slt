@@ -6336,12 +6336,12 @@ query TT
 explain select count(1) * count(2) from t;
 ----
 logical_plan
-01)Projection: count(*) * count(Int64(2))
-02)--Aggregate: groupBy=[[]], aggr=[[count(*), count(Int64(2))]]
+01)Projection: count(Int64(1)) * count(Int64(2))
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
 03)----TableScan: t projection=[]
 physical_plan
-01)ProjectionExec: expr=[count(*)@0 * count(Int64(2))@1 as count(*) * count(Int64(2))]
-02)--AggregateExec: mode=Single, gby=[], aggr=[count(*), count(Int64(2))]
+01)ProjectionExec: expr=[count(Int64(1))@0 * count(Int64(2))@1 as count(Int64(1)) * count(Int64(2))]
+02)--AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement count 0

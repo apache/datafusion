@@ -23,6 +23,7 @@ use crate::aggregates::{
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
+use arrow::array::{ArrayRef, Int64Array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -219,23 +220,33 @@ fn aggregate_batch(
                 None => Cow::Borrowed(&batch),
             };
 
+            let n_rows = batch.num_rows();
+
             // 1.3
-            let values = &expr
-                .iter()
-                .map(|e| {
-                    e.evaluate(&batch)
-                        .and_then(|v| v.into_array(batch.num_rows()))
-                })
-                .collect::<Result<Vec<_>>>()?;
+            // special case for count(*), create the array similar to count(1)
+            let values = if expr.is_empty() {
+                let arr = Arc::new(Int64Array::from(vec![1; n_rows])) as ArrayRef;
+                vec![arr]
+            } else {
+                let values = expr
+                    .iter()
+                    .map(|e| {
+                        e.evaluate(&batch)
+                            .and_then(|v| v.into_array(batch.num_rows()))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                values
+            };
 
             // 1.4
             let size_pre = accum.size();
             let res = match mode {
                 AggregateMode::Partial
                 | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => accum.update_batch(values),
+                | AggregateMode::SinglePartitioned => accum.update_batch(&values),
                 AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                    accum.merge_batch(values)
+                    accum.merge_batch(&values)
                 }
             };
             let size_post = accum.size();

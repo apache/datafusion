@@ -129,6 +129,11 @@ pub fn check_arg_count(
                 );
             }
         }
+        TypeSignature::Nullary => {
+            if !input_types.is_empty() {
+                return plan_err!("The function {func_name} expects no arguments");
+            }
+        }
         TypeSignature::UserDefined
         | TypeSignature::Numeric(_)
         | TypeSignature::Coercible(_) => {

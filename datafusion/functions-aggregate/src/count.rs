@@ -520,6 +520,11 @@ impl AggregateUDFImpl for Count {
             return None;
         }
         if let Precision::Exact(num_rows) = statistics_args.statistics.num_rows {
+            // handle count()
+            if statistics_args.exprs.is_empty() {
+                return Some(ScalarValue::Int64(Some(num_rows as i64)));
+            }
+
             if statistics_args.exprs.len() == 1 {
                 // TODO optimize with exprs other than Column
                 if let Some(col_expr) = statistics_args.exprs[0]
@@ -559,8 +564,6 @@ impl AggregateUDFImpl for Count {
 fn is_count_wildcard(args: &[Expr]) -> bool {
     match args {
         [] => true, // count()
-        // Only count(1) is considered special count wildcard case, other constants are not (although they are equivalent)
-        [Expr::Literal(ScalarValue::Int64(Some(1)))] => true, // count(1)
         _ => false, // More than one argument or non-matching cases
     }
 }
