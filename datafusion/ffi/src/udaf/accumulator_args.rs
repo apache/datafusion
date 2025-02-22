@@ -152,3 +152,40 @@ impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
+    use arrow::datatypes::{DataType, Schema};
+    use datafusion::{
+        error::Result, logical_expr::function::AccumulatorArgs,
+        physical_expr::LexOrdering,
+    };
+
+    #[test]
+    fn test_round_trip_accumulator_args() -> Result<()> {
+        let orig_args = AccumulatorArgs {
+            return_type: &DataType::Float64,
+            schema: &Schema::empty(),
+            ignore_nulls: false,
+            ordering_req: &LexOrdering::new(vec![]),
+            is_reversed: false,
+            name: "round_trip",
+            is_distinct: true,
+            exprs: &[],
+        };
+        let orig_str = format!("{:?}", orig_args);
+
+        let ffi_args: FFI_AccumulatorArgs = orig_args.try_into()?;
+        let foreign_args: ForeignAccumulatorArgs = ffi_args.try_into()?;
+        let round_trip_args: AccumulatorArgs = (&foreign_args).into();
+
+        let round_trip_str = format!("{:?}", round_trip_args);
+
+        // Since AccumulatorArgs doesn't implement Eq, simply compare
+        // the debug strings.
+        assert_eq!(orig_str, round_trip_str);
+
+        Ok(())
+    }
+}
