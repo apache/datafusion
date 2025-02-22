@@ -150,12 +150,14 @@ impl TableProvider for GenerateSeriesTable {
 }
 
 #[derive(Debug)]
-pub struct GenerateSeriesFunc {}
+struct GenerateSeriesFuncImpl {
+    name: &'static str,
+}
 
-impl TableFunctionImpl for GenerateSeriesFunc {
+impl TableFunctionImpl for GenerateSeriesFuncImpl {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         if exprs.is_empty() || exprs.len() > 3 {
-            return plan_err!("generate_series function requires 1 to 3 arguments");
+            return plan_err!("{} function requires 1 to 3 arguments", self.name);
         }
 
         let mut normalize_args = Vec::new();
@@ -186,7 +188,7 @@ impl TableFunctionImpl for GenerateSeriesFunc {
             [start, end] => (*start, *end, 1),
             [start, end, step] => (*start, *end, *step),
             _ => {
-                return plan_err!("generate_series function requires 1 to 3 arguments");
+                return plan_err!("{} function requires 1 to 3 arguments", self.name);
             }
         };
 
@@ -206,5 +208,17 @@ impl TableFunctionImpl for GenerateSeriesFunc {
             schema,
             args: GenSeriesArgs::AllNotNullArgs { start, end, step },
         }))
+    }
+}
+
+#[derive(Debug)]
+pub struct GenerateSeriesFunc {}
+
+impl TableFunctionImpl for GenerateSeriesFunc {
+    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        let impl_func = GenerateSeriesFuncImpl {
+            name: "generate_series",
+        };
+        impl_func.call(exprs)
     }
 }
