@@ -148,6 +148,15 @@ impl AggregateUDFImpl for Count {
         "count"
     }
 
+    // In AggregateFunctionPlanner, wildcard is converted to count(1)
+    //
+    // count() -> count(1)
+    // count(*) -> count(1)
+    // count(1) -> count(1)
+    // count(2) -> count(2)
+    //
+    // count(1) is named as count(*) in schema_name
+    // other constant remains the same
     fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
         let AggregateFunctionParams {
             args,
@@ -551,7 +560,7 @@ fn is_count_wildcard(args: &[Expr]) -> bool {
     match args {
         [] => true, // count()
         // All const should be coerced to int64 or rejected by the signature
-        [Expr::Literal(ScalarValue::Int64(Some(_)))] => true, // count(1)
+        [Expr::Literal(ScalarValue::Int64(Some(1)))] => true, // count(1)
         _ => false, // More than one argument or non-matching cases
     }
 }
