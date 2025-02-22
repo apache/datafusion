@@ -32,7 +32,8 @@ use arrow::datatypes::{
 };
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion_functions_aggregate::count::count_udaf;
+use datafusion_expr::utils::COUNT_STAR_EXPANSION;
+use datafusion_functions_aggregate::count::{count_all, count_udaf};
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,
 };
@@ -72,7 +73,7 @@ use datafusion_expr::expr::{GroupingSet, Sort, WindowFunction};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
-    scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
+    scalar_subquery, when, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
     ScalarFunctionImplementation, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition,
 };
@@ -2463,8 +2464,8 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     let df_results = ctx
         .table("t1")
         .await?
-        .aggregate(vec![col("b")], vec![count(wildcard())])?
-        .sort(vec![count(wildcard()).sort(true, false)])?
+        .aggregate(vec![col("b")], vec![count_all()])?
+        .sort(vec![count_all().sort(true, false)])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -2498,8 +2499,8 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
             Arc::new(
                 ctx.table("t2")
                     .await?
-                    .aggregate(vec![], vec![count(wildcard())])?
-                    .select(vec![count(wildcard())])?
+                    .aggregate(vec![], vec![count_all()])?
+                    .select(vec![count_all()])?
                     .into_optimized_plan()?,
             ),
         ))?
@@ -2532,8 +2533,8 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
         .filter(exists(Arc::new(
             ctx.table("t2")
                 .await?
-                .aggregate(vec![], vec![count(wildcard())])?
-                .select(vec![count(wildcard())])?
+                .aggregate(vec![], vec![count_all()])?
+                .select(vec![count_all()])?
                 .into_unoptimized_plan(),
             // Usually, into_optimized_plan() should be used here, but due to
             // https://github.com/apache/datafusion/issues/5771,
@@ -2568,7 +2569,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .await?
         .select(vec![Expr::WindowFunction(WindowFunction::new(
             WindowFunctionDefinition::AggregateUDF(count_udaf()),
-            vec![wildcard()],
+            vec![Expr::Literal(COUNT_STAR_EXPANSION)],
         ))
         .order_by(vec![Sort::new(col("a"), false, true)])
         .window_frame(WindowFrame::new_bounds(
@@ -2599,17 +2600,16 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     let sql_results = ctx
         .sql("select count(*) from t1")
         .await?
-        .select(vec![col("count(*)")])?
         .explain(false, false)?
         .collect()
         .await?;
 
-    // add `.select(vec![count(wildcard())])?` to make sure we can analyze all node instead of just top node.
+    // add `.select(vec![count_wildcard()])?` to make sure we can analyze all node instead of just top node.
     let df_results = ctx
         .table("t1")
         .await?
-        .aggregate(vec![], vec![count(wildcard())])?
-        .select(vec![count(wildcard())])?
+        .aggregate(vec![], vec![count_all()])?
+        .select(vec![count_all()])?
         .explain(false, false)?
         .collect()
         .await?;
@@ -2646,8 +2646,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
                 ctx.table("t2")
                     .await?
                     .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
-                    .aggregate(vec![], vec![count(wildcard())])?
-                    .select(vec![col(count(wildcard()).to_string())])?
+                    .aggregate(vec![], vec![count_all()])?
+                    .select(vec![col(count_all().to_string())])?
                     .into_unoptimized_plan(),
             ))
             .gt(lit(ScalarValue::UInt8(Some(0)))),

@@ -24,6 +24,7 @@ use arrow::{
     compute::SortOptions,
     record_batch::RecordBatch,
 };
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -33,7 +34,6 @@ use datafusion_common::cast::as_int32_array;
 use datafusion_execution::memory_pool::GreedyMemoryPool;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::memory::MemorySourceConfig;
 
 use rand::Rng;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};

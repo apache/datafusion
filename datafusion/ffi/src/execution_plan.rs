@@ -219,17 +219,17 @@ impl TryFrom<&FFI_ExecutionPlan> for ForeignExecutionPlan {
             let properties: PlanProperties = (plan.properties)(plan).try_into()?;
 
             let children_rvec = (plan.children)(plan);
-            let children: Result<Vec<_>> = children_rvec
+            let children = children_rvec
                 .iter()
                 .map(ForeignExecutionPlan::try_from)
                 .map(|child| child.map(|c| Arc::new(c) as Arc<dyn ExecutionPlan>))
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
 
             Ok(Self {
                 name,
                 plan: plan.clone(),
                 properties,
-                children: children?,
+                children,
             })
         }
     }
@@ -281,6 +281,7 @@ impl ExecutionPlan for ForeignExecutionPlan {
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::{
         physical_plan::{
             execution_plan::{Boundedness, EmissionType},
@@ -294,6 +295,7 @@ mod tests {
     #[derive(Debug)]
     pub struct EmptyExec {
         props: PlanProperties,
+        children: Vec<Arc<dyn ExecutionPlan>>,
     }
 
     impl EmptyExec {
@@ -305,6 +307,7 @@ mod tests {
                     EmissionType::Incremental,
                     Boundedness::Bounded,
                 ),
+                children: Vec::default(),
             }
         }
     }
@@ -333,14 +336,17 @@ mod tests {
         }
 
         fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
-            vec![]
+            self.children.iter().collect()
         }
 
         fn with_new_children(
             self: Arc<Self>,
-            _: Vec<Arc<dyn ExecutionPlan>>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
-            unimplemented!()
+            Ok(Arc::new(EmptyExec {
+                props: self.props.clone(),
+                children,
+            }))
         }
 
         fn execute(
@@ -358,7 +364,6 @@ mod tests {
 
     #[test]
     fn test_round_trip_ffi_execution_plan() -> Result<()> {
-        use arrow::datatypes::{DataType, Field, Schema};
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
         let ctx = SessionContext::new();
@@ -371,6 +376,49 @@ mod tests {
         let foreign_plan: ForeignExecutionPlan = (&local_plan).try_into()?;
 
         assert!(original_name == foreign_plan.name());
+
+        let display = datafusion::physical_plan::display::DisplayableExecutionPlan::new(
+            &foreign_plan,
+        );
+
+        let buf = display.one_line().to_string();
+        assert_eq!(buf.trim(), "FFI_ExecutionPlan(number_of_children=0)");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ffi_execution_plan_children() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+        let ctx = SessionContext::new();
+
+        // Version 1: Adding child to the foreign plan
+        let child_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let child_local = FFI_ExecutionPlan::new(child_plan, ctx.task_ctx(), None);
+        let child_foreign = Arc::new(ForeignExecutionPlan::try_from(&child_local)?);
+
+        let parent_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let parent_local = FFI_ExecutionPlan::new(parent_plan, ctx.task_ctx(), None);
+        let parent_foreign = Arc::new(ForeignExecutionPlan::try_from(&parent_local)?);
+
+        assert_eq!(parent_foreign.children().len(), 0);
+        assert_eq!(child_foreign.children().len(), 0);
+
+        let parent_foreign = parent_foreign.with_new_children(vec![child_foreign])?;
+        assert_eq!(parent_foreign.children().len(), 1);
+
+        // Version 2: Adding child to the local plan
+        let child_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let child_local = FFI_ExecutionPlan::new(child_plan, ctx.task_ctx(), None);
+        let child_foreign = Arc::new(ForeignExecutionPlan::try_from(&child_local)?);
+
+        let parent_plan = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let parent_plan = parent_plan.with_new_children(vec![child_foreign])?;
+        let parent_local = FFI_ExecutionPlan::new(parent_plan, ctx.task_ctx(), None);
+        let parent_foreign = Arc::new(ForeignExecutionPlan::try_from(&parent_local)?);
+
+        assert_eq!(parent_foreign.children().len(), 1);
 
         Ok(())
     }

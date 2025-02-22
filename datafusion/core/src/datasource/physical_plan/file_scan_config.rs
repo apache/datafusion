@@ -19,8 +19,8 @@
 //! file sources.
 
 use super::{
-    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupPartitioner,
-    FileGroupsDisplay, FileStream,
+    get_projected_output_ordering, statistics::MinMaxStatistics, FileGroupsDisplay,
+    FileStream,
 };
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
@@ -36,13 +36,13 @@ use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, Partitioning}
 
 use crate::datasource::data_source::FileSource;
 pub use datafusion_datasource::file_scan_config::*;
+use datafusion_datasource::source::{DataSource, DataSourceExec};
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_plan::display::{display_orderings, ProjectSchemaDisplay};
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::projection::{
     all_alias_free_columns, new_projections_for_columns, ProjectionExec,
 };
-use datafusion_physical_plan::source::{DataSource, DataSourceExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
 /// Convert type to a type suitable for use as a [`ListingTable`]
@@ -203,30 +203,21 @@ impl DataSource for FileScanConfig {
         self.fmt_file_source(t, f)
     }
 
-    /// Redistribute files across partitions according to their size
-    /// See comments on [`FileGroupPartitioner`] for more detail.
+    /// If supported by the underlying [`FileSource`], redistribute files across partitions according to their size.
     fn repartitioned(
         &self,
         target_partitions: usize,
         repartition_file_min_size: usize,
         output_ordering: Option<LexOrdering>,
     ) -> Result<Option<Arc<dyn DataSource>>> {
-        if !self.source.supports_repartition(self) {
-            return Ok(None);
-        }
+        let source = self.source.repartitioned(
+            target_partitions,
+            repartition_file_min_size,
+            output_ordering,
+            self,
+        )?;
 
-        let repartitioned_file_groups_option = FileGroupPartitioner::new()
-            .with_target_partitions(target_partitions)
-            .with_repartition_file_min_size(repartition_file_min_size)
-            .with_preserve_order_within_groups(output_ordering.is_some())
-            .repartition_file_groups(&self.file_groups);
-
-        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
-            let mut source = self.clone();
-            source.file_groups = repartitioned_file_groups;
-            return Ok(Some(Arc::new(source)));
-        }
-        Ok(None)
+        Ok(source.map(|s| Arc::new(s) as _))
     }
 
     fn output_partitioning(&self) -> Partitioning {

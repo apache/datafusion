@@ -79,8 +79,4 @@ tokio = { workspace = true, features = [
 
 [[bench]]
 harness = false
-name = "spm"
-
-[[bench]]
-harness = false
 name = "partial_ordering"

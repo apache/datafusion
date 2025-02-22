@@ -45,6 +45,9 @@ pub mod nth_value;
 pub mod ntile;
 pub mod rank;
 pub mod row_number;
+
+pub mod planner;
+
 mod utils;
 
 /// Fluent-style API for creating `Expr`s

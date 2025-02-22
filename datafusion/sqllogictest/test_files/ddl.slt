@@ -827,4 +827,3 @@ drop table table_with_pk;
 
 statement ok
 set datafusion.catalog.information_schema = false;
-
