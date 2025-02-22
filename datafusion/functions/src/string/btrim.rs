@@ -22,7 +22,8 @@ use arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -101,20 +102,16 @@ impl ScalarUDFImpl for BTrimFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => make_scalar_function(
                 btrim::<i32>,
                 vec![Hint::Pad, Hint::AcceptsSingular],
-            )(args),
+            )(&args.args),
             DataType::LargeUtf8 => make_scalar_function(
                 btrim::<i64>,
                 vec![Hint::Pad, Hint::AcceptsSingular],
-            )(args),
+            )(&args.args),
             other => exec_err!(
                 "Unsupported data type {other:?} for function btrim,\
                 expected Utf8, LargeUtf8 or Utf8View."

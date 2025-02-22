@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
 #![warn(missing_docs, clippy::needless_borrow)]
@@ -229,9 +234,9 @@
 //! 1. The query string is parsed to an Abstract Syntax Tree (AST)
 //!    [`Statement`] using [sqlparser].
 //!
-//! 2. The AST is converted to a [`LogicalPlan`] and logical
-//!    expressions [`Expr`]s to compute the desired result by the
-//!    [`SqlToRel`] planner.
+//! 2. The AST is converted to a [`LogicalPlan`] and logical expressions
+//!    [`Expr`]s to compute the desired result by [`SqlToRel`]. This phase
+//!    also includes name and type resolution ("binding").
 //!
 //! [`Statement`]: https://docs.rs/sqlparser/latest/sqlparser/ast/enum.Statement.html
 //!
@@ -737,6 +742,11 @@ pub mod logical_expr {
     pub use datafusion_expr::*;
 }
 
+/// re-export of [`datafusion_expr_common`] crate
+pub mod logical_expr_common {
+    pub use datafusion_expr_common::*;
+}
+
 /// re-export of [`datafusion_optimizer`] crate
 pub mod optimizer {
     pub use datafusion_optimizer::*;
@@ -922,6 +932,12 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
+    "../../../docs/source/user-guide/features.md",
+    user_guide_features
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
     "../../../docs/source/user-guide/sql/aggregate_functions.md",
     user_guide_sql_aggregate_functions
 );
@@ -984,12 +1000,6 @@ doc_comment::doctest!(
 doc_comment::doctest!(
     "../../../docs/source/user-guide/sql/special_functions.md",
     user_guide_sql_special_functions
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
-    "../../../docs/source/user-guide/sql/sql_status.md",
-    user_guide_sql_status
 );
 
 #[cfg(doctest)]

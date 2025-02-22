@@ -258,7 +258,7 @@ impl TableProvider for IndexTableProvider {
                 file_size,
             ));
         }
-        Ok(file_scan_config.new_exec())
+        Ok(file_scan_config.build())
     }
 
     /// Tell DataFusion to push filters down to the scan method

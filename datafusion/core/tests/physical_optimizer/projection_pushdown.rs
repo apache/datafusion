@@ -21,15 +21,15 @@ use std::sync::Arc;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Result;
 use datafusion_common::{JoinSide, JoinType, ScalarValue};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::{
-    ColumnarValue, Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
-};
+use datafusion_expr::{Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
 use datafusion_physical_expr::expressions::{
     binary, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
 };
@@ -48,12 +48,10 @@ use datafusion_physical_plan::joins::{
     HashJoinExec, NestedLoopJoinExec, PartitionMode, StreamJoinPartitionMode,
     SymmetricHashJoinExec,
 };
-use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::projection::{update_expr, ProjectionExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::streaming::PartitionStream;
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
@@ -90,14 +88,6 @@ impl ScalarUDFImpl for DummyUDF {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Int32)
-    }
-
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        unimplemented!("DummyUDF::invoke")
     }
 }
 
@@ -382,7 +372,7 @@ fn create_simple_csv_exec() -> Arc<dyn ExecutionPlan> {
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_projection(Some(vec![0, 1, 2, 3, 4]))
-    .new_exec()
+    .build()
 }
 
 fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
@@ -399,7 +389,7 @@ fn create_projecting_csv_exec() -> Arc<dyn ExecutionPlan> {
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_projection(Some(vec![3, 2, 1]))
-    .new_exec()
+    .build()
 }
 
 fn create_projecting_memory_exec() -> Arc<dyn ExecutionPlan> {

@@ -37,7 +37,8 @@ use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
-use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::{
@@ -996,27 +997,8 @@ impl TableProvider for ListingTable {
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check that the schema of the plan matches the schema of this table.
-        if !self
-            .schema()
-            .logically_equivalent_names_and_types(&input.schema())
-        {
-            // Return an error if schema of the input query does not match with the table schema.
-            return plan_err!(
-                "Inserting query must have the same schema with the table. \
-                Expected: {:?}, got: {:?}",
-                self.schema()
-                    .fields()
-                    .iter()
-                    .map(|field| field.data_type())
-                    .collect::<Vec<_>>(),
-                input
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|field| field.data_type())
-                    .collect::<Vec<_>>()
-            );
-        }
+        self.schema()
+            .logically_equivalent_names_and_types(&input.schema())?;
 
         let table_path = &self.table_paths()[0];
         if !table_path.is_collection() {
@@ -1195,7 +1177,7 @@ mod tests {
     use crate::datasource::file_format::json::JsonFormat;
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
-    use crate::datasource::{provider_as_source, MemTable};
+    use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
     use crate::{
@@ -2065,6 +2047,8 @@ mod tests {
         session_ctx.register_table("source", source_table.clone())?;
         // Convert the source table into a provider so that it can be used in a query
         let source = provider_as_source(source_table);
+        let target = session_ctx.table_provider("t").await?;
+        let target = Arc::new(DefaultTableSource::new(target));
         // Create a table scan logical plan to read from the source table
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?
             .filter(filter_predicate)?
@@ -2073,7 +2057,7 @@ mod tests {
         // Therefore, we will have 8 partitions in the final plan.
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, InsertOp::Append)?
+            LogicalPlanBuilder::insert_into(scan_plan, "t", target, InsertOp::Append)?
                 .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx

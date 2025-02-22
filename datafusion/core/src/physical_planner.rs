@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
-use crate::datasource::source_as_provider;
+use crate::datasource::{source_as_provider, DefaultTableSource};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -38,7 +38,6 @@ use crate::logical_expr::{
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
-use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::filter::FilterExec;
@@ -48,7 +47,6 @@ use crate::physical_plan::joins::{
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::recursive_query::RecursiveQueryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
@@ -58,6 +56,8 @@ use crate::physical_plan::{
     displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
     Partitioning, PhysicalExpr, WindowExpr,
 };
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
@@ -68,9 +68,11 @@ use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
 };
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
-    physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
+    physical_name, AggregateFunction, AggregateFunctionParams, Alias, GroupingSet,
+    WindowFunction, WindowFunctionParams,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -83,7 +85,6 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
-use datafusion_physical_plan::memory::MemorySourceConfig;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
 
@@ -541,19 +542,22 @@ impl DefaultPhysicalPlanner {
                     .await?
             }
             LogicalPlan::Dml(DmlStatement {
-                table_name,
+                target,
                 op: WriteOp::Insert(insert_op),
                 ..
             }) => {
-                let name = table_name.table();
-                let schema = session_state.schema_for_ref(table_name.clone())?;
-                if let Some(provider) = schema.table(name).await? {
+                if let Some(provider) =
+                    target.as_any().downcast_ref::<DefaultTableSource>()
+                {
                     let input_exec = children.one()?;
                     provider
+                        .table_provider
                         .insert_into(session_state, input_exec, *insert_op)
                         .await?
                 } else {
-                    return exec_err!("Table '{table_name}' does not exist");
+                    return exec_err!(
+                        "Table source can't be downcasted to DefaultTableSource"
+                    );
                 }
             }
             LogicalPlan::Window(Window { window_expr, .. }) => {
@@ -565,16 +569,24 @@ impl DefaultPhysicalPlanner {
 
                 let get_sort_keys = |expr: &Expr| match expr {
                     Expr::WindowFunction(WindowFunction {
-                        ref partition_by,
-                        ref order_by,
+                        params:
+                            WindowFunctionParams {
+                                ref partition_by,
+                                ref order_by,
+                                ..
+                            },
                         ..
                     }) => generate_sort_key(partition_by, order_by),
                     Expr::Alias(Alias { expr, .. }) => {
                         // Convert &Box<T> to &T
                         match &**expr {
                             Expr::WindowFunction(WindowFunction {
-                                ref partition_by,
-                                ref order_by,
+                                params:
+                                    WindowFunctionParams {
+                                        ref partition_by,
+                                        ref order_by,
+                                        ..
+                                    },
                                 ..
                             }) => generate_sort_key(partition_by, order_by),
                             _ => unreachable!(),
@@ -1505,11 +1517,14 @@ pub fn create_window_expr_with_name(
     match e {
         Expr::WindowFunction(WindowFunction {
             fun,
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment,
+            params:
+                WindowFunctionParams {
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                },
         }) => {
             let physical_args =
                 create_physical_exprs(args, logical_schema, execution_props)?;
@@ -1576,11 +1591,14 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     match e {
         Expr::AggregateFunction(AggregateFunction {
             func,
-            distinct,
-            args,
-            filter,
-            order_by,
-            null_treatment,
+            params:
+                AggregateFunctionParams {
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                },
         }) => {
             let name = if let Some(name) = name {
                 name

@@ -30,17 +30,19 @@ use arrow::datatypes::{
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
     exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
     DataFusionError, Result,
 };
-use datafusion_expr::{ArrayFunctionSignature, Expr, TypeSignature};
+use datafusion_expr::{
+    ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -170,12 +172,11 @@ impl ScalarUDFImpl for ArrayElement {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_element_inner)(args)
+        make_scalar_function(array_element_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -330,16 +331,23 @@ impl ArraySlice {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::ArraySignature(
-                        ArrayFunctionSignature::ArrayAndIndexes(
-                            NonZeroUsize::new(2).expect("2 is non-zero"),
-                        ),
-                    ),
-                    TypeSignature::ArraySignature(
-                        ArrayFunctionSignature::ArrayAndIndexes(
-                            NonZeroUsize::new(3).expect("3 is non-zero"),
-                        ),
-                    ),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                            ArrayFunctionArgument::Index,
+                        ],
+                        array_coercion: None,
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                            ArrayFunctionArgument::Index,
+                            ArrayFunctionArgument::Index,
+                        ],
+                        array_coercion: None,
+                    }),
                 ],
                 Volatility::Immutable,
             ),
@@ -386,12 +394,11 @@ impl ScalarUDFImpl for ArraySlice {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_slice_inner)(args)
+        make_scalar_function(array_slice_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -665,7 +672,15 @@ pub(super) struct ArrayPopFront {
 impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_pop_front")],
         }
     }
@@ -687,12 +702,11 @@ impl ScalarUDFImpl for ArrayPopFront {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_pop_front_inner)(args)
+        make_scalar_function(array_pop_front_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -765,7 +779,15 @@ pub(super) struct ArrayPopBack {
 impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_pop_back")],
         }
     }
@@ -787,12 +809,11 @@ impl ScalarUDFImpl for ArrayPopBack {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_pop_back_inner)(args)
+        make_scalar_function(array_pop_back_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -893,13 +914,13 @@ impl ScalarUDFImpl for ArrayAnyValue {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_any_value_inner)(args)
+        make_scalar_function(array_any_value_inner)(&args.args)
     }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }

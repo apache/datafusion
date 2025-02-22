@@ -26,6 +26,8 @@ use crate::datasource::physical_plan::{FileOpener, FileScanConfig};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Statistics;
+use datafusion_datasource::file_groups::FileGroupPartitioner;
+use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
 
@@ -62,9 +64,33 @@ pub trait FileSource: Send + Sync {
     fn fmt_extra(&self, _t: DisplayFormatType, _f: &mut Formatter) -> fmt::Result {
         Ok(())
     }
-    /// Return true if the file format supports repartition
+
+    /// If supported by the [`FileSource`], redistribute files across partitions according to their size.
+    /// Allows custom file formats to implement their own repartitioning logic.
     ///
-    /// If this returns true, the DataSourceExec may repartition the data
-    /// by breaking up the input files into multiple smaller groups.
-    fn supports_repartition(&self, config: &FileScanConfig) -> bool;
+    /// Provides a default repartitioning behavior, see comments on [`FileGroupPartitioner`] for more detail.
+    fn repartitioned(
+        &self,
+        target_partitions: usize,
+        repartition_file_min_size: usize,
+        output_ordering: Option<LexOrdering>,
+        config: &FileScanConfig,
+    ) -> datafusion_common::Result<Option<FileScanConfig>> {
+        if config.file_compression_type.is_compressed() || config.new_lines_in_values {
+            return Ok(None);
+        }
+
+        let repartitioned_file_groups_option = FileGroupPartitioner::new()
+            .with_target_partitions(target_partitions)
+            .with_repartition_file_min_size(repartition_file_min_size)
+            .with_preserve_order_within_groups(output_ordering.is_some())
+            .repartition_file_groups(&config.file_groups);
+
+        if let Some(repartitioned_file_groups) = repartitioned_file_groups_option {
+            let mut source = config.clone();
+            source.file_groups = repartitioned_file_groups;
+            return Ok(Some(source));
+        }
+        Ok(None)
+    }
 }

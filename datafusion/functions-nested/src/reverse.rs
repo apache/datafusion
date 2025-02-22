@@ -96,12 +96,11 @@ impl ScalarUDFImpl for ArrayReverse {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_reverse_inner)(args)
+        make_scalar_function(array_reverse_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

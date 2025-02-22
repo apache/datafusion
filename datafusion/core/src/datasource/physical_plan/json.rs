@@ -35,12 +35,12 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use futures::{StreamExt, TryStreamExt};
@@ -312,10 +312,6 @@ impl FileSource for JsonSource {
 
     fn file_type(&self) -> &str {
         "json"
-    }
-
-    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
-        !(config.file_compression_type.is_compressed() || config.new_lines_in_values)
     }
 }
 
@@ -589,7 +585,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.new_exec();
+        let exec = conf.build();
 
         // TODO: this is not where schema inference should be tested
 
@@ -660,7 +656,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.new_exec();
+        let exec = conf.build();
 
         let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
@@ -700,7 +696,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_projection(Some(vec![0, 2]))
             .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.new_exec();
+        let exec = conf.build();
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 
@@ -745,7 +741,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_projection(Some(vec![3, 0, 2]))
             .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.new_exec();
+        let exec = conf.build();
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);
 

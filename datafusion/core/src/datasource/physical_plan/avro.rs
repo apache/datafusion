@@ -29,12 +29,12 @@ use crate::error::Result;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
@@ -255,10 +255,15 @@ impl FileSource for AvroSource {
     fn file_type(&self) -> &str {
         "avro"
     }
-    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
-        !(config.file_compression_type.is_compressed()
-            || config.new_lines_in_values
-            || self.as_any().downcast_ref::<AvroSource>().is_some())
+
+    fn repartitioned(
+        &self,
+        _target_partitions: usize,
+        _repartition_file_min_size: usize,
+        _output_ordering: Option<LexOrdering>,
+        _config: &FileScanConfig,
+    ) -> Result<Option<FileScanConfig>> {
+        Ok(None)
     }
 }
 
@@ -399,7 +404,7 @@ mod tests {
                 .with_file(meta.into())
                 .with_projection(Some(vec![0, 1, 2]));
 
-        let source_exec = conf.new_exec();
+        let source_exec = conf.build();
         assert_eq!(
             source_exec
                 .properties()
@@ -472,7 +477,7 @@ mod tests {
             .with_file(meta.into())
             .with_projection(projection);
 
-        let source_exec = conf.new_exec();
+        let source_exec = conf.build();
         assert_eq!(
             source_exec
                 .properties()
@@ -546,7 +551,7 @@ mod tests {
             .with_file(partitioned_file)
             .with_table_partition_cols(vec![Field::new("date", DataType::Utf8, false)]);
 
-        let source_exec = conf.new_exec();
+        let source_exec = conf.build();
 
         assert_eq!(
             source_exec

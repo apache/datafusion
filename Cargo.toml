@@ -66,7 +66,7 @@ homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
-rust-version = "1.81.0"
+rust-version = "1.82.0"
 version = "45.0.0"
 
 [workspace.dependencies]
@@ -78,15 +78,15 @@ version = "45.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
-arrow = { version = "54.1.0", features = [
+arrow = { version = "54.2.0", features = [
     "prettyprint",
     "chrono-tz",
 ] }
 arrow-buffer = { version = "54.1.0", default-features = false }
-arrow-flight = { version = "54.1.0", features = [
+arrow-flight = { version = "54.2.0", features = [
     "flight-sql-experimental",
 ] }
-arrow-ipc = { version = "54.1.0", default-features = false, features = [
+arrow-ipc = { version = "54.2.0", default-features = false, features = [
     "lz4",
 ] }
 arrow-ord = { version = "54.1.0", default-features = false }
@@ -95,13 +95,15 @@ async-trait = "0.1.73"
 bigdecimal = "0.4.7"
 bytes = "1.10"
 chrono = { version = "0.4.38", default-features = false }
+criterion = "0.5.1"
 ctor = "0.2.9"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "45.0.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "45.0.0" }
-datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "45.0.0", default-features = false }
+datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "45.0.0" }
 datafusion-common = { path = "datafusion/common", version = "45.0.0", default-features = false }
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "45.0.0" }
+datafusion-datasource = { path = "datafusion/datasource", version = "45.0.0", default-features = false }
 datafusion-doc = { path = "datafusion/doc", version = "45.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "45.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "45.0.0" }
@@ -133,7 +135,7 @@ itertools = "0.14"
 log = "^0.4"
 object_store = { version = "0.11.0", default-features = false }
 parking_lot = "0.12"
-parquet = { version = "54.1.0", default-features = false, features = [
+parquet = { version = "54.2.0", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -143,7 +145,7 @@ pbjson-types = "0.7"
 # Should match arrow-flight's version of prost.
 prost = "0.13.1"
 prost-derive = "0.13.1"
-rand = "0.8"
+rand = "0.8.5"
 recursive = "0.1.1"
 regex = "1.8"
 rstest = "0.24.0"

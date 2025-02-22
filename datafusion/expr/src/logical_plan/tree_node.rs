@@ -228,14 +228,14 @@ impl TreeNode for LogicalPlan {
             }),
             LogicalPlan::Dml(DmlStatement {
                 table_name,
-                table_schema,
+                target,
                 op,
                 input,
                 output_schema,
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Dml(DmlStatement {
                     table_name,
-                    table_schema,
+                    target,
                     op,
                     input,
                     output_schema,

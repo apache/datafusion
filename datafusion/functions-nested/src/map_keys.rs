@@ -100,12 +100,11 @@ impl ScalarUDFImpl for MapKeysFunc {
         ))))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(map_keys_inner)(args)
+        make_scalar_function(map_keys_inner)(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

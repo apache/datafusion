@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
@@ -101,12 +101,8 @@ impl ScalarUDFImpl for NullIfFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        nullif_func(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        nullif_func(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

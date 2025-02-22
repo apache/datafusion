@@ -42,7 +42,7 @@ use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::DataFusionError;
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -93,7 +93,7 @@ pub fn scan_partitioned_csv(
     let source = Arc::new(CsvSource::new(true, b'"', b'"'));
     let config = partitioned_csv_config(schema, file_groups, source)
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
-    Ok(config.new_exec())
+    Ok(config.build())
 }
 
 /// Returns file groups [`Vec<Vec<PartitionedFile>>`] for scanning `partitions` of `filename`
