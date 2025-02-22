@@ -79,7 +79,8 @@ pub fn channels<T>(
     (senders, receivers)
 }
 
-pub fn tokio_channels<T>(
+/// Create `n` empty mpsc channels with unbounded capacity.
+pub fn unbounded_channels<T>(
     n: usize,
 ) -> (
     Vec<tokio::sync::mpsc::UnboundedSender<T>>,
@@ -115,7 +116,7 @@ pub fn on_demand_partition_aware_channels<T>(
     OnDemandPartitionAwareSenders<T>,
     OnDemandPartitionAwareReceivers<T>,
 ) {
-    (0..n_in).map(|_| tokio_channels(n_out)).unzip()
+    (0..n_in).map(|_| unbounded_channels(n_out)).unzip()
 }
 
 /// Erroring during [send](DistributionSender::send).

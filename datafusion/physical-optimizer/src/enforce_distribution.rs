@@ -1096,6 +1096,7 @@ fn replace_order_preserving_variants(
     context.update_plan_from_children()
 }
 
+/// Replace the round robin repartition with on-demand repartition when prefer_round_robin_repartition is set to false.
 fn replace_round_robin_repartition_with_on_demand(
     mut context: DistributionContext,
 ) -> Result<DistributionContext> {
@@ -1413,6 +1414,7 @@ pub fn ensure_distribution(
                     }
                 }
             }
+            // when prefer_round_robin_repartition is set to false, replace round robin repartition with on-demand repartition
             if !prefer_round_robin_repartition {
                 child = replace_round_robin_repartition_with_on_demand(child)?;
             }
@@ -1501,6 +1503,5 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
     dist_context.data = false;
     Ok(dist_context)
 }
-// See tests in datafusion/core/tests/physical_optimizer
 
 // See tests in datafusion/core/tests/physical_optimizer

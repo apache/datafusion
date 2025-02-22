@@ -27,7 +27,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
-use super::distributor_channels::{on_demand_partition_aware_channels, tokio_channels};
+use super::distributor_channels::{
+    on_demand_partition_aware_channels, unbounded_channels,
+};
 use super::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, MaybeBatch, RecordBatchStream,
@@ -58,51 +60,17 @@ use futures::{ready, StreamExt, TryStreamExt};
 use log::trace;
 use parking_lot::Mutex;
 
+/// Channels for sending output partition number to the operator.
 type PartitionChannels = (Vec<Sender<usize>>, Vec<Receiver<usize>>);
 
-/// The OnDemandRepartitionExec operator repartitions the input data based on a push-based model.
-/// It is similar to the RepartitionExec operator, but it doesn't distribute the data to the output
-/// partitions until the output partitions request the data.
-///
-/// When polling, the operator sends the output partition number to the one partition channel, then the prefetch buffer will distribute the data based on the order of the partition number.
-/// Each input steams has a prefetch buffer(channel) to distribute the data to the output partitions.
-///
-/// The following diagram illustrates the data flow of the OnDemandRepartitionExec operator with 3 output partitions for the input stream 1:
-/// ```text
-///         /\                     /\                     /\
-///         ││                     ││                     ││
-///         ││                     ││                     ││
-///         ││                     ││                     ││
-/// ┌───────┴┴────────┐    ┌───────┴┴────────┐    ┌───────┴┴────────┐
-/// │     Stream      │    │     Stream      │    │     Stream      │
-/// │       (1)       │    │       (2)       │    │       (3)       │
-/// └────────┬────────┘    └───────┬─────────┘    └────────┬────────┘
-///          │                     │                       │    / \
-///          │                     │                       │    | |
-///          │                     │                       │    | |
-///          └────────────────┐    │    ┌──────────────────┘    | |
-///                           │    │    │                       | |
-///                           ▼    ▼    ▼                       | |
-///                       ┌─────────────────┐                   | |
-///  Send the partition   │ partion channel │                   | |
-///  number when polling  │                 │                   | |
-///                       └────────┬────────┘                   | |
-///                                │                            | |
-///                                │                            | |
-///                                │  Get the partition number  | |
-///                                ▼  then send data            | |
-///                       ┌─────────────────┐                   | |
-///                       │ Prefetch Buffer │───────────────────┘ |
-///                       │       (1)       │─────────────────────┘
-///                       └─────────────────┘ Distribute data to the output partitions
-///
-/// ```
+/// The OnDemandRepartitionExec operator cannot use the custom DistributionSender and DistributionReceiver because it can prevent channels from filling up endlessly.
 type OnDemandDistributionSender = tokio::sync::mpsc::UnboundedSender<MaybeBatch>;
 type OnDemandDistributionReceiver = tokio::sync::mpsc::UnboundedReceiver<MaybeBatch>;
 
 type OnDemandInputPartitionsToCurrentPartitionSender = Vec<OnDemandDistributionSender>;
 type OnDemandInputPartitionsToCurrentPartitionReceiver =
     Vec<OnDemandDistributionReceiver>;
+
 /// Inner state of [`OnDemandRepartitionExec`].
 #[derive(Debug)]
 struct OnDemandRepartitionExecState {
@@ -143,7 +111,7 @@ fn create_on_demand_repartition_channels(
         // create one channel per *output* partition
         // note we use a custom channel that ensures there is always data for each receiver
         // but limits the amount of buffering if required.
-        let (txs, rxs) = tokio_channels(num_output_partitions);
+        let (txs, rxs) = unbounded_channels(num_output_partitions);
         // Clone sender for each input partitions
         let txs = txs
             .into_iter()
@@ -258,6 +226,43 @@ impl OnDemandRepartitionExecState {
     }
 }
 
+/// The OnDemandRepartitionExec operator repartitions the input data based on a push-based model.
+/// It is similar to the RepartitionExec operator, but it doesn't distribute the data to the output
+/// partitions until the output partitions request the data.
+///
+/// When polling, the operator sends the output partition number to the one partition channel, then the prefetch buffer will distribute the data based on the order of the partition number.
+/// Each input steams has a prefetch buffer(channel) to distribute the data to the output partitions.
+///
+/// The following diagram illustrates the data flow of the OnDemandRepartitionExec operator with 3 output partitions for the input stream 1:
+/// ```text
+///         /\                     /\                     /\
+///         ││                     ││                     ││
+///         ││                     ││                     ││
+///         ││                     ││                     ││
+/// ┌───────┴┴────────┐    ┌───────┴┴────────┐    ┌───────┴┴────────┐
+/// │     Stream      │    │     Stream      │    │     Stream      │
+/// │       (1)       │    │       (2)       │    │       (3)       │
+/// └────────┬────────┘    └───────┬─────────┘    └────────┬────────┘
+///          │                     │                       │    / \
+///          │                     │                       │    | |
+///          │                     │                       │    | |
+///          └────────────────┐    │    ┌──────────────────┘    | |
+///                           │    │    │                       | |
+///                           ▼    ▼    ▼                       | |
+///                       ┌─────────────────┐                   | |
+///  Send the partition   │ partion channel │                   | |
+///  number when polling  │                 │                   | |
+///                       └────────┬────────┘                   | |
+///                                │                            | |
+///                                │                            | |
+///                                │  Get the partition number  | |
+///                                ▼  then send data            | |
+///                       ┌─────────────────┐                   | |
+///                       │ Prefetch Buffer │───────────────────┘ |
+///                       │       (1)       │─────────────────────┘
+///                       └─────────────────┘ Distribute data to the output partitions
+///
+/// ```
 #[derive(Debug, Clone)]
 pub struct OnDemandRepartitionExec {
     base: RepartitionExecBase,
@@ -961,14 +966,13 @@ mod tests {
     use super::*;
     use crate::{
         collect,
-        memory::MemorySourceConfig,
-        source::DataSourceExec,
         test::{
             assert_is_pending,
             exec::{
                 assert_strong_count_converges_to_zero, BarrierExec, BlockingExec,
                 ErrorExec, MockExec,
             },
+            TestMemoryExec,
         },
     };
 
@@ -1018,11 +1022,8 @@ mod tests {
     ) -> Result<Vec<Vec<RecordBatch>>> {
         let task_ctx = Arc::new(TaskContext::default());
         // create physical plan
-        let exec = MemorySourceConfig::try_new_exec(
-            &input_partitions,
-            Arc::clone(schema),
-            None,
-        )?;
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(schema), None)?;
         let exec = OnDemandRepartitionExec::try_new(exec, partitioning)?;
 
         // execute and collect results
@@ -1082,8 +1083,7 @@ mod tests {
         let schema = test_schema();
         let partition: Vec<RecordBatch> = create_vec_batches(2);
         let partitions = vec![partition.clone(), partition.clone()];
-        let input =
-            MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&schema), None)?;
+        let input = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
         let exec =
             OnDemandRepartitionExec::try_new(input, Partitioning::OnDemand(3)).unwrap();
 
@@ -1452,19 +1452,15 @@ mod tests {
             Arc::new(UInt32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
         )])?;
 
-        let source = Arc::new(DataSourceExec::new(Arc::new(
-            MemorySourceConfig::try_new(
-                &[vec![batch.clone()]],
-                Arc::clone(&schema),
-                None,
-            )
-            .unwrap()
-            .try_with_sort_information(vec![sort_exprs])
-            .unwrap(),
+        let source = Arc::new(TestMemoryExec::update_cache(Arc::new(
+            TestMemoryExec::try_new(&[vec![batch.clone()]], Arc::clone(&schema), None)
+                .unwrap()
+                .try_with_sort_information(vec![sort_exprs])
+                .unwrap(),
         )));
 
         // output has multiple partitions, and is sorted
-        let union = UnionExec::new(vec![Arc::<DataSourceExec>::clone(&source), source]);
+        let union = UnionExec::new(vec![Arc::<TestMemoryExec>::clone(&source), source]);
         let repartition_exec =
             OnDemandRepartitionExec::try_new(Arc::new(union), Partitioning::OnDemand(5))
                 .unwrap()
@@ -1559,15 +1555,15 @@ mod tests {
     }
 
     fn memory_exec(schema: &SchemaRef) -> Arc<dyn ExecutionPlan> {
-        MemorySourceConfig::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
+        TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(schema), None).unwrap()
     }
 
     fn sorted_memory_exec(
         schema: &SchemaRef,
         sort_exprs: LexOrdering,
     ) -> Arc<dyn ExecutionPlan> {
-        Arc::new(DataSourceExec::new(Arc::new(
-            MemorySourceConfig::try_new(&[vec![]], Arc::clone(schema), None)
+        Arc::new(TestMemoryExec::update_cache(Arc::new(
+            TestMemoryExec::try_new(&[vec![]], Arc::clone(schema), None)
                 .unwrap()
                 .try_with_sort_information(vec![sort_exprs])
                 .unwrap(),
