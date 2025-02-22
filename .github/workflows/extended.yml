@@ -33,15 +33,45 @@ on:
   push:
     branches:
       - main
+  issue_comment:
+    types: [created]
+
+permissions:
+  pull-requests: write
+  issues: write
 
 jobs:
+  # Check issue comment and notify that extended tests are running
+  check_issue_comment:
+    name: Check issue comment
+    runs-on: ubuntu-latest
+    if: github.event.issue.pull_request && github.event.comment.body == 'run extended tests'
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "Running extended tests..."
+            })
+
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
     runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.body == 'run extended tests')
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
       - name: Install Rust
@@ -61,9 +91,16 @@ jobs:
     name: cargo test 'extended_tests' (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.body == 'run extended tests')
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
       - name: Free Disk Space (Ubuntu)
@@ -94,9 +131,14 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.body == 'run extended tests')
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
@@ -114,9 +156,14 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.body == 'run extended tests')
     steps:
       - uses: actions/checkout@v4
         with:
+          # Check out the pull request branch if triggered by a comment
+          ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
@@ -128,4 +175,48 @@ jobs:
           cargo test --profile release-nonlto --test sqllogictests -- --include-sqlite
           cargo clean
 
+  notify_if_run_on_pr_success:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs:
+      [
+        linux-test-extended,
+        hash-collisions,
+        sqllogictest-sqlite,
+        check_issue_comment,
+      ]
+    if: success()
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "extended test suite ran successfully on this PR."
+            })
 
+  notify_if_run_on_pr_failure:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs:
+      [
+        linux-test-extended,
+        hash-collisions,
+        sqllogictest-sqlite,
+        check_issue_comment,
+      ]
+    if: failure()
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "extended test suite failed on this PR."
+            })
