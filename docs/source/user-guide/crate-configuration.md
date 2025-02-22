@@ -42,18 +42,18 @@ You can always check the [Cargo.toml] file for the most up to date list of featu
 
 ### Default features:
 
-- `nested_expressions`: functions for working with nested type function such as `array_to_string`
 - `compression`: reading files compressed with `xz2`, `bzip2`, `flate2`, and `zstd`
 - `crypto_expressions`: cryptographic functions such as `md5` and `sha256`
 - `datetime_expressions`: date and time functions such as `to_timestamp`
 - `encoding_expressions`: `encode` and `decode` functions
 - `math_expressions`: `sqrt` and other math functions
-- `string_expressions`: string functions such as `concat`
+- `nested_expressions`: functions for working with nested type function such as `array_to_string`
 - `parquet`: support for reading the [Apache Parquet] format
+- `string_expressions`: string functions such as `concat`
+- `recursive_protection`: uses [recursive](https://docs.rs/recursive/latest/recursive/) for stack overflow protection.
 - `regex_expressions`: regular expression functions, such as `regexp_match`
 - `unicode_expressions`: Include unicode aware functions such as `character_length`
 - `unparser`: enables support to reverse LogicalPlans back into SQL
-- `recursive_protection`: uses [recursive](https://docs.rs/recursive/latest/recursive/) for stack overflow protection.
 
 ### Optional features:
 
