@@ -44,7 +44,9 @@ use crate::{
     Statistics,
 };
 
-use arrow::array::{Array, RecordBatch, RecordBatchOptions, UInt32Array};
+use arrow::array::{
+    Array, RecordBatch, RecordBatchOptions, StringViewArray, UInt32Array,
+};
 use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, SortField};
@@ -300,6 +302,7 @@ impl ExternalSorter {
         if input.num_rows() == 0 {
             return Ok(());
         }
+
         self.reserve_memory_for_merge()?;
 
         let size = get_reserved_byte_for_record_batch(&input);
@@ -397,6 +400,8 @@ impl ExternalSorter {
             return Ok(0);
         }
 
+        self.organize_stringview_arrays()?;
+
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
         let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
@@ -412,6 +417,66 @@ impl ExternalSorter {
         self.metrics.spilled_rows.add(spilled_rows);
         self.spills.push(spill_file);
         Ok(used)
+    }
+
+    /// Reconstruct `self.in_mem_batches` to organize the payload buffers of each
+    /// `StringViewArray` in sequential order by calling `gc()` on them.
+    ///
+    /// # Rationale
+    /// After (merge-based) sorting, all batches will be sorted into a single run,
+    /// but physically this sorted run is chunked into many small batches. For
+    /// `StringViewArray`s inside each sorted run, their inner buffers are not
+    /// re-constructed by default, leading to non-sequential payload locations
+    /// (permutated by `interleave()` Arrow kernel). A single payload buffer might
+    /// be shared by multiple `RecordBatch`es.
+    /// When writing each batch to disk, the writer has to write all referenced buffers,
+    /// because they have to be read back one by one to reduce memory usage. This
+    /// causes extra disk reads and writes, and potentially execution failure.
+    ///
+    /// # Example
+    /// Before sorting:
+    /// batch1 -> buffer1
+    /// batch2 -> buffer2
+    ///
+    /// sorted_batch1 -> buffer1
+    ///               -> buffer2
+    /// sorted_batch2 -> buffer1
+    ///               -> buffer2
+    ///
+    /// Then when spilling each batch, the writer has to write all referenced buffers
+    /// repeatedly.
+    fn organize_stringview_arrays(&mut self) -> Result<()> {
+        let mut organized_batches = Vec::with_capacity(self.in_mem_batches.len());
+
+        for batch in self.in_mem_batches.drain(..) {
+            let mut new_columns: Vec<Arc<dyn Array>> =
+                Vec::with_capacity(batch.num_columns());
+
+            let mut arr_mutated = false;
+            for array in batch.columns() {
+                if let Some(string_view_array) =
+                    array.as_any().downcast_ref::<StringViewArray>()
+                {
+                    let new_array = string_view_array.gc();
+                    new_columns.push(Arc::new(new_array));
+                    arr_mutated = true;
+                } else {
+                    new_columns.push(array.clone());
+                }
+            }
+
+            let organized_batch = if arr_mutated {
+                RecordBatch::try_new(batch.schema(), new_columns)?
+            } else {
+                batch
+            };
+
+            organized_batches.push(organized_batch);
+        }
+
+        self.in_mem_batches = organized_batches;
+
+        Ok(())
     }
 
     /// Sorts the in_mem_batches in place
@@ -446,21 +511,9 @@ impl ExternalSorter {
                 None => {
                     let sorted_size = get_reserved_byte_for_record_batch(&batch);
                     if self.reservation.try_grow(sorted_size).is_err() {
-                        // Directly write in_mem_batches as well as all the remaining batches in
-                        // sorted_stream to disk. Further batches fetched from `sorted_stream` will
-                        // be handled by the `Some(writer)` matching arm.
-                        let spill_file =
-                            self.runtime.disk_manager.create_tmp_file("Sorting")?;
-                        let mut writer = IPCWriter::new(spill_file.path(), &self.schema)?;
-                        // Flush everything in memory to the spill file
-                        for batch in self.in_mem_batches.drain(..) {
-                            writer.write(&batch)?;
-                        }
-                        // as well as the newly sorted batch
-                        writer.write(&batch)?;
-                        spill_writer = Some(writer);
+                        self.in_mem_batches.push(batch);
+                        self.spill().await?;
                         self.reservation.free();
-                        self.spills.push(spill_file);
                     } else {
                         self.in_mem_batches.push(batch);
                         self.in_mem_batches_sorted = true;
