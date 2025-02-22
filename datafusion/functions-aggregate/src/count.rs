@@ -85,7 +85,14 @@ pub fn count_distinct(expr: Expr) -> Expr {
 
 /// Creates aggregation to count all rows, equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`
 pub fn count_all() -> Expr {
-    count(Expr::Literal(COUNT_STAR_EXPANSION))
+    Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+        count_udaf(),
+        vec![],
+        false,
+        None,
+        None,
+        None,
+    ))
 }
 
 #[user_doc(
