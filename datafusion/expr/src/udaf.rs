@@ -515,9 +515,9 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             null_treatment,
         } = params;
 
-        let mut schema_name = String::new();
+        let mut display_name = String::new();
 
-        schema_name.write_fmt(format_args!(
+        display_name.write_fmt(format_args!(
             "{}({}{})",
             self.name(),
             if *distinct { "DISTINCT " } else { "" },
@@ -525,17 +525,22 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(nt) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", nt))?;
+            display_name.write_fmt(format_args!(" {}", nt))?;
         }
         if let Some(fe) = filter {
-            schema_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
+            display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
         }
-        if let Some(order_by) = order_by {
-            schema_name
-                .write_fmt(format_args!(" ORDER BY [{}]", expr_vec_fmt!(order_by)))?;
+        if let Some(ob) = order_by {
+            display_name.write_fmt(format_args!(
+                " ORDER BY [{}]",
+                ob.iter()
+                    .map(|o| format!("{o}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ))?;
         }
 
-        Ok(schema_name)
+        Ok(display_name)
     }
 
     /// Returns the user-defined display name of function, given the arguments

@@ -25,9 +25,12 @@ use datafusion_common::{
     config::ConfigOptions, file_options::file_type::FileType, not_impl_err, DFSchema,
     Result, TableReference,
 };
-use sqlparser::ast;
+use sqlparser::ast::{self, NullTreatment};
 
-use crate::{AggregateUDF, Expr, GetFieldAccess, ScalarUDF, TableSource, WindowUDF};
+use crate::{
+    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
+    WindowFunctionDefinition, WindowUDF,
+};
 
 /// Provides the `SQL` query planner meta-data about tables and
 /// functions referenced in SQL statements, without a direct dependency on the
@@ -138,7 +141,7 @@ pub trait ExprPlanner: Debug + Send + Sync {
 
     /// Plan an array literal, such as `[1, 2, 3]`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_array_literal(
         &self,
         exprs: Vec<Expr>,
@@ -149,14 +152,14 @@ pub trait ExprPlanner: Debug + Send + Sync {
 
     /// Plan a `POSITION` expression, such as `POSITION(<expr> in <expr>)`
     ///
-    /// returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_position(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
     /// Plan a dictionary literal, such as `{ key: value, ...}`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_dictionary_literal(
         &self,
         expr: RawDictionaryExpr,
@@ -167,14 +170,14 @@ pub trait ExprPlanner: Debug + Send + Sync {
 
     /// Plan an extract expression, such as`EXTRACT(month FROM foo)`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_extract(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
     /// Plan an substring expression, such as `SUBSTRING(<expr> [FROM <expr>] [FOR <expr>])`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_substring(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
@@ -195,14 +198,14 @@ pub trait ExprPlanner: Debug + Send + Sync {
 
     /// Plans an overlay expression, such as `overlay(str PLACING substr FROM pos [FOR count])`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_overlay(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
 
     /// Plans a `make_map` expression, such as `make_map(key1, value1, key2, value2, ...)`
     ///
-    /// Returns origin expression arguments if not possible
+    /// Returns original expression arguments if not possible
     fn plan_make_map(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         Ok(PlannerResult::Original(args))
     }
@@ -228,6 +231,23 @@ pub trait ExprPlanner: Debug + Send + Sync {
     ///
     /// Returns origin binary expression if not possible
     fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
+        Ok(PlannerResult::Original(expr))
+    }
+
+    /// Plans aggregate functions, such as `COUNT(<expr>)`
+    ///
+    /// Returns original expression arguments if not possible
+    fn plan_aggregate(
+        &self,
+        expr: RawAggregateExpr,
+    ) -> Result<PlannerResult<RawAggregateExpr>> {
+        Ok(PlannerResult::Original(expr))
+    }
+
+    /// Plans window functions, such as `COUNT(<expr>)`
+    ///
+    /// Returns original expression arguments if not possible
+    fn plan_window(&self, expr: RawWindowExpr) -> Result<PlannerResult<RawWindowExpr>> {
         Ok(PlannerResult::Original(expr))
     }
 }
@@ -264,6 +284,30 @@ pub struct RawFieldAccessExpr {
 pub struct RawDictionaryExpr {
     pub keys: Vec<Expr>,
     pub values: Vec<Expr>,
+}
+
+/// This structure is used by `AggregateFunctionPlanner` to plan operators with
+/// custom expressions.
+#[derive(Debug, Clone)]
+pub struct RawAggregateExpr {
+    pub func: Arc<AggregateUDF>,
+    pub args: Vec<Expr>,
+    pub distinct: bool,
+    pub filter: Option<Box<Expr>>,
+    pub order_by: Option<Vec<SortExpr>>,
+    pub null_treatment: Option<NullTreatment>,
+}
+
+/// This structure is used by `WindowFunctionPlanner` to plan operators with
+/// custom expressions.
+#[derive(Debug, Clone)]
+pub struct RawWindowExpr {
+    pub func_def: WindowFunctionDefinition,
+    pub args: Vec<Expr>,
+    pub partition_by: Vec<Expr>,
+    pub order_by: Vec<SortExpr>,
+    pub window_frame: WindowFrame,
+    pub null_treatment: Option<NullTreatment>,
 }
 
 /// Result of planning a raw expr with [`ExprPlanner`]
