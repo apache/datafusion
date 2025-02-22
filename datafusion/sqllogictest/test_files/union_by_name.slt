@@ -92,15 +92,16 @@ NULL 1
 NULL 3
 5 NULL
 
-# TODO: This should pass, but the sanity checker isn't allowing it.
-# Commenting out the ordering check in the sanity checker produces the correct result.
-query error
+query II
 (SELECT x FROM t1 UNION ALL SELECT x FROM t1) UNION ALL BY NAME SELECT 5 ORDER BY x;
 ----
-DataFusion error: SanityCheckPlan
-caused by
-Error during planning: Plan: ["SortPreservingMergeExec: [x@1 ASC NULLS LAST]", "  UnionExec", "    SortExec: expr=[x@1 ASC NULLS LAST], preserve_partitioning=[true]", "      ProjectionExec: expr=[NULL as Int64(5), x@0 as x]", "        UnionExec", "          DataSourceExec: partitions=1, partition_sizes=[1]", "          DataSourceExec: partitions=1, partition_sizes=[1]", "    ProjectionExec: expr=[5 as Int64(5), NULL as x]", "      PlaceholderRowExec"] does not satisfy order requirements: [x@1 ASC NULLS LAST]. Child-0 order: []
-
+NULL 1
+NULL 1
+NULL 3
+NULL 3
+NULL 3
+NULL 3
+5 NULL
 
 query II
 (SELECT x FROM t1 UNION ALL SELECT y FROM t1) UNION BY NAME SELECT 5 ORDER BY x;
@@ -109,15 +110,16 @@ NULL 1
 NULL 3
 5 NULL
 
-# TODO: This should pass, but the sanity checker isn't allowing it.
-# Commenting out the ordering check in the sanity checker produces the correct result.
-query error
+query II
 (SELECT x FROM t1 UNION ALL SELECT y FROM t1) UNION ALL BY NAME SELECT 5 ORDER BY x;
 ----
-DataFusion error: SanityCheckPlan
-caused by
-Error during planning: Plan: ["SortPreservingMergeExec: [x@1 ASC NULLS LAST]", "  UnionExec", "    SortExec: expr=[x@1 ASC NULLS LAST], preserve_partitioning=[true]", "      ProjectionExec: expr=[NULL as Int64(5), x@0 as x]", "        UnionExec", "          DataSourceExec: partitions=1, partition_sizes=[1]", "          ProjectionExec: expr=[y@0 as x]", "            DataSourceExec: partitions=1, partition_sizes=[1]", "    ProjectionExec: expr=[5 as Int64(5), NULL as x]", "      PlaceholderRowExec"] does not satisfy order requirements: [x@1 ASC NULLS LAST]. Child-0 order: []
-
+NULL 1
+NULL 1
+NULL 3
+NULL 3
+NULL 3
+NULL 3
+5 NULL
 
 
 # Ambiguous name
@@ -158,15 +160,14 @@ NULL NULL 4
 NULL NULL 5
 NULL NULL 6
 
-# TODO: This should pass, but the sanity checker isn't allowing it.
-# Commenting out the ordering check in the sanity checker produces the correct result.
-query error
+query III
 SELECT 1 UNION ALL BY NAME SELECT * FROM unnest(range(2, 100)) UNION ALL BY NAME SELECT 999 ORDER BY 3, 1 LIMIT 5;
 ----
-DataFusion error: SanityCheckPlan
-caused by
-Error during planning: Plan: ["SortPreservingMergeExec: [UNNEST(range(Int64(2),Int64(100)))@2 ASC NULLS LAST, Int64(1)@0 ASC NULLS LAST], fetch=5", "  UnionExec", "    SortExec: TopK(fetch=5), expr=[UNNEST(range(Int64(2),Int64(100)))@2 ASC NULLS LAST], preserve_partitioning=[true]", "      ProjectionExec: expr=[Int64(1)@0 as Int64(1), NULL as Int64(999), UNNEST(range(Int64(2),Int64(100)))@1 as UNNEST(range(Int64(2),Int64(100)))]", "        UnionExec", "          ProjectionExec: expr=[1 as Int64(1), NULL as UNNEST(range(Int64(2),Int64(100)))]", "            PlaceholderRowExec", "          ProjectionExec: expr=[NULL as Int64(1), __unnest_placeholder(range(Int64(2),Int64(100)),depth=1)@0 as UNNEST(range(Int64(2),Int64(100)))]", "            UnnestExec", "              ProjectionExec: expr=[[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99] as __unnest_placeholder(range(Int64(2),Int64(100)))]", "                PlaceholderRowExec", "    ProjectionExec: expr=[NULL as Int64(1), 999 as Int64(999), NULL as UNNEST(range(Int64(2),Int64(100)))]", "      PlaceholderRowExec"] does not satisfy order requirements: [UNNEST(range(Int64(2),Int64(100)))@2 ASC NULLS LAST, Int64(1)@0 ASC NULLS LAST]. Child-0 order: []
-
+NULL NULL 2
+NULL NULL 3
+NULL NULL 4
+NULL NULL 5
+NULL NULL 6
 
 # Order by
 
