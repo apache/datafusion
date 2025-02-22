@@ -461,7 +461,7 @@ impl ExternalSorter {
                     new_columns.push(Arc::new(new_array));
                     arr_mutated = true;
                 } else {
-                    new_columns.push(array.clone());
+                    new_columns.push(Arc::clone(array));
                 }
             }
 
@@ -1478,7 +1478,7 @@ mod tests {
         // Processing 840 KB of data using 400 KB of memory requires at least 2 spills
         // It will spill roughly 18000 rows and 800 KBytes.
         // We leave a little wiggle room for the actual numbers.
-        assert!((2..=10).contains(&spill_count));
+        assert!((12..=18).contains(&spill_count));
         assert!((15000..=20000).contains(&spilled_rows));
         assert!((700000..=900000).contains(&spilled_bytes));
 

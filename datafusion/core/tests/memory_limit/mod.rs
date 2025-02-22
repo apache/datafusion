@@ -26,7 +26,6 @@ mod memory_limit_validation;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
-use arrow::util::pretty;
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -46,7 +45,7 @@ use datafusion_execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion_execution::TaskContext;
-use datafusion_expr::{col, Expr, TableType};
+use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
@@ -466,7 +465,7 @@ async fn test_stringview_external_sort() {
         .await
         .unwrap();
 
-    let results = df.collect().await.expect("Query execution failed");
+    let _ = df.collect().await.expect("Query execution failed");
 }
 
 /// Run the query with the specified memory limit,
