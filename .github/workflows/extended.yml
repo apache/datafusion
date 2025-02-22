@@ -74,12 +74,17 @@ jobs:
           ref: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request.head.ref || github.ref }}
           submodules: true
           fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup default stable
+      - name: Install Protobuf Compiler
+        run: sudo apt-get install -y protobuf-compiler
       - name: Prepare cargo build
-        run: cargo check --profile ci --all-targets
+        run: |
+          cargo check --profile ci --all-targets
+          cargo clean
 
   # Run extended tests (with feature 'extended_tests')
   linux-test-extended:
