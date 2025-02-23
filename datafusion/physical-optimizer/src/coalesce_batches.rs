@@ -31,7 +31,6 @@ use datafusion_physical_plan::{
 };
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_physical_plan::async_func::AsyncFuncExec;
 
 /// Optimizer rule that introduces CoalesceBatchesExec to avoid overhead with small batches that
 /// are produced by highly selective filters
@@ -63,7 +62,6 @@ impl PhysicalOptimizerRule for CoalesceBatches {
             // See https://github.com/apache/datafusion/issues/139
             let wrap_in_coalesce = plan_any.downcast_ref::<FilterExec>().is_some()
                 || plan_any.downcast_ref::<HashJoinExec>().is_some()
-                || plan_any.downcast_ref::<AsyncFuncExec>().is_some()
                 // Don't need to add CoalesceBatchesExec after a round robin RepartitionExec
                 || plan_any
                     .downcast_ref::<RepartitionExec>()
