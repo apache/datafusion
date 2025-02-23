@@ -96,6 +96,8 @@ use datafusion_physical_plan::unnest::ListUnnest;
 use sqlparser::ast::NullTreatment;
 
 use async_trait::async_trait;
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
@@ -2044,10 +2046,33 @@ impl DefaultPhysicalPlanner {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Arc::new(ProjectionExec::try_new(
-            physical_exprs,
-            input_exec,
-        )?))
+        let num_input_columns = input_exec.schema().fields().len();
+        let mut async_map = AsyncMapper::new(num_input_columns);
+        physical_exprs
+            .iter()
+            .try_for_each(|(expr, _column_name)| async_map.find_references(expr))?;
+
+        // If there are no async expressions, we can create a ProjectionExec
+        if async_map.is_empty() {
+            return Ok(Arc::new(ProjectionExec::try_new(
+                physical_exprs,
+                input_exec,
+            )?));
+        }
+
+        // rewrite the projection's expressions in terms of the columns with the result of async evaluation
+        let new_exprs = physical_exprs
+            .iter()
+            .map(|(expr, column_name)| {
+                let new_expr =
+                    Arc::clone(expr).transform_up(|e| Ok(async_map.map_expr(e)))?;
+                Ok((new_expr.data, column_name.to_string()))
+            })
+            .collect::<Result<_>>()?;
+
+        let async_exec = AsyncFuncExec::try_new(async_map.async_exprs, input_exec)?;
+        let new_proj_exec = ProjectionExec::try_new(new_exprs, Arc::new(async_exec))?;
+        Ok(Arc::new(new_proj_exec))
     }
 }
 

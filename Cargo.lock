@@ -2215,6 +2215,7 @@ name = "datafusion-expr"
 version = "48.0.0"
 dependencies = [
  "arrow",
+ "async-trait",
  "chrono",
  "ctor",
  "datafusion-common",
