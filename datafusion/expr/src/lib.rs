@@ -61,6 +61,7 @@ pub mod simplify;
 pub mod sort_properties {
     pub use datafusion_expr_common::sort_properties::*;
 }
+pub mod async_udf;
 pub mod statistics {
     pub use datafusion_expr_common::statistics::*;
 }
