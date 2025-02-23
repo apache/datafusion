@@ -116,7 +116,7 @@ required-features = ["string_expressions"]
 [[bench]]
 harness = false
 name = "gcd"
-required-features = []
+required-features = ["math_expressions"]
 
 [[bench]]
 harness = false
