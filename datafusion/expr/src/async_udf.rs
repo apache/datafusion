@@ -33,7 +33,7 @@ use std::sync::Arc;
 /// Note this is less efficient than the ScalarUDFImpl, but it can be used
 /// to register remote functions in the context.
 ///
-/// The name is chosen to  mirror ScalarUDFImpl
+/// The name is chosen to mirror ScalarUDFImpl
 #[async_trait]
 pub trait AsyncScalarUDFImpl: Debug + Send + Sync {
     /// the function cast as any
@@ -49,6 +49,9 @@ pub trait AsyncScalarUDFImpl: Debug + Send + Sync {
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType>;
 
     /// The ideal batch size for this function.
+    ///
+    /// This is used to determine what size of data to be evaluated at once.
+    /// If None, the whole batch will be evaluated at once.
     fn ideal_batch_size(&self) -> Option<usize> {
         None
     }
@@ -65,10 +68,6 @@ pub trait AsyncScalarUDFImpl: Debug + Send + Sync {
 ///
 /// Note this is not meant to be used directly, but is meant to be an implementation detail
 /// for AsyncUDFImpl.
-///
-/// This is used to register remote functions in the context. The function
-/// should not be invoked by DataFusion. It's only used to generate the logical
-/// plan and unparsed them to SQL.
 #[derive(Debug)]
 pub struct AsyncScalarUDF {
     inner: Arc<dyn AsyncScalarUDFImpl>,
