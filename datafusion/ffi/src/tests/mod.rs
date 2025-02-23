@@ -26,6 +26,8 @@ use abi_stable::{
     StableAbi,
 };
 
+use crate::udaf::FFI_AggregateUDF;
+
 use super::{table_provider::FFI_TableProvider, udf::FFI_ScalarUDF};
 use arrow::array::RecordBatch;
 use async_provider::create_async_table_provider;
@@ -34,7 +36,7 @@ use datafusion::{
     common::record_batch,
 };
 use sync_provider::create_sync_table_provider;
-use udf_udaf_udwf::create_ffi_abs_func;
+use udf_udaf_udwf::{create_ffi_abs_func, create_ffi_avg_func};
 
 mod async_provider;
 mod sync_provider;
@@ -52,6 +54,9 @@ pub struct ForeignLibraryModule {
 
     /// Create a scalar UDF
     pub create_scalar_udf: extern "C" fn() -> FFI_ScalarUDF,
+
+    /// Create an aggregate UDF
+    pub create_udaf: extern "C" fn() -> FFI_AggregateUDF,
 
     pub version: extern "C" fn() -> u64,
 }
@@ -97,6 +102,7 @@ pub fn get_foreign_library_module() -> ForeignLibraryModuleRef {
     ForeignLibraryModule {
         create_table: construct_table_provider,
         create_scalar_udf: create_ffi_abs_func,
+        create_udaf: create_ffi_avg_func,
         version: super::version,
     }
     .leak_into_prefix()

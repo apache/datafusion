@@ -23,10 +23,11 @@ mod tests {
     use abi_stable::library::RootModule;
     use datafusion::common::record_batch;
     use datafusion::error::{DataFusionError, Result};
-    use datafusion::logical_expr::ScalarUDF;
+    use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
     use datafusion::prelude::{col, SessionContext};
     use datafusion_ffi::table_provider::ForeignTableProvider;
     use datafusion_ffi::tests::{create_record_batch, ForeignLibraryModuleRef};
+    use datafusion_ffi::udaf::ForeignAggregateUDF;
     use datafusion_ffi::udf::ForeignScalarUDF;
     use std::path::Path;
     use std::sync::Arc;
@@ -176,6 +177,46 @@ mod tests {
 
         assert!(result.len() == 1);
         assert!(result[0] == expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ffi_udaf() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_avg_func =
+            module.create_udaf().ok_or(DataFusionError::NotImplemented(
+                "External table provider failed to implement create_udaf".to_string(),
+            ))?();
+        let foreign_avg_func: ForeignAggregateUDF = (&ffi_avg_func).try_into()?;
+
+        let udf: AggregateUDF = foreign_avg_func.into();
+
+        let ctx = SessionContext::default();
+        let record_batch = record_batch!(
+            ("a", Int32, vec![1, 2, 2, 4, 4, 4, 4]),
+            ("b", Float64, vec![1.0, 2.0, 2.0, 4.0, 4.0, 4.0, 4.0])
+        )
+        .unwrap();
+
+        let df = ctx.read_batch(record_batch)?;
+
+        let df = df
+            .aggregate(
+                vec![col("a")],
+                vec![udf.call(vec![col("b")]).alias("sum_b")],
+            )?
+            .sort_by(vec![col("a")])?;
+
+        let result = df.collect().await?;
+
+        let expected = record_batch!(
+            ("a", Int32, vec![1, 2, 4]),
+            ("sum_b", Float64, vec![1.0, 4.0, 16.0])
+        )?;
+
+        assert_eq!(result[0], expected);
 
         Ok(())
     }
