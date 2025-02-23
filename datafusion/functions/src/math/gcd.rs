@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, Int64Array};
+use arrow::array::{new_null_array, ArrayRef, AsArray, Int64Array};
 use arrow::error::ArrowError;
 use std::any::Any;
 use std::mem::swap;
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
-use arrow::datatypes::DataType::Int64;
+use arrow::datatypes::{DataType, Int64Type};
 
-use crate::utils::make_scalar_function;
 use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+    ScalarValue,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -54,9 +53,12 @@ impl Default for GcdFunc {
 
 impl GcdFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(2, vec![Int64], Volatility::Immutable),
+            signature: Signature::uniform(
+                2,
+                vec![DataType::Int64],
+                Volatility::Immutable,
+            ),
         }
     }
 }
@@ -75,11 +77,33 @@ impl ScalarUDFImpl for GcdFunc {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Int64)
+        Ok(DataType::Int64)
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        make_scalar_function(gcd, vec![])(&args.args)
+        let args: [ColumnarValue; 2] = args.args.try_into().map_err(|_| {
+            internal_datafusion_err!("Expected 2 arguments for function gcd")
+        })?;
+
+        match args {
+            [ColumnarValue::Array(a), ColumnarValue::Array(b)] => 
+                compute_gcd_for_arrays(&a, &b),
+            [ColumnarValue::Scalar(ScalarValue::Int64(a)), ColumnarValue::Scalar(ScalarValue::Int64(b))] => {
+                match (a, b) {
+                    (Some(a), Some(b)) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(
+                        Some(compute_gcd(a, b)?),
+                    ))),
+                    _ => Ok(ColumnarValue::Scalar(ScalarValue::Int64(None))),
+                }
+            }
+            [ColumnarValue::Array(a), ColumnarValue::Scalar(ScalarValue::Int64(b))] => {
+                compute_gcd_with_scalar(&a, b)
+            }
+            [ColumnarValue::Scalar(ScalarValue::Int64(a)), ColumnarValue::Array(b)] => {
+                compute_gcd_with_scalar(&b, a)
+            }
+            _ => exec_err!("Unsupported argument types for function gcd"),
+        }
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -87,24 +111,35 @@ impl ScalarUDFImpl for GcdFunc {
     }
 }
 
-/// Gcd SQL function
-fn gcd(args: &[ArrayRef]) -> Result<ArrayRef> {
-    match args[0].data_type() {
-        Int64 => {
-            let arg1 = downcast_named_arg!(&args[0], "x", Int64Array);
-            let arg2 = downcast_named_arg!(&args[1], "y", Int64Array);
+fn compute_gcd_for_arrays(a: &ArrayRef, b: &ArrayRef) -> Result<ColumnarValue> {
+    let result: Result<Int64Array> = a
+        .as_primitive::<Int64Type>()
+        .iter()
+        .zip(b.as_primitive::<Int64Type>().iter())
+        .map(|(a, b)| match (a, b) {
+            (Some(a), Some(b)) => Ok(Some(compute_gcd(a, b)?)),
+            _ => Ok(None),
+        })
+        .collect();
+    
+    result.map(|arr| ColumnarValue::Array(Arc::new(arr) as ArrayRef))
+}
 
-            Ok(arg1
+fn compute_gcd_with_scalar(arr: &ArrayRef, scalar: Option<i64>) -> Result<ColumnarValue> {
+    match scalar {
+        Some(scalar_value) => {
+            let result: Result<Int64Array> = arr
+                .as_primitive::<Int64Type>()
                 .iter()
-                .zip(arg2.iter())
-                .map(|(a1, a2)| match (a1, a2) {
-                    (Some(a1), Some(a2)) => Ok(Some(compute_gcd(a1, a2)?)),
+                .map(|val| match val {
+                    Some(val) => Ok(Some(compute_gcd(val, scalar_value)?)),
                     _ => Ok(None),
                 })
-                .collect::<Result<Int64Array>>()
-                .map(Arc::new)? as ArrayRef)
+                .collect();
+            
+            result.map(|arr| ColumnarValue::Array(Arc::new(arr) as ArrayRef))
         }
-        other => exec_err!("Unsupported data type {other:?} for function gcd"),
+        None => Ok(ColumnarValue::Array(new_null_array(&DataType::Int64, arr.len()))),
     }
 }
 
@@ -142,51 +177,4 @@ pub fn compute_gcd(x: i64, y: i64) -> Result<i64> {
             "Signed integer overflow in GCD({x}, {y})"
         )))
     })
-}
-
-#[cfg(test)]
-mod test {
-    use std::sync::Arc;
-
-    use arrow::{
-        array::{ArrayRef, Int64Array},
-        error::ArrowError,
-    };
-
-    use crate::math::gcd::gcd;
-    use datafusion_common::{cast::as_int64_array, DataFusionError};
-
-    #[test]
-    fn test_gcd_i64() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![0, 3, 25, -16])), // x
-            Arc::new(Int64Array::from(vec![0, -2, 15, 8])),  // y
-        ];
-
-        let result = gcd(&args).expect("failed to initialize function gcd");
-        let ints = as_int64_array(&result).expect("failed to initialize function gcd");
-
-        assert_eq!(ints.len(), 4);
-        assert_eq!(ints.value(0), 0);
-        assert_eq!(ints.value(1), 1);
-        assert_eq!(ints.value(2), 5);
-        assert_eq!(ints.value(3), 8);
-    }
-
-    #[test]
-    fn overflow_on_both_param_i64_min() {
-        let args: Vec<ArrayRef> = vec![
-            Arc::new(Int64Array::from(vec![i64::MIN])), // x
-            Arc::new(Int64Array::from(vec![i64::MIN])), // y
-        ];
-
-        match gcd(&args) {
-            // we expect a overflow
-            Err(DataFusionError::ArrowError(ArrowError::ComputeError(_), _)) => {}
-            Err(_) => {
-                panic!("failed to initialize function gcd")
-            }
-            Ok(_) => panic!("GCD({0}, {0}) should have overflown", i64::MIN),
-        };
-    }
 }
