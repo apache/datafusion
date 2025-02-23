@@ -1467,7 +1467,7 @@ fn update_properties(
     if eq_properties.is_expr_constant(&normalized_expr)
         || eq_properties
             .normalized_oeq_class()
-            .singleton_options(&normalized_expr)
+            .is_expr_partial_const(&normalized_expr)
     {
         node.data.sort_properties = SortProperties::Singleton;
     } else if let Some(options) = eq_properties

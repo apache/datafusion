@@ -22,7 +22,9 @@ use std::vec::IntoIter;
 
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr};
+
 use arrow::compute::SortOptions;
+use datafusion_common::HashSet;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
@@ -235,15 +237,34 @@ impl OrderingEquivalenceClass {
         None
     }
 
-    pub fn singleton_options(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        let mut count = 0;
+    /// Checks whether the given expression remains constant across all variations of [SortOptions].
+    ///
+    /// This function determines if `expr` appears with every possible combination of `descending`
+    /// and `nulls_first` options. If `expr` meets this condition, it is effectively constant.
+    ///
+    /// We primarily use [ConstExpr] to represent globally constant expressions. However, if an
+    /// expression is only constant within secondary ordering constraints, this function helps
+    /// identify such cases.
+    ///
+    /// TODO: If [SortOptions] eventually supports encoding constantness information, this function
+    ///       may become obsolete.
+    pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
+        let mut variants =
+            HashSet::from([(false, false), (false, true), (true, false), (true, true)]);
+
         for ordering in self.iter() {
-            let leading_ordering = &ordering[0];
-            if leading_ordering.expr.eq(expr) {
-                count += 1;
+            if let Some(leading_ordering) = ordering.first() {
+                if leading_ordering.expr.eq(expr) {
+                    let opt = (
+                        leading_ordering.options.descending,
+                        leading_ordering.options.nulls_first,
+                    );
+                    variants.remove(&opt);
+                }
             }
         }
-        count == 4
+
+        variants.is_empty()
     }
 }
 
