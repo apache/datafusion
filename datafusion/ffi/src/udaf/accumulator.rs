@@ -58,7 +58,7 @@ pub struct FFI_Accumulator {
         values: RVec<WrappedArray>,
     ) -> RResult<(), RString>,
 
-    pub supports_retract_batch: unsafe extern "C" fn(accumulator: &Self) -> bool,
+    pub supports_retract_batch: bool,
 
     /// Release the memory of the private data when it is no longer being used.
     pub release: unsafe extern "C" fn(accumulator: &mut Self),
@@ -161,35 +161,17 @@ unsafe extern "C" fn retract_batch_fn_wrapper(
     rresult!(accum_data.accumulator.retract_batch(&values))
 }
 
-unsafe extern "C" fn supports_retract_batch_fn_wrapper(
-    accumulator: &FFI_Accumulator,
-) -> bool {
-    let private_data = accumulator.private_data as *mut AccumulatorPrivateData;
-    let accum_data = &mut (*private_data);
-    accum_data.accumulator.supports_retract_batch()
-}
-
 unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_Accumulator) {
     let private_data =
         Box::from_raw(accumulator.private_data as *mut AccumulatorPrivateData);
     drop(private_data);
 }
 
-// unsafe extern "C" fn clone_fn_wrapper(accumulator: &FFI_Accumulator) -> FFI_Accumulator {
-//     let private_data = accumulator.private_data as *const AccumulatorPrivateData;
-//     let accum_data = &(*private_data);
-
-//     Box::new(accum_data.accumulator).into()
-// }
-
-// impl Clone for FFI_Accumulator {
-//     fn clone(&self) -> Self {
-//         unsafe { (self.clone)(self) }
-//     }
-// }
-
 impl From<Box<dyn Accumulator>> for FFI_Accumulator {
     fn from(accumulator: Box<dyn Accumulator>) -> Self {
+        let supports_retract_batch = accumulator.supports_retract_batch();
+        let private_data = AccumulatorPrivateData { accumulator };
+
         Self {
             update_batch: update_batch_fn_wrapper,
             evaluate: evaluate_fn_wrapper,
@@ -197,11 +179,11 @@ impl From<Box<dyn Accumulator>> for FFI_Accumulator {
             state: state_fn_wrapper,
             merge_batch: merge_batch_fn_wrapper,
             retract_batch: retract_batch_fn_wrapper,
-            supports_retract_batch: supports_retract_batch_fn_wrapper,
+            supports_retract_batch,
 
             // clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(accumulator) as *mut c_void,
+            private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
         }
     }
 }
@@ -308,6 +290,57 @@ impl Accumulator for ForeignAccumulator {
     }
 
     fn supports_retract_batch(&self) -> bool {
-        unsafe { (self.accumulator.supports_retract_batch)(&self.accumulator) }
+        self.accumulator.supports_retract_batch
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{make_array, Array};
+    use datafusion::{
+        common::create_array, error::Result,
+        functions_aggregate::average::AvgAccumulator, logical_expr::Accumulator,
+        scalar::ScalarValue,
+    };
+
+    use super::{FFI_Accumulator, ForeignAccumulator};
+
+    #[test]
+    fn test_foreign_avg_accumulator() -> Result<()> {
+        let boxed_accum: Box<dyn Accumulator> = Box::new(AvgAccumulator::default());
+        let ffi_accum: FFI_Accumulator = boxed_accum.into();
+        let mut foreign_accum: ForeignAccumulator = ffi_accum.into();
+
+        // Send in an array to average. There are 5 values and it should average to 30.0
+        let values = create_array!(Float64, vec![10., 20., 30., 40., 50.]);
+        foreign_accum.update_batch(&[values])?;
+
+        let avg = foreign_accum.evaluate()?;
+        assert_eq!(avg, ScalarValue::Float64(Some(30.0)));
+
+        let state = foreign_accum.state()?;
+        assert_eq!(state.len(), 2);
+        assert_eq!(state[0], ScalarValue::UInt64(Some(5)));
+        assert_eq!(state[1], ScalarValue::Float64(Some(150.0)));
+
+        // To verify merging batches works, create a second state to add in
+        // This should cause our average to go down to 25.0
+        let second_states = vec![
+            make_array(create_array!(UInt64, vec![1]).to_data()),
+            make_array(create_array!(Float64, vec![0.0]).to_data()),
+        ];
+
+        foreign_accum.merge_batch(&second_states)?;
+        let avg = foreign_accum.evaluate()?;
+        assert_eq!(avg, ScalarValue::Float64(Some(25.0)));
+
+        // If we remove a batch that is equivalent to the state we added
+        // we should go back to our original value of 30.0
+        let values = create_array!(Float64, vec![0.0]);
+        foreign_accum.retract_batch(&[values])?;
+        let avg = foreign_accum.evaluate()?;
+        assert_eq!(avg, ScalarValue::Float64(Some(30.0)));
+
+        Ok(())
     }
 }

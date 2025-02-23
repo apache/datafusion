@@ -29,6 +29,7 @@ use datafusion::{
     error::DataFusionError,
     logical_expr::{
         function::{AccumulatorArgs, AggregateFunctionSimplification, StateFieldsArgs},
+        type_coercion::functions::data_types_with_aggregate_udf,
         utils::AggregateOrderSensitivity,
         Accumulator, GroupsAccumulator,
     },
@@ -111,6 +112,15 @@ pub struct FFI_AggregateUDF {
 
     pub order_sensitivity:
         unsafe extern "C" fn(udaf: &FFI_AggregateUDF) -> FFI_AggregateOrderSensitivity,
+
+    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// user defined signatures, which will in turn call coerce_types to be called. This
+    /// call should be transparent to most users as the internal function performs the
+    /// appropriate calls on the underlying [`ScalarUDF`]
+    pub coerce_types: unsafe extern "C" fn(
+        udf: &Self,
+        arg_types: RVec<WrappedSchema>,
+    ) -> RResult<RVec<WrappedSchema>, RString>,
 
     /// Used to create a clone on the provider of the udaf. This should
     /// only need to be called by the receiver of the udaf.
@@ -270,6 +280,19 @@ unsafe extern "C" fn order_sensitivity_fn_wrapper(
     udaf.inner().order_sensitivity().into()
 }
 
+unsafe extern "C" fn coerce_types_fn_wrapper(
+    udaf: &FFI_AggregateUDF,
+    arg_types: RVec<WrappedSchema>,
+) -> RResult<RVec<WrappedSchema>, RString> {
+    let udaf = udaf.inner();
+
+    let arg_types = rresult_return!(rvec_wrapped_to_vec_datatype(&arg_types));
+
+    let return_types = rresult_return!(data_types_with_aggregate_udf(&arg_types, udaf));
+
+    rresult!(vec_datatype_to_rvec_wrapped(&return_types))
+}
+
 unsafe extern "C" fn release_fn_wrapper(udaf: &mut FFI_AggregateUDF) {
     let private_data = Box::from_raw(udaf.private_data as *mut AggregateUDFPrivateData);
     drop(private_data);
@@ -307,6 +330,7 @@ impl From<Arc<AggregateUDF>> for FFI_AggregateUDF {
             with_beneficial_ordering: with_beneficial_ordering_fn_wrapper,
             state_fields: state_fields_fn_wrapper,
             order_sensitivity: order_sensitivity_fn_wrapper,
+            coerce_types: coerce_types_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
             private_data: Box::into_raw(private_data) as *mut c_void,
@@ -492,6 +516,15 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
 
     fn simplify(&self) -> Option<AggregateFunctionSimplification> {
         None
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        unsafe {
+            let arg_types = vec_datatype_to_rvec_wrapped(arg_types)?;
+            let result_types =
+                df_result!((self.udaf.coerce_types)(&self.udaf, arg_types))?;
+            Ok(rvec_wrapped_to_vec_datatype(&result_types)?)
+        }
     }
 }
 

@@ -253,6 +253,9 @@ unsafe extern "C" fn release_fn_wrapper(accumulator: &mut FFI_GroupsAccumulator)
 
 impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
     fn from(accumulator: Box<dyn GroupsAccumulator>) -> Self {
+        let supports_convert_to_state = accumulator.supports_convert_to_state();
+        let private_data = GroupsAccumulatorPrivateData { accumulator };
+
         Self {
             update_batch: update_batch_fn_wrapper,
             evaluate: evaluate_fn_wrapper,
@@ -260,10 +263,10 @@ impl From<Box<dyn GroupsAccumulator>> for FFI_GroupsAccumulator {
             state: state_fn_wrapper,
             merge_batch: merge_batch_fn_wrapper,
             convert_to_state: convert_to_state_fn_wrapper,
-            supports_convert_to_state: accumulator.supports_convert_to_state(),
+            supports_convert_to_state,
 
             release: release_fn_wrapper,
-            private_data: Box::into_raw(accumulator) as *mut c_void,
+            private_data: Box::into_raw(Box::new(private_data)) as *mut c_void,
         }
     }
 }
@@ -449,5 +452,75 @@ impl From<FFI_EmitTo> for EmitTo {
             FFI_EmitTo::All => Self::All,
             FFI_EmitTo::First(v) => Self::First(v),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{make_array, Array, Float64Array};
+    use datafusion::{
+        common::create_array,
+        error::Result,
+        functions_aggregate::stddev::StddevGroupsAccumulator,
+        logical_expr::{EmitTo, GroupsAccumulator},
+        physical_plan::expressions::StatsType,
+    };
+
+    use super::{FFI_EmitTo, FFI_GroupsAccumulator, ForeignGroupsAccumulator};
+
+    #[test]
+    fn test_foreign_avg_accumulator() -> Result<()> {
+        let boxed_accum: Box<dyn GroupsAccumulator> =
+            Box::new(StddevGroupsAccumulator::new(StatsType::Population));
+        let ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
+        let mut foreign_accum: ForeignGroupsAccumulator = ffi_accum.into();
+
+        // Send in an array to evaluate. We want a mean of 30 and standard deviation of 4.
+        let values = create_array!(Float64, vec![26., 26., 34., 34.]);
+        foreign_accum.update_batch(&[values], &[0; 4], None, 1)?;
+
+        let groups_avg = foreign_accum.evaluate(EmitTo::All)?;
+        let groups_avg = groups_avg.as_any().downcast_ref::<Float64Array>().unwrap();
+        let expected = 4.0;
+        assert_eq!(groups_avg.len(), 1);
+        assert!((groups_avg.value(0) - expected).abs() < 0.0001);
+
+        let state = foreign_accum.state(EmitTo::All)?;
+        assert_eq!(state.len(), 3);
+
+        // To verify merging batches works, create a second state to add in
+        // This should cause our average to go down to 25.0
+        let second_states = vec![
+            make_array(create_array!(UInt64, vec![1]).to_data()),
+            make_array(create_array!(Float64, vec![30.0]).to_data()),
+            make_array(create_array!(Float64, vec![64.0]).to_data()),
+        ];
+
+        foreign_accum.merge_batch(&second_states, &[0], None, 1)?;
+        let avg = foreign_accum.evaluate(EmitTo::All)?;
+        assert_eq!(avg.len(), 1);
+        assert_eq!(
+            avg.as_ref(),
+            make_array(create_array!(Float64, vec![8.0]).to_data()).as_ref()
+        );
+
+        Ok(())
+    }
+
+    fn test_emit_to_round_trip(value: EmitTo) -> Result<()> {
+        let ffi_value: FFI_EmitTo = value.into();
+        let round_trip_value: EmitTo = ffi_value.into();
+
+        assert_eq!(value, round_trip_value);
+        Ok(())
+    }
+
+    /// This test ensures all enum values are properly translated
+    #[test]
+    fn test_all_emit_to_round_trip() -> Result<()> {
+        test_emit_to_round_trip(EmitTo::All)?;
+        test_emit_to_round_trip(EmitTo::First(10))?;
+
+        Ok(())
     }
 }
