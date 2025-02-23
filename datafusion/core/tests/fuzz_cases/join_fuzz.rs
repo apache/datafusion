@@ -22,10 +22,12 @@ use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
 use arrow::array::{ArrayRef, Int32Array};
 use arrow::compute::SortOptions;
+use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::Schema;
 use datafusion::common::JoinSide;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::expressions::BinaryExpr;
 use datafusion::physical_plan::collect;
@@ -38,8 +40,6 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::PhysicalExprRef;
-use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
 
 use itertools::Itertools;
 use rand::Rng;

@@ -27,6 +27,9 @@ repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
@@ -40,7 +43,6 @@ futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 parking_lot = { workspace = true }
-sqlparser = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -19,7 +19,7 @@
 //! user defined window functions
 
 use arrow::array::{ArrayRef, AsArray, Int64Array, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::{assert_batches_eq, prelude::SessionContext};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{

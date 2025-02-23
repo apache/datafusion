@@ -19,8 +19,8 @@ use arrow::array::{
     builder::{ListBuilder, StringBuilder},
     ArrayRef, Int64Array, RecordBatch, StringArray, StructArray,
 };
+use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
-use arrow_schema::{DataType, Field};
 use datafusion::prelude::*;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::ExprFunctionExt;

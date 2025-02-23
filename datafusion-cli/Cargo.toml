@@ -27,17 +27,21 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = "1.5.16"
 aws-credential-types = "1.2.0"
-clap = { version = "4.5.28", features = ["derive", "cargo"] }
+clap = { version = "4.5.30", features = ["derive", "cargo"] }
 datafusion = { workspace = true, features = [
     "avro",
     "crypto_expressions",
     "datetime_expressions",
     "encoding_expressions",
+    "nested_expressions",
     "parquet",
     "recursive_protection",
     "regex_expressions",

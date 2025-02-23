@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::{fmt, str::FromStr};
 
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 use datafusion_common::DataFusionError;
@@ -65,7 +65,7 @@ impl FromStr for DisplayFormatType {
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::{Field, Schema, DataType};
+/// # use arrow::datatypes::{Field, Schema, DataType};
 /// # use datafusion_expr::Operator;
 /// # use datafusion_physical_expr::expressions::{binary, col, lit};
 /// # use datafusion_physical_plan::{displayable, ExecutionPlan};

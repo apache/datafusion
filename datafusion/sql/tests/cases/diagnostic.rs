@@ -35,6 +35,7 @@ fn do_query(sql: &'static str) -> Diagnostic {
         collect_spans: true,
         ..ParserOptions::default()
     };
+
     let state = MockSessionState::default();
     let context = MockContextProvider { state };
     let sql_to_rel = SqlToRel::new_with_options(&context, options);
@@ -200,14 +201,8 @@ fn test_ambiguous_reference() -> Result<()> {
     let diag = do_query(query);
     assert_eq!(diag.message, "column 'first_name' is ambiguous");
     assert_eq!(diag.span, Some(spans["a"]));
-    assert_eq!(
-        diag.notes[0].message,
-        "possible reference to 'first_name' in table 'a'"
-    );
-    assert_eq!(
-        diag.notes[1].message,
-        "possible reference to 'first_name' in table 'b'"
-    );
+    assert_eq!(diag.notes[0].message, "possible column a.first_name");
+    assert_eq!(diag.notes[1].message, "possible column b.first_name");
     Ok(())
 }
 
@@ -223,5 +218,59 @@ fn test_incompatible_types_binary_arithmetic() -> Result<()> {
     assert_eq!(diag.notes[0].span, Some(spans["left"]));
     assert_eq!(diag.notes[1].message, "has type Utf8");
     assert_eq!(diag.notes[1].span, Some(spans["right"]));
+    Ok(())
+}
+
+#[test]
+fn test_field_not_found_suggestion() -> Result<()> {
+    let query = "SELECT /*whole*/first_na/*whole*/ FROM person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_eq!(diag.message, "column 'first_na' not found");
+    assert_eq!(diag.span, Some(spans["whole"]));
+    assert_eq!(diag.notes.len(), 1);
+
+    let mut suggested_fields: Vec<String> = diag
+        .notes
+        .iter()
+        .filter_map(|note| {
+            if note.message.starts_with("possible column") {
+                Some(note.message.replace("possible column ", ""))
+            } else {
+                None
+            }
+        })
+        .collect();
+    suggested_fields.sort();
+    assert_eq!(suggested_fields[0], "person.first_name");
+    Ok(())
+}
+
+#[test]
+fn test_ambiguous_column_suggestion() -> Result<()> {
+    let query = "SELECT /*whole*/id/*whole*/ FROM test_decimal, person";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+
+    assert_eq!(diag.message, "column 'id' is ambiguous");
+    assert_eq!(diag.span, Some(spans["whole"]));
+
+    assert_eq!(diag.notes.len(), 2);
+
+    let mut suggested_fields: Vec<String> = diag
+        .notes
+        .iter()
+        .filter_map(|note| {
+            if note.message.starts_with("possible column") {
+                Some(note.message.replace("possible column ", ""))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    suggested_fields.sort();
+    assert_eq!(suggested_fields, vec!["person.id", "test_decimal.id"]);
+
     Ok(())
 }

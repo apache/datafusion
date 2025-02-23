@@ -20,12 +20,12 @@
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use super::{
+use crate::execution_plan::{Boundedness, EmissionType};
+use crate::memory::MemoryStream;
+use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution_plan::{Boundedness, EmissionType};
-use crate::memory::MemoryStream;
 use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use arrow::datatypes::SchemaRef;

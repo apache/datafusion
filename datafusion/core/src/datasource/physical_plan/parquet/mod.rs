@@ -50,10 +50,10 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Constraints;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::source::DataSourceExec;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
@@ -575,15 +575,14 @@ mod tests {
         ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
         StructArray,
     };
-    use arrow::datatypes::{Field, Schema, SchemaBuilder};
+    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::{DataType, Fields};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_datasource::source::DataSourceExec;
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-    use datafusion_physical_plan::source::DataSourceExec;
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use crate::datasource::physical_plan::parquet::source::ParquetSource;
@@ -709,7 +708,7 @@ mod tests {
 
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();
-            let parquet_exec = base_config.new_exec();
+            let parquet_exec = base_config.clone().build();
             RoundTripResult {
                 batches: collect(parquet_exec.clone(), task_ctx).await,
                 parquet_exec,
@@ -1355,7 +1354,7 @@ mod tests {
                 Arc::new(ParquetSource::default()),
             )
             .with_file_groups(file_groups)
-            .new_exec();
+            .build();
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1469,7 +1468,7 @@ mod tests {
                     false,
                 ),
             ])
-            .new_exec();
+            .build();
         let partition_count = parquet_exec
             .source()
             .output_partitioning()
@@ -1532,7 +1531,7 @@ mod tests {
             Arc::new(ParquetSource::default()),
         )
         .with_file(partitioned_file)
-        .new_exec();
+        .build();
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
@@ -1687,7 +1686,7 @@ mod tests {
 
         assert_contains!(
             &display,
-            "pruning_predicate=c1_null_count@2 != c1_row_count@3 AND (c1_min@0 != bar OR bar != c1_max@1)"
+            "pruning_predicate=c1_null_count@2 != row_count@3 AND (c1_min@0 != bar OR bar != c1_max@1)"
         );
 
         assert_contains!(&display, r#"predicate=c1@0 != bar"#);
@@ -2189,7 +2188,7 @@ mod tests {
                 extensions: None,
                 metadata_size_hint: None,
             })
-            .new_exec();
+            .build();
 
         let res = collect(exec, ctx.task_ctx()).await.unwrap();
         assert_eq!(res.len(), 2);

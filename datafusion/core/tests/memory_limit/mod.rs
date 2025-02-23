@@ -24,9 +24,11 @@ use std::sync::{Arc, LazyLock};
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
 use arrow::array::{ArrayRef, DictionaryArray, RecordBatch};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
-use arrow_schema::SortOptions;
 use datafusion::assert_batches_eq;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -46,8 +48,6 @@ use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
 use test_utils::AccessLogGenerator;
 
@@ -69,7 +69,7 @@ async fn oom_sort() {
         .with_expected_errors(vec![
             "Resources exhausted: Memory Exhausted while Sorting (DiskManager is disabled)",
         ])
-        .with_memory_limit(200_000)
+        .with_memory_limit(500_000)
         .run()
         .await
 }
@@ -271,7 +271,8 @@ async fn sort_spill_reservation() {
 
     // Merge operation needs extra memory to do row conversion, so make the
     // memory limit larger.
-    let mem_limit = partition_size * 2;
+    let mem_limit =
+        ((partition_size * 2 + 1024) as f64 / MEMORY_FRACTION).ceil() as usize;
     let test = TestCase::new()
     // This query uses a different order than the input table to
     // force a sort. It also needs to have multiple columns to
@@ -308,7 +309,8 @@ async fn sort_spill_reservation() {
 
     test.clone()
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: ExternalSorterMerge",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:",
+            "bytes for ExternalSorterMerge",
         ])
         .with_config(config)
         .run()

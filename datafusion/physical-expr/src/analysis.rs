@@ -301,7 +301,7 @@ fn calculate_selectivity(
 mod tests {
     use std::sync::Arc;
 
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{assert_contains, DFSchema};
     use datafusion_expr::{
         col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit, Expr,

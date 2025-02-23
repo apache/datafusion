@@ -147,11 +147,13 @@ impl ScalarUDFImpl for RegexpReplaceFunc {
             }
         })
     }
-    fn invoke_batch(
+
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
+
         let len = args
             .iter()
             .fold(Option::<usize>::None, |acc, arg| match arg {

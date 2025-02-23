@@ -24,8 +24,11 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::ArrowNativeType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List};
-use arrow_schema::{DataType, FieldRef};
+use arrow::datatypes::DataType;
+use arrow::datatypes::{
+    DataType::{FixedSizeList, LargeList, List},
+    FieldRef,
+};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{
@@ -109,12 +112,11 @@ impl ScalarUDFImpl for ArrayResize {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_resize_inner)(args)
+        make_scalar_function(array_resize_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {

@@ -18,8 +18,9 @@
 //! Tree node implementation for Logical Expressions
 
 use crate::expr::{
-    AggregateFunction, Alias, Between, BinaryExpr, Case, Cast, GroupingSet, InList,
-    InSubquery, Like, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
+    AggregateFunction, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Cast,
+    GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction, TryCast, Unnest,
+    WindowFunction, WindowFunctionParams,
 };
 use crate::{Expr, ExprFunctionExt};
 
@@ -87,14 +88,14 @@ impl TreeNode for Expr {
                           }) => (expr, low, high).apply_ref_elements(f),
             Expr::Case(Case { expr, when_then_expr, else_expr }) =>
                 (expr, when_then_expr, else_expr).apply_ref_elements(f),
-            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. }) =>
+            Expr::AggregateFunction(AggregateFunction { params: AggregateFunctionParams { args, filter, order_by, ..}, .. }) =>
                 (args, filter, order_by).apply_ref_elements(f),
             Expr::WindowFunction(WindowFunction {
-                                     args,
-                                     partition_by,
-                                     order_by,
-                                     ..
-                                 }) => {
+                params : WindowFunctionParams {
+                    args,
+                    partition_by,
+                    order_by,
+                    ..}, ..}) => {
                 (args, partition_by, order_by).apply_ref_elements(f)
             }
             Expr::InList(InList { expr, list, .. }) => {
@@ -223,12 +224,15 @@ impl TreeNode for Expr {
                 })?
             }
             Expr::WindowFunction(WindowFunction {
-                args,
                 fun,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
+                params:
+                    WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        null_treatment,
+                    },
             }) => (args, partition_by, order_by).map_elements(f)?.update_data(
                 |(new_args, new_partition_by, new_order_by)| {
                     Expr::WindowFunction(WindowFunction::new(fun, new_args))
@@ -241,12 +245,15 @@ impl TreeNode for Expr {
                 },
             ),
             Expr::AggregateFunction(AggregateFunction {
-                args,
                 func,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
+                params:
+                    AggregateFunctionParams {
+                        args,
+                        distinct,
+                        filter,
+                        order_by,
+                        null_treatment,
+                    },
             }) => (args, filter, order_by).map_elements(f)?.map_data(
                 |(new_args, new_filter, new_order_by)| {
                     Ok(Expr::AggregateFunction(AggregateFunction::new_udf(

@@ -20,13 +20,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::memory::MemoryStream;
+use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::{
-    memory::MemoryStream, ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning,
-    PhysicalExpr,
+    ColumnarValue, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
@@ -236,7 +235,7 @@ mod tests {
     use crate::expressions::lit;
     use crate::test::{self, make_partition};
 
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::stats::{ColumnStatistics, Precision};
 
     #[tokio::test]

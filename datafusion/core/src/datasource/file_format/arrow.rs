@@ -37,11 +37,12 @@ use crate::datasource::physical_plan::{
 use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::error::ArrowError;
 use arrow::ipc::convert::fb_to_schema;
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{root_as_message, CompressionType};
-use arrow_schema::{ArrowError, Schema, SchemaRef};
 use datafusion_catalog::Session;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
@@ -170,11 +171,10 @@ impl FileFormat for ArrowFormat {
     async fn create_physical_plan(
         &self,
         _state: &dyn Session,
-        mut conf: FileScanConfig,
+        conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        conf = conf.with_source(Arc::new(ArrowSource::default()));
-        Ok(conf.new_exec())
+        Ok(conf.with_source(Arc::new(ArrowSource::default())).build())
     }
 
     async fn create_writer_physical_plan(

@@ -469,11 +469,11 @@ mod tests {
     use crate::collect;
     use crate::expressions::col;
     use crate::expressions::PhysicalSortExpr;
-    use crate::memory::MemorySourceConfig;
     use crate::sorts::sort::SortExec;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::TestMemoryExec;
 
     use super::*;
 
@@ -699,7 +699,7 @@ mod tests {
         );
         let schema = batch1.schema();
 
-        MemorySourceConfig::try_new_exec(
+        TestMemoryExec::try_new_exec(
             &[vec![batch1, batch2, batch3, batch4]],
             Arc::clone(&schema),
             None,
@@ -884,7 +884,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![data])?;
         let input =
-            MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
 
         let partial_sort_exec = Arc::new(PartialSortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
@@ -990,7 +990,7 @@ mod tests {
                     options: option_desc,
                 },
             ]),
-            MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None)?,
+            TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?,
             2,
         ));
 

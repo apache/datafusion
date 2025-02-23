@@ -32,6 +32,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::{AvroSource, CsvSource, FileScanConfig};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
@@ -57,7 +58,6 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
@@ -243,7 +243,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 )?
                 .with_newlines_in_values(scan.newlines_in_values)
                 .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
-                Ok(conf.new_exec())
+                Ok(conf.build())
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
@@ -280,7 +280,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         extension_codec,
                         Arc::new(source),
                     )?;
-                    Ok(base_config.new_exec())
+                    Ok(base_config.build())
                 }
                 #[cfg(not(feature = "parquet"))]
                 panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
@@ -292,7 +292,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     extension_codec,
                     Arc::new(AvroSource::new()),
                 )?;
-                Ok(conf.new_exec())
+                Ok(conf.build())
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(

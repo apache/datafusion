@@ -64,9 +64,9 @@ use arrow::array::{
 use arrow::compute::kernels::cmp::{eq, not_distinct};
 use arrow::compute::{and, concat_batches, take, FilterBuilder};
 use arrow::datatypes::{Schema, SchemaRef};
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
-use arrow_schema::ArrowError;
 use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     internal_datafusion_err, internal_err, plan_err, project_schema, DataFusionError,
@@ -1641,7 +1641,7 @@ impl EmbeddedProjection for HashJoinExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::MemorySourceConfig;
+    use crate::test::TestMemoryExec;
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
         test::exec::MockExec,
@@ -1683,7 +1683,7 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     fn join(
@@ -2086,7 +2086,7 @@ mod tests {
             build_table_i32(("a1", &vec![2]), ("b2", &vec![2]), ("c1", &vec![9]));
         let schema = batch1.schema();
         let left =
-            MemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+            TestMemoryExec::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
                 .unwrap();
 
         let right = build_table(
@@ -2158,7 +2158,7 @@ mod tests {
         let schema = batch1.schema();
 
         let left =
-            MemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+            TestMemoryExec::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
                 .unwrap();
         let right = build_table(
             ("a2", &vec![20, 30, 10]),
@@ -2212,7 +2212,7 @@ mod tests {
             build_table_i32(("a2", &vec![30]), ("b1", &vec![5]), ("c2", &vec![90]));
         let schema = batch1.schema();
         let right =
-            MemorySourceConfig::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
+            TestMemoryExec::try_new_exec(&[vec![batch1], vec![batch2]], schema, None)
                 .unwrap();
 
         let on = vec![(
@@ -2291,8 +2291,7 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch.clone(), batch]], schema, None)
-            .unwrap()
+        TestMemoryExec::try_new_exec(&[vec![batch.clone(), batch]], schema, None).unwrap()
     }
 
     #[apply(batch_sizes)]
@@ -2397,8 +2396,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b1", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
-        let right =
-            MemorySourceConfig::try_new_exec(&[vec![right]], schema, None).unwrap();
+        let right = TestMemoryExec::try_new_exec(&[vec![right]], schema, None).unwrap();
         let join = join(left, right, on, &JoinType::Left, false).unwrap();
 
         let columns = columns(&join.schema());
@@ -2435,8 +2433,7 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema()).unwrap()) as _,
         )];
         let schema = right.schema();
-        let right =
-            MemorySourceConfig::try_new_exec(&[vec![right]], schema, None).unwrap();
+        let right = TestMemoryExec::try_new_exec(&[vec![right]], schema, None).unwrap();
         let join = join(left, right, on, &JoinType::Full, false).unwrap();
 
         let columns = columns(&join.schema());
@@ -3741,13 +3738,12 @@ mod tests {
         let n: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
         let left =
-            MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
                 .unwrap();
         let dates: ArrayRef = Arc::new(Date32Array::from(vec![19108, 19108, 19109]));
         let n: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![dates, n])?;
-        let right =
-            MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap();
+        let right = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap();
         let on = vec![(
             Arc::new(Column::new_with_schema("date", &left.schema()).unwrap()) as _,
             Arc::new(Column::new_with_schema("date", &right.schema()).unwrap()) as _,
@@ -4037,7 +4033,7 @@ mod tests {
             ("b1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
             ("c1", &vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0]),
         );
-        let left = MemorySourceConfig::try_new_exec(
+        let left = TestMemoryExec::try_new_exec(
             &[vec![left_batch.clone()], vec![left_batch.clone()]],
             left_batch.schema(),
             None,
@@ -4048,7 +4044,7 @@ mod tests {
             ("b2", &vec![12, 13]),
             ("c2", &vec![14, 15]),
         );
-        let right = MemorySourceConfig::try_new_exec(
+        let right = TestMemoryExec::try_new_exec(
             &[vec![right_batch.clone()], vec![right_batch.clone()]],
             right_batch.schema(),
             None,
@@ -4133,7 +4129,7 @@ mod tests {
         )
         .unwrap();
         let schema_ref = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema_ref, None).unwrap()
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema_ref, None).unwrap()
     }
 
     #[tokio::test]

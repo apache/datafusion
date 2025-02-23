@@ -16,12 +16,13 @@
 // under the License.
 
 use arrow::array::{types::Int32Type, ListArray};
+use arrow::datatypes::SchemaRef;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
     array::{Int32Array, StringArray},
     record_batch::RecordBatch,
 };
-use arrow_schema::SchemaRef;
+use datafusion_functions_aggregate::count::count_all;
 use std::sync::Arc;
 
 use datafusion::error::Result;
@@ -31,7 +32,7 @@ use datafusion::prelude::*;
 use datafusion::assert_batches_eq;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
-use datafusion_expr::ExprSchemable;
+use datafusion_expr::{table_scan, ExprSchemable, LogicalPlanBuilder};
 use datafusion_functions_aggregate::expr_fn::{approx_median, approx_percentile_cont};
 use datafusion_functions_nested::map::map;
 
@@ -1120,6 +1121,37 @@ async fn test_fn_map() -> Result<()> {
         "+---------------------------------------------------------------------------------------+",
     ];
     assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+/// Call count wildcard from dataframe API
+#[tokio::test]
+async fn test_count_wildcard() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("a", DataType::UInt32, false),
+        Field::new("b", DataType::UInt32, false),
+        Field::new("c", DataType::UInt32, false),
+    ]);
+
+    let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+    let plan = LogicalPlanBuilder::from(table_scan)
+        .aggregate(vec![col("b")], vec![count_all()])
+        .unwrap()
+        .project(vec![count_all()])
+        .unwrap()
+        .sort(vec![count_all().sort(true, false)])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let expected = "Sort: count(*) ASC NULLS LAST [count(*):Int64]\
+    \n  Projection: count(*) [count(*):Int64]\
+    \n    Aggregate: groupBy=[[test.b]], aggr=[[count(*)]] [b:UInt32, count(*):Int64]\
+    \n      TableScan: test [a:UInt32, b:UInt32, c:UInt32]";
+
+    let formatted_plan = plan.display_indent_schema().to_string();
+    assert_eq!(formatted_plan, expected);
 
     Ok(())
 }

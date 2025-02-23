@@ -163,6 +163,7 @@ fn validate_args(
     group_by_expr: &HashMap<&Expr, usize>,
 ) -> Result<()> {
     let expr_not_in_group_by = function
+        .params
         .args
         .iter()
         .find(|expr| !group_by_expr.contains_key(expr));
@@ -183,7 +184,7 @@ fn grouping_function_on_id(
     is_grouping_set: bool,
 ) -> Result<Expr> {
     validate_args(function, group_by_expr)?;
-    let args = &function.args;
+    let args = &function.params.args;
 
     // Postgres allows grouping function for group by without grouping sets, the result is then
     // always 0

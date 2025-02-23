@@ -37,7 +37,7 @@ use crate::physical_plan::metrics::MetricsSet;
 use crate::physical_plan::ExecutionPlan;
 use crate::prelude::{Expr, SessionConfig, SessionContext};
 
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
@@ -156,7 +156,7 @@ impl TestParquetFile {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let parquet_options = ctx.copied_table_options().parquet;
         let source = Arc::new(ParquetSource::new(parquet_options.clone()));
-        let mut scan_config = FileScanConfig::new(
+        let scan_config = FileScanConfig::new(
             self.object_store_url.clone(),
             Arc::clone(&self.schema),
             source,
@@ -185,13 +185,12 @@ impl TestParquetFile {
                 Arc::clone(&scan_config.file_schema),
                 Arc::clone(&physical_filter_expr),
             ));
-            scan_config = scan_config.with_source(source);
-            let parquet_exec = scan_config.new_exec();
+            let parquet_exec = scan_config.with_source(source).build();
 
             let exec = Arc::new(FilterExec::try_new(physical_filter_expr, parquet_exec)?);
             Ok(exec)
         } else {
-            Ok(scan_config.new_exec())
+            Ok(scan_config.build())
         }
     }
 

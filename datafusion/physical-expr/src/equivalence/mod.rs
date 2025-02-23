@@ -72,8 +72,8 @@ mod tests {
     use crate::expressions::col;
     use crate::PhysicalSortExpr;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{SchemaRef, SortOptions};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{plan_datafusion_err, Result};
     use datafusion_physical_expr_common::sort_expr::{
         LexOrdering, PhysicalSortRequirement,

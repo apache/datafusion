@@ -19,8 +19,8 @@
 
 use arrow::array::{Float64Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use arrow::compute::concat_batches;
+use arrow::datatypes::SchemaRef;
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::SessionContext;
 use datafusion_common::assert_contains;

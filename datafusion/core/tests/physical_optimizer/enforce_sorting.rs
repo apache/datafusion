@@ -24,13 +24,13 @@ use crate::physical_optimizer::test_utils::{
     create_test_schema3, create_test_schema4, filter_exec, global_limit_exec,
     hash_join_exec, limit_exec, local_limit_exec, memory_exec, parquet_exec,
     repartition_exec, sort_exec, sort_expr, sort_expr_options, sort_merge_join_exec,
-    sort_preserving_merge_exec, spr_repartition_exec, stream_exec_ordered, union_exec,
-    RequirementsTestExec,
+    sort_preserving_merge_exec, sort_preserving_merge_exec_with_fetch,
+    spr_repartition_exec, stream_exec_ordered, union_exec, RequirementsTestExec,
 };
 
 use datafusion_physical_plan::displayable;
 use arrow::compute::SortOptions;
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::expressions::{col, Column, NotExpr};
@@ -69,7 +69,7 @@ fn csv_exec_ordered(
     )
     .with_file(PartitionedFile::new("file_path".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .new_exec()
+    .build()
 }
 
 /// Created a sorted parquet exec
@@ -87,7 +87,7 @@ pub fn parquet_exec_sorted(
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .new_exec()
+    .build()
 }
 
 /// Create a sorted Csv exec
@@ -104,7 +104,7 @@ fn csv_exec_sorted(
     )
     .with_file(PartitionedFile::new("x".to_string(), 100))
     .with_output_ordering(vec![sort_exprs])
-    .new_exec()
+    .build()
 }
 
 /// Runs the sort enforcement optimizer and asserts the plan
@@ -1939,6 +1939,30 @@ async fn test_remove_unnecessary_spm1() -> Result<()> {
         "  DataSourceExec: partitions=1, partition_sizes=[0]",
     ];
     assert_optimized!(expected_input, expected_optimized, physical_plan, true);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_remove_unnecessary_spm2() -> Result<()> {
+    let schema = create_test_schema()?;
+    let source = memory_exec(&schema);
+    let input = sort_preserving_merge_exec_with_fetch(
+        vec![sort_expr("non_nullable_col", &schema)],
+        source,
+        100,
+    );
+
+    let expected_input = [
+        "SortPreservingMergeExec: [non_nullable_col@1 ASC], fetch=100",
+        "  DataSourceExec: partitions=1, partition_sizes=[0]",
+    ];
+    let expected_optimized = [
+        "LocalLimitExec: fetch=100",
+        "  SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
+        "    DataSourceExec: partitions=1, partition_sizes=[0]",
+    ];
+    assert_optimized!(expected_input, expected_optimized, input, true);
 
     Ok(())
 }

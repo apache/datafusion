@@ -438,3 +438,8 @@ Date32
 
 statement ok
 drop table test
+
+query T
+select coalesce(arrow_cast('', 'Utf8View'), arrow_cast('', 'Dictionary(UInt32, Utf8)'));
+----
+(empty)

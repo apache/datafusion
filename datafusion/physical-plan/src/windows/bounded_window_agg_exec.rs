@@ -1193,9 +1193,9 @@ mod tests {
 
     use crate::common::collect;
     use crate::expressions::PhysicalSortExpr;
-    use crate::memory::MemorySourceConfig;
     use crate::projection::ProjectionExec;
     use crate::streaming::{PartitionStream, StreamingTableExec};
+    use crate::test::TestMemoryExec;
     use crate::windows::{
         create_udwf_window_expr, create_window_expr, BoundedWindowAggExec, InputOrderMode,
     };
@@ -1205,7 +1205,8 @@ mod tests {
         builder::{Int64Builder, UInt64Builder},
         RecordBatch,
     };
-    use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{
         assert_batches_eq, exec_datafusion_err, Result, ScalarValue,
     };
@@ -1553,7 +1554,7 @@ mod tests {
             vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3]))],
         )?;
 
-        let memory_exec = MemorySourceConfig::try_new_exec(
+        let memory_exec = TestMemoryExec::try_new_exec(
             &[vec![batch.clone(), batch.clone(), batch.clone()]],
             Arc::clone(&schema),
             None,

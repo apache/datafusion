@@ -42,7 +42,7 @@ use arrow::array::{self, Array, ArrayRef, Decimal128Builder, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::DataFusionError;
-use datafusion_physical_plan::source::DataSourceExec;
+use datafusion_datasource::source::DataSourceExec;
 
 #[cfg(feature = "compression")]
 use bzip2::write::BzEncoder;
@@ -93,29 +93,7 @@ pub fn scan_partitioned_csv(
     let source = Arc::new(CsvSource::new(true, b'"', b'"'));
     let config = partitioned_csv_config(schema, file_groups, source)
         .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
-    Ok(config.new_exec())
-}
-
-/// Auto finish the wrapped BzEncoder on drop
-#[cfg(feature = "compression")]
-struct AutoFinishBzEncoder<W: Write>(BzEncoder<W>);
-
-#[cfg(feature = "compression")]
-impl<W: Write> Write for AutoFinishBzEncoder<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.0.flush()
-    }
-}
-
-#[cfg(feature = "compression")]
-impl<W: Write> Drop for AutoFinishBzEncoder<W> {
-    fn drop(&mut self) {
-        let _ = self.0.try_finish();
-    }
+    Ok(config.build())
 }
 
 /// Returns file groups [`Vec<Vec<PartitionedFile>>`] for scanning `partitions` of `filename`
@@ -159,10 +137,9 @@ pub fn partitioned_file_groups(
                 Box::new(encoder)
             }
             #[cfg(feature = "compression")]
-            FileCompressionType::BZIP2 => Box::new(AutoFinishBzEncoder(BzEncoder::new(
-                file,
-                BzCompression::default(),
-            ))),
+            FileCompressionType::BZIP2 => {
+                Box::new(BzEncoder::new(file, BzCompression::default()))
+            }
             #[cfg(not(feature = "compression"))]
             FileCompressionType::GZIP
             | FileCompressionType::BZIP2
