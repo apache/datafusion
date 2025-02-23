@@ -511,6 +511,9 @@ impl ExternalSorter {
                 None => {
                     let sorted_size = get_reserved_byte_for_record_batch(&batch);
                     if self.reservation.try_grow(sorted_size).is_err() {
+                        // Although the reservation is not enough, the batch is
+                        // already in memory, so it's okay to combine it with previously
+                        // sorted batches, and spill together.
                         self.in_mem_batches.push(batch);
                         self.spill().await?;
                         self.reservation.free();
