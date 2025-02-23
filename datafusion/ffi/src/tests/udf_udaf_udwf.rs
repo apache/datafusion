@@ -18,7 +18,7 @@
 use crate::{udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF};
 use datafusion::{
     functions::math::abs::AbsFunc,
-    functions_aggregate::sum::Sum,
+    functions_aggregate::{stddev::Stddev, sum::Sum},
     logical_expr::{AggregateUDF, ScalarUDF},
 };
 
@@ -32,6 +32,12 @@ pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
 
 pub(crate) extern "C" fn create_ffi_avg_func() -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Sum::new().into());
+
+    udaf.into()
+}
+
+pub(crate) extern "C" fn create_ffi_stddev_func() -> FFI_AggregateUDF {
+    let udaf: Arc<AggregateUDF> = Arc::new(Stddev::new().into());
 
     udaf.into()
 }

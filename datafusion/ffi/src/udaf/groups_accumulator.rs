@@ -476,8 +476,9 @@ mod tests {
         let mut foreign_accum: ForeignGroupsAccumulator = ffi_accum.into();
 
         // Send in an array to evaluate. We want a mean of 30 and standard deviation of 4.
-        let values = create_array!(Float64, vec![26., 26., 34., 34.]);
-        foreign_accum.update_batch(&[values], &[0; 4], None, 1)?;
+        let values = create_array!(Float64, vec![26., 26., 34., 34., 0.0]);
+        let opt_filter = create_array!(Boolean, vec![true, true, true, true, false]);
+        foreign_accum.update_batch(&[values], &[0; 5], Some(opt_filter.as_ref()), 1)?;
 
         let groups_avg = foreign_accum.evaluate(EmitTo::All)?;
         let groups_avg = groups_avg.as_any().downcast_ref::<Float64Array>().unwrap();
@@ -496,7 +497,8 @@ mod tests {
             make_array(create_array!(Float64, vec![64.0]).to_data()),
         ];
 
-        foreign_accum.merge_batch(&second_states, &[0], None, 1)?;
+        let opt_filter = create_array!(Boolean, vec![true]);
+        foreign_accum.merge_batch(&second_states, &[0], Some(opt_filter.as_ref()), 1)?;
         let avg = foreign_accum.evaluate(EmitTo::All)?;
         assert_eq!(avg.len(), 1);
         assert_eq!(
