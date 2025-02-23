@@ -23,16 +23,13 @@ concurrency:
 
 # https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#running-your-pull_request-workflow-when-a-pull-request-merges
 #
-# These jobs only run on the `main` branch as they are time consuming
+# These jobs are not run as part of PR checks as they are time-consuming
 # and should not fail often.
 #
 # We still run them as they provide important coverage to ensure correctness
 # in the (very rare) event of a hash failure or sqlite library query failure.
 on:
-  # Run on all commits to main
   push:
-    branches:
-      - main
 
 jobs:
   # Check crate compiles and base cargo check passes
