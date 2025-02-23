@@ -19,13 +19,14 @@ use std::any::Any;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::ArrayData;
-use arrow_array::{Array, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
-use arrow_buffer::{Buffer, ToByteSlice};
-use arrow_schema::{DataType, Field, SchemaBuilder};
+use arrow::array::{Array, ArrayData, ArrayRef, MapArray, OffsetSizeTrait, StructArray};
+use arrow::buffer::Buffer;
+use arrow::datatypes::{DataType, Field, SchemaBuilder, ToByteSlice};
 
 use datafusion_common::utils::{fixed_size_list_to_arrays, list_to_arrays};
-use datafusion_common::{exec_err, HashSet, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, utils::take_function_args, HashSet, Result, ScalarValue,
+};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
@@ -56,23 +57,18 @@ fn can_evaluate_to_const(args: &[ColumnarValue]) -> bool {
 }
 
 fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return exec_err!(
-            "make_map requires exactly 2 arguments, got {} instead",
-            args.len()
-        );
-    }
+    let [keys_arg, values_arg] = take_function_args("make_map", args)?;
 
     let can_evaluate_to_const = can_evaluate_to_const(args);
 
     // check the keys array is unique
-    let keys = get_first_array_ref(&args[0])?;
+    let keys = get_first_array_ref(keys_arg)?;
     if keys.null_count() > 0 {
         return exec_err!("map key cannot be null");
     }
     let key_array = keys.as_ref();
 
-    match &args[0] {
+    match keys_arg {
         ColumnarValue::Array(_) => {
             let row_keys = match key_array.data_type() {
                 DataType::List(_) => list_to_arrays::<i32>(&keys),
@@ -95,8 +91,8 @@ fn make_map_batch(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         }
     }
 
-    let values = get_first_array_ref(&args[1])?;
-    make_map_batch_internal(keys, values, can_evaluate_to_const, args[0].data_type())
+    let values = get_first_array_ref(values_arg)?;
+    make_map_batch_internal(keys, values, can_evaluate_to_const, keys_arg.data_type())
 }
 
 fn check_unique_keys(array: &dyn Array) -> Result<()> {
@@ -258,21 +254,16 @@ impl ScalarUDFImpl for MapFunc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 2 {
-            return exec_err!(
-                "map requires exactly 2 arguments, got {} instead",
-                arg_types.len()
-            );
-        }
+        let [keys_arg, values_arg] = take_function_args(self.name(), arg_types)?;
         let mut builder = SchemaBuilder::new();
         builder.push(Field::new(
             "key",
-            get_element_type(&arg_types[0])?.clone(),
+            get_element_type(keys_arg)?.clone(),
             false,
         ));
         builder.push(Field::new(
             "value",
-            get_element_type(&arg_types[1])?.clone(),
+            get_element_type(values_arg)?.clone(),
             true,
         ));
         let fields = builder.finish().fields;
@@ -282,12 +273,11 @@ impl ScalarUDFImpl for MapFunc {
         ))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_map_batch(args)
+        make_map_batch(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

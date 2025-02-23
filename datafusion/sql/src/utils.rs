@@ -19,7 +19,7 @@
 
 use std::vec;
 
-use arrow_schema::{
+use arrow::datatypes::{
     DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use datafusion_common::tree_node::{
@@ -30,7 +30,9 @@ use datafusion_common::{
     HashMap, Result, ScalarValue,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
-use datafusion_expr::expr::{Alias, GroupingSet, Unnest, WindowFunction};
+use datafusion_expr::expr::{
+    Alias, GroupingSet, Unnest, WindowFunction, WindowFunctionParams,
+};
 use datafusion_expr::utils::{expr_as_column_expr, find_column_exprs};
 use datafusion_expr::{
     col, expr_vec_fmt, ColumnUnnestList, Expr, ExprSchemable, LogicalPlan,
@@ -240,11 +242,15 @@ pub fn window_expr_common_partition_keys(window_exprs: &[Expr]) -> Result<&[Expr
     let all_partition_keys = window_exprs
         .iter()
         .map(|expr| match expr {
-            Expr::WindowFunction(WindowFunction { partition_by, .. }) => Ok(partition_by),
+            Expr::WindowFunction(WindowFunction {
+                params: WindowFunctionParams { partition_by, .. },
+                ..
+            }) => Ok(partition_by),
             Expr::Alias(Alias { expr, .. }) => match expr.as_ref() {
-                Expr::WindowFunction(WindowFunction { partition_by, .. }) => {
-                    Ok(partition_by)
-                }
+                Expr::WindowFunction(WindowFunction {
+                    params: WindowFunctionParams { partition_by, .. },
+                    ..
+                }) => Ok(partition_by),
                 expr => exec_err!("Impossibly got non-window expr {expr:?}"),
             },
             expr => exec_err!("Impossibly got non-window expr {expr:?}"),
@@ -650,8 +656,7 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
 mod tests {
     use std::{ops::Add, sync::Arc};
 
-    use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
-    use arrow_schema::Fields;
+    use arrow::datatypes::{DataType as ArrowDataType, Field, Fields, Schema};
     use datafusion_common::{Column, DFSchema, Result};
     use datafusion_expr::{
         col, lit, unnest, ColumnUnnestList, EmptyRelation, LogicalPlan,

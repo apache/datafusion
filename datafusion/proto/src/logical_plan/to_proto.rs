@@ -22,8 +22,8 @@
 use datafusion_common::{TableReference, UnnestOptions};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::expr::{
-    self, Alias, Between, BinaryExpr, Cast, GroupingSet, InList, Like, Placeholder,
-    ScalarFunction, Unnest,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Cast, GroupingSet, InList,
+    Like, Placeholder, ScalarFunction, Unnest,
 };
 use datafusion_expr::WriteOp;
 use datafusion_expr::{
@@ -300,12 +300,15 @@ pub fn serialize_expr(
         }
         Expr::WindowFunction(expr::WindowFunction {
             ref fun,
-            ref args,
-            ref partition_by,
-            ref order_by,
-            ref window_frame,
-            // TODO: support null treatment in proto
-            null_treatment: _,
+            params:
+                expr::WindowFunctionParams {
+                    ref args,
+                    ref partition_by,
+                    ref order_by,
+                    ref window_frame,
+                    // TODO: support null treatment in proto
+                    null_treatment: _,
+                },
         }) => {
             let (window_function, fun_definition) = match fun {
                 WindowFunctionDefinition::AggregateUDF(aggr_udf) => {
@@ -348,11 +351,14 @@ pub fn serialize_expr(
         }
         Expr::AggregateFunction(expr::AggregateFunction {
             ref func,
-            ref args,
-            ref distinct,
-            ref filter,
-            ref order_by,
-            null_treatment: _,
+            params:
+                AggregateFunctionParams {
+                    ref args,
+                    ref distinct,
+                    ref filter,
+                    ref order_by,
+                    null_treatment: _,
+                },
         }) => {
             let mut buf = Vec::new();
             let _ = codec.try_encode_udaf(func, &mut buf);

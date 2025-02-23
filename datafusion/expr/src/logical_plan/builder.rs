@@ -242,9 +242,10 @@ impl LogicalPlanBuilder {
         schema: &DFSchema,
     ) -> Result<Self> {
         let n_cols = values[0].len();
-        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
+        let mut fields = ValuesFields::new();
         for j in 0..n_cols {
             let field_type = schema.field(j).data_type();
+            let field_nullable = schema.field(j).is_nullable();
             for row in values.iter() {
                 let value = &row[j];
                 let data_type = value.get_type(schema)?;
@@ -260,17 +261,17 @@ impl LogicalPlanBuilder {
                     }
                 }
             }
-            field_types.push(field_type.to_owned());
+            fields.push(field_type.to_owned(), field_nullable);
         }
 
-        Self::infer_inner(values, &field_types, schema)
+        Self::infer_inner(values, fields, schema)
     }
 
     fn infer_data(values: Vec<Vec<Expr>>) -> Result<Self> {
         let n_cols = values[0].len();
         let schema = DFSchema::empty();
+        let mut fields = ValuesFields::new();
 
-        let mut field_types: Vec<DataType> = Vec::with_capacity(n_cols);
         for j in 0..n_cols {
             let mut common_type: Option<DataType> = None;
             for (i, row) in values.iter().enumerate() {
@@ -293,20 +294,21 @@ impl LogicalPlanBuilder {
             }
             // assuming common_type was not set, and no error, therefore the type should be NULL
             // since the code loop skips NULL
-            field_types.push(common_type.unwrap_or(DataType::Null));
+            fields.push(common_type.unwrap_or(DataType::Null), true);
         }
 
-        Self::infer_inner(values, &field_types, &schema)
+        Self::infer_inner(values, fields, &schema)
     }
 
     fn infer_inner(
         mut values: Vec<Vec<Expr>>,
-        field_types: &[DataType],
+        fields: ValuesFields,
         schema: &DFSchema,
     ) -> Result<Self> {
+        let fields = fields.into_fields();
         // wrap cast if data type is not same as common type.
         for row in &mut values {
-            for (j, field_type) in field_types.iter().enumerate() {
+            for (j, field_type) in fields.iter().map(|f| f.data_type()).enumerate() {
                 if let Expr::Literal(ScalarValue::Null) = row[j] {
                     row[j] = Expr::Literal(ScalarValue::try_from(field_type)?);
                 } else {
@@ -314,16 +316,8 @@ impl LogicalPlanBuilder {
                 }
             }
         }
-        let fields = field_types
-            .iter()
-            .enumerate()
-            .map(|(j, data_type)| {
-                // naming is following convention https://www.postgresql.org/docs/current/queries-values.html
-                let name = &format!("column{}", j + 1);
-                Field::new(name, data_type.clone(), true)
-            })
-            .collect::<Vec<_>>();
-        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let dfschema = DFSchema::from_unqualified_fields(fields, HashMap::new())?;
         let schema = DFSchemaRef::new(dfschema);
 
         Ok(Self::new(LogicalPlan::Values(Values { schema, values })))
@@ -386,18 +380,49 @@ impl LogicalPlanBuilder {
         })))
     }
 
-    /// Create a [DmlStatement] for inserting the contents of this builder into the named table
+    /// Create a [`DmlStatement`] for inserting the contents of this builder into the named table.
+    ///
+    /// Note,  use a [`DefaultTableSource`] to insert into a [`TableProvider`]
+    ///
+    /// [`DefaultTableSource`]: https://docs.rs/datafusion/latest/datafusion/datasource/default_table_source/struct.DefaultTableSource.html
+    /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
+    ///
+    /// # Example:
+    /// ```
+    /// # use datafusion_expr::{lit, LogicalPlanBuilder,
+    /// #  logical_plan::builder::LogicalTableSource,
+    /// # };
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{Schema, DataType, Field};
+    /// # use datafusion_expr::dml::InsertOp;
+    /// #
+    /// # fn test() -> datafusion_common::Result<()> {
+    /// # let employee_schema = Arc::new(Schema::new(vec![
+    /// #     Field::new("id", DataType::Int32, false),
+    /// # ])) as _;
+    /// # let table_source = Arc::new(LogicalTableSource::new(employee_schema));
+    /// // VALUES (1), (2)
+    /// let input = LogicalPlanBuilder::values(vec![vec![lit(1)], vec![lit(2)]])?
+    ///   .build()?;
+    /// // INSERT INTO MyTable VALUES (1), (2)
+    /// let insert_plan = LogicalPlanBuilder::insert_into(
+    ///   input,
+    ///   "MyTable",
+    ///   table_source,
+    ///   InsertOp::Append,
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn insert_into(
         input: LogicalPlan,
         table_name: impl Into<TableReference>,
-        table_schema: &Schema,
+        target: Arc<dyn TableSource>,
         insert_op: InsertOp,
     ) -> Result<Self> {
-        let table_schema = table_schema.clone().to_dfschema_ref()?;
-
         Ok(Self::new(LogicalPlan::Dml(DmlStatement::new(
             table_name.into(),
-            table_schema,
+            target,
             WriteOp::Insert(insert_op),
             Arc::new(input),
         ))))
@@ -728,6 +753,21 @@ impl LogicalPlanBuilder {
         union(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
     }
 
+    /// Apply a union by name, preserving duplicate rows
+    pub fn union_by_name(self, plan: LogicalPlan) -> Result<Self> {
+        union_by_name(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
+    }
+
+    /// Apply a union by name, removing duplicate rows
+    pub fn union_by_name_distinct(self, plan: LogicalPlan) -> Result<Self> {
+        let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
+        let right_plan: LogicalPlan = plan;
+
+        Ok(Self::new(LogicalPlan::Distinct(Distinct::All(Arc::new(
+            union_by_name(left_plan, right_plan)?,
+        )))))
+    }
+
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
         let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
@@ -840,10 +880,16 @@ impl LogicalPlanBuilder {
         plan: &LogicalPlan,
         column: impl Into<Column>,
     ) -> Result<Column> {
+        let column = column.into();
+        if column.relation.is_some() {
+            // column is already normalized
+            return Ok(column);
+        }
+
         let schema = plan.schema();
         let fallback_schemas = plan.fallback_normalize_schemas();
         let using_columns = plan.using_columns()?;
-        column.into().normalize_with_schemas_and_ambiguity_check(
+        column.normalize_with_schemas_and_ambiguity_check(
             &[&[schema], &fallback_schemas],
             &using_columns,
         )
@@ -1320,6 +1366,29 @@ impl From<Arc<LogicalPlan>> for LogicalPlanBuilder {
     }
 }
 
+/// Container used when building fields for a `VALUES` node.
+#[derive(Default)]
+struct ValuesFields {
+    inner: Vec<Field>,
+}
+
+impl ValuesFields {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, data_type: DataType, nullable: bool) {
+        // Naming follows the convention described here:
+        // https://www.postgresql.org/docs/current/queries-values.html
+        let name = format!("column{}", self.inner.len() + 1);
+        self.inner.push(Field::new(name, data_type, nullable));
+    }
+
+    pub fn into_fields(self) -> Fields {
+        self.inner.into()
+    }
+}
+
 pub fn change_redundant_column(fields: &Fields) -> Vec<Field> {
     let mut name_map = HashMap::new();
     fields
@@ -1523,6 +1592,18 @@ pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalP
     ])?))
 }
 
+/// Like [`union`], but combine rows from different tables by name, rather than
+/// by position.
+pub fn union_by_name(
+    left_plan: LogicalPlan,
+    right_plan: LogicalPlan,
+) -> Result<LogicalPlan> {
+    Ok(LogicalPlan::Union(Union::try_new_by_name(vec![
+        Arc::new(left_plan),
+        Arc::new(right_plan),
+    ])?))
+}
+
 /// Create Projection
 /// # Errors
 /// This function errors under any of the following conditions:
@@ -1602,7 +1683,7 @@ pub fn table_scan_with_filter_and_fetch(
     )
 }
 
-fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
+pub fn table_source(table_schema: &Schema) -> Arc<dyn TableSource> {
     let table_schema = Arc::new(table_schema.clone());
     Arc::new(LogicalTableSource { table_schema })
 }

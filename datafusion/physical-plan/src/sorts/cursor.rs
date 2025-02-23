@@ -17,15 +17,14 @@
 
 use std::cmp::Ordering;
 
-use arrow::buffer::ScalarBuffer;
+use arrow::array::{
+    types::ByteArrayType, Array, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait,
+    PrimitiveArray,
+};
+use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::SortOptions;
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::Rows;
-use arrow_array::types::ByteArrayType;
-use arrow_array::{
-    Array, ArrowPrimitiveType, GenericByteArray, OffsetSizeTrait, PrimitiveArray,
-};
-use arrow_buffer::{Buffer, OffsetBuffer};
 use datafusion_execution::memory_pool::MemoryReservation;
 
 /// A comparable collection of values for use with [`Cursor`]
@@ -292,6 +291,10 @@ pub struct ArrayValues<T: CursorValues> {
     // Otherwise, the first null index
     null_threshold: usize,
     options: SortOptions,
+
+    /// Tracks the memory used by the values array,
+    /// freed on drop.
+    _reservation: MemoryReservation,
 }
 
 impl<T: CursorValues> ArrayValues<T> {
@@ -299,7 +302,11 @@ impl<T: CursorValues> ArrayValues<T> {
     /// to `options`.
     ///
     /// Panics if the array is empty
-    pub fn new<A: CursorArray<Values = T>>(options: SortOptions, array: &A) -> Self {
+    pub fn new<A: CursorArray<Values = T>>(
+        options: SortOptions,
+        array: &A,
+        reservation: MemoryReservation,
+    ) -> Self {
         assert!(array.len() > 0, "Empty array passed to FieldCursor");
         let null_threshold = match options.nulls_first {
             true => array.null_count(),
@@ -310,6 +317,7 @@ impl<T: CursorValues> ArrayValues<T> {
             values: array.values(),
             null_threshold,
             options,
+            _reservation: reservation,
         }
     }
 
@@ -361,6 +369,12 @@ impl<T: CursorValues> CursorValues for ArrayValues<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryPool,
+    };
+
     use super::*;
 
     fn new_primitive(
@@ -373,10 +387,15 @@ mod tests {
             false => values.len() - null_count,
         };
 
+        let memory_pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(10000));
+        let consumer = MemoryConsumer::new("test");
+        let reservation = consumer.register(&memory_pool);
+
         let values = ArrayValues {
             values: PrimitiveValues(values),
             null_threshold,
             options,
+            _reservation: reservation,
         };
 
         Cursor::new(values)

@@ -29,12 +29,11 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
-
-[lib]
-name = "datafusion"
-path = "src/lib.rs"
 
 [features]
 nested_expressions = ["datafusion-functions-nested"]
@@ -43,7 +42,7 @@ array_expressions = ["nested_expressions"]
 # Used to enable the avro format
 avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
 backtrace = ["datafusion-common/backtrace"]
-compression = ["xz2", "bzip2", "flate2", "zstd", "async-compression", "tokio-util"]
+compression = ["xz2", "bzip2", "flate2", "zstd", "datafusion-datasource/compression"]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
 datetime_expressions = ["datafusion-functions/datetime_expressions"]
 default = [
@@ -74,7 +73,7 @@ recursive_protection = [
     "datafusion-physical-optimizer/recursive_protection",
     "datafusion-sql/recursive_protection",
 ]
-serde = ["arrow-schema/serde"]
+serde = ["dep:serde"]
 string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [
     "datafusion-sql/unicode_expressions",
@@ -85,30 +84,26 @@ extended_tests = []
 [dependencies]
 apache-avro = { version = "0.17", optional = true }
 arrow = { workspace = true }
-arrow-array = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
-async-compression = { version = "0.4.0", features = [
-    "bzip2",
-    "gzip",
-    "xz",
-    "zstd",
-    "tokio",
-], optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-bzip2 = { version = "0.5.0", optional = true }
+bzip2 = { version = "0.5.1", optional = true }
 chrono = { workspace = true }
 datafusion-catalog = { workspace = true }
+datafusion-catalog-listing = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
+datafusion-datasource = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
+datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-nested = { workspace = true, optional = true }
 datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
+datafusion-macros = { workspace = true }
 datafusion-optimizer = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
@@ -117,7 +112,6 @@ datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 flate2 = { version = "1.0.24", optional = true }
 futures = { workspace = true }
-glob = "0.3.0"
 itertools = { workspace = true }
 log = { workspace = true }
 num-traits = { version = "0.2", optional = true }
@@ -126,20 +120,21 @@ parking_lot = { workspace = true }
 parquet = { workspace = true, optional = true, default-features = true }
 rand = { workspace = true }
 regex = { workspace = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
-tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 url = { workspace = true }
-uuid = { version = "1.7", features = ["v4", "js"] }
+uuid = { version = "1.13", features = ["v4", "js"] }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
-arrow-buffer = { workspace = true }
 async-trait = { workspace = true }
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { workspace = true, features = ["async_tokio"] }
 ctor = { workspace = true }
+dashmap = "6.1.0"
+datafusion-doc = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
@@ -222,3 +217,11 @@ name = "topk_aggregate"
 harness = false
 name = "map_query_sql"
 required-features = ["nested_expressions"]
+
+[[bench]]
+harness = false
+name = "dataframe"
+
+[[bench]]
+harness = false
+name = "spm"

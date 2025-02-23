@@ -15,26 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::fs::File;
+use std::io::Seek;
+use std::path::Path;
+use std::sync::Arc;
+
 use arrow::array::Int64Array;
 use arrow::csv::reader::Format;
 use arrow::csv::ReaderBuilder;
-use async_trait::async_trait;
+
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
 use datafusion::execution::TaskContext;
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_catalog::Session;
 use datafusion_catalog::TableFunctionImpl;
 use datafusion_common::{assert_batches_eq, DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
-use std::fs::File;
-use std::io::Seek;
-use std::path::Path;
-use std::sync::Arc;
+
+use async_trait::async_trait;
 
 /// test simple udtf with define read_csv with parameters
 #[tokio::test]
@@ -153,11 +156,11 @@ impl TableProvider for SimpleCsvTable {
         } else {
             self.batches.clone()
         };
-        Ok(Arc::new(MemoryExec::try_new(
+        Ok(MemorySourceConfig::try_new_exec(
             &[batches],
             TableProvider::schema(self),
             projection.cloned(),
-        )?))
+        )?)
     }
 }
 

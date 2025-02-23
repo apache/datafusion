@@ -18,7 +18,7 @@
 //! Tests for [`CombinePartialFinalAggregate`] physical optimizer rule
 //!
 //! Note these tests are not in the same module as the optimizer pass because
-//! they rely on `ParquetExec` which is in the core crate.
+//! they rely on `DataSourceExec` which is in the core crate.
 
 use std::sync::Arc;
 
@@ -148,7 +148,7 @@ fn aggregations_not_combined() -> datafusion_common::Result<()> {
         "AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]",
         "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
         "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet",
     ];
     assert_optimized!(expected, plan);
 
@@ -168,7 +168,7 @@ fn aggregations_not_combined() -> datafusion_common::Result<()> {
     let expected = &[
         "AggregateExec: mode=Final, gby=[], aggr=[COUNT(2)]",
         "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet",
     ];
 
     assert_optimized!(expected, plan);
@@ -193,7 +193,7 @@ fn aggregations_combined() -> datafusion_common::Result<()> {
     // should combine the Partial/Final AggregateExecs to the Single AggregateExec
     let expected = &[
         "AggregateExec: mode=Single, gby=[], aggr=[COUNT(1)]",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet",
     ];
 
     assert_optimized!(expected, plan);
@@ -229,7 +229,7 @@ fn aggregations_with_group_combined() -> datafusion_common::Result<()> {
     // should combine the Partial/Final AggregateExecs to the Single AggregateExec
     let expected = &[
         "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[Sum(b)]",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet",
     ];
 
     assert_optimized!(expected, plan);
@@ -273,7 +273,7 @@ fn aggregations_with_limit_combined() -> datafusion_common::Result<()> {
     // with the final limit preserved
     let expected = &[
         "AggregateExec: mode=Single, gby=[c@2 as c], aggr=[], lim=[5]",
-        "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
+        "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c], file_type=parquet",
     ];
 
     assert_optimized!(expected, plan);

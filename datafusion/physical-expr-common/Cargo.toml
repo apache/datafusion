@@ -28,17 +28,18 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [lib]
 name = "datafusion_physical_expr_common"
-path = "src/lib.rs"
 
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
-arrow-buffer = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr-common = { workspace = true }
 hashbrown = { workspace = true }

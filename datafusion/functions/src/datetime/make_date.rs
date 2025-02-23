@@ -26,7 +26,7 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{Date32, Int32, Int64, UInt32, UInt64, Utf8, Utf8View};
 use chrono::prelude::*;
 
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{exec_err, utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -111,13 +111,6 @@ impl ScalarUDFImpl for MakeDateFunc {
         args: &[ColumnarValue],
         _number_rows: usize,
     ) -> Result<ColumnarValue> {
-        if args.len() != 3 {
-            return exec_err!(
-                "make_date function requires 3 arguments, got {}",
-                args.len()
-            );
-        }
-
         // first, identify if any of the arguments is an Array. If yes, store its `len`,
         // as any scalar will need to be converted to an array of len `len`.
         let len = args
@@ -127,9 +120,11 @@ impl ScalarUDFImpl for MakeDateFunc {
                 ColumnarValue::Array(a) => Some(a.len()),
             });
 
-        let years = args[0].cast_to(&Int32, None)?;
-        let months = args[1].cast_to(&Int32, None)?;
-        let days = args[2].cast_to(&Int32, None)?;
+        let [years, months, days] = take_function_args(self.name(), args)?;
+
+        let years = years.cast_to(&Int32, None)?;
+        let months = months.cast_to(&Int32, None)?;
+        let days = days.cast_to(&Int32, None)?;
 
         let scalar_value_fn = |col: &ColumnarValue| -> Result<i32> {
             let ColumnarValue::Scalar(s) = col else {

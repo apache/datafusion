@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{
+    builder::StringViewBuilder, cast::AsArray, Array, ArrayRef, RecordBatch,
+    RecordBatchOptions,
+};
 use arrow::compute::concat_batches;
-use arrow_array::builder::StringViewBuilder;
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use std::sync::Arc;
 
 /// Concatenate multiple [`RecordBatch`]es
@@ -277,9 +278,8 @@ mod tests {
 
     use super::*;
 
+    use arrow::array::{builder::ArrayBuilder, StringViewArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_array::builder::ArrayBuilder;
-    use arrow_array::{StringViewArray, UInt32Array};
 
     #[test]
     fn test_coalesce() {

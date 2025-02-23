@@ -94,7 +94,7 @@ statement ok
 set datafusion.execution.batch_size = 4096;
 
 # left semi with wrong where clause
-query error DataFusion error: Schema error: No field named t2\.t2_id\. Valid fields are t1\.t1_id, t1\.t1_name, t1\.t1_int\.
+query error DataFusion error: Schema error: No field named t2\.t2_id\. Did you mean 't1\.t1_id'\?\.
 SELECT t1.t1_id, t1.t1_name, t1.t1_int
 FROM t1
 	LEFT SEMI JOIN t2 ON t1.t1_id = t2.t2_id
@@ -671,14 +671,14 @@ query TT
 explain select * from t1 inner join t2 on true;
 ----
 logical_plan
-01)Cross Join:
+01)Cross Join: 
 02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
 03)--TableScan: t2 projection=[t2_id, t2_name, t2_int]
 physical_plan
 01)CrossJoinExec
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-04)----MemoryExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table IF EXISTS t1;
@@ -756,8 +756,8 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Reset the configs to old values
 statement ok
@@ -828,8 +828,8 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[emp_id@1 as emp_id, name@2 as name, dept_name@0 as dept_name]
 02)--NestedLoopJoinExec: join_type=Right, filter=name@0 = Alice OR name@0 = Bob
-03)----MemoryExec: partitions=1, partition_sizes=[1]
-04)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITT
 SELECT e.emp_id, e.name, d.dept_name
@@ -905,7 +905,7 @@ JOIN department AS d
 ON (e.name = 'Alice' OR e.name = 'Bob');
 ----
 logical_plan
-01)Cross Join:
+01)Cross Join: 
 02)--SubqueryAlias: e
 03)----Filter: employees.name = Utf8("Alice") OR employees.name = Utf8("Bob")
 04)------TableScan: employees projection=[emp_id, name]
@@ -915,8 +915,8 @@ physical_plan
 01)CrossJoinExec
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----FilterExec: name@1 = Alice OR name@1 = Bob
-04)------MemoryExec: partitions=1, partition_sizes=[1]
-05)--MemoryExec: partitions=1, partition_sizes=[1]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # expect no row for Carol
 query ITT
@@ -968,8 +968,8 @@ physical_plan
 05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(emp_id@0, emp_id@0)], projection=[emp_id@0, name@1, dept_name@3]
 06)----------CoalesceBatchesExec: target_batch_size=8192
 07)------------FilterExec: name@1 = Alice OR name@1 != Alice AND name@1 = Carol
-08)--------------MemoryExec: partitions=1, partition_sizes=[1]
-09)----------MemoryExec: partitions=1, partition_sizes=[1]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)----------DataSourceExec: partitions=1, partition_sizes=[1]
 
 query ITT
 SELECT e.emp_id, e.name, d.dept_name
@@ -1164,9 +1164,9 @@ physical_plan
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 06)----------CoalesceBatchesExec: target_batch_size=8192
 07)------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0), (v1@1, v1@1)], projection=[v0@0, v1@1, v0@2, v2@4, v3@5, v4@6]
-08)--------------MemoryExec: partitions=1, partition_sizes=[0]
-09)--------------MemoryExec: partitions=1, partition_sizes=[0]
-10)----MemoryExec: partitions=1, partition_sizes=[0]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[0]
+09)--------------DataSourceExec: partitions=1, partition_sizes=[0]
+10)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 
 
@@ -1312,3 +1312,78 @@ SELECT a+b*2,
 
 statement ok
 drop table t1;
+
+# Test that equivalent classes are projected correctly.
+
+statement ok
+create table pairs(x int, y int) as values (1,1), (2,2), (3,3);
+
+statement ok
+create table f(a int) as values (1), (2), (3);
+
+statement ok
+create table s(b int) as values (1), (2), (3);
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+set datafusion.execution.target_partitions = 16;
+
+# After the filter applying (x = y) we can join by both x and y,
+# partitioning only once.
+
+query TT
+explain
+SELECT * FROM
+(SELECT x+1 AS col0, y+1 AS col1 FROM PAIRS WHERE x == y)
+JOIN f
+ON col0 = f.a
+JOIN s
+ON col1 = s.b
+----
+logical_plan
+01)Inner Join: col1 = CAST(s.b AS Int64)
+02)--Inner Join: col0 = CAST(f.a AS Int64)
+03)----Projection: CAST(pairs.x AS Int64) + Int64(1) AS col0, CAST(pairs.y AS Int64) + Int64(1) AS col1
+04)------Filter: pairs.y = pairs.x
+05)--------TableScan: pairs projection=[x, y]
+06)----TableScan: f projection=[a]
+07)--TableScan: s projection=[b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col1@1, CAST(s.b AS Int64)@1)], projection=[col0@0, col1@1, a@2, b@3]
+03)----ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@0 as a]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=Hash([CAST(f.a AS Int64)@1], 16), input_partitions=1
+08)--------------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)----------CoalesceBatchesExec: target_batch_size=8192
+11)------------RepartitionExec: partitioning=Hash([col0@0], 16), input_partitions=16
+12)--------------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
+13)----------------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
+14)------------------CoalesceBatchesExec: target_batch_size=8192
+15)--------------------FilterExec: y@1 = x@0
+16)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
+17)----CoalesceBatchesExec: target_batch_size=8192
+18)------RepartitionExec: partitioning=Hash([CAST(s.b AS Int64)@1], 16), input_partitions=1
+19)--------ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
+20)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table pairs;
+
+statement ok
+drop table f;
+
+statement ok
+drop table s;
+
+# Reset the configs to old values.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;

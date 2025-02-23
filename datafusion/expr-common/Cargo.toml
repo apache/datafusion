@@ -27,6 +27,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -36,5 +39,6 @@ name = "datafusion_expr_common"
 [dependencies]
 arrow = { workspace = true }
 datafusion-common = { workspace = true }
+indexmap = { workspace = true }
 itertools = { workspace = true }
 paste = "^1.0"

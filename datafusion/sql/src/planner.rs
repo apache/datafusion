@@ -20,7 +20,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
 
-use arrow_schema::*;
+use arrow::datatypes::*;
+use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
     SchemaError,
@@ -223,7 +224,24 @@ impl PlannerContext {
     }
 }
 
-/// SQL query planner
+/// SQL query planner and binder
+///
+/// This struct is used to convert a SQL AST into a [`LogicalPlan`].
+///
+/// You can control the behavior of the planner by providing [`ParserOptions`].
+///
+/// It performs the following tasks:
+///
+/// 1. Name and type resolution (called "binding" in other systems). This
+///    phase looks up table and column names using the [`ContextProvider`].
+/// 2. Mechanical translation of the AST into a [`LogicalPlan`].
+///
+/// It does not perform type coercion, or perform optimization, which are done
+/// by subsequent passes.
+///
+/// Key interfaces are:
+/// * [`Self::sql_statement_to_plan`]: Convert a statement (e.g. `SELECT ...`) into a [`LogicalPlan`]
+/// * [`Self::sql_to_expr`]: Convert an expression (e.g. `1 + 2`) into an [`Expr`]
 pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) context_provider: &'a S,
     pub(crate) options: ParserOptions,
@@ -368,10 +386,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 .map_err(|err: DataFusionError| match &err {
                     DataFusionError::SchemaError(
-                        SchemaError::FieldNotFound { .. },
+                        SchemaError::FieldNotFound {
+                            field,
+                            valid_fields,
+                        },
                         _,
                     ) => {
-                        let diagnostic = if let Some(relation) = &col.relation {
+                        let mut diagnostic = if let Some(relation) = &col.relation {
                             Diagnostic::new_error(
                                 format!(
                                     "column '{}' not found in '{}'",
@@ -385,6 +406,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 col.spans().first(),
                             )
                         };
+                        add_possible_columns_to_diag(
+                            &mut diagnostic,
+                            field,
+                            valid_fields,
+                        );
                         err.with_diagnostic(diagnostic)
                     }
                     _ => err,
@@ -451,7 +477,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::UnsignedBigInt(_) | SQLDataType::UnsignedInt8(_) => Ok(DataType::UInt64),
             SQLDataType::Float(_) => Ok(DataType::Float32),
             SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
-            SQLDataType::Double | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
+            SQLDataType::Double(ExactNumberInfo::None) | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
+            SQLDataType::Double(ExactNumberInfo::Precision(_)|ExactNumberInfo::PrecisionAndScale(_, _)) => {
+                not_impl_err!("Unsupported SQL type (precision/scale not supported) {sql_type}")
+            }
             SQLDataType::Char(_)
             | SQLDataType::Text
             | SQLDataType::String(_) => Ok(DataType::Utf8),
@@ -587,7 +616,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::MediumText
             | SQLDataType::LongText
             | SQLDataType::Bit(_)
-            |SQLDataType::BitVarying(_)
+            | SQLDataType::BitVarying(_)
+            // BigQuery UDFs
+            | SQLDataType::AnyType
             => not_impl_err!(
                 "Unsupported SQL type {sql_type:?}"
             ),

@@ -19,12 +19,14 @@ use arrow::array::Array;
 use arrow::compute::is_not_null;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 use std::sync::Arc;
+
 #[user_doc(
     doc_section(label = "Conditional Functions"),
     description = "Returns _expression2_ if _expression1_ is NULL otherwise it returns _expression1_.",
@@ -115,12 +117,8 @@ impl ScalarUDFImpl for NVLFunc {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        nvl_func(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        nvl_func(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -133,13 +131,8 @@ impl ScalarUDFImpl for NVLFunc {
 }
 
 fn nvl_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return internal_err!(
-            "{:?} args were supplied but NVL/IFNULL takes exactly two args",
-            args.len()
-        );
-    }
-    let (lhs_array, rhs_array) = match (&args[0], &args[1]) {
+    let [lhs, rhs] = take_function_args("nvl/ifnull", args)?;
+    let (lhs_array, rhs_array) = match (lhs, rhs) {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {
             (Arc::clone(lhs), rhs.to_array_of_size(lhs.len())?)
         }

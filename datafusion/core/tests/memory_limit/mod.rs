@@ -23,16 +23,16 @@ use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
+use arrow::array::{ArrayRef, DictionaryArray, RecordBatch};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use arrow_array::{ArrayRef, DictionaryArray};
-use arrow_schema::SortOptions;
 use datafusion::assert_batches_eq;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::PartitionStream;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
@@ -69,7 +69,7 @@ async fn oom_sort() {
         .with_expected_errors(vec![
             "Resources exhausted: Memory Exhausted while Sorting (DiskManager is disabled)",
         ])
-        .with_memory_limit(200_000)
+        .with_memory_limit(500_000)
         .run()
         .await
 }
@@ -241,15 +241,15 @@ async fn sort_preserving_merge() {
             // SortPreservingMergeExec (not a Sort which would compete
             // with the SortPreservingMergeExec for memory)
             &[
-                "+---------------+------------------------------------------------------------------------------------------------------------+",
-                "| plan_type     | plan                                                                                                       |",
-                "+---------------+------------------------------------------------------------------------------------------------------------+",
-                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b ASC NULLS LAST, fetch=10                                                     |",
-                "|               |   TableScan: t projection=[a, b]                                                                           |",
-                "| physical_plan | SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], fetch=10                                |",
-                "|               |   MemoryExec: partitions=2, partition_sizes=[5, 5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
-                "|               |                                                                                                            |",
-                "+---------------+------------------------------------------------------------------------------------------------------------+",
+                "+---------------+--------------------------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                                     |",
+                "+---------------+--------------------------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b ASC NULLS LAST, fetch=10                                                                   |",
+                "|               |   TableScan: t projection=[a, b]                                                                                         |",
+                "| physical_plan | SortPreservingMergeExec: [a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], fetch=10                                              |",
+                "|               |   DataSourceExec: partitions=2, partition_sizes=[5, 5], fetch=10, output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
+                "|               |                                                                                                                          |",
+                "+---------------+--------------------------------------------------------------------------------------------------------------------------+"
             ]
         )
         .run()
@@ -271,7 +271,8 @@ async fn sort_spill_reservation() {
 
     // Merge operation needs extra memory to do row conversion, so make the
     // memory limit larger.
-    let mem_limit = partition_size * 2;
+    let mem_limit =
+        ((partition_size * 2 + 1024) as f64 / MEMORY_FRACTION).ceil() as usize;
     let test = TestCase::new()
     // This query uses a different order than the input table to
     // force a sort. It also needs to have multiple columns to
@@ -288,15 +289,15 @@ async fn sort_spill_reservation() {
             // also merge, so we can ensure the sort could finish
             // given enough merging memory
             &[
-                "+---------------+---------------------------------------------------------------------------------------------------------+",
-                "| plan_type     | plan                                                                                                    |",
-                "+---------------+---------------------------------------------------------------------------------------------------------+",
-                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                          |",
-                "|               |   TableScan: t projection=[a, b]                                                                        |",
-                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], preserve_partitioning=[false]                            |",
-                "|               |   MemoryExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
-                "|               |                                                                                                         |",
-                "+---------------+---------------------------------------------------------------------------------------------------------+",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
+                "| plan_type     | plan                                                                                                        |",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
+                "| logical_plan  | Sort: t.a ASC NULLS LAST, t.b DESC NULLS FIRST                                                              |",
+                "|               |   TableScan: t projection=[a, b]                                                                            |",
+                "| physical_plan | SortExec: expr=[a@0 ASC NULLS LAST, b@1 DESC], preserve_partitioning=[false]                                |",
+                "|               |   DataSourceExec: partitions=1, partition_sizes=[5], output_ordering=a@0 ASC NULLS LAST, b@1 ASC NULLS LAST |",
+                "|               |                                                                                                             |",
+                "+---------------+-------------------------------------------------------------------------------------------------------------+",
             ]
         );
 
@@ -308,7 +309,8 @@ async fn sort_spill_reservation() {
 
     test.clone()
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: ExternalSorterMerge",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:",
+            "bytes for ExternalSorterMerge",
         ])
         .with_config(config)
         .run()
@@ -844,10 +846,13 @@ impl TableProvider for SortedTableProvider {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mem_exec =
-            MemoryExec::try_new(&self.batches, self.schema(), projection.cloned())?
-                .try_with_sort_information(self.sort_information.clone())?;
+        let mem_conf = MemorySourceConfig::try_new(
+            &self.batches,
+            self.schema(),
+            projection.cloned(),
+        )?
+        .try_with_sort_information(self.sort_information.clone())?;
 
-        Ok(Arc::new(mem_exec))
+        Ok(Arc::new(DataSourceExec::new(Arc::new(mem_conf))))
     }
 }

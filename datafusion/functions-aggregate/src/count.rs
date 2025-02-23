@@ -17,11 +17,15 @@
 
 use ahash::RandomState;
 use datafusion_common::stats::Precision;
+use datafusion_expr::expr::{
+    schema_name_from_exprs, schema_name_from_sorts, AggregateFunctionParams,
+    WindowFunctionParams,
+};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
 use std::collections::HashSet;
-use std::fmt::Debug;
+use std::fmt::{Debug, Write};
 use std::mem::{size_of, size_of_val};
 use std::ops::BitAnd;
 use std::sync::Arc;
@@ -44,14 +48,14 @@ use arrow::{
     buffer::BooleanBuffer,
 };
 use datafusion_common::{
-    downcast_value, internal_err, not_impl_err, DataFusionError, Result, ScalarValue,
+    downcast_value, internal_err, not_impl_err, Result, ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
+use datafusion_expr::{expr_vec_fmt, Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     Documentation, EmitTo, GroupsAccumulator, SetMonotonicity, Signature, Volatility,
 };
-use datafusion_expr::{Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::{
     BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
     PrimitiveDistinctCountAccumulator,
@@ -77,6 +81,11 @@ pub fn count_distinct(expr: Expr) -> Expr {
         None,
         None,
     ))
+}
+
+/// Creates aggregation to count all rows, equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`
+pub fn count_all() -> Expr {
+    count(Expr::Literal(COUNT_STAR_EXPANSION))
 }
 
 #[user_doc(
@@ -137,6 +146,185 @@ impl AggregateUDFImpl for Count {
 
     fn name(&self) -> &str {
         "count"
+    }
+
+    fn schema_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        let AggregateFunctionParams {
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        } = params;
+
+        let mut schema_name = String::new();
+
+        if is_count_wildcard(args) {
+            schema_name.write_str("count(*)")?;
+        } else {
+            schema_name.write_fmt(format_args!(
+                "{}({}{})",
+                self.name(),
+                if *distinct { "DISTINCT " } else { "" },
+                schema_name_from_exprs(args)?
+            ))?;
+        }
+
+        if let Some(null_treatment) = null_treatment {
+            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+        }
+
+        if let Some(filter) = filter {
+            schema_name.write_fmt(format_args!(" FILTER (WHERE {filter})"))?;
+        };
+
+        if let Some(order_by) = order_by {
+            schema_name.write_fmt(format_args!(
+                " ORDER BY [{}]",
+                schema_name_from_sorts(order_by)?
+            ))?;
+        };
+
+        Ok(schema_name)
+    }
+
+    fn window_function_schema_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        let WindowFunctionParams {
+            args,
+            partition_by,
+            order_by,
+            window_frame,
+            null_treatment,
+        } = params;
+
+        let mut schema_name = String::new();
+
+        if is_count_wildcard(args) {
+            schema_name.write_str("count(*)")?;
+        } else {
+            schema_name.write_fmt(format_args!(
+                "{}({})",
+                self.name(),
+                schema_name_from_exprs(args)?
+            ))?;
+        }
+
+        if let Some(null_treatment) = null_treatment {
+            schema_name.write_fmt(format_args!(" {}", null_treatment))?;
+        }
+
+        if !partition_by.is_empty() {
+            schema_name.write_fmt(format_args!(
+                " PARTITION BY [{}]",
+                schema_name_from_exprs(partition_by)?
+            ))?;
+        }
+
+        if !order_by.is_empty() {
+            schema_name.write_fmt(format_args!(
+                " ORDER BY [{}]",
+                schema_name_from_sorts(order_by)?
+            ))?;
+        };
+
+        schema_name.write_fmt(format_args!(" {window_frame}"))?;
+
+        Ok(schema_name)
+    }
+
+    fn display_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+        let AggregateFunctionParams {
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        } = params;
+
+        let mut display_name = String::new();
+
+        if is_count_wildcard(args) {
+            display_name.write_str("count(*)")?;
+        } else {
+            display_name.write_fmt(format_args!(
+                "{}({}{})",
+                self.name(),
+                if *distinct { "DISTINCT " } else { "" },
+                args.iter()
+                    .map(|arg| format!("{arg}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ))?;
+        }
+
+        if let Some(nt) = null_treatment {
+            display_name.write_fmt(format_args!(" {}", nt))?;
+        }
+        if let Some(fe) = filter {
+            display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
+        }
+        if let Some(ob) = order_by {
+            display_name.write_fmt(format_args!(
+                " ORDER BY [{}]",
+                ob.iter()
+                    .map(|o| format!("{o}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ))?;
+        }
+
+        Ok(display_name)
+    }
+
+    fn window_function_display_name(
+        &self,
+        params: &WindowFunctionParams,
+    ) -> Result<String> {
+        let WindowFunctionParams {
+            args,
+            partition_by,
+            order_by,
+            window_frame,
+            null_treatment,
+        } = params;
+
+        let mut display_name = String::new();
+
+        if is_count_wildcard(args) {
+            display_name.write_str("count(*)")?;
+        } else {
+            display_name.write_fmt(format_args!(
+                "{}({})",
+                self.name(),
+                expr_vec_fmt!(args)
+            ))?;
+        }
+
+        if let Some(null_treatment) = null_treatment {
+            display_name.write_fmt(format_args!(" {}", null_treatment))?;
+        }
+
+        if !partition_by.is_empty() {
+            display_name.write_fmt(format_args!(
+                " PARTITION BY [{}]",
+                expr_vec_fmt!(partition_by)
+            ))?;
+        }
+
+        if !order_by.is_empty() {
+            display_name
+                .write_fmt(format_args!(" ORDER BY [{}]", expr_vec_fmt!(order_by)))?;
+        };
+
+        display_name.write_fmt(format_args!(
+            " {} BETWEEN {} AND {}",
+            window_frame.units, window_frame.start_bound, window_frame.end_bound
+        ))?;
+
+        Ok(display_name)
     }
 
     fn signature(&self) -> &Signature {
@@ -356,6 +544,15 @@ impl AggregateUDFImpl for Count {
         // `COUNT` is monotonically increasing as it always increases or stays
         // the same as new values are seen.
         SetMonotonicity::Increasing
+    }
+}
+
+fn is_count_wildcard(args: &[Expr]) -> bool {
+    match args {
+        [] => true, // count()
+        // All const should be coerced to int64 or rejected by the signature
+        [Expr::Literal(ScalarValue::Int64(Some(_)))] => true, // count(1)
+        _ => false, // More than one argument or non-matching cases
     }
 }
 

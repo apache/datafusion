@@ -19,14 +19,14 @@
 //! StringArray / LargeStringArray / BinaryArray / LargeBinaryArray.
 
 use ahash::RandomState;
-use arrow::array::cast::AsArray;
-use arrow::array::types::{ByteArrayType, GenericBinaryType, GenericStringType};
 use arrow::array::{
+    cast::AsArray,
+    types::{ByteArrayType, GenericBinaryType, GenericStringType},
     Array, ArrayRef, BufferBuilder, GenericBinaryArray, GenericStringArray,
-    OffsetSizeTrait,
+    NullBufferBuilder, OffsetSizeTrait,
 };
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::DataType;
-use arrow_buffer::{NullBuffer, NullBufferBuilder, OffsetBuffer, ScalarBuffer};
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::proxy::{HashTableAllocExt, VecAllocExt};
 use std::any::type_name;

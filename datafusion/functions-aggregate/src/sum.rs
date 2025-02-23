@@ -33,7 +33,9 @@ use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::{exec_err, not_impl_err, Result, ScalarValue};
+use datafusion_common::{
+    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
+};
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::utils::format_state_name;
@@ -125,9 +127,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 1 {
-            return exec_err!("SUM expects exactly one argument");
-        }
+        let [args] = take_function_args(self.name(), arg_types)?;
 
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
         // smallint, int, bigint, real, double precision, decimal, or interval.
@@ -147,7 +147,7 @@ impl AggregateUDFImpl for Sum {
             }
         }
 
-        Ok(vec![coerced_type(&arg_types[0])?])
+        Ok(vec![coerced_type(args)?])
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {

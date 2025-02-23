@@ -20,30 +20,49 @@
 mod arrow_file;
 mod avro;
 mod csv;
-mod file_groups;
 mod file_scan_config;
 mod file_stream;
 mod json;
 #[cfg(feature = "parquet")]
 pub mod parquet;
 mod statistics;
-
 pub(crate) use self::csv::plan_to_csv;
 pub(crate) use self::json::plan_to_json;
 #[cfg(feature = "parquet")]
-pub use self::parquet::{ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory};
-
+pub use self::parquet::source::ParquetSource;
+#[cfg(feature = "parquet")]
+#[allow(deprecated)]
+pub use self::parquet::{
+    ParquetExec, ParquetExecBuilder, ParquetFileMetrics, ParquetFileReaderFactory,
+};
+use crate::error::Result;
+use crate::physical_plan::{DisplayAs, DisplayFormatType};
+use crate::{
+    datasource::listing::{FileRange, PartitionedFile},
+    physical_plan::display::{display_orderings, ProjectSchemaDisplay},
+};
+#[allow(deprecated)]
 pub use arrow_file::ArrowExec;
+pub use arrow_file::ArrowSource;
+#[allow(deprecated)]
 pub use avro::AvroExec;
-pub use csv::{CsvConfig, CsvExec, CsvExecBuilder, CsvOpener};
-use datafusion_expr::dml::InsertOp;
-pub use file_groups::FileGroupPartitioner;
+pub use avro::AvroSource;
+#[allow(deprecated)]
+pub use csv::{CsvExec, CsvExecBuilder};
+pub use csv::{CsvOpener, CsvSource};
+pub use datafusion_datasource::file_groups::FileGroupPartitioner;
+pub use datafusion_datasource::file_meta::FileMeta;
+pub use datafusion_datasource::file_sink_config::*;
 pub use file_scan_config::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
 };
 pub use file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
-pub use json::{JsonOpener, NdJsonExec};
-
+use futures::StreamExt;
+#[allow(deprecated)]
+pub use json::NdJsonExec;
+pub use json::{JsonOpener, JsonSource};
+use log::debug;
+use object_store::{path::Path, GetOptions, GetRange, ObjectStore};
 use std::{
     fmt::{Debug, Formatter, Result as FmtResult},
     ops::Range,
@@ -51,115 +70,10 @@ use std::{
     vec,
 };
 
-use super::{file_format::write::demux::start_demuxer_task, listing::ListingTableUrl};
-use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
-use crate::error::Result;
-use crate::physical_plan::{DisplayAs, DisplayFormatType};
-use crate::{
-    datasource::{
-        listing::{FileRange, PartitionedFile},
-        object_store::ObjectStoreUrl,
-    },
-    physical_plan::display::{display_orderings, ProjectSchemaDisplay},
-};
-
-use arrow::datatypes::{DataType, SchemaRef};
-use datafusion_common_runtime::SpawnedTask;
-use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use arrow::datatypes::SchemaRef;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::insert::DataSink;
-
-use async_trait::async_trait;
-use futures::StreamExt;
-use log::debug;
-use object_store::{path::Path, GetOptions, GetRange, ObjectMeta, ObjectStore};
-
-/// General behaviors for files that do `DataSink` operations
-#[async_trait]
-pub trait FileSink: DataSink {
-    /// Retrieves the file sink configuration.
-    fn config(&self) -> &FileSinkConfig;
-
-    /// Spawns writer tasks and joins them to perform file writing operations.
-    /// Is a critical part of `FileSink` trait, since it's the very last step for `write_all`.
-    ///
-    /// This function handles the process of writing data to files by:
-    /// 1. Spawning tasks for writing data to individual files.
-    /// 2. Coordinating the tasks using a demuxer to distribute data among files.
-    /// 3. Collecting results using `tokio::join`, ensuring that all tasks complete successfully.
-    ///
-    /// # Parameters
-    /// - `context`: The execution context (`TaskContext`) that provides resources
-    ///   like memory management and runtime environment.
-    /// - `demux_task`: A spawned task that handles demuxing, responsible for splitting
-    ///   an input [`SendableRecordBatchStream`] into dynamically determined partitions.
-    ///   See `start_demuxer_task()`
-    /// - `file_stream_rx`: A receiver that yields streams of record batches and their
-    ///   corresponding file paths for writing. See `start_demuxer_task()`
-    /// - `object_store`: A handle to the object store where the files are written.
-    ///
-    /// # Returns
-    /// - `Result<u64>`: Returns the total number of rows written across all files.
-    async fn spawn_writer_tasks_and_join(
-        &self,
-        context: &Arc<TaskContext>,
-        demux_task: SpawnedTask<Result<()>>,
-        file_stream_rx: DemuxedStreamReceiver,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Result<u64>;
-
-    /// File sink implementation of the [`DataSink::write_all`] method.
-    async fn write_all(
-        &self,
-        data: SendableRecordBatchStream,
-        context: &Arc<TaskContext>,
-    ) -> Result<u64> {
-        let config = self.config();
-        let object_store = context
-            .runtime_env()
-            .object_store(&config.object_store_url)?;
-        let (demux_task, file_stream_rx) = start_demuxer_task(config, data, context);
-        self.spawn_writer_tasks_and_join(
-            context,
-            demux_task,
-            file_stream_rx,
-            object_store,
-        )
-        .await
-    }
-}
-
-/// The base configurations to provide when creating a physical plan for
-/// writing to any given file format.
-pub struct FileSinkConfig {
-    /// Object store URL, used to get an ObjectStore instance
-    pub object_store_url: ObjectStoreUrl,
-    /// A vector of [`PartitionedFile`] structs, each representing a file partition
-    pub file_groups: Vec<PartitionedFile>,
-    /// Vector of partition paths
-    pub table_paths: Vec<ListingTableUrl>,
-    /// The schema of the output file
-    pub output_schema: SchemaRef,
-    /// A vector of column names and their corresponding data types,
-    /// representing the partitioning columns for the file
-    pub table_partition_cols: Vec<(String, DataType)>,
-    /// Controls how new data should be written to the file, determining whether
-    /// to append to, overwrite, or replace records in existing files.
-    pub insert_op: InsertOp,
-    /// Controls whether partition columns are kept for the file
-    pub keep_partition_by_columns: bool,
-    /// File extension without a dot(.)
-    pub file_extension: String,
-}
-
-impl FileSinkConfig {
-    /// Get output schema
-    pub fn output_schema(&self) -> &SchemaRef {
-        &self.output_schema
-    }
-}
 
 impl Debug for FileScanConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
@@ -306,36 +220,6 @@ where
     Ok(())
 }
 
-/// A single file or part of a file that should be read, along with its schema, statistics
-pub struct FileMeta {
-    /// Path for the file (e.g. URL, filesystem path, etc)
-    pub object_meta: ObjectMeta,
-    /// An optional file range for a more fine-grained parallel execution
-    pub range: Option<FileRange>,
-    /// An optional field for user defined per object metadata
-    pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
-    /// Size hint for the metadata of this file
-    pub metadata_size_hint: Option<usize>,
-}
-
-impl FileMeta {
-    /// The full path to the object
-    pub fn location(&self) -> &Path {
-        &self.object_meta.location
-    }
-}
-
-impl From<ObjectMeta> for FileMeta {
-    fn from(object_meta: ObjectMeta) -> Self {
-        Self {
-            object_meta,
-            range: None,
-            extensions: None,
-            metadata_size_hint: None,
-        }
-    }
-}
-
 /// The various listing tables does not attempt to read all files
 /// concurrently, instead they will read files in sequence within a
 /// partition.  This is an important property as it allows plans to
@@ -367,7 +251,7 @@ impl From<ObjectMeta> for FileMeta {
 ///┃    Partition 1          Partition 2          Partition 3          Partition 4       ┃
 /// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━
 ///
-///                                      ParquetExec
+///                                      DataSourceExec
 ///```
 ///
 /// However, when more than 1 file is assigned to each partition, each
@@ -393,7 +277,7 @@ impl From<ObjectMeta> for FileMeta {
 ///┃    Partition 1          Partition 2
 /// ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ━ ┛
 ///
-///              ParquetExec
+///              DataSourceExec
 ///```
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
@@ -570,13 +454,14 @@ mod tests {
     use super::*;
     use crate::physical_plan::{DefaultDisplay, VerboseDisplay};
 
-    use arrow_array::cast::AsArray;
-    use arrow_array::types::{Float32Type, Float64Type, UInt32Type};
-    use arrow_array::{
+    use arrow::array::{
+        cast::AsArray,
+        types::{Float32Type, Float64Type, UInt32Type},
         BinaryArray, BooleanArray, Float32Array, Int32Array, Int64Array, RecordBatch,
         StringArray, UInt64Array,
     };
-    use arrow_schema::{Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use object_store::ObjectMeta;
 
     use crate::datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapterFactory,

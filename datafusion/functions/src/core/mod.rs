@@ -34,6 +34,7 @@ pub mod nvl;
 pub mod nvl2;
 pub mod planner;
 pub mod r#struct;
+pub mod union_extract;
 pub mod version;
 
 // create UDFs
@@ -48,6 +49,7 @@ make_udf_function!(getfield::GetFieldFunc, get_field);
 make_udf_function!(coalesce::CoalesceFunc, coalesce);
 make_udf_function!(greatest::GreatestFunc, greatest);
 make_udf_function!(least::LeastFunc, least);
+make_udf_function!(union_extract::UnionExtractFun, union_extract);
 make_udf_function!(version::VersionFunc, version);
 
 pub mod expr_fn {
@@ -99,6 +101,11 @@ pub mod expr_fn {
     pub fn get_field(arg1: Expr, arg2: impl Literal) -> Expr {
         super::get_field().call(vec![arg1, arg2.lit()])
     }
+
+    #[doc = "Returns the value of the field with the given name from the union when it's selected, or NULL otherwise"]
+    pub fn union_extract(arg1: Expr, arg2: impl Literal) -> Expr {
+        super::union_extract().call(vec![arg1, arg2.lit()])
+    }
 }
 
 /// Returns all DataFusion functions defined in this package
@@ -121,6 +128,7 @@ pub fn functions() -> Vec<Arc<ScalarUDF>> {
         coalesce(),
         greatest(),
         least(),
+        union_extract(),
         version(),
         r#struct(),
     ]

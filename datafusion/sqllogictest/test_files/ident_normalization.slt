@@ -1,0 +1,175 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Enable information_schema, so we can execute show create table
+statement ok
+set datafusion.catalog.information_schema = true;
+
+# Check ident normalization is enabled by default
+
+statement ok
+CREATE OR REPLACE TABLE TABLE_WITH_NORMALIZATION(FIELD1 BIGINT, FIELD2 BIGINT);
+
+# Check table name is in lowercase
+query TTTT
+show create table table_with_normalization
+----
+datafusion public table_with_normalization NULL
+
+# Check column name is in uppercase
+query TTT
+describe table_with_normalization
+----
+field1 Int64 YES
+field2 Int64 YES
+
+# Disable ident normalization
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = false;
+
+statement ok
+CREATE TABLE TABLE_WITHOUT_NORMALIZATION(FIELD1 BIGINT, FIELD2 BIGINT) AS VALUES (1,2);
+
+# Check table name is in uppercase
+query TTTT
+show create table TABLE_WITHOUT_NORMALIZATION
+----
+datafusion public TABLE_WITHOUT_NORMALIZATION NULL
+
+# Check column name is in uppercase
+query TTT
+describe TABLE_WITHOUT_NORMALIZATION
+----
+FIELD1 Int64 YES
+FIELD2 Int64 YES
+
+statement ok
+DROP TABLE TABLE_WITHOUT_NORMALIZATION
+
+############
+## Column Name Normalization
+############
+
+# Table x (lowercase) with a column named "A" (uppercase)
+statement ok
+create table x as select 1 "A"
+
+query TTT
+describe x
+----
+A Int64 NO
+
+# Expect error as 'a' is not a column -- "A" is and the identifiers
+# are not normalized
+query error DataFusion error: Schema error: No field named a\. Valid fields are x\."A"\.
+select a from x;
+
+# should work (note the uppercase 'A')
+query I
+select A from x;
+----
+1
+
+statement ok
+drop table x;
+
+############
+## Table Name Normalization
+############
+
+# Table Y (uppercase) with a column named a (lower case)
+statement ok
+create table Y as select 1 a;
+
+query TTT
+describe Y
+----
+a Int64 NO
+
+# Expect error as y is not a a table -- "Y" is
+query error DataFusion error: Error during planning: table 'datafusion\.public\.y' not found
+select * from y;
+
+# should work (note the uppercase 'Y')
+query I
+select * from Y;
+----
+1
+
+statement ok
+drop table Y;
+
+############
+## Function Name Normalization
+############
+
+## Check function names are still normalized even though column names are not
+query I
+SELECT length('str');
+----
+3
+
+query I
+SELECT LENGTH('str');
+----
+3
+
+query T
+SELECT CONCAT('Hello', 'World')
+----
+HelloWorld
+
+# Restore default setting
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;
+
+##########
+## Constraint Column Name Normalization
+##########
+
+# Test issue https://github.com/apache/datafusion/issues/14340
+statement ok
+create table test_pk_constraint(COLUMN_NAME TEXT NOT NULL, constraint COLUMN_NAME_PK primary key (COLUMN_NAME))
+
+statement ok
+create table test_unique_constraint(cOlUmn_name TEXT NOT NULL, unique(COLUMN_NAME))
+
+statement ok
+drop table test_pk_constraint;
+
+statement ok
+drop table test_unique_constraint;
+
+# Test with normalization disabled
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = false;
+
+statement error Error during planning: Column for primary key not found in schema: COLUMN_NAME
+create table test_pk_constraint(column_name TEXT NOT NULL, constraint COLUMN_NAME_PK primary key (COLUMN_NAME))
+
+statement ok
+create table test_pk_constraint(COLUMN_NAME TEXT NOT NULL, constraint COLUMN_NAME_PK primary key (COLUMN_NAME))
+
+statement error Error during planning: Column for unique constraint not found in schema: COLUMN_NAME
+create table test_unique_constraint(column_name TEXT NOT NULL, unique(COLUMN_NAME))
+
+statement ok
+drop table test_pk_constraint;
+
+# Restore default setting
+statement ok
+set datafusion.sql_parser.enable_ident_normalization = true;

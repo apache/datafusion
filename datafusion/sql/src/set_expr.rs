@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_err, Diagnostic, Result, Span};
+use datafusion_common::{
+    not_impl_err, plan_err, DataFusionError, Diagnostic, Result, Span,
+};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier, Spanned};
 
@@ -39,16 +41,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 let left_span = Span::try_from_sqlparser_span(left.span());
                 let right_span = Span::try_from_sqlparser_span(right.span());
-                let left_plan = self.set_expr_to_plan(*left, planner_context)?;
-                let right_plan = self.set_expr_to_plan(*right, planner_context)?;
-                self.validate_set_expr_num_of_columns(
-                    op,
-                    left_span,
-                    right_span,
-                    &left_plan,
-                    &right_plan,
-                    set_expr_span,
-                )?;
+                let left_plan = self.set_expr_to_plan(*left, planner_context);
+                let right_plan = self.set_expr_to_plan(*right, planner_context);
+                let (left_plan, right_plan) = match (left_plan, right_plan) {
+                    (Ok(left_plan), Ok(right_plan)) => (left_plan, right_plan),
+                    (Err(left_err), Err(right_err)) => {
+                        return Err(DataFusionError::Collection(vec![
+                            left_err, right_err,
+                        ]));
+                    }
+                    (Err(err), _) | (_, Err(err)) => {
+                        return Err(err);
+                    }
+                };
+                if !(set_quantifier == SetQuantifier::ByName
+                    || set_quantifier == SetQuantifier::AllByName)
+                {
+                    self.validate_set_expr_num_of_columns(
+                        op,
+                        left_span,
+                        right_span,
+                        &left_plan,
+                        &right_plan,
+                        set_expr_span,
+                    )?;
+                }
                 self.set_operation_to_plan(op, left_plan, right_plan, set_quantifier)
             }
             SetExpr::Query(q) => self.query_to_plan(*q, planner_context),
@@ -58,17 +75,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(super) fn is_union_all(set_quantifier: SetQuantifier) -> Result<bool> {
         match set_quantifier {
-            SetQuantifier::All => Ok(true),
-            SetQuantifier::Distinct | SetQuantifier::None => Ok(false),
-            SetQuantifier::ByName => {
-                not_impl_err!("UNION BY NAME not implemented")
-            }
-            SetQuantifier::AllByName => {
-                not_impl_err!("UNION ALL BY NAME not implemented")
-            }
-            SetQuantifier::DistinctByName => {
-                not_impl_err!("UNION DISTINCT BY NAME not implemented")
-            }
+            SetQuantifier::All | SetQuantifier::AllByName => Ok(true),
+            SetQuantifier::Distinct
+            | SetQuantifier::ByName
+            | SetQuantifier::DistinctByName
+            | SetQuantifier::None => Ok(false),
         }
     }
 
@@ -113,25 +124,42 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         right_plan: LogicalPlan,
         set_quantifier: SetQuantifier,
     ) -> Result<LogicalPlan> {
-        let all = Self::is_union_all(set_quantifier)?;
-        match (op, all) {
-            (SetOperator::Union, true) => LogicalPlanBuilder::from(left_plan)
-                .union(right_plan)?
+        match (op, set_quantifier) {
+            (SetOperator::Union, SetQuantifier::All) => {
+                LogicalPlanBuilder::from(left_plan)
+                    .union(right_plan)?
+                    .build()
+            }
+            (SetOperator::Union, SetQuantifier::AllByName) => {
+                LogicalPlanBuilder::from(left_plan)
+                    .union_by_name(right_plan)?
+                    .build()
+            }
+            (SetOperator::Union, SetQuantifier::Distinct | SetQuantifier::None) => {
+                LogicalPlanBuilder::from(left_plan)
+                    .union_distinct(right_plan)?
+                    .build()
+            }
+            (
+                SetOperator::Union,
+                SetQuantifier::ByName | SetQuantifier::DistinctByName,
+            ) => LogicalPlanBuilder::from(left_plan)
+                .union_by_name_distinct(right_plan)?
                 .build(),
-            (SetOperator::Union, false) => LogicalPlanBuilder::from(left_plan)
-                .union_distinct(right_plan)?
-                .build(),
-            (SetOperator::Intersect, true) => {
+            (SetOperator::Intersect, SetQuantifier::All) => {
                 LogicalPlanBuilder::intersect(left_plan, right_plan, true)
             }
-            (SetOperator::Intersect, false) => {
+            (SetOperator::Intersect, SetQuantifier::Distinct | SetQuantifier::None) => {
                 LogicalPlanBuilder::intersect(left_plan, right_plan, false)
             }
-            (SetOperator::Except, true) => {
+            (SetOperator::Except, SetQuantifier::All) => {
                 LogicalPlanBuilder::except(left_plan, right_plan, true)
             }
-            (SetOperator::Except, false) => {
+            (SetOperator::Except, SetQuantifier::Distinct | SetQuantifier::None) => {
                 LogicalPlanBuilder::except(left_plan, right_plan, false)
+            }
+            (op, quantifier) => {
+                not_impl_err!("{op} {quantifier} not implemented")
             }
         }
     }

@@ -36,9 +36,9 @@ use datafusion::catalog::TableProvider;
 use datafusion::catalog::{AsyncSchemaProvider, Session};
 use datafusion::common::Result;
 use datafusion::common::{assert_batches_eq, internal_datafusion_err, plan_err};
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::{Expr, TableType};
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::{DataFrame, SessionContext};
@@ -254,10 +254,11 @@ impl TableProvider for RemoteTable {
             .await?
             .try_collect()
             .await?;
-        Ok(Arc::new(MemoryExec::try_new(
+        let exec = MemorySourceConfig::try_new_exec(
             &[batches],
             self.schema.clone(),
             projection.cloned(),
-        )?))
+        )?;
+        Ok(exec)
     }
 }

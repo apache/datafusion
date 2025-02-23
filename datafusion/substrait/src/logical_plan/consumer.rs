@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, OffsetBuffer};
+use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+use arrow::buffer::OffsetBuffer;
 use async_recursion::async_recursion;
 use datafusion::arrow::array::MapArray;
 use datafusion::arrow::datatypes::{
@@ -26,7 +27,7 @@ use datafusion::common::{
     substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, TableReference,
 };
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
+use datafusion::logical_expr::expr::{Exists, InSubquery, Sort, WindowFunctionParams};
 
 use datafusion::logical_expr::{
     Aggregate, BinaryExpr, Case, Cast, EmptyRelation, Expr, ExprSchemable, Extension,
@@ -67,7 +68,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::prelude::{lit, JoinType};
 use datafusion::{
-    error::Result, logical_expr::utils::split_conjunction, prelude::Column,
+    arrow, error::Result, logical_expr::utils::split_conjunction, prelude::Column,
     scalar::ScalarValue,
 };
 use std::collections::HashSet;
@@ -2222,12 +2223,19 @@ pub async fn from_window_function(
 
     Ok(Expr::WindowFunction(expr::WindowFunction {
         fun,
-        args: from_substrait_func_args(consumer, &window.arguments, input_schema).await?,
-        partition_by: from_substrait_rex_vec(consumer, &window.partitions, input_schema)
+        params: WindowFunctionParams {
+            args: from_substrait_func_args(consumer, &window.arguments, input_schema)
+                .await?,
+            partition_by: from_substrait_rex_vec(
+                consumer,
+                &window.partitions,
+                input_schema,
+            )
             .await?,
-        order_by,
-        window_frame,
-        null_treatment: None,
+            order_by,
+            window_frame,
+            null_treatment: None,
+        },
     }))
 }
 
@@ -3278,7 +3286,8 @@ mod test {
         from_substrait_literal_without_names, from_substrait_rex,
         DefaultSubstraitConsumer,
     };
-    use arrow_buffer::IntervalMonthDayNano;
+    use arrow::array::types::IntervalMonthDayNano;
+    use datafusion::arrow;
     use datafusion::common::DFSchema;
     use datafusion::error::Result;
     use datafusion::execution::SessionState;
@@ -3359,7 +3368,7 @@ mod test {
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
             Expr::WindowFunction(window_function) => {
-                assert_eq!(window_function.order_by.len(), 1)
+                assert_eq!(window_function.params.order_by.len(), 1)
             }
             _ => panic!("expr was not a WindowFunction"),
         };

@@ -15,18 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::super::conversion::*;
+use super::error::{DFSqlLogicTestError, Result};
 use crate::engines::output::DFColumnType;
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use datafusion_common::format::DEFAULT_CLI_FORMAT_OPTIONS;
-use datafusion_common::DataFusionError;
+use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
+use datafusion::common::DataFusionError;
 use std::path::PathBuf;
 use std::sync::LazyLock;
-
-use super::super::conversion::*;
-use super::error::{DFSqlLogicTestError, Result};
 
 /// Converts `batches` to a result as expected by sqllogictest.
 pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
@@ -120,13 +119,13 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
 /// normalize path references
 ///
 /// ```text
-/// CsvExec: files={1 group: [[path/to/datafusion/testing/data/csv/aggregate_test_100.csv]]}, ...
+/// DataSourceExec: files={1 group: [[path/to/datafusion/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 ///
 /// into:
 ///
 /// ```text
-/// CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, ...
+/// DataSourceExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
     row.iter_mut().for_each(|s| {

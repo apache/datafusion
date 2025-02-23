@@ -19,14 +19,14 @@
 
 use crate::utils;
 use crate::utils::make_scalar_function;
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    new_empty_array, Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait,
+use arrow::array::{
+    cast::AsArray, new_empty_array, Array, ArrayRef, BooleanArray, GenericListArray,
+    OffsetSizeTrait,
 };
-use arrow_buffer::OffsetBuffer;
-use arrow_schema::{DataType, Field};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -101,12 +101,11 @@ impl ScalarUDFImpl for ArrayRemove {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_remove_inner)(args)
+        make_scalar_function(array_remove_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -180,12 +179,11 @@ impl ScalarUDFImpl for ArrayRemoveN {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_remove_n_inner)(args)
+        make_scalar_function(array_remove_n_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -258,12 +256,11 @@ impl ScalarUDFImpl for ArrayRemoveAll {
         Ok(arg_types[0].clone())
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_remove_all_inner)(args)
+        make_scalar_function(array_remove_all_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -277,32 +274,26 @@ impl ScalarUDFImpl for ArrayRemoveAll {
 
 /// Array_remove SQL function
 pub fn array_remove_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_remove expects two arguments");
-    }
+    let [array, element] = take_function_args("array_remove", args)?;
 
-    let arr_n = vec![1; args[0].len()];
-    array_remove_internal(&args[0], &args[1], arr_n)
+    let arr_n = vec![1; array.len()];
+    array_remove_internal(array, element, arr_n)
 }
 
 /// Array_remove_n SQL function
 pub fn array_remove_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!("array_remove_n expects three arguments");
-    }
+    let [array, element, max] = take_function_args("array_remove_n", args)?;
 
-    let arr_n = as_int64_array(&args[2])?.values().to_vec();
-    array_remove_internal(&args[0], &args[1], arr_n)
+    let arr_n = as_int64_array(max)?.values().to_vec();
+    array_remove_internal(array, element, arr_n)
 }
 
 /// Array_remove_all SQL function
 pub fn array_remove_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_remove_all expects two arguments");
-    }
+    let [array, element] = take_function_args("array_remove_all", args)?;
 
-    let arr_n = vec![i64::MAX; args[0].len()];
-    array_remove_internal(&args[0], &args[1], arr_n)
+    let arr_n = vec![i64::MAX; array.len()];
+    array_remove_internal(array, element, arr_n)
 }
 
 fn array_remove_internal(
@@ -330,7 +321,7 @@ fn array_remove_internal(
 ///
 /// The type of each **element** in `list_array` must be the same as the type of
 /// `element_array`. This function also handles nested arrays
-/// ([`arrow_array::ListArray`] of [`arrow_array::ListArray`]s)
+/// ([`arrow::array::ListArray`] of [`arrow::array::ListArray`]s)
 ///
 /// For example, when called to remove a list array (where each element is a
 /// list of int32s, the second argument are int32 arrays, and the
