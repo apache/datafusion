@@ -1990,6 +1990,7 @@ name = "datafusion-expr"
 version = "45.0.0"
 dependencies = [
  "arrow",
+ "async-trait",
  "chrono",
  "ctor",
  "datafusion-common",
