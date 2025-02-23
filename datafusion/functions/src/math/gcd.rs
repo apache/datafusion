@@ -86,8 +86,9 @@ impl ScalarUDFImpl for GcdFunc {
         })?;
 
         match args {
-            [ColumnarValue::Array(a), ColumnarValue::Array(b)] => 
-                compute_gcd_for_arrays(&a, &b),
+            [ColumnarValue::Array(a), ColumnarValue::Array(b)] => {
+                compute_gcd_for_arrays(&a, &b)
+            }
             [ColumnarValue::Scalar(ScalarValue::Int64(a)), ColumnarValue::Scalar(ScalarValue::Int64(b))] => {
                 match (a, b) {
                     (Some(a), Some(b)) => Ok(ColumnarValue::Scalar(ScalarValue::Int64(
@@ -121,7 +122,7 @@ fn compute_gcd_for_arrays(a: &ArrayRef, b: &ArrayRef) -> Result<ColumnarValue> {
             _ => Ok(None),
         })
         .collect();
-    
+
     result.map(|arr| ColumnarValue::Array(Arc::new(arr) as ArrayRef))
 }
 
@@ -136,10 +137,13 @@ fn compute_gcd_with_scalar(arr: &ArrayRef, scalar: Option<i64>) -> Result<Column
                     _ => Ok(None),
                 })
                 .collect();
-            
+
             result.map(|arr| ColumnarValue::Array(Arc::new(arr) as ArrayRef))
         }
-        None => Ok(ColumnarValue::Array(new_null_array(&DataType::Int64, arr.len()))),
+        None => Ok(ColumnarValue::Array(new_null_array(
+            &DataType::Int64,
+            arr.len(),
+        ))),
     }
 }
 
