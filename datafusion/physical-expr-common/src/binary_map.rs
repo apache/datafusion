@@ -384,7 +384,7 @@ where
 
             // value is "small"
             let payload = if value.len() <= SHORT_VALUE_LEN {
-                let inline = value.iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
+                let inline = value.iter().fold(0usize, |acc, &x| (acc << 8) | x as usize);
 
                 // is value is already present in the set?
                 let entry = self.map.find_mut(hash, |header| {

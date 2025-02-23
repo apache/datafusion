@@ -26,29 +26,33 @@ use arrow::datatypes::DataType;
 use datafusion_common::rounding::alter_fp_rounding_mode;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 
-/// New, enhanced `Statistics` definition, represents five core statistical
-/// distributions. New variants will be added over time.
+/// This object defines probabilistic distributions that encode uncertain
+/// information about a single, scalar value. Currently, we support five core
+/// statistical distributions. New variants will be added over time.
+///
+/// This object is the lowest-level object in the statistics hierarchy, and it
+/// is the main unit of calculus when evaluating expressions in a statistical
+/// context. Notions like column and table statistics are built on top of this
+/// object and the operations it supports.
 #[derive(Clone, Debug, PartialEq)]
-pub enum StatisticsV2 {
+pub enum Distribution {
     Uniform(UniformDistribution),
     Exponential(ExponentialDistribution),
     Gaussian(GaussianDistribution),
     Bernoulli(BernoulliDistribution),
-    Unknown(UnknownDistribution),
+    Generic(GenericDistribution),
 }
 
-use StatisticsV2::{Bernoulli, Exponential, Gaussian, Uniform, Unknown};
+use Distribution::{Bernoulli, Exponential, Gaussian, Generic, Uniform};
 
-impl StatisticsV2 {
-    /// Constructs a new [`StatisticsV2`] instance with [`Uniform`]
-    /// distribution from the given [`Interval`].
+impl Distribution {
+    /// Constructs a new [`Uniform`] distribution from the given [`Interval`].
     pub fn new_uniform(interval: Interval) -> Result<Self> {
         UniformDistribution::try_new(interval).map(Uniform)
     }
 
-    /// Constructs a new [`StatisticsV2`] instance with [`Exponential`]
-    /// distribution from the given rate/offset pair, and checks the newly
-    /// created statistic for validity.
+    /// Constructs a new [`Exponential`] distribution from the given rate/offset
+    /// pair, and validates the given parameters.
     pub fn new_exponential(
         rate: ScalarValue,
         offset: ScalarValue,
@@ -57,47 +61,45 @@ impl StatisticsV2 {
         ExponentialDistribution::try_new(rate, offset, positive_tail).map(Exponential)
     }
 
-    /// Constructs a new [`StatisticsV2`] instance with [`Gaussian`]
-    /// distribution from the given mean/variance pair, and checks the newly
-    /// created statistic for validity.
+    /// Constructs a new [`Gaussian`] distribution from the given mean/variance
+    /// pair, and validates the given parameters.
     pub fn new_gaussian(mean: ScalarValue, variance: ScalarValue) -> Result<Self> {
         GaussianDistribution::try_new(mean, variance).map(Gaussian)
     }
 
-    /// Constructs a new [`StatisticsV2`] instance with [`Bernoulli`]
-    /// distribution from the given probability, and checks the newly created
-    /// statistic for validity.
+    /// Constructs a new [`Bernoulli`] distribution from the given success
+    /// probability, and validates the given parameters.
     pub fn new_bernoulli(p: ScalarValue) -> Result<Self> {
         BernoulliDistribution::try_new(p).map(Bernoulli)
     }
 
-    /// Constructs a new [`StatisticsV2`] instance with [`Unknown`]
-    /// distribution from the given mean, median, variance, and range values.
-    /// Then, checks the newly created statistic for validity.
-    pub fn new_unknown(
+    /// Constructs a new [`Generic`] distribution from the given mean, median,
+    /// variance, and range values after validating the given parameters.
+    pub fn new_generic(
         mean: ScalarValue,
         median: ScalarValue,
         variance: ScalarValue,
         range: Interval,
     ) -> Result<Self> {
-        UnknownDistribution::try_new(mean, median, variance, range).map(Unknown)
+        GenericDistribution::try_new(mean, median, variance, range).map(Generic)
     }
 
-    /// Constructs a new [`Unknown`] statistics instance from the given range.
-    /// Other parameters; mean, median and variance are initialized with null values.
+    /// Constructs a new [`Generic`] distribution from the given range. Other
+    /// parameters (mean, median and variance) are initialized with null values.
     pub fn new_from_interval(range: Interval) -> Result<Self> {
         let null = ScalarValue::try_from(range.data_type())?;
-        StatisticsV2::new_unknown(null.clone(), null.clone(), null, range)
+        Distribution::new_generic(null.clone(), null.clone(), null, range)
     }
 
-    /// Extracts the mean value of the given statistic, depending on its distribution:
+    /// Extracts the mean value of this uncertain quantity, depending on its
+    /// distribution:
     /// - A [`Uniform`] distribution's interval determines its mean value, which
     ///   is the arithmetic average of the interval endpoints.
     /// - An [`Exponential`] distribution's mean is calculable by the formula
     ///   `offset + 1 / λ`, where `λ` is the (non-negative) rate.
     /// - A [`Gaussian`] distribution contains the mean explicitly.
     /// - A [`Bernoulli`] distribution's mean is equal to its success probability `p`.
-    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information
+    /// - A [`Generic`] distribution _may_ have it explicitly, or this information
     ///   may be absent.
     pub fn mean(&self) -> Result<ScalarValue> {
         match &self {
@@ -105,11 +107,12 @@ impl StatisticsV2 {
             Exponential(e) => e.mean(),
             Gaussian(g) => Ok(g.mean().clone()),
             Bernoulli(b) => Ok(b.mean().clone()),
-            Unknown(u) => Ok(u.mean().clone()),
+            Generic(u) => Ok(u.mean().clone()),
         }
     }
 
-    /// Extracts the median value of the given statistic, depending on its distribution:
+    /// Extracts the median value of this uncertain quantity, depending on its
+    /// distribution:
     /// - A [`Uniform`] distribution's interval determines its median value, which
     ///   is the arithmetic average of the interval endpoints.
     /// - An [`Exponential`] distribution's median is calculable by the formula
@@ -118,7 +121,7 @@ impl StatisticsV2 {
     ///   specified explicitly.
     /// - A [`Bernoulli`] distribution's median is `1` if `p > 0.5` and `0`
     ///   otherwise, where `p` is the success probability.
-    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information
+    /// - A [`Generic`] distribution _may_ have it explicitly, or this information
     ///   may be absent.
     pub fn median(&self) -> Result<ScalarValue> {
         match &self {
@@ -126,11 +129,12 @@ impl StatisticsV2 {
             Exponential(e) => e.median(),
             Gaussian(g) => Ok(g.median().clone()),
             Bernoulli(b) => b.median(),
-            Unknown(u) => Ok(u.median().clone()),
+            Generic(u) => Ok(u.median().clone()),
         }
     }
 
-    /// Extracts the variance value of the given statistic, depending on its distribution:
+    /// Extracts the variance value of this uncertain quantity, depending on
+    /// its distribution:
     /// - A [`Uniform`] distribution's interval determines its variance value, which
     ///   is calculable by the formula `(upper - lower) ^ 2 / 12`.
     /// - An [`Exponential`] distribution's variance is calculable by the formula
@@ -138,7 +142,7 @@ impl StatisticsV2 {
     /// - A [`Gaussian`] distribution's variance is specified explicitly.
     /// - A [`Bernoulli`] distribution's median is given by the formula `p * (1 - p)`
     ///   where `p` is the success probability.
-    /// - An [`Unknown`] distribution _may_ have it explicitly, or this information
+    /// - A [`Generic`] distribution _may_ have it explicitly, or this information
     ///   may be absent.
     pub fn variance(&self) -> Result<ScalarValue> {
         match &self {
@@ -146,18 +150,19 @@ impl StatisticsV2 {
             Exponential(e) => e.variance(),
             Gaussian(g) => Ok(g.variance.clone()),
             Bernoulli(b) => b.variance(),
-            Unknown(u) => Ok(u.variance.clone()),
+            Generic(u) => Ok(u.variance.clone()),
         }
     }
 
-    /// Extracts the range of the given statistic, depending on its distribution:
+    /// Extracts the range of this uncertain quantity, depending on its
+    /// distribution:
     /// - A [`Uniform`] distribution's range is simply its interval.
     /// - An [`Exponential`] distribution's range is `[offset, +∞)`.
     /// - A [`Gaussian`] distribution's range is unbounded.
     /// - A [`Bernoulli`] distribution's range is [`Interval::UNCERTAIN`], if
     ///   `p` is neither `0` nor `1`. Otherwise, it is [`Interval::CERTAINLY_FALSE`]
     ///   and [`Interval::CERTAINLY_TRUE`], respectively.
-    /// - An [`Unknown`] distribution is unbounded by default, but more information
+    /// - A [`Generic`] distribution is unbounded by default, but more information
     ///   may be present.
     pub fn range(&self) -> Result<Interval> {
         match &self {
@@ -165,7 +170,7 @@ impl StatisticsV2 {
             Exponential(e) => e.range(),
             Gaussian(g) => g.range(),
             Bernoulli(b) => Ok(b.range()),
-            Unknown(u) => Ok(u.range().clone()),
+            Generic(u) => Ok(u.range().clone()),
         }
     }
 
@@ -177,7 +182,7 @@ impl StatisticsV2 {
             Exponential(e) => e.data_type(),
             Gaussian(g) => g.data_type(),
             Bernoulli(b) => b.data_type(),
-            Unknown(u) => u.data_type(),
+            Generic(u) => u.data_type(),
         }
     }
 
@@ -256,12 +261,12 @@ pub struct BernoulliDistribution {
     p: ScalarValue,
 }
 
-/// An unknown distribution, only containing some summary statistics.
-/// For a more in-depth discussion, see:
+/// A generic distribution whose functional form is not available, which is
+/// approximated via some summary statistics. For a more in-depth discussion, see:
 ///
 /// <https://en.wikipedia.org/wiki/Summary_statistics>
 #[derive(Clone, Debug, PartialEq)]
-pub struct UnknownDistribution {
+pub struct GenericDistribution {
     mean: ScalarValue,
     median: ScalarValue,
     variance: ScalarValue,
@@ -272,7 +277,7 @@ impl UniformDistribution {
     fn try_new(interval: Interval) -> Result<Self> {
         if interval.data_type().eq(&DataType::Boolean) {
             return internal_err!(
-                "Construction of a boolean `Uniform` statistic is prohibited, create a `Bernoulli` statistic instead."
+                "Construction of a boolean `Uniform` distribution is prohibited, create a `Bernoulli` distribution instead."
             );
         }
 
@@ -509,7 +514,7 @@ impl BernoulliDistribution {
     }
 }
 
-impl UnknownDistribution {
+impl GenericDistribution {
     fn try_new(
         mean: ScalarValue,
         median: ScalarValue,
@@ -518,7 +523,7 @@ impl UnknownDistribution {
     ) -> Result<Self> {
         if range.data_type().eq(&DataType::Boolean) {
             return internal_err!(
-                "Construction of a boolean `Unknown` statistic is prohibited, create a `Bernoulli` statistic instead."
+                "Construction of a boolean `Generic` distribution is prohibited, create a `Bernoulli` distribution instead."
             );
         }
 
@@ -536,7 +541,7 @@ impl UnknownDistribution {
             || (!variance.is_null()
                 && variance.lt(&ScalarValue::new_zero(&variance.data_type())?))
         {
-            internal_err!("Tried to construct an invalid `UnknownDistribution` instance")
+            internal_err!("Tried to construct an invalid `GenericDistribution` instance")
         } else {
             Ok(Self {
                 mean,
@@ -592,7 +597,7 @@ pub fn combine_bernoullis(
                 Ok(right.clone())
             }
             _ => {
-                let dt = StatisticsV2::target_type(&[left_p, right_p])?;
+                let dt = Distribution::target_type(&[left_p, right_p])?;
                 BernoulliDistribution::try_new(ScalarValue::try_from(&dt)?)
             }
         },
@@ -610,7 +615,7 @@ pub fn combine_bernoullis(
                 Ok(right.clone())
             }
             _ => {
-                let dt = StatisticsV2::target_type(&[left_p, right_p])?;
+                let dt = Distribution::target_type(&[left_p, right_p])?;
                 BernoulliDistribution::try_new(ScalarValue::try_from(&dt)?)
             }
         },
@@ -646,15 +651,15 @@ pub fn combine_gaussians(
     }
 }
 
-/// Creates a new statistic with `Bernoulli` distribution by computing the
-/// resulting probability. Expects `op` to be a comparison operator, with
-/// `left` and `right` having numeric distributions. The resulting distribution
-/// has the `Float64` data type.
+/// Creates a new `Bernoulli` distribution by computing the resulting probability.
+/// Expects `op` to be a comparison operator, with `left` and `right` having
+/// numeric distributions. The resulting distribution has the `Float64` data
+/// type.
 pub fn create_bernoulli_from_comparison(
     op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
-) -> Result<StatisticsV2> {
+    left: &Distribution,
+    right: &Distribution,
+) -> Result<Distribution> {
     match (left, right) {
         (Uniform(left), Uniform(right)) => {
             match op {
@@ -685,14 +690,14 @@ pub fn create_bernoulli_from_comparison(
                                     |lhs, rhs| lhs.sub_checked(rhs),
                                 )?;
                             };
-                            return StatisticsV2::new_bernoulli(p_value);
+                            return Distribution::new_bernoulli(p_value);
                         }
                     } else if op == &Operator::Eq {
                         // If the ranges are disjoint, probability of equality is 0.
-                        return StatisticsV2::new_bernoulli(ScalarValue::from(0.0));
+                        return Distribution::new_bernoulli(ScalarValue::from(0.0));
                     } else {
                         // If the ranges are disjoint, probability of not-equality is 1.
-                        return StatisticsV2::new_bernoulli(ScalarValue::from(1.0));
+                        return Distribution::new_bernoulli(ScalarValue::from(1.0));
                     }
                 }
                 Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
@@ -714,24 +719,26 @@ pub fn create_bernoulli_from_comparison(
     let (li, ri) = (left.range()?, right.range()?);
     let range_evaluation = apply_operator(op, &li, &ri)?;
     if range_evaluation.eq(&Interval::CERTAINLY_FALSE) {
-        StatisticsV2::new_bernoulli(ScalarValue::from(0.0))
+        Distribution::new_bernoulli(ScalarValue::from(0.0))
     } else if range_evaluation.eq(&Interval::CERTAINLY_TRUE) {
-        StatisticsV2::new_bernoulli(ScalarValue::from(1.0))
+        Distribution::new_bernoulli(ScalarValue::from(1.0))
     } else if range_evaluation.eq(&Interval::UNCERTAIN) {
-        StatisticsV2::new_bernoulli(ScalarValue::try_from(&DataType::Float64)?)
+        Distribution::new_bernoulli(ScalarValue::try_from(&DataType::Float64)?)
     } else {
         internal_err!("This function must be called with a comparison operator")
     }
 }
 
-/// Creates a new statistic with `Unknown` distribution, and tries to compute
-/// mean, median and variance if possible.
-pub fn new_unknown_from_binary_op(
+/// Creates a new [`Generic`] distribution that represents the result of the
+/// given binary operation on two unknown quantities represented by their
+/// [`Distribution`] objects. The function computes the mean, median and
+/// variance if possible.
+pub fn new_generic_from_binary_op(
     op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
-) -> Result<StatisticsV2> {
-    StatisticsV2::new_unknown(
+    left: &Distribution,
+    right: &Distribution,
+) -> Result<Distribution> {
+    Distribution::new_generic(
         compute_mean(op, left, right)?,
         compute_median(op, left, right)?,
         compute_variance(op, left, right)?,
@@ -740,11 +747,11 @@ pub fn new_unknown_from_binary_op(
 }
 
 /// Computes the mean value for the result of the given binary operation on
-/// two statistics.
+/// two unknown quantities represented by their [`Distribution`] objects.
 pub fn compute_mean(
     op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
+    left: &Distribution,
+    right: &Distribution,
 ) -> Result<ScalarValue> {
     let (left_mean, right_mean) = (left.mean()?, right.mean()?);
 
@@ -764,19 +771,19 @@ pub fn compute_mean(
         // Fall back to an unknown mean value for other cases:
         _ => {}
     }
-    let target_type = StatisticsV2::target_type(&[&left_mean, &right_mean])?;
+    let target_type = Distribution::target_type(&[&left_mean, &right_mean])?;
     ScalarValue::try_from(target_type)
 }
 
 /// Computes the median value for the result of the given binary operation on
-/// two statistics. Currently, the median is calculable only for addition and
-/// subtraction operations on:
+/// two unknown quantities represented by its [`Distribution`] objects. Currently,
+/// the median is calculable only for addition and subtraction operations on:
 /// - [`Uniform`] and [`Uniform`] distributions, and
 /// - [`Gaussian`] and [`Gaussian`] distributions.
 pub fn compute_median(
     op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
+    left: &Distribution,
+    right: &Distribution,
 ) -> Result<ScalarValue> {
     match (left, right) {
         (Uniform(lu), Uniform(ru)) => {
@@ -804,16 +811,16 @@ pub fn compute_median(
     }
 
     let (left_median, right_median) = (left.median()?, right.median()?);
-    let target_type = StatisticsV2::target_type(&[&left_median, &right_median])?;
+    let target_type = Distribution::target_type(&[&left_median, &right_median])?;
     ScalarValue::try_from(target_type)
 }
 
 /// Computes the variance value for the result of the given binary operation on
-/// two statistics.
+/// two unknown quantities represented by their [`Distribution`] objects.
 pub fn compute_variance(
     op: &Operator,
-    left: &StatisticsV2,
-    right: &StatisticsV2,
+    left: &Distribution,
+    right: &Distribution,
 ) -> Result<ScalarValue> {
     let (left_variance, right_variance) = (left.variance()?, right.variance()?);
 
@@ -846,7 +853,7 @@ pub fn compute_variance(
         // Fall back to an unknown variance value for other cases:
         _ => {}
     }
-    let target_type = StatisticsV2::target_type(&[&left_variance, &right_variance])?;
+    let target_type = Distribution::target_type(&[&left_variance, &right_variance])?;
     ScalarValue::try_from(target_type)
 }
 
@@ -854,8 +861,8 @@ pub fn compute_variance(
 mod tests {
     use super::{
         combine_bernoullis, combine_gaussians, compute_mean, compute_median,
-        compute_variance, create_bernoulli_from_comparison, new_unknown_from_binary_op,
-        BernoulliDistribution, GaussianDistribution, StatisticsV2, UniformDistribution,
+        compute_variance, create_bernoulli_from_comparison, new_generic_from_binary_op,
+        BernoulliDistribution, Distribution, GaussianDistribution, UniformDistribution,
     };
     use crate::interval_arithmetic::{apply_operator, Interval};
     use crate::operator::Operator;
@@ -863,29 +870,29 @@ mod tests {
     use arrow::datatypes::DataType;
     use datafusion_common::{HashSet, Result, ScalarValue};
 
-    // The test data in the following tests are placed as follows: (stat -> expected answer)
     #[test]
-    fn uniform_stats_is_valid_test() -> Result<()> {
+    fn uniform_dist_is_valid_test() -> Result<()> {
         assert_eq!(
-            StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int8)?)?,
-            StatisticsV2::Uniform(UniformDistribution {
+            Distribution::new_uniform(Interval::make_zero(&DataType::Int8)?)?,
+            Distribution::Uniform(UniformDistribution {
                 interval: Interval::make_zero(&DataType::Int8)?,
             })
         );
 
-        assert!(StatisticsV2::new_uniform(Interval::UNCERTAIN).is_err());
+        assert!(Distribution::new_uniform(Interval::UNCERTAIN).is_err());
         Ok(())
     }
 
     #[test]
-    fn exponential_stats_is_valid_test() {
-        let exp_stats = vec![
+    fn exponential_dist_is_valid_test() {
+        // This array collects test cases of the form (distribution, validity).
+        let exponentials = vec![
             (
-                StatisticsV2::new_exponential(ScalarValue::Null, ScalarValue::Null, true),
+                Distribution::new_exponential(ScalarValue::Null, ScalarValue::Null, true),
                 false,
             ),
             (
-                StatisticsV2::new_exponential(
+                Distribution::new_exponential(
                     ScalarValue::from(0_f32),
                     ScalarValue::from(1_f32),
                     true,
@@ -893,7 +900,7 @@ mod tests {
                 false,
             ),
             (
-                StatisticsV2::new_exponential(
+                Distribution::new_exponential(
                     ScalarValue::from(100_f32),
                     ScalarValue::from(1_f32),
                     true,
@@ -901,7 +908,7 @@ mod tests {
                 true,
             ),
             (
-                StatisticsV2::new_exponential(
+                Distribution::new_exponential(
                     ScalarValue::from(-100_f32),
                     ScalarValue::from(1_f32),
                     true,
@@ -909,76 +916,79 @@ mod tests {
                 false,
             ),
         ];
-        for case in exp_stats {
+        for case in exponentials {
             assert_eq!(case.0.is_ok(), case.1);
         }
     }
 
     #[test]
-    fn gaussian_stats_is_valid_test() {
-        let gaussian_stats = vec![
+    fn gaussian_dist_is_valid_test() {
+        // This array collects test cases of the form (distribution, validity).
+        let gaussians = vec![
             (
-                StatisticsV2::new_gaussian(ScalarValue::Null, ScalarValue::Null),
+                Distribution::new_gaussian(ScalarValue::Null, ScalarValue::Null),
                 false,
             ),
             (
-                StatisticsV2::new_gaussian(
+                Distribution::new_gaussian(
                     ScalarValue::from(0_f32),
                     ScalarValue::from(0_f32),
                 ),
                 true,
             ),
             (
-                StatisticsV2::new_gaussian(
+                Distribution::new_gaussian(
                     ScalarValue::from(0_f32),
                     ScalarValue::from(0.5_f32),
                 ),
                 true,
             ),
             (
-                StatisticsV2::new_gaussian(
+                Distribution::new_gaussian(
                     ScalarValue::from(0_f32),
                     ScalarValue::from(-0.5_f32),
                 ),
                 false,
             ),
         ];
-        for case in gaussian_stats {
+        for case in gaussians {
             assert_eq!(case.0.is_ok(), case.1);
         }
     }
 
     #[test]
-    fn bernoulli_stats_is_valid_test() {
-        let gaussian_stats = vec![
-            (StatisticsV2::new_bernoulli(ScalarValue::Null), true),
-            (StatisticsV2::new_bernoulli(ScalarValue::from(0.)), true),
-            (StatisticsV2::new_bernoulli(ScalarValue::from(0.25)), true),
-            (StatisticsV2::new_bernoulli(ScalarValue::from(1.)), true),
-            (StatisticsV2::new_bernoulli(ScalarValue::from(11.)), false),
-            (StatisticsV2::new_bernoulli(ScalarValue::from(-11.)), false),
-            (StatisticsV2::new_bernoulli(ScalarValue::from(0_i64)), true),
-            (StatisticsV2::new_bernoulli(ScalarValue::from(1_i64)), true),
+    fn bernoulli_dist_is_valid_test() {
+        // This array collects test cases of the form (distribution, validity).
+        let bernoullis = vec![
+            (Distribution::new_bernoulli(ScalarValue::Null), true),
+            (Distribution::new_bernoulli(ScalarValue::from(0.)), true),
+            (Distribution::new_bernoulli(ScalarValue::from(0.25)), true),
+            (Distribution::new_bernoulli(ScalarValue::from(1.)), true),
+            (Distribution::new_bernoulli(ScalarValue::from(11.)), false),
+            (Distribution::new_bernoulli(ScalarValue::from(-11.)), false),
+            (Distribution::new_bernoulli(ScalarValue::from(0_i64)), true),
+            (Distribution::new_bernoulli(ScalarValue::from(1_i64)), true),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::from(11_i64)),
+                Distribution::new_bernoulli(ScalarValue::from(11_i64)),
                 false,
             ),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::from(-11_i64)),
+                Distribution::new_bernoulli(ScalarValue::from(-11_i64)),
                 false,
             ),
         ];
-        for case in gaussian_stats {
+        for case in bernoullis {
             assert_eq!(case.0.is_ok(), case.1);
         }
     }
 
     #[test]
-    fn unknown_stats_is_valid_test() -> Result<()> {
-        let unknown_stats = vec![
-            // Usage of boolean range during Unknown statistic construction is prohibited.
+    fn generic_dist_is_valid_test() -> Result<()> {
+        // This array collects test cases of the form (distribution, validity).
+        let generic_dists = vec![
+            // Using a boolean range to construct a Generic distribution is prohibited.
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::Null,
                     ScalarValue::Null,
                     ScalarValue::Null,
@@ -987,7 +997,7 @@ mod tests {
                 false,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::Null,
                     ScalarValue::Null,
                     ScalarValue::Null,
@@ -996,7 +1006,7 @@ mod tests {
                 true,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(0_f32),
                     ScalarValue::Float32(None),
                     ScalarValue::Float32(None),
@@ -1005,7 +1015,7 @@ mod tests {
                 true,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::Float64(None),
                     ScalarValue::from(0.),
                     ScalarValue::Float64(None),
@@ -1014,7 +1024,7 @@ mod tests {
                 true,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(-10_f32),
                     ScalarValue::Float32(None),
                     ScalarValue::Float32(None),
@@ -1023,7 +1033,7 @@ mod tests {
                 false,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::Float32(None),
                     ScalarValue::from(10_f32),
                     ScalarValue::Float32(None),
@@ -1032,7 +1042,7 @@ mod tests {
                 false,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::Null,
                     ScalarValue::Null,
                     ScalarValue::Null,
@@ -1041,7 +1051,7 @@ mod tests {
                 true,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(0),
                     ScalarValue::from(0),
                     ScalarValue::Int32(None),
@@ -1050,7 +1060,7 @@ mod tests {
                 true,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(0_f32),
                     ScalarValue::from(0_f32),
                     ScalarValue::Float32(None),
@@ -1059,7 +1069,7 @@ mod tests {
                 true,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(50.),
                     ScalarValue::from(50.),
                     ScalarValue::Float64(None),
@@ -1068,7 +1078,7 @@ mod tests {
                 true,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(50.),
                     ScalarValue::from(50.),
                     ScalarValue::Float64(None),
@@ -1077,7 +1087,7 @@ mod tests {
                 false,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::Float64(None),
                     ScalarValue::Float64(None),
                     ScalarValue::from(1.),
@@ -1086,7 +1096,7 @@ mod tests {
                 true,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::Float64(None),
                     ScalarValue::Float64(None),
                     ScalarValue::from(-1.),
@@ -1095,7 +1105,7 @@ mod tests {
                 false,
             ),
         ];
-        for case in unknown_stats {
+        for case in generic_dists {
             assert_eq!(case.0.is_ok(), case.1, "{:?}", case.0);
         }
 
@@ -1104,30 +1114,30 @@ mod tests {
 
     #[test]
     fn mean_extraction_test() -> Result<()> {
-        // The test data is placed as follows : (stat -> expected answer)
-        let stats = vec![
+        // This array collects test cases of the form (distribution, mean value).
+        let dists = vec![
             (
-                StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64)?),
+                Distribution::new_uniform(Interval::make_zero(&DataType::Int64)?),
                 ScalarValue::from(0_i64),
             ),
             (
-                StatisticsV2::new_uniform(Interval::make_zero(&DataType::Float64)?),
+                Distribution::new_uniform(Interval::make_zero(&DataType::Float64)?),
                 ScalarValue::from(0.),
             ),
             (
-                StatisticsV2::new_uniform(Interval::make(Some(1), Some(100))?),
+                Distribution::new_uniform(Interval::make(Some(1), Some(100))?),
                 ScalarValue::from(50),
             ),
             (
-                StatisticsV2::new_uniform(Interval::make(Some(-100), Some(-1))?),
+                Distribution::new_uniform(Interval::make(Some(-100), Some(-1))?),
                 ScalarValue::from(-50),
             ),
             (
-                StatisticsV2::new_uniform(Interval::make(Some(-100), Some(100))?),
+                Distribution::new_uniform(Interval::make(Some(-100), Some(100))?),
                 ScalarValue::from(0),
             ),
             (
-                StatisticsV2::new_exponential(
+                Distribution::new_exponential(
                     ScalarValue::from(2.),
                     ScalarValue::from(0.),
                     true,
@@ -1135,7 +1145,7 @@ mod tests {
                 ScalarValue::from(0.5),
             ),
             (
-                StatisticsV2::new_exponential(
+                Distribution::new_exponential(
                     ScalarValue::from(2.),
                     ScalarValue::from(1.),
                     true,
@@ -1143,22 +1153,22 @@ mod tests {
                 ScalarValue::from(1.5),
             ),
             (
-                StatisticsV2::new_gaussian(ScalarValue::from(0.), ScalarValue::from(1.)),
+                Distribution::new_gaussian(ScalarValue::from(0.), ScalarValue::from(1.)),
                 ScalarValue::from(0.),
             ),
             (
-                StatisticsV2::new_gaussian(
+                Distribution::new_gaussian(
                     ScalarValue::from(-2.),
                     ScalarValue::from(0.5),
                 ),
                 ScalarValue::from(-2.),
             ),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::from(0.5)),
+                Distribution::new_bernoulli(ScalarValue::from(0.5)),
                 ScalarValue::from(0.5),
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(42.),
                     ScalarValue::from(42.),
                     ScalarValue::Float64(None),
@@ -1168,7 +1178,7 @@ mod tests {
             ),
         ];
 
-        for case in stats {
+        for case in dists {
             assert_eq!(case.0?.mean()?, case.1);
         }
 
@@ -1177,18 +1187,18 @@ mod tests {
 
     #[test]
     fn median_extraction_test() -> Result<()> {
-        // The test data is placed as follows: (stat -> expected answer)
-        let stats = vec![
+        // This array collects test cases of the form (distribution, median value).
+        let dists = vec![
             (
-                StatisticsV2::new_uniform(Interval::make_zero(&DataType::Int64)?),
+                Distribution::new_uniform(Interval::make_zero(&DataType::Int64)?),
                 ScalarValue::from(0_i64),
             ),
             (
-                StatisticsV2::new_uniform(Interval::make(Some(25.), Some(75.))?),
+                Distribution::new_uniform(Interval::make(Some(25.), Some(75.))?),
                 ScalarValue::from(50.),
             ),
             (
-                StatisticsV2::new_exponential(
+                Distribution::new_exponential(
                     ScalarValue::from(2_f64.ln()),
                     ScalarValue::from(0.),
                     true,
@@ -1196,23 +1206,23 @@ mod tests {
                 ScalarValue::from(1.),
             ),
             (
-                StatisticsV2::new_gaussian(ScalarValue::from(2.), ScalarValue::from(1.)),
+                Distribution::new_gaussian(ScalarValue::from(2.), ScalarValue::from(1.)),
                 ScalarValue::from(2.),
             ),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::from(0.25)),
+                Distribution::new_bernoulli(ScalarValue::from(0.25)),
                 ScalarValue::from(0.),
             ),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::from(0.75)),
+                Distribution::new_bernoulli(ScalarValue::from(0.75)),
                 ScalarValue::from(1.),
             ),
             (
-                StatisticsV2::new_gaussian(ScalarValue::from(2.), ScalarValue::from(1.)),
+                Distribution::new_gaussian(ScalarValue::from(2.), ScalarValue::from(1.)),
                 ScalarValue::from(2.),
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(12.),
                     ScalarValue::from(12.),
                     ScalarValue::Float64(None),
@@ -1222,7 +1232,7 @@ mod tests {
             ),
         ];
 
-        for case in stats {
+        for case in dists {
             assert_eq!(case.0?.median()?, case.1);
         }
 
@@ -1231,14 +1241,14 @@ mod tests {
 
     #[test]
     fn variance_extraction_test() -> Result<()> {
-        // The test data is placed as follows : (stat -> expected answer)
-        let stats = vec![
+        // This array collects test cases of the form (distribution, variance value).
+        let dists = vec![
             (
-                StatisticsV2::new_uniform(Interval::make(Some(0.), Some(12.))?),
+                Distribution::new_uniform(Interval::make(Some(0.), Some(12.))?),
                 ScalarValue::from(12.),
             ),
             (
-                StatisticsV2::new_exponential(
+                Distribution::new_exponential(
                     ScalarValue::from(10.),
                     ScalarValue::from(0.),
                     true,
@@ -1246,15 +1256,15 @@ mod tests {
                 ScalarValue::from(0.01),
             ),
             (
-                StatisticsV2::new_gaussian(ScalarValue::from(0.), ScalarValue::from(1.)),
+                Distribution::new_gaussian(ScalarValue::from(0.), ScalarValue::from(1.)),
                 ScalarValue::from(1.),
             ),
             (
-                StatisticsV2::new_bernoulli(ScalarValue::from(0.5)),
+                Distribution::new_bernoulli(ScalarValue::from(0.5)),
                 ScalarValue::from(0.25),
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::Float64(None),
                     ScalarValue::Float64(None),
                     ScalarValue::from(0.02),
@@ -1264,7 +1274,7 @@ mod tests {
             ),
         ];
 
-        for case in stats {
+        for case in dists {
             assert_eq!(case.0?.variance()?, case.1);
         }
 
@@ -1272,29 +1282,29 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_unknown_properties_gauss_gauss() -> Result<()> {
-        let stat_a =
-            StatisticsV2::new_gaussian(ScalarValue::from(10.), ScalarValue::from(0.0))?;
-        let stat_b =
-            StatisticsV2::new_gaussian(ScalarValue::from(20.), ScalarValue::from(0.0))?;
+    fn test_calculate_generic_properties_gauss_gauss() -> Result<()> {
+        let dist_a =
+            Distribution::new_gaussian(ScalarValue::from(10.), ScalarValue::from(0.0))?;
+        let dist_b =
+            Distribution::new_gaussian(ScalarValue::from(20.), ScalarValue::from(0.0))?;
 
         let test_data = vec![
             // Mean:
             (
-                compute_mean(&Operator::Plus, &stat_a, &stat_b)?,
+                compute_mean(&Operator::Plus, &dist_a, &dist_b)?,
                 ScalarValue::from(30.),
             ),
             (
-                compute_mean(&Operator::Minus, &stat_a, &stat_b)?,
+                compute_mean(&Operator::Minus, &dist_a, &dist_b)?,
                 ScalarValue::from(-10.),
             ),
             // Median:
             (
-                compute_median(&Operator::Plus, &stat_a, &stat_b)?,
+                compute_median(&Operator::Plus, &dist_a, &dist_b)?,
                 ScalarValue::from(30.),
             ),
             (
-                compute_median(&Operator::Minus, &stat_a, &stat_b)?,
+                compute_median(&Operator::Minus, &dist_a, &dist_b)?,
                 ScalarValue::from(-10.),
             ),
         ];
@@ -1372,7 +1382,7 @@ mod tests {
         for op in operator_set {
             assert!(
                 combine_bernoullis(&op, &left, &right).is_err(),
-                "Operator {op} should not be supported for Bernoulli statistics"
+                "Operator {op} should not be supported for Bernoulli distributions"
             );
         }
 
@@ -1435,7 +1445,7 @@ mod tests {
         for op in operator_set {
             assert!(
                 combine_gaussians(&op, &left, &right)?.is_none(),
-                "Operator {op} should not be supported for Gaussian statistics"
+                "Operator {op} should not be supported for Gaussian distributions"
             );
         }
 
@@ -1449,44 +1459,44 @@ mod tests {
     //  {x ~ *DISTRIBUTION_X*[..], y ~ *DISTRIBUTION_Y*[..]}
     // ]]
     #[test]
-    fn test_calculate_unknown_properties_uniform_uniform() -> Result<()> {
-        let stat_a = StatisticsV2::new_uniform(Interval::make(Some(0.), Some(12.))?)?;
-        let stat_b = StatisticsV2::new_uniform(Interval::make(Some(12.), Some(36.))?)?;
+    fn test_calculate_generic_properties_uniform_uniform() -> Result<()> {
+        let dist_a = Distribution::new_uniform(Interval::make(Some(0.), Some(12.))?)?;
+        let dist_b = Distribution::new_uniform(Interval::make(Some(12.), Some(36.))?)?;
 
         let test_data = vec![
             // Mean:
             (
-                compute_mean(&Operator::Plus, &stat_a, &stat_b)?,
+                compute_mean(&Operator::Plus, &dist_a, &dist_b)?,
                 ScalarValue::from(30.),
             ),
             (
-                compute_mean(&Operator::Minus, &stat_a, &stat_b)?,
+                compute_mean(&Operator::Minus, &dist_a, &dist_b)?,
                 ScalarValue::from(-18.),
             ),
             (
-                compute_mean(&Operator::Multiply, &stat_a, &stat_b)?,
+                compute_mean(&Operator::Multiply, &dist_a, &dist_b)?,
                 ScalarValue::from(144.),
             ),
             // Median:
             (
-                compute_median(&Operator::Plus, &stat_a, &stat_b)?,
+                compute_median(&Operator::Plus, &dist_a, &dist_b)?,
                 ScalarValue::from(30.),
             ),
             (
-                compute_median(&Operator::Minus, &stat_a, &stat_b)?,
+                compute_median(&Operator::Minus, &dist_a, &dist_b)?,
                 ScalarValue::from(-18.),
             ),
             // Variance:
             (
-                compute_variance(&Operator::Plus, &stat_a, &stat_b)?,
+                compute_variance(&Operator::Plus, &dist_a, &dist_b)?,
                 ScalarValue::from(60.),
             ),
             (
-                compute_variance(&Operator::Minus, &stat_a, &stat_b)?,
+                compute_variance(&Operator::Minus, &dist_a, &dist_b)?,
                 ScalarValue::from(60.),
             ),
             (
-                compute_variance(&Operator::Multiply, &stat_a, &stat_b)?,
+                compute_variance(&Operator::Multiply, &dist_a, &dist_b)?,
                 ScalarValue::from(9216.),
             ),
         ];
@@ -1497,30 +1507,30 @@ mod tests {
         Ok(())
     }
 
-    /// Test for Uniform-Uniform, Uniform-Unknown, Unknown-Uniform, Unknown-Unknown pairs,
-    /// where range is always present.
+    /// Test for `Uniform`-`Uniform`, `Uniform`-`Generic`, `Generic`-`Uniform`,
+    /// `Generic`-`Generic` pairs, where range is always present.
     #[test]
     fn test_compute_range_where_present() -> Result<()> {
         let a = &Interval::make(Some(0.), Some(12.0))?;
         let b = &Interval::make(Some(0.), Some(12.0))?;
         let mean = ScalarValue::from(6.0);
-        for (stat_a, stat_b) in [
+        for (dist_a, dist_b) in [
             (
-                StatisticsV2::new_uniform(a.clone())?,
-                StatisticsV2::new_uniform(b.clone())?,
+                Distribution::new_uniform(a.clone())?,
+                Distribution::new_uniform(b.clone())?,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     mean.clone(),
                     mean.clone(),
                     ScalarValue::Float64(None),
                     a.clone(),
                 )?,
-                StatisticsV2::new_uniform(b.clone())?,
+                Distribution::new_uniform(b.clone())?,
             ),
             (
-                StatisticsV2::new_uniform(a.clone())?,
-                StatisticsV2::new_unknown(
+                Distribution::new_uniform(a.clone())?,
+                Distribution::new_generic(
                     mean.clone(),
                     mean.clone(),
                     ScalarValue::Float64(None),
@@ -1528,13 +1538,13 @@ mod tests {
                 )?,
             ),
             (
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     mean.clone(),
                     mean.clone(),
                     ScalarValue::Float64(None),
                     a.clone(),
                 )?,
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     mean.clone(),
                     mean.clone(),
                     ScalarValue::Float64(None),
@@ -1547,20 +1557,20 @@ mod tests {
             };
             for op in [Plus, Minus, Multiply, Divide] {
                 assert_eq!(
-                    new_unknown_from_binary_op(&op, &stat_a, &stat_b)?.range()?,
+                    new_generic_from_binary_op(&op, &dist_a, &dist_b)?.range()?,
                     apply_operator(&op, a, b)?,
                     "Failed for {:?} {op} {:?}",
-                    stat_a,
-                    stat_b
+                    dist_a,
+                    dist_b
                 );
             }
             for op in [Gt, GtEq, Lt, LtEq, Eq, NotEq] {
                 assert_eq!(
-                    create_bernoulli_from_comparison(&op, &stat_a, &stat_b)?.range()?,
+                    create_bernoulli_from_comparison(&op, &dist_a, &dist_b)?.range()?,
                     apply_operator(&op, a, b)?,
                     "Failed for {:?} {op} {:?}",
-                    stat_a,
-                    stat_b
+                    dist_a,
+                    dist_b
                 );
             }
         }

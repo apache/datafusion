@@ -37,10 +37,10 @@ use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::binary::BinaryTypeCoercer;
 use datafusion_expr::interval_arithmetic::{apply_operator, Interval};
 use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::statistics::StatisticsV2::{Bernoulli, Gaussian};
+use datafusion_expr::statistics::Distribution::{Bernoulli, Gaussian};
 use datafusion_expr::statistics::{
     combine_bernoullis, combine_gaussians, create_bernoulli_from_comparison,
-    new_unknown_from_binary_op, StatisticsV2,
+    new_generic_from_binary_op, Distribution,
 };
 use datafusion_expr::{ColumnarValue, Operator};
 use datafusion_physical_expr_common::datum::{apply, apply_cmp, apply_cmp_for_nested};
@@ -491,7 +491,7 @@ impl PhysicalExpr for BinaryExpr {
         }
     }
 
-    fn evaluate_statistics(&self, children: &[&StatisticsV2]) -> Result<StatisticsV2> {
+    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         let (left, right) = (children[0], children[1]);
 
         if self.op.is_numerical_operators() {
@@ -519,7 +519,7 @@ impl PhysicalExpr for BinaryExpr {
             return create_bernoulli_from_comparison(&self.op, left, right);
         }
         // Fall back to an unknown distribution with only summary statistics:
-        new_unknown_from_binary_op(&self.op, left, right)
+        new_generic_from_binary_op(&self.op, left, right)
     }
 
     /// For each operator, [`BinaryExpr`] has distinct rules.
@@ -4444,21 +4444,21 @@ mod tests {
 
         for children in [
             vec![
-                &StatisticsV2::new_uniform(left_interval.clone())?,
-                &StatisticsV2::new_uniform(right_interval.clone())?,
+                &Distribution::new_uniform(left_interval.clone())?,
+                &Distribution::new_uniform(right_interval.clone())?,
             ],
             vec![
-                &StatisticsV2::new_unknown(
+                &Distribution::new_generic(
                     left_mean.clone(),
                     left_med.clone(),
                     ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
-                &StatisticsV2::new_uniform(right_interval.clone())?,
+                &Distribution::new_uniform(right_interval.clone())?,
             ],
             vec![
-                &StatisticsV2::new_uniform(right_interval.clone())?,
-                &StatisticsV2::new_unknown(
+                &Distribution::new_uniform(right_interval.clone())?,
+                &Distribution::new_generic(
                     right_mean.clone(),
                     right_med.clone(),
                     ScalarValue::Float64(None),
@@ -4466,13 +4466,13 @@ mod tests {
                 )?,
             ],
             vec![
-                &StatisticsV2::new_unknown(
+                &Distribution::new_generic(
                     left_mean.clone(),
                     left_med.clone(),
                     ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
-                &StatisticsV2::new_unknown(
+                &Distribution::new_generic(
                     right_mean.clone(),
                     right_med.clone(),
                     ScalarValue::Float64(None),
@@ -4491,7 +4491,7 @@ mod tests {
                 let expr = binary_expr(Arc::clone(&a), op, Arc::clone(&b), schema)?;
                 assert_eq!(
                     expr.evaluate_statistics(&children)?,
-                    new_unknown_from_binary_op(&op, children[0], children[1])?
+                    new_generic_from_binary_op(&op, children[0], children[1])?
                 );
             }
         }
@@ -4514,20 +4514,20 @@ mod tests {
         )?);
         let neq = Arc::new(binary_expr(a, Operator::NotEq, b, schema)?);
 
-        let left_stat = &StatisticsV2::new_uniform(Interval::make(Some(0), Some(7))?)?;
-        let right_stat = &StatisticsV2::new_uniform(Interval::make(Some(4), Some(11))?)?;
+        let left_stat = &Distribution::new_uniform(Interval::make(Some(0), Some(7))?)?;
+        let right_stat = &Distribution::new_uniform(Interval::make(Some(4), Some(11))?)?;
 
         // Intervals: [0, 7], [4, 11].
         // The intersection is [4, 7], so the probability of equality is 4 / 64 = 1 / 16.
         assert_eq!(
             eq.evaluate_statistics(&[left_stat, right_stat])?,
-            StatisticsV2::new_bernoulli(ScalarValue::from(1.0 / 16.0))?
+            Distribution::new_bernoulli(ScalarValue::from(1.0 / 16.0))?
         );
 
         // The probability of being distinct is 1 - 1 / 16 = 15 / 16.
         assert_eq!(
             neq.evaluate_statistics(&[left_stat, right_stat])?,
-            StatisticsV2::new_bernoulli(ScalarValue::from(15.0 / 16.0))?
+            Distribution::new_bernoulli(ScalarValue::from(15.0 / 16.0))?
         );
 
         Ok(())
@@ -4542,24 +4542,24 @@ mod tests {
         let left_interval = Interval::make(Some(0.0), Some(12.0))?;
         let right_interval = Interval::make(Some(12.0), Some(36.0))?;
 
-        let parent = StatisticsV2::new_uniform(Interval::make(Some(-432.), Some(432.))?)?;
+        let parent = Distribution::new_uniform(Interval::make(Some(-432.), Some(432.))?)?;
         let children = vec![
             vec![
-                StatisticsV2::new_uniform(left_interval.clone())?,
-                StatisticsV2::new_uniform(right_interval.clone())?,
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_uniform(right_interval.clone())?,
             ],
             vec![
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(6.),
                     ScalarValue::from(6.),
                     ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
-                StatisticsV2::new_uniform(right_interval.clone())?,
+                Distribution::new_uniform(right_interval.clone())?,
             ],
             vec![
-                StatisticsV2::new_uniform(left_interval.clone())?,
-                StatisticsV2::new_unknown(
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_generic(
                     ScalarValue::from(12.),
                     ScalarValue::from(12.),
                     ScalarValue::Float64(None),
@@ -4567,13 +4567,13 @@ mod tests {
                 )?,
             ],
             vec![
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(6.),
                     ScalarValue::from(6.),
                     ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(12.),
                     ScalarValue::from(12.),
                     ScalarValue::Float64(None),
@@ -4612,24 +4612,24 @@ mod tests {
         let right_interval = Interval::make(Some(6.0), Some(18.0))?;
 
         let one = ScalarValue::from(1.0);
-        let parent = StatisticsV2::new_bernoulli(one)?;
+        let parent = Distribution::new_bernoulli(one)?;
         let children = vec![
             vec![
-                StatisticsV2::new_uniform(left_interval.clone())?,
-                StatisticsV2::new_uniform(right_interval.clone())?,
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_uniform(right_interval.clone())?,
             ],
             vec![
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(6.),
                     ScalarValue::from(6.),
                     ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
-                StatisticsV2::new_uniform(right_interval.clone())?,
+                Distribution::new_uniform(right_interval.clone())?,
             ],
             vec![
-                StatisticsV2::new_uniform(left_interval.clone())?,
-                StatisticsV2::new_unknown(
+                Distribution::new_uniform(left_interval.clone())?,
+                Distribution::new_generic(
                     ScalarValue::from(12.),
                     ScalarValue::from(12.),
                     ScalarValue::Float64(None),
@@ -4637,13 +4637,13 @@ mod tests {
                 )?,
             ],
             vec![
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(6.),
                     ScalarValue::from(6.),
                     ScalarValue::Float64(None),
                     left_interval.clone(),
                 )?,
-                StatisticsV2::new_unknown(
+                Distribution::new_generic(
                     ScalarValue::from(12.),
                     ScalarValue::from(12.),
                     ScalarValue::Float64(None),

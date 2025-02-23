@@ -30,8 +30,8 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
 
-///! Logical plans need to provide stable semantics, as downstream projects
-///! create them and depend on them. Test executable semantics of logical plans.
+// Logical plans need to provide stable semantics, as downstream projects
+// create them and depend on them. Test executable semantics of logical plans.
 
 #[tokio::test]
 async fn count_only_nulls() -> Result<()> {

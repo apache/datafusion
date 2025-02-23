@@ -31,8 +31,8 @@ use arrow::{
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
-use datafusion_expr::statistics::StatisticsV2::{
-    self, Bernoulli, Exponential, Gaussian, Uniform, Unknown,
+use datafusion_expr::statistics::Distribution::{
+    self, Bernoulli, Exponential, Gaussian, Generic, Uniform,
 };
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
@@ -135,22 +135,22 @@ impl PhysicalExpr for NegativeExpr {
             .map(|result| vec![result]))
     }
 
-    fn evaluate_statistics(&self, children: &[&StatisticsV2]) -> Result<StatisticsV2> {
+    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
         match children[0] {
-            Uniform(u) => StatisticsV2::new_uniform(u.range().arithmetic_negate()?),
-            Exponential(e) => StatisticsV2::new_exponential(
+            Uniform(u) => Distribution::new_uniform(u.range().arithmetic_negate()?),
+            Exponential(e) => Distribution::new_exponential(
                 e.rate().clone(),
                 e.offset().arithmetic_negate()?,
                 !e.positive_tail(),
             ),
-            Gaussian(g) => StatisticsV2::new_gaussian(
+            Gaussian(g) => Distribution::new_gaussian(
                 g.mean().arithmetic_negate()?,
                 g.variance().clone(),
             ),
             Bernoulli(_) => {
                 internal_err!("NegativeExpr cannot operate on Boolean datatypes")
             }
-            Unknown(u) => StatisticsV2::new_unknown(
+            Generic(u) => Distribution::new_generic(
                 u.mean().arithmetic_negate()?,
                 u.median().arithmetic_negate()?,
                 u.variance().clone(),
@@ -258,27 +258,27 @@ mod tests {
 
         // Uniform
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&StatisticsV2::new_uniform(
+            negative_expr.evaluate_statistics(&[&Distribution::new_uniform(
                 Interval::make(Some(-2.), Some(3.))?
             )?])?,
-            StatisticsV2::new_uniform(Interval::make(Some(-3.), Some(2.))?)?
+            Distribution::new_uniform(Interval::make(Some(-3.), Some(2.))?)?
         );
 
         // Bernoulli
         assert!(negative_expr
-            .evaluate_statistics(&[&StatisticsV2::new_bernoulli(ScalarValue::from(
+            .evaluate_statistics(&[&Distribution::new_bernoulli(ScalarValue::from(
                 0.75
             ))?])
             .is_err());
 
         // Exponential
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&StatisticsV2::new_exponential(
+            negative_expr.evaluate_statistics(&[&Distribution::new_exponential(
                 ScalarValue::from(1.),
                 ScalarValue::from(1.),
                 true
             )?])?,
-            StatisticsV2::new_exponential(
+            Distribution::new_exponential(
                 ScalarValue::from(1.),
                 ScalarValue::from(-1.),
                 false
@@ -287,22 +287,22 @@ mod tests {
 
         // Gaussian
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&StatisticsV2::new_gaussian(
+            negative_expr.evaluate_statistics(&[&Distribution::new_gaussian(
                 ScalarValue::from(15),
                 ScalarValue::from(225),
             )?])?,
-            StatisticsV2::new_gaussian(ScalarValue::from(-15), ScalarValue::from(225),)?
+            Distribution::new_gaussian(ScalarValue::from(-15), ScalarValue::from(225),)?
         );
 
         // Unknown
         assert_eq!(
-            negative_expr.evaluate_statistics(&[&StatisticsV2::new_unknown(
+            negative_expr.evaluate_statistics(&[&Distribution::new_generic(
                 ScalarValue::from(15),
                 ScalarValue::from(15),
                 ScalarValue::from(10),
                 Interval::make(Some(10), Some(20))?
             )?])?,
-            StatisticsV2::new_unknown(
+            Distribution::new_generic(
                 ScalarValue::from(-15),
                 ScalarValue::from(-15),
                 ScalarValue::from(10),
@@ -335,10 +335,10 @@ mod tests {
         let original_child_interval = Interval::make(Some(-2), Some(3))?;
         let after_propagation = Interval::make(Some(-2), Some(0))?;
 
-        let parent = StatisticsV2::new_uniform(Interval::make(Some(0), Some(4))?)?;
-        let children: Vec<Vec<StatisticsV2>> = vec![
-            vec![StatisticsV2::new_uniform(original_child_interval.clone())?],
-            vec![StatisticsV2::new_unknown(
+        let parent = Distribution::new_uniform(Interval::make(Some(0), Some(4))?)?;
+        let children: Vec<Vec<Distribution>> = vec![
+            vec![Distribution::new_uniform(original_child_interval.clone())?],
+            vec![Distribution::new_generic(
                 ScalarValue::from(0),
                 ScalarValue::from(0),
                 ScalarValue::Int32(None),
@@ -349,7 +349,7 @@ mod tests {
         for child_view in children {
             let child_refs: Vec<_> = child_view.iter().collect();
             let actual = negative_expr.propagate_statistics(&parent, &child_refs)?;
-            let expected = Some(vec![StatisticsV2::new_from_interval(
+            let expected = Some(vec![Distribution::new_from_interval(
                 after_propagation.clone(),
             )?]);
             assert_eq!(actual, expected);

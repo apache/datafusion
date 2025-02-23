@@ -24,7 +24,7 @@ use crate::utils::{build_dag, ExprTreeNode};
 
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::statistics::StatisticsV2;
+use datafusion_expr::statistics::Distribution;
 use datafusion_expr_common::interval_arithmetic::Interval;
 
 use petgraph::adj::DefaultIx;
@@ -34,47 +34,48 @@ use petgraph::visit::DfsPostOrder;
 use petgraph::Outgoing;
 
 /// This object implements a directed acyclic expression graph (DAEG) that
-/// is used to compute statistics for expressions hierarchically.
+/// is used to compute statistics/distributions for expressions hierarchically.
 #[derive(Clone, Debug)]
-pub struct ExprStatisticGraph {
-    graph: StableGraph<ExprStatisticGraphNode, usize>,
+pub struct ExprStatisticsGraph {
+    graph: StableGraph<ExprStatisticsGraphNode, usize>,
     root: NodeIndex,
 }
 
 /// This is a node in the DAEG; it encapsulates a reference to the actual
-/// [`PhysicalExpr`] as well as its statistics.
+/// [`PhysicalExpr`] as well as its statistics/distribution.
 #[derive(Clone, Debug)]
-pub struct ExprStatisticGraphNode {
+pub struct ExprStatisticsGraphNode {
     expr: Arc<dyn PhysicalExpr>,
-    statistics: StatisticsV2,
+    dist: Distribution,
 }
 
-impl ExprStatisticGraphNode {
+impl ExprStatisticsGraphNode {
     /// Constructs a new DAEG node based on the given interval with a
     /// `Uniform` distribution.
     fn new_uniform(expr: Arc<dyn PhysicalExpr>, interval: Interval) -> Result<Self> {
-        StatisticsV2::new_uniform(interval)
-            .map(|statistics| ExprStatisticGraphNode { expr, statistics })
+        Distribution::new_uniform(interval)
+            .map(|dist| ExprStatisticsGraphNode { expr, dist })
     }
 
     /// Constructs a new DAEG node with a `Bernoulli` distribution having an
     /// unknown success probability.
     fn new_bernoulli(expr: Arc<dyn PhysicalExpr>) -> Result<Self> {
-        StatisticsV2::new_bernoulli(ScalarValue::Float64(None))
-            .map(|statistics| ExprStatisticGraphNode { expr, statistics })
+        Distribution::new_bernoulli(ScalarValue::Float64(None))
+            .map(|dist| ExprStatisticsGraphNode { expr, dist })
     }
 
-    /// Constructs a new DAEG node with an `Unknown` distribution having no
+    /// Constructs a new DAEG node with a `Generic` distribution having no
     /// definite summary statistics.
-    fn new_unknown(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> Result<Self> {
+    fn new_generic(expr: Arc<dyn PhysicalExpr>, dt: &DataType) -> Result<Self> {
         let interval = Interval::make_unbounded(dt)?;
-        let statistics = StatisticsV2::new_from_interval(interval)?;
-        Ok(ExprStatisticGraphNode { expr, statistics })
+        let dist = Distribution::new_from_interval(interval)?;
+        Ok(ExprStatisticsGraphNode { expr, dist })
     }
 
-    /// Get the [`StatisticsV2`] object representing the statistics of the expression.
-    pub fn statistics(&self) -> &StatisticsV2 {
-        &self.statistics
+    /// Get the [`Distribution`] object representing the statistics of the
+    /// expression.
+    pub fn distribution(&self) -> &Distribution {
+        &self.dist
     }
 
     /// This function creates a DAEG node from DataFusion's [`ExprTreeNode`]
@@ -94,72 +95,73 @@ impl ExprStatisticGraphNode {
                 if dt.eq(&DataType::Boolean) {
                     Self::new_bernoulli(expr)
                 } else {
-                    Self::new_unknown(expr, &dt)
+                    Self::new_generic(expr, &dt)
                 }
             })
         }
     }
 }
 
-impl ExprStatisticGraph {
+impl ExprStatisticsGraph {
     pub fn try_new(expr: Arc<dyn PhysicalExpr>, schema: &Schema) -> Result<Self> {
         // Build the full graph:
         let (root, graph) = build_dag(expr, &|node| {
-            ExprStatisticGraphNode::make_node(node, schema)
+            ExprStatisticsGraphNode::make_node(node, schema)
         })?;
         Ok(Self { graph, root })
     }
 
-    /// This function assigns given statistics to expressions in the DAEG.
+    /// This function assigns given distributions to expressions in the DAEG.
     /// The argument `assignments` associates indices of sought expressions
-    /// with their corresponding new statistics.
-    pub fn assign_statistics(&mut self, assignments: &[(usize, StatisticsV2)]) {
+    /// with their corresponding new distributions.
+    pub fn assign_statistics(&mut self, assignments: &[(usize, Distribution)]) {
         for (index, stats) in assignments {
             let node_index = NodeIndex::from(*index as DefaultIx);
-            self.graph[node_index].statistics = stats.clone();
+            self.graph[node_index].dist = stats.clone();
         }
     }
 
-    /// Computes statistics for an expression via a bottom-up traversal.
-    pub fn evaluate_statistics(&mut self) -> Result<&StatisticsV2> {
+    /// Computes statistics/distributions for an expression via a bottom-up
+    /// traversal.
+    pub fn evaluate_statistics(&mut self) -> Result<&Distribution> {
         let mut dfs = DfsPostOrder::new(&self.graph, self.root);
         while let Some(idx) = dfs.next(&self.graph) {
             let neighbors = self.graph.neighbors_directed(idx, Outgoing);
             let mut children_statistics = neighbors
-                .map(|child| self.graph[child].statistics())
+                .map(|child| self.graph[child].distribution())
                 .collect::<Vec<_>>();
             // Note that all distributions are assumed to be independent.
             if !children_statistics.is_empty() {
                 // Reverse to align with `PhysicalExpr`'s children:
                 children_statistics.reverse();
-                self.graph[idx].statistics = self.graph[idx]
+                self.graph[idx].dist = self.graph[idx]
                     .expr
                     .evaluate_statistics(&children_statistics)?;
             }
         }
-        Ok(self.graph[self.root].statistics())
+        Ok(self.graph[self.root].distribution())
     }
 
     /// Runs a propagation mechanism in a top-down manner to update statistics
     /// of leaf nodes.
     pub fn propagate_statistics(
         &mut self,
-        given_stats: StatisticsV2,
+        given_stats: Distribution,
     ) -> Result<PropagationResult> {
         // Adjust the root node with the given statistics:
-        let root_range = self.graph[self.root].statistics.range()?;
+        let root_range = self.graph[self.root].dist.range()?;
         let given_range = given_stats.range()?;
         if let Some(interval) = root_range.intersect(&given_range)? {
             if interval != root_range {
                 // If the given statistics enable us to obtain a more precise
                 // range for the root, update it:
                 let subset = root_range.contains(given_range)?;
-                self.graph[self.root].statistics = if subset == Interval::CERTAINLY_TRUE {
+                self.graph[self.root].dist = if subset == Interval::CERTAINLY_TRUE {
                     // Given statistics is strictly more informative, use it as is:
                     given_stats
                 } else {
                     // Intersecting ranges gives us a more precise range:
-                    StatisticsV2::new_from_interval(interval)?
+                    Distribution::new_from_interval(interval)?
                 };
             }
         } else {
@@ -180,15 +182,15 @@ impl ExprStatisticGraph {
             children.reverse();
             let children_stats = children
                 .iter()
-                .map(|child| self.graph[*child].statistics())
+                .map(|child| self.graph[*child].distribution())
                 .collect::<Vec<_>>();
-            let node_statistics = self.graph[node].statistics();
+            let node_statistics = self.graph[node].distribution();
             let propagated_statistics = self.graph[node]
                 .expr
                 .propagate_statistics(node_statistics, &children_stats)?;
             if let Some(propagated_stats) = propagated_statistics {
                 for (child_idx, stats) in children.into_iter().zip(propagated_stats) {
-                    self.graph[child_idx].statistics = stats;
+                    self.graph[child_idx].dist = stats;
                 }
             } else {
                 // The constraint is infeasible, report:
@@ -205,13 +207,13 @@ mod tests {
 
     use crate::expressions::{binary, try_cast, Column};
     use crate::intervals::cp_solver::PropagationResult;
-    use crate::statistics::stats_solver::ExprStatisticGraph;
+    use crate::statistics::stats_solver::ExprStatisticsGraph;
 
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr_common::interval_arithmetic::Interval;
     use datafusion_expr_common::operator::Operator;
-    use datafusion_expr_common::statistics::StatisticsV2;
+    use datafusion_expr_common::statistics::Distribution;
     use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
@@ -249,35 +251,35 @@ mod tests {
         let right = binary_expr(c, Operator::Minus, d, schema)?;
         let expr = binary_expr(left, Operator::Eq, right, schema)?;
 
-        let mut graph = ExprStatisticGraph::try_new(expr, schema)?;
+        let mut graph = ExprStatisticsGraph::try_new(expr, schema)?;
         // 2, 5 and 6 are BinaryExpr
         graph.assign_statistics(&[
             (
                 0usize,
-                StatisticsV2::new_uniform(Interval::make(Some(0.), Some(1.))?)?,
+                Distribution::new_uniform(Interval::make(Some(0.), Some(1.))?)?,
             ),
             (
                 1usize,
-                StatisticsV2::new_uniform(Interval::make(Some(0.), Some(2.))?)?,
+                Distribution::new_uniform(Interval::make(Some(0.), Some(2.))?)?,
             ),
             (
                 3usize,
-                StatisticsV2::new_uniform(Interval::make(Some(1.), Some(3.))?)?,
+                Distribution::new_uniform(Interval::make(Some(1.), Some(3.))?)?,
             ),
             (
                 4usize,
-                StatisticsV2::new_uniform(Interval::make(Some(1.), Some(5.))?)?,
+                Distribution::new_uniform(Interval::make(Some(1.), Some(5.))?)?,
             ),
         ]);
         let ev_stats = graph.evaluate_statistics()?;
         assert_eq!(
             ev_stats,
-            &StatisticsV2::new_bernoulli(ScalarValue::Float64(None))?
+            &Distribution::new_bernoulli(ScalarValue::Float64(None))?
         );
 
         let one = ScalarValue::new_one(&DataType::Float64)?;
         assert_eq!(
-            graph.propagate_statistics(StatisticsV2::new_bernoulli(one)?)?,
+            graph.propagate_statistics(Distribution::new_bernoulli(one)?)?,
             PropagationResult::Success
         );
         Ok(())

@@ -35,6 +35,7 @@ pub mod udf {
     #[allow(deprecated)]
     pub use crate::scalar_function::create_physical_expr;
 }
+pub mod statistics;
 pub mod utils;
 pub mod window;
 
