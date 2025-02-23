@@ -463,10 +463,10 @@ impl ParquetSource {
 impl FileSource for ParquetSource {
     fn create_file_opener(
         &self,
-        object_store: datafusion_common::Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
+    ) -> Arc<dyn FileOpener> {
         let projection = base_config
             .file_column_projection_indices()
             .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
@@ -475,17 +475,12 @@ impl FileSource for ParquetSource {
             .clone()
             .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
 
-        let parquet_file_reader_factory = self
-            .parquet_file_reader_factory
-            .as_ref()
-            .map(|f| Ok(Arc::clone(f)))
-            .unwrap_or_else(|| {
-                object_store.map(|store| {
-                    Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
-                })
-            })?;
+        let parquet_file_reader_factory =
+            self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
+                Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
+            });
 
-        Ok(Arc::new(ParquetOpener {
+        Arc::new(ParquetOpener {
             partition_index: partition,
             projection: Arc::from(projection),
             batch_size: self
@@ -504,7 +499,7 @@ impl FileSource for ParquetSource {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             schema_adapter_factory,
-        }))
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
