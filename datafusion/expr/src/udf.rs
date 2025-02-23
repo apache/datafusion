@@ -284,9 +284,7 @@ impl ScalarUDF {
 
     /// Return true if this function is an async function
     pub fn as_async(&self) -> Option<&AsyncScalarUDF> {
-        self.inner()
-            .as_any()
-            .downcast_ref::<AsyncScalarUDF>()
+        self.inner().as_any().downcast_ref::<AsyncScalarUDF>()
     }
 }
 
