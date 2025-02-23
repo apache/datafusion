@@ -57,3 +57,4 @@ doc-comment = { workspace = true }
 
 [features]
 integration-tests = []
+tarpaulin_include = [] # Exists only to prevent warnings on stable and still have accurate coverage
