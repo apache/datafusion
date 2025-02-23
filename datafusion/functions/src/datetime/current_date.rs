@@ -81,15 +81,18 @@ impl ScalarUDFImpl for CurrentDateFunc {
         Ok(Date32)
     }
 
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        internal_err!(
-            "invoke should not be called on a simplified current_date() function"
-        )
+   fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if !args.is_empty() {
+        return Err(DataFusionError::Execution(
+            "current_date() takes 0 arguments".to_string(),
+        ));
     }
+
+    let current_date = chrono::Utc::now().date_naive();
+    let epoch_days = current_date.num_days_from_ce() - 719163;
+    let array: ArrayRef = Arc::new(Date32Array::from_value(epoch_days, 1));
+    Ok(ColumnarValue::Array(array))
+}
 
     fn aliases(&self) -> &[String] {
         &self.aliases

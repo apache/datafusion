@@ -130,30 +130,33 @@ impl ScalarUDFImpl for ToDateFunc {
         Ok(Date32)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        if args.is_empty() {
-            return exec_err!("to_date function requires 1 or more arguments, got 0");
-        }
-
-        // validate that any args after the first one are Utf8
-        if args.len() > 1 {
-            validate_data_types(args, "to_date")?;
-        }
-
-        match args[0].data_type() {
-            Int32 | Int64 | Null | Float64 | Date32 | Date64 => {
-                args[0].cast_to(&Date32, None)
-            }
-            Utf8View | LargeUtf8 | Utf8 => self.to_date(args),
-            other => {
-                exec_err!("Unsupported data type {:?} for function to_date", other)
-            }
-        }
+    fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.is_empty() {
+        return Err(DataFusionError::Execution(
+            "to_date function requires 1 or more arguments, got 0".to_string(),
+        ));
     }
+
+    // Validate that any args after the first one are Utf8
+    if args.len() > 1 {
+        validate_data_types(args, "to_date")?;
+    }
+
+    match args[0].data_type() {
+        DataType::Int32
+        | DataType::Int64
+        | DataType::Null
+        | DataType::Float64
+        | DataType::Date32
+        | DataType::Date64 => args[0].cast_to(&DataType::Date32, None),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => self.to_date(args),
+        other => Err(DataFusionError::Execution(format!(
+            "Unsupported data type {:?} for function to_date",
+            other
+        ))),
+    }
+}
+
 
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()

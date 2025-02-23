@@ -160,12 +160,16 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let (granularity, array) = (&args[0], &args[1]);
+    fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() !=2 {
+        return Err(DataFusionError::Execution(format!(
+            "{} function requires 2 arguments, got {}",
+            self.name(),
+            args.len()
+        )));
+    }
+
+    let (granularity, array) = (&args[0], &args[1]);
 
         let granularity = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) =
             granularity

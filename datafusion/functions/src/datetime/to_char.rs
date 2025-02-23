@@ -135,32 +135,37 @@ impl ScalarUDFImpl for ToCharFunc {
         Ok(Utf8)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let [date_time, format] = take_function_args(self.name(), args)?;
+    fn fn invoke_with_args(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    if args.len() != 2 {
+        return Err(DataFusionError::Execution(format!(
+            "{} function requires 2 arguments, got {}",
+            self.name(),
+            args.len()
+        )));
+    }
 
-        match format {
-            ColumnarValue::Scalar(ScalarValue::Utf8(None))
-            | ColumnarValue::Scalar(ScalarValue::Null) => {
-                _to_char_scalar(date_time.clone(), None)
-            }
-            // constant format
-            ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
-                // invoke to_char_scalar with the known string, without converting to array
-                _to_char_scalar(date_time.clone(), Some(format))
-            }
-            ColumnarValue::Array(_) => _to_char_array(args),
-            _ => {
-                exec_err!(
-                    "Format for `to_char` must be non-null Utf8, received {:?}",
-                    format.data_type()
-                )
-            }
+    let [date_time, format] = args else {
+        return Err(DataFusionError::Internal("Expected 2 arguments".to_string()));
+    };
+
+    match format {
+        ColumnarValue::Scalar(ScalarValue::Utf8(None))
+        | ColumnarValue::Scalar(ScalarValue::Null) => {
+            _to_char_scalar(date_time.clone(), None)
+        }
+        ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
+            _to_char_scalar(date_time.clone(), Some(format))
+        }
+        ColumnarValue::Array(_) => _to_char_array(args),
+        _ => {
+            Err(DataFusionError::Execution(format!(
+                "Format for `to_char` must be non-null Utf8, received {:?}",
+                format.data_type()
+            )))
         }
     }
+}
+
 
     fn aliases(&self) -> &[String] {
         &self.aliases
