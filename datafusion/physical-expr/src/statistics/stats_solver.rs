@@ -209,7 +209,7 @@ mod tests {
     use crate::intervals::cp_solver::PropagationResult;
     use crate::statistics::stats_solver::ExprStatisticsGraph;
 
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr_common::interval_arithmetic::Interval;
     use datafusion_expr_common::operator::Operator;
