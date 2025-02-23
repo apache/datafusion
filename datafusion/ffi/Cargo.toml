@@ -45,6 +45,7 @@ async-trait = { workspace = true }
 datafusion = { workspace = true, default-features = false }
 datafusion-proto = { workspace = true }
 datafusion-proto-common = { workspace = true }
+datafusion-functions-aggregate-common = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 prost = { workspace = true }
