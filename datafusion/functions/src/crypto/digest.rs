@@ -76,8 +76,8 @@ impl DigestFunc {
                         Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
                     ]),
                     TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
                         Coercion::new_exact(TypeSignatureClass::Native(logical_binary())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
                     ]),
                 ],
                 Volatility::Immutable,
