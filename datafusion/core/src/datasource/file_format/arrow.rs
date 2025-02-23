@@ -296,13 +296,12 @@ impl Debug for ArrowFileSink {
 impl DisplayAs for ArrowFileSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(f, "ArrowFileSink(file_groups=",)?;
                 FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
                 write!(f, ")")
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "") // TODO(renjj): add display info
             }
         }
     }

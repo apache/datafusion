@@ -216,15 +216,14 @@ impl DisplayAs for RecursiveQueryExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(
                     f,
                     "RecursiveQueryExec: name={}, is_distinct={}",
                     self.name, self.is_distinct
                 )
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "") // TODO(renjj): add display info
             }
         }
     }

@@ -917,15 +917,14 @@ impl DisplayAs for UnboundedExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(
                     f,
                     "UnboundedExec: unbounded={}",
                     self.batch_produce.is_none(),
                 )
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "") // TODO(renjj): add display info
             }
         }
     }
@@ -1014,16 +1013,15 @@ impl DisplayAs for StatisticsExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(
                     f,
                     "StatisticsExec: col_count={}, row_count={:?}",
                     self.schema.fields().len(),
                     self.stats.num_rows,
                 )
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "") // TODO(renjj): add display info
             }
         }
     }

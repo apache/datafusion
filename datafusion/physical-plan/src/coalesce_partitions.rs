@@ -86,15 +86,14 @@ impl DisplayAs for CoalescePartitionsExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => match self.fetch {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => match self.fetch {
                 Some(fetch) => {
                     write!(f, "CoalescePartitionsExec: fetch={fetch}")
                 }
                 None => write!(f, "CoalescePartitionsExec"),
             },
-            DisplayFormatType::TreeRender => {
-                write!(f, "") // TODO(renjj): add display info
-            }
         }
     }
 }

@@ -135,11 +135,10 @@ impl DisplayAs for CustomExecutionPlan {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(f, "CustomExecutionPlan: projection={:#?}", self.projection)
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "") // TODO(renjj): add display info
             }
         }
     }

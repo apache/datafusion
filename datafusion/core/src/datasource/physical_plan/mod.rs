@@ -125,7 +125,7 @@ impl DisplayAs for FileGroupsDisplay<'_> {
         let groups = if n_groups == 1 { "group" } else { "groups" };
         write!(f, "{{{n_groups} {groups}: [")?;
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::TreeRender => {
                 // To avoid showing too many partitions
                 let max_groups = 5;
                 fmt_up_to_n_elements(self.0, max_groups, f, |group, f| {
@@ -136,9 +136,6 @@ impl DisplayAs for FileGroupsDisplay<'_> {
                 fmt_elements_split_by_commas(self.0.iter(), f, |group, f| {
                     FileGroupDisplay(group).fmt_as(t, f)
                 })?
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "")?; // TODO(renjj): add display info
             }
         }
         write!(f, "]}}")
@@ -158,7 +155,7 @@ impl DisplayAs for FileGroupDisplay<'_> {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
         write!(f, "[")?;
         match t {
-            DisplayFormatType::Default => {
+            DisplayFormatType::Default | DisplayFormatType::TreeRender => {
                 // To avoid showing too many files
                 let max_files = 5;
                 fmt_up_to_n_elements(self.0, max_files, f, |pf, f| {
@@ -177,9 +174,6 @@ impl DisplayAs for FileGroupDisplay<'_> {
                     }
                     Ok(())
                 })?
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "")?; // TODO(renjj): add display info
             }
         }
         write!(f, "]")

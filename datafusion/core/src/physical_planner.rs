@@ -2736,11 +2736,10 @@ mod tests {
     impl DisplayAs for NoOpExecutionPlan {
         fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
             match t {
-                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                DisplayFormatType::Default
+                | DisplayFormatType::Verbose
+                | DisplayFormatType::TreeRender => {
                     write!(f, "NoOpExecutionPlan")
-                }
-                DisplayFormatType::TreeRender => {
-                    write!(f, "") // TODO(renjj): add display info
                 }
             }
         }

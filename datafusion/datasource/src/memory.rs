@@ -388,7 +388,9 @@ impl DataSource for MemorySourceConfig {
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 let partition_sizes: Vec<_> =
                     self.partitions.iter().map(|b| b.len()).collect();
 
@@ -425,7 +427,6 @@ impl DataSource for MemorySourceConfig {
                     )
                 }
             }
-            DisplayFormatType::TreeRender => todo!(),
         }
     }
 

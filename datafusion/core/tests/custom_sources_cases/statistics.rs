@@ -133,16 +133,15 @@ impl DisplayAs for StatisticsValidation {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(
                     f,
                     "StatisticsValidation: col_count={}, row_count={:?}",
                     self.schema.fields().len(),
                     self.stats.num_rows,
                 )
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "") // TODO(renjj): add display info
             }
         }
     }

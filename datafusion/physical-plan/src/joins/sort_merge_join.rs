@@ -351,7 +351,9 @@ impl SortMergeJoinExec {
 impl DisplayAs for SortMergeJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 let on = self
                     .on
                     .iter()
@@ -368,9 +370,6 @@ impl DisplayAs for SortMergeJoinExec {
                         f.expression()
                     ))
                 )
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "") // TODO(renjj): add display info
             }
         }
     }

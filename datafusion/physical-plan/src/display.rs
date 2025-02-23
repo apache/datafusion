@@ -600,15 +600,17 @@ impl TreeRenderVisitor<'_, '_> {
 
         // Render the actual node.
         for render_y in 0..=extra_height {
-            for (x, node) in root.nodes.iter().enumerate().take(root.width) {
+            for (x, _) in root.nodes.iter().enumerate().take(root.width) {
                 if x * Self::NODE_RENDER_WIDTH >= Self::MAXIMUM_RENDER_WIDTH {
                     break;
                 }
 
-                let has_adjacent_nodes =
-                    (0..root.width - x).any(|i| root.has_node(x + i, y));
+                let mut has_adjacent_nodes = false;
+                for i in 0..(root.width - x) {
+                    has_adjacent_nodes = has_adjacent_nodes || root.has_node(x + i, y);
+                }
 
-                if let Some(node) = node {
+                if let Some(node) = root.get_node(x, y) {
                     write!(self.f, "{}", Self::VERTICAL)?;
 
                     // Rigure out what to render.

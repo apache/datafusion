@@ -724,7 +724,9 @@ impl DisplayAs for AggregateExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
                 let g: Vec<String> = if self.group_by.is_single() {
                     self.group_by
@@ -788,9 +790,6 @@ impl DisplayAs for AggregateExec {
                 if self.input_order_mode != InputOrderMode::Linear {
                     write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
                 }
-            }
-            DisplayFormatType::TreeRender => {
-                write!(f, "")?; // TODO(renjj): add display info
             }
         }
         Ok(())
@@ -1797,11 +1796,10 @@ mod tests {
             f: &mut std::fmt::Formatter,
         ) -> std::fmt::Result {
             match t {
-                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                DisplayFormatType::Default
+                | DisplayFormatType::Verbose
+                | DisplayFormatType::TreeRender => {
                     write!(f, "TestYieldingExec")
-                }
-                DisplayFormatType::TreeRender => {
-                    write!(f, "") // TODO(renjj): add display info
                 }
             }
         }
