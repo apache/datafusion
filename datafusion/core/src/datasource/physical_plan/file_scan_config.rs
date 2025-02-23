@@ -277,6 +277,11 @@ impl DataSource for FileScanConfig {
             file_scan.new_exec() as _
         }))
     }
+
+    fn collect_info(&self) -> HashMap<String, String> {
+        // TODO: collect explain info
+        HashMap::new()
+    }
 }
 
 impl FileScanConfig {

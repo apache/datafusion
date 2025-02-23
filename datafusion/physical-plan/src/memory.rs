@@ -18,6 +18,7 @@
 //! Execution plan for reading in-memory batches of data
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -434,6 +435,34 @@ impl DataSource for MemorySourceConfig {
                 write!(f, "") // TODO(renjj): add display info
             }
         }
+    }
+
+    fn collect_info(&self) -> HashMap<String, String> {
+        let mut result = HashMap::new();
+
+        let partition_sizes: Vec<_> = self.partitions.iter().map(|b| b.len()).collect();
+        result.insert(
+            "partition_sizes".to_string(),
+            format!("{:?}", partition_sizes),
+        );
+
+        if let Some(output_ordering) = self.sort_information.first() {
+            result.insert("output_ordering".to_string(), output_ordering.to_string());
+        }
+
+        let eq_properties = self.eq_properties();
+        let constraints = eq_properties.constraints();
+        if !constraints.is_empty() {
+            result.insert("constraints".to_string(), constraints.to_string());
+        }
+
+        if let Some(limit) = self.fetch {
+            result.insert("fetch".to_string(), limit.to_string());
+        }
+
+        result.insert("partitions".to_string(), partition_sizes.len().to_string());
+
+        result
     }
 
     fn output_partitioning(&self) -> Partitioning {
