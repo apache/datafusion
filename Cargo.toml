@@ -159,6 +159,8 @@ url = "2.5.4"
 [profile.release]
 codegen-units = 1
 lto = true
+debug = false
+strip = true
 
 # the release profile takes a long time to build so we can use this profile during development to save time
 # cargo build --profile release-nonlto
@@ -173,6 +175,7 @@ opt-level = 3
 overflow-checks = false
 panic = 'unwind'
 rpath = false
+strip = true
 
 [profile.ci]
 inherits = "dev"
