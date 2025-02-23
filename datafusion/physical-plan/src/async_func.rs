@@ -35,10 +35,8 @@ use log::trace;
 use std::any::Any;
 use std::sync::Arc;
 
-/// This structure evaluates  a set of async expressions on a record
+/// This structure evaluates a set of async expressions on a record
 /// batch producing a new record batch
-///
-/// This is similar to a ProjectionExec except that the functions can be async
 ///
 /// The schema of the output of the AsyncFuncExec is:
 /// Input columns followed by one column for each async expression
@@ -47,7 +45,6 @@ pub struct AsyncFuncExec {
     /// The async expressions to evaluate
     async_exprs: Vec<Arc<AsyncFuncExpr>>,
     input: Arc<dyn ExecutionPlan>,
-    /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: PlanProperties,
     metrics: ExecutionPlanMetricsSet,
 }

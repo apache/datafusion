@@ -29,7 +29,7 @@ use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-/// Wrapper for a Async function that can be used in a DataFusion query
+/// Wrapper around a scalar function that can be evaluated asynchronously
 #[derive(Debug, Clone, Eq)]
 pub struct AsyncFuncExpr {
     /// The name of the output column this function will generate
@@ -206,7 +206,7 @@ impl PhysicalExpr for AsyncFuncExpr {
     }
 
     fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
-        // TODO: implement this
+        // TODO: implement this for scalar value input
         not_impl_err!("AsyncFuncExpr.evaluate")
     }
 
