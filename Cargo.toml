@@ -161,6 +161,7 @@ codegen-units = 1
 lto = true
 debug = false
 strip = true
+panic = "abort"
 
 # the release profile takes a long time to build so we can use this profile during development to save time
 # cargo build --profile release-nonlto
