@@ -26,6 +26,7 @@ use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::{listing::PartitionedFile, object_store::ObjectStoreUrl};
 use crate::{error::Result, scalar::ScalarValue};
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::{fmt, sync::Arc};
 
