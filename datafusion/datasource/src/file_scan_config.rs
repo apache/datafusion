@@ -994,7 +994,7 @@ fn get_projected_output_ordering(
     all_orderings
 }
 
-/// Convert type to a type suitable for use as a [`ListingTable`]
+/// Convert type to a type suitable for use as a `ListingTable`
 /// partition column. Returns `Dictionary(UInt16, val_type)`, which is
 /// a reasonable trade off between a reasonable number of partition
 /// values and space efficiency.
@@ -1004,8 +1004,6 @@ fn get_projected_output_ordering(
 /// different dictionary type.
 ///
 /// Use [`wrap_partition_value_in_dict`] to wrap a [`ScalarValue`] in the same say.
-///
-/// [`ListingTable`]: crate::datasource::listing::ListingTable
 pub fn wrap_partition_type_in_dict(val_type: DataType) -> DataType {
     DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val_type))
 }
