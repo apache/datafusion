@@ -174,7 +174,7 @@ inherits = "release"
 lto = false
 opt-level = 3
 overflow-checks = false
-panic = 'unwind'
+panic = 'abort'
 rpath = false
 strip = true
 
