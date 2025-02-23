@@ -237,16 +237,16 @@ impl OrderingEquivalenceClass {
         None
     }
 
-    /// Checks whether the given expression remains constant across all variations of [SortOptions].
+    /// Checks whether the given expression remains constant across all variations of [`SortOptions`].
     ///
     /// This function determines if `expr` appears with every possible combination of `descending`
     /// and `nulls_first` options. If `expr` meets this condition, it is effectively constant.
     ///
-    /// We primarily use [ConstExpr] to represent globally constant expressions. However, if an
+    /// We primarily use `ConstExpr` to represent globally constant expressions. However, if an
     /// expression is only constant within secondary ordering constraints, this function helps
     /// identify such cases.
     ///
-    /// TODO: If [SortOptions] eventually supports encoding constantness information, this function
+    /// TODO: If [`SortOptions`] eventually supports encoding constantness information, this function
     ///       may become obsolete.
     pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         let mut variants =
