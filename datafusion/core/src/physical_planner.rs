@@ -799,6 +799,11 @@ impl DefaultPhysicalPlanner {
                             Arc::clone(&runtime_expr[0]),
                             Arc::new(async_exec),
                         )?
+                        // project the output columns excluding the async functions
+                        // The async functions are always appended to the end of the schema.
+                        .with_projection(Some(
+                            (0..input.schema().fields().len()).collect(),
+                        ))?
                     }
                     _ => {
                         return internal_err!(
