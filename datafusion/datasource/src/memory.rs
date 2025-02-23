@@ -389,42 +389,42 @@ impl DataSource for MemorySourceConfig {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                        let partition_sizes: Vec<_> =
-                            self.partitions.iter().map(|b| b.len()).collect();
+                let partition_sizes: Vec<_> =
+                    self.partitions.iter().map(|b| b.len()).collect();
 
-                        let output_ordering = self
-                            .sort_information
-                            .first()
-                            .map(|output_ordering| {
-                                format!(", output_ordering={}", output_ordering)
-                            })
-                            .unwrap_or_default();
+                let output_ordering = self
+                    .sort_information
+                    .first()
+                    .map(|output_ordering| {
+                        format!(", output_ordering={}", output_ordering)
+                    })
+                    .unwrap_or_default();
 
-                        let eq_properties = self.eq_properties();
-                        let constraints = eq_properties.constraints();
-                        let constraints = if constraints.is_empty() {
-                            String::new()
-                        } else {
-                            format!(", {}", constraints)
-                        };
+                let eq_properties = self.eq_properties();
+                let constraints = eq_properties.constraints();
+                let constraints = if constraints.is_empty() {
+                    String::new()
+                } else {
+                    format!(", {}", constraints)
+                };
 
-                        let limit = self
-                            .fetch
-                            .map_or(String::new(), |limit| format!(", fetch={}", limit));
-                        if self.show_sizes {
-                            write!(
+                let limit = self
+                    .fetch
+                    .map_or(String::new(), |limit| format!(", fetch={}", limit));
+                if self.show_sizes {
+                    write!(
                                 f,
                                 "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
                                 partition_sizes.len(),
                             )
-                        } else {
-                            write!(
-                                f,
-                                "partitions={}{limit}{output_ordering}{constraints}",
-                                partition_sizes.len(),
-                            )
-                        }
-                    }
+                } else {
+                    write!(
+                        f,
+                        "partitions={}{limit}{output_ordering}{constraints}",
+                        partition_sizes.len(),
+                    )
+                }
+            }
             DisplayFormatType::TreeRender => todo!(),
         }
     }
