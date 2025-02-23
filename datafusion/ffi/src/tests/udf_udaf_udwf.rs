@@ -19,7 +19,7 @@ use crate::{udaf::FFI_AggregateUDF, udf::FFI_ScalarUDF, udtf::FFI_TableFunction}
 use datafusion::{
     catalog::TableFunctionImpl,
     functions::math::{abs::AbsFunc, random::RandomFunc},
-    functions_aggregate::sum::Sum,
+    functions_aggregate::{stddev::Stddev, sum::Sum},
     functions_table::generate_series::RangeFunc,
     logical_expr::{AggregateUDF, ScalarUDF},
 };
@@ -46,6 +46,12 @@ pub(crate) extern "C" fn create_ffi_table_func() -> FFI_TableFunction {
 
 pub(crate) extern "C" fn create_ffi_avg_func() -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Sum::new().into());
+
+    udaf.into()
+}
+
+pub(crate) extern "C" fn create_ffi_stddev_func() -> FFI_AggregateUDF {
+    let udaf: Arc<AggregateUDF> = Arc::new(Stddev::new().into());
 
     udaf.into()
 }
