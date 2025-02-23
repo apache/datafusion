@@ -57,20 +57,19 @@ impl AsyncFuncExec {
         async_exprs: Vec<Arc<AsyncFuncExpr>>,
         input: Arc<dyn ExecutionPlan>,
     ) -> Result<Self> {
-
-        let async_fields = async_exprs.iter().map(|async_expr| {
-           async_expr.field(input.schema().as_ref())
-        }).collect::<Result<Vec<_>>>()?;
+        let async_fields = async_exprs
+            .iter()
+            .map(|async_expr| async_expr.field(input.schema().as_ref()))
+            .collect::<Result<Vec<_>>>()?;
 
         // compute the output schema: input schema then async expressions
-        let fields: Fields =
-            input
-                .schema()
-                .fields()
-                .iter()
-                .cloned()
-                .chain(async_fields.into_iter().map(Arc::new))
-                .collect();
+        let fields: Fields = input
+            .schema()
+            .fields()
+            .iter()
+            .cloned()
+            .chain(async_fields.into_iter().map(Arc::new))
+            .collect();
 
         let schema = Arc::new(Schema::new(fields));
         let tuples = async_exprs
@@ -244,11 +243,15 @@ impl AsyncMapper {
     ) -> Result<()> {
         // recursively look for references to async functions
         physical_expr.apply(|expr| {
-            if let Some(scalar_func_expr) = expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
+            if let Some(scalar_func_expr) =
+                expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+            {
                 if scalar_func_expr.fun().as_async().is_some() {
                     let next_name = self.next_column_name();
-                    self.async_exprs
-                        .push(Arc::new(AsyncFuncExpr::try_new(next_name, Arc::clone(expr))?));
+                    self.async_exprs.push(Arc::new(AsyncFuncExpr::try_new(
+                        next_name,
+                        Arc::clone(expr),
+                    )?));
                 }
             }
             Ok(TreeNodeRecursion::Continue)
@@ -266,15 +269,13 @@ impl AsyncMapper {
             self.async_exprs
                 .iter()
                 .enumerate()
-                .find_map(
-                    |(idx, async_expr)| {
-                        if async_expr.func == Arc::clone(&expr) {
-                            Some(idx)
-                        } else {
-                            None
-                        }
-                    },
-                )
+                .find_map(|(idx, async_expr)| {
+                    if async_expr.func == Arc::clone(&expr) {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                })
         else {
             return Transformed::no(expr);
         };

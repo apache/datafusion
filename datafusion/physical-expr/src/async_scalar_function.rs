@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
 use crate::ScalarFunctionExpr;
 use arrow::array::{make_array, MutableArrayData, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -25,6 +24,7 @@ use datafusion_common::{internal_err, not_impl_err};
 use datafusion_expr::async_udf::{AsyncScalarFunctionArgs, AsyncScalarUDF};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use std::any::Any;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -60,14 +60,12 @@ impl Hash for AsyncFuncExpr {
 impl AsyncFuncExpr {
     /// create a new AsyncFuncExpr
     pub fn try_new(name: impl Into<String>, func: Arc<dyn PhysicalExpr>) -> Result<Self> {
-
-       let Some(_) = func.as_any().downcast_ref::<ScalarFunctionExpr>() else {
+        let Some(_) = func.as_any().downcast_ref::<ScalarFunctionExpr>() else {
             return internal_err!(
                 "unexpected function type, expected ScalarFunctionExpr, got: {:?}",
                 func
             );
         };
-
 
         Ok(Self {
             name: name.into(),
@@ -216,7 +214,10 @@ impl PhysicalExpr for AsyncFuncExpr {
         self.func.children()
     }
 
-    fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> {
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         let new_func = Arc::clone(&self.func).with_new_children(children)?;
         Ok(Arc::new(AsyncFuncExpr {
             name: self.name.clone(),

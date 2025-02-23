@@ -779,12 +779,39 @@ impl DefaultPhysicalPlanner {
 
                 let runtime_expr =
                     self.create_physical_expr(predicate, input_dfschema, session_state)?;
+
+                let filter = match self.try_plan_async_exprs(
+                    input.schema().fields().len(),
+                    PlannedExprResult::Expr(vec![runtime_expr]),
+                )? {
+                    PlanAsyncExpr::Sync(PlannedExprResult::Expr(runtime_expr)) => {
+                        FilterExec::try_new(Arc::clone(&runtime_expr[0]), physical_input)?
+                    }
+                    PlanAsyncExpr::Async(
+                        async_map,
+                        PlannedExprResult::Expr(runtime_expr),
+                    ) => {
+                        let async_exec = AsyncFuncExec::try_new(
+                            async_map.async_exprs,
+                            physical_input,
+                        )?;
+                        FilterExec::try_new(
+                            Arc::clone(&runtime_expr[0]),
+                            Arc::new(async_exec),
+                        )?
+                    }
+                    _ => {
+                        return internal_err!(
+                            "Unexpected result from try_plan_async_exprs"
+                        )
+                    }
+                };
+
                 let selectivity = session_state
                     .config()
                     .options()
                     .optimizer
                     .default_filter_selectivity;
-                let filter = FilterExec::try_new(runtime_expr, physical_input)?;
                 Arc::new(filter.with_default_selectivity(selectivity)?)
             }
             LogicalPlan::Repartition(Repartition {
@@ -2047,33 +2074,86 @@ impl DefaultPhysicalPlanner {
             .collect::<Result<Vec<_>>>()?;
 
         let num_input_columns = input_exec.schema().fields().len();
-        let mut async_map = AsyncMapper::new(num_input_columns);
-        physical_exprs
-            .iter()
-            .try_for_each(|(expr, _column_name)| async_map.find_references(expr))?;
 
-        // If there are no async expressions, we can create a ProjectionExec
-        if async_map.is_empty() {
-            return Ok(Arc::new(ProjectionExec::try_new(
-                physical_exprs,
-                input_exec,
-            )?));
+        match self.try_plan_async_exprs(
+            num_input_columns,
+            PlannedExprResult::ExprWithName(physical_exprs),
+        )? {
+            PlanAsyncExpr::Sync(PlannedExprResult::ExprWithName(physical_exprs)) => Ok(
+                Arc::new(ProjectionExec::try_new(physical_exprs, input_exec)?),
+            ),
+            PlanAsyncExpr::Async(
+                async_map,
+                PlannedExprResult::ExprWithName(physical_exprs),
+            ) => {
+                let async_exec =
+                    AsyncFuncExec::try_new(async_map.async_exprs, input_exec)?;
+                let new_proj_exec =
+                    ProjectionExec::try_new(physical_exprs, Arc::new(async_exec))?;
+                Ok(Arc::new(new_proj_exec))
+            }
+            _ => internal_err!("Unexpected PlanAsyncExpressions variant"),
+        }
+    }
+
+    fn try_plan_async_exprs(
+        &self,
+        num_input_columns: usize,
+        physical_expr: PlannedExprResult,
+    ) -> Result<PlanAsyncExpr> {
+        let mut async_map = AsyncMapper::new(num_input_columns);
+        match &physical_expr {
+            PlannedExprResult::ExprWithName(exprs) => {
+                exprs
+                    .iter()
+                    .try_for_each(|(expr, _)| async_map.find_references(expr))?;
+            }
+            PlannedExprResult::Expr(exprs) => {
+                exprs
+                    .iter()
+                    .try_for_each(|expr| async_map.find_references(expr))?;
+            }
         }
 
-        // rewrite the projection's expressions in terms of the columns with the result of async evaluation
-        let new_exprs = physical_exprs
-            .iter()
-            .map(|(expr, column_name)| {
-                let new_expr =
-                    Arc::clone(expr).transform_up(|e| Ok(async_map.map_expr(e)))?;
-                Ok((new_expr.data, column_name.to_string()))
-            })
-            .collect::<Result<_>>()?;
+        if async_map.is_empty() {
+            return Ok(PlanAsyncExpr::Sync(physical_expr));
+        }
 
-        let async_exec = AsyncFuncExec::try_new(async_map.async_exprs, input_exec)?;
-        let new_proj_exec = ProjectionExec::try_new(new_exprs, Arc::new(async_exec))?;
-        Ok(Arc::new(new_proj_exec))
+        let new_exprs = match physical_expr {
+            PlannedExprResult::ExprWithName(exprs) => PlannedExprResult::ExprWithName(
+                exprs
+                    .iter()
+                    .map(|(expr, column_name)| {
+                        let new_expr = Arc::clone(expr)
+                            .transform_up(|e| Ok(async_map.map_expr(e)))?;
+                        Ok((new_expr.data, column_name.to_string()))
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+            PlannedExprResult::Expr(exprs) => PlannedExprResult::Expr(
+                exprs
+                    .iter()
+                    .map(|expr| {
+                        let new_expr = Arc::clone(expr)
+                            .transform_up(|e| Ok(async_map.map_expr(e)))?;
+                        Ok(new_expr.data)
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+        };
+        // rewrite the projection's expressions in terms of the columns with the result of async evaluation
+        Ok(PlanAsyncExpr::Async(async_map, new_exprs))
     }
+}
+
+enum PlannedExprResult {
+    ExprWithName(Vec<(Arc<dyn PhysicalExpr>, String)>),
+    Expr(Vec<Arc<dyn PhysicalExpr>>),
+}
+
+enum PlanAsyncExpr {
+    Sync(PlannedExprResult),
+    Async(AsyncMapper, PlannedExprResult),
 }
 
 fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
