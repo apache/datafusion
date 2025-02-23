@@ -1913,6 +1913,7 @@ dependencies = [
  "bytes",
  "bzip2 0.5.1",
  "chrono",
+ "datafusion",
  "datafusion-catalog",
  "datafusion-common",
  "datafusion-common-runtime",

@@ -24,6 +24,8 @@
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
+pub mod display;
+pub mod file;
 pub mod file_compression_type;
 pub mod file_groups;
 pub mod file_meta;
@@ -32,6 +34,9 @@ pub mod file_sink_config;
 pub mod file_stream;
 pub mod memory;
 pub mod source;
+mod statistics;
+#[cfg(test)]
+mod test_util;
 pub mod url;
 pub mod write;
 use chrono::TimeZone;

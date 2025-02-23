@@ -31,6 +31,8 @@ version.workspace = true
 all-features = true
 
 [features]
+# Temporary feature while I move things around
+avro = []
 compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
 
@@ -69,6 +71,7 @@ xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
+datafusion = { workspace = true, default-features = true }
 tempfile = { workspace = true }
 
 [lints]
