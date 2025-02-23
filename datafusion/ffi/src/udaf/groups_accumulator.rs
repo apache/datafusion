@@ -457,53 +457,67 @@ impl From<FFI_EmitTo> for EmitTo {
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{make_array, Array, Float64Array};
+    use arrow::array::{make_array, Array, BooleanArray};
     use datafusion::{
         common::create_array,
         error::Result,
-        functions_aggregate::stddev::StddevGroupsAccumulator,
         logical_expr::{EmitTo, GroupsAccumulator},
-        physical_plan::expressions::StatsType,
     };
+    use datafusion_functions_aggregate_common::aggregate::groups_accumulator::bool_op::BooleanGroupsAccumulator;
 
     use super::{FFI_EmitTo, FFI_GroupsAccumulator, ForeignGroupsAccumulator};
 
     #[test]
     fn test_foreign_avg_accumulator() -> Result<()> {
         let boxed_accum: Box<dyn GroupsAccumulator> =
-            Box::new(StddevGroupsAccumulator::new(StatsType::Population));
+            Box::new(BooleanGroupsAccumulator::new(|a, b| a && b, true));
         let ffi_accum: FFI_GroupsAccumulator = boxed_accum.into();
         let mut foreign_accum: ForeignGroupsAccumulator = ffi_accum.into();
 
         // Send in an array to evaluate. We want a mean of 30 and standard deviation of 4.
-        let values = create_array!(Float64, vec![26., 26., 34., 34., 0.0]);
-        let opt_filter = create_array!(Boolean, vec![true, true, true, true, false]);
-        foreign_accum.update_batch(&[values], &[0; 5], Some(opt_filter.as_ref()), 1)?;
+        let values = create_array!(Boolean, vec![true, true, true, false, true, true]);
+        let opt_filter =
+            create_array!(Boolean, vec![true, true, true, true, false, false]);
+        foreign_accum.update_batch(
+            &[values],
+            &[0, 0, 1, 1, 2, 2],
+            Some(opt_filter.as_ref()),
+            3,
+        )?;
 
-        let groups_avg = foreign_accum.evaluate(EmitTo::All)?;
-        let groups_avg = groups_avg.as_any().downcast_ref::<Float64Array>().unwrap();
-        let expected = 4.0;
-        assert_eq!(groups_avg.len(), 1);
-        assert!((groups_avg.value(0) - expected).abs() < 0.0001);
+        let groups_bool = foreign_accum.evaluate(EmitTo::All)?;
+        let groups_bool = groups_bool.as_any().downcast_ref::<BooleanArray>().unwrap();
+
+        assert_eq!(
+            groups_bool,
+            create_array!(Boolean, vec![Some(true), Some(false), None]).as_ref()
+        );
 
         let state = foreign_accum.state(EmitTo::All)?;
-        assert_eq!(state.len(), 3);
+        assert_eq!(state.len(), 1);
 
         // To verify merging batches works, create a second state to add in
         // This should cause our average to go down to 25.0
-        let second_states = vec![
-            make_array(create_array!(UInt64, vec![1]).to_data()),
-            make_array(create_array!(Float64, vec![30.0]).to_data()),
-            make_array(create_array!(Float64, vec![64.0]).to_data()),
-        ];
+        let second_states =
+            vec![make_array(create_array!(Boolean, vec![false]).to_data())];
 
         let opt_filter = create_array!(Boolean, vec![true]);
         foreign_accum.merge_batch(&second_states, &[0], Some(opt_filter.as_ref()), 1)?;
-        let avg = foreign_accum.evaluate(EmitTo::All)?;
-        assert_eq!(avg.len(), 1);
+        let groups_bool = foreign_accum.evaluate(EmitTo::All)?;
+        assert_eq!(groups_bool.len(), 1);
         assert_eq!(
-            avg.as_ref(),
-            make_array(create_array!(Float64, vec![8.0]).to_data()).as_ref()
+            groups_bool.as_ref(),
+            make_array(create_array!(Boolean, vec![false]).to_data()).as_ref()
+        );
+
+        let values = create_array!(Boolean, vec![false]);
+        let opt_filter = create_array!(Boolean, vec![true]);
+        let groups_bool =
+            foreign_accum.convert_to_state(&[values], Some(opt_filter.as_ref()))?;
+
+        assert_eq!(
+            groups_bool[0].as_ref(),
+            make_array(create_array!(Boolean, vec![false]).to_data()).as_ref()
         );
 
         Ok(())
