@@ -167,16 +167,13 @@ panic = "abort"
 # cargo build --profile release-nonlto
 [profile.release-nonlto]
 codegen-units = 16
-debug = false
 debug-assertions = false
 incremental = false
 inherits = "release"
 lto = false
 opt-level = 3
 overflow-checks = false
-panic = 'abort'
 rpath = false
-strip = true
 
 [profile.ci]
 inherits = "dev"
