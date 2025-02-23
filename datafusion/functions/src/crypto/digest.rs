@@ -19,7 +19,7 @@
 use super::basic::{digest, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    types::{logical_binary, logical_string},
+    types::{logical_binary, logical_string, NativeType},
     Result,
 };
 use datafusion_expr::{
@@ -69,17 +69,17 @@ impl Default for DigestFunc {
 impl DigestFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                    ]),
-                    TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_binary())),
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                    ]),
-                ],
+            signature: Signature::new(
+                TypeSignature::Coercible(vec![
+                    // First argument: Accepts string types and can coerce from binary
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        vec![TypeSignatureClass::Native(logical_binary())],
+                        NativeType::String,
+                    ),
+                    // Second argument: Only accepts string types, no coercion from binary
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ]),
                 Volatility::Immutable,
             ),
         }
