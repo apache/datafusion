@@ -183,9 +183,6 @@ fn pushdown_requirement_to_children(
         let required_input_ordering = plan.required_input_ordering();
         let request_child = required_input_ordering[0].clone().unwrap_or_default();
         let child_plan = plan.children().swap_remove(0);
-        let avoid_pushdown = !plan
-            .equivalence_properties()
-            .ordering_satisfy_requirement(parent_required);
 
         match determine_children_requirement(parent_required, &request_child, child_plan)
         {
@@ -194,21 +191,17 @@ fn pushdown_requirement_to_children(
                     .then(|| LexRequirement::new(request_child.to_vec()));
                 Ok(Some(vec![req]))
             }
-            RequirementsCompatibility::Compatible(mut adjusted) => {
+            RequirementsCompatibility::Compatible(adjusted) => {
+                // If parent requirements are more specific than output ordering of the window plan,
+                // then we can deduce that parent expects an ordering from the columns constructed
+                // by the window functions. If that's the case, we block the pushdown of sort operation.
+                let avoid_pushdown = !plan
+                    .equivalence_properties()
+                    .ordering_satisfy_requirement(parent_required);
                 if avoid_pushdown {
                     return Ok(None);
                 }
-                adjusted = adjusted.map(|adj| {
-                    let mut new = adj.to_vec();
-                    new.retain(|req| {
-                        req.expr
-                            .as_any()
-                            .downcast_ref::<Column>()
-                            .map(|col| col.index() < child_plan.schema().fields().len())
-                            .unwrap_or(true)
-                    });
-                    LexRequirement::new(new)
-                });
+
                 Ok(Some(vec![adjusted]))
             }
             RequirementsCompatibility::NonCompatible => Ok(None),
