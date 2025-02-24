@@ -35,7 +35,7 @@ pub fn gen_string_array(
     let rng_ref = &mut rng;
 
     let corpus = "DataFusionДатаФусион数据融合📊🔥"; // includes utf8 encoding with 1~4 bytes
-    let corpus_char_count = corpus.chars().count();
+    let corpus = corpus.chars().collect::<Vec<_>>();
 
     let mut output_string_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     for _ in 0..n_rows {
@@ -46,8 +46,7 @@ pub fn gen_string_array(
             // Generate random UTF8 string
             let mut generated_string = String::with_capacity(str_len_chars);
             for _ in 0..str_len_chars {
-                let idx = rng_ref.gen_range(0..corpus_char_count);
-                let char = corpus.chars().nth(idx).unwrap();
+                let char = corpus[rng_ref.gen_range(0..corpus.len())];
                 generated_string.push(char);
             }
             output_string_vec.push(Some(generated_string));

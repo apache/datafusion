@@ -27,7 +27,7 @@ use datafusion_physical_plan::{collect, ExecutionPlan};
 
 use criterion::async_executor::FuturesExecutor;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_physical_plan::memory::MemorySourceConfig;
+use datafusion_datasource::memory::MemorySourceConfig;
 
 fn generate_spm_for_round_robin_tie_breaker(
     has_same_value: bool,

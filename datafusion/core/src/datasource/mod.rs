@@ -36,6 +36,8 @@ mod statistics;
 pub mod stream;
 pub mod view;
 
+pub use datafusion_datasource::source;
+
 // backwards compatibility
 pub use self::default_table_source::{
     provider_as_source, source_as_provider, DefaultTableSource,
