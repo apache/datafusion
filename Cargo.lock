@@ -1952,6 +1952,7 @@ dependencies = [
  "datafusion-proto",
  "env_logger",
  "futures",
+ "itertools 0.14.0",
  "log",
  "mimalloc",
  "nix",

@@ -19,7 +19,7 @@ use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
 use std::sync::{Arc, Mutex};
 
-use arrow_array::{ArrayRef, StringArray, UInt64Array};
+use arrow::array::{ArrayRef, StringArray, UInt64Array};
 use async_trait::async_trait;
 use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};

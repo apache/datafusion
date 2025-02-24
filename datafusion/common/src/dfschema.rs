@@ -114,8 +114,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 /// To build a schema with metadata columns, use [DFSchema::new_with_metadata]:
 /// ```rust
 /// use datafusion_common::{DFSchema, Column, TableReference};
-/// use arrow_schema::{Field, Schema};
-/// use arrow::datatypes::DataType;
+/// use arrow::datatypes::{DataType, Field, Schema};
 /// use std::collections::HashMap;
 ///
 /// let schema = Schema::new(vec![
@@ -233,8 +232,7 @@ impl QualifiedSchema {
     /// ```rust
     /// use std::sync::Arc;
     /// use datafusion_common::{QualifiedSchema, TableReference};
-    /// use arrow_schema::{Field, Schema};
-    /// use arrow::datatypes::DataType;
+    /// use arrow::datatypes::{DataType, Field, Schema};
     /// let schema = Arc::new(Schema::new(vec![
     ///    Field::new("c1", DataType::Int32, false),
     /// ]));
@@ -388,8 +386,7 @@ impl QualifiedSchema {
     ///
     /// ```rust
     /// use datafusion_common::{DFSchema, QualifiedSchema, TableReference};
-    /// use arrow_schema::{Field, Schema};
-    /// use arrow::datatypes::DataType;
+    /// use arrow::datatypes::{DataType, Field, Schema};
     /// use std::sync::Arc;
     ///
     /// let schema1 = QualifiedSchema::new_with_table(
@@ -436,8 +433,7 @@ impl QualifiedSchema {
     ///
     /// ```
     /// use datafusion_common::{DFSchema, QualifiedSchema, TableReference};
-    /// use arrow_schema::{Field, Schema};
-    /// use arrow::datatypes::DataType;
+    /// use arrow::datatypes::{DataType, Field, Schema};
     /// use std::sync::Arc;
     ///
     /// let mut schema1 = QualifiedSchema::new_with_table(
