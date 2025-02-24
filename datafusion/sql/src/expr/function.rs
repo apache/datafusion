@@ -217,7 +217,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.
         let is_function_window = over.is_some();
-        let sql_parser_span = name.0[0].span.clone();
+        let sql_parser_span = name.0[0].span;
         let name = if name.0.len() > 1 {
             // DF doesn't handle compound identifiers
             // (e.g. "foo.bar") for function names yet
