@@ -97,16 +97,12 @@ impl ScalarUDFImpl for RightFunc {
         utf8_to_str_type(&arg_types[0], "right")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args[0].data_type() {
             DataType::Utf8 | DataType::Utf8View => {
-                make_scalar_function(right::<i32>, vec![])(args)
+                make_scalar_function(right::<i32>, vec![])(args.args())
             }
-            DataType::LargeUtf8 => make_scalar_function(right::<i64>, vec![])(args),
+            DataType::LargeUtf8 => make_scalar_function(right::<i64>, vec![])(args.args()),
             other => exec_err!(
                 "Unsupported data type {other:?} for function right,\
             expected Utf8View, Utf8 or LargeUtf8."

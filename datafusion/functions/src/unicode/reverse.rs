@@ -85,14 +85,10 @@ impl ScalarUDFImpl for ReverseFunc {
         utf8_to_str_type(&arg_types[0], "reverse")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         match args[0].data_type() {
-            Utf8 | Utf8View => make_scalar_function(reverse::<i32>, vec![])(args),
-            LargeUtf8 => make_scalar_function(reverse::<i64>, vec![])(args),
+            Utf8 | Utf8View => make_scalar_function(reverse::<i32>, vec![])(args.args()),
+            LargeUtf8 => make_scalar_function(reverse::<i64>, vec![])(args.args()),
             other => {
                 exec_err!("Unsupported data type {other:?} for function reverse")
             }
