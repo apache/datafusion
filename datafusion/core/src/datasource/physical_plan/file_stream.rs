@@ -302,7 +302,12 @@ impl FileStream {
                                                     reader,
                                                 )),
                                                 partition_values,
-                                            }
+                                            };
+                                            // Return control to the runtime when we're ready to open the next file
+                                            // to prevent uncancellable queries in scenarios with many large files.
+                                            // This functions similarly to a `tokio::task::yield_now()`.
+                                            cx.waker().wake_by_ref();
+                                            return Poll::Pending;
                                         }
                                     }
                                 }
