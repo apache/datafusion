@@ -170,28 +170,44 @@ impl Helper for CliHelper {}
 ///
 /// The data read from stdio will be escaped, so we need to unescape the input before executing the input
 pub fn unescape_input(input: &str) -> datafusion::error::Result<String> {
-    let mut chars = input.chars();
-
+    let mut chars = input.chars().peekable();
     let mut result = String::with_capacity(input.len());
-    while let Some(char) = chars.next() {
-        if char == '\\' {
-            if let Some(next_char) = chars.next() {
-                // https://static.rust-lang.org/doc/master/reference.html#literals
-                result.push(match next_char {
-                    '0' => '\0',
-                    'n' => '\n',
-                    'r' => '\r',
-                    't' => '\t',
-                    '\\' => '\\',
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(&next) = chars.peek() {
+                match next {
+                    '0' => {
+                        chars.next();
+                        result.push('\0');
+                    }
+                    'n' => {
+                        chars.next();
+                        result.push('\n');
+                    }
+                    'r' => {
+                        chars.next();
+                        result.push('\r');
+                    }
+                    't' => {
+                        chars.next();
+                        result.push('\t');
+                    }
+                    '\\' | '\'' => result.push('\\'),
                     _ => {
-                        return Err(sql_datafusion_err!(ParserError::TokenizerError(
-                            format!("unsupported escape char: '\\{}'", next_char)
+                        return Err(DataFusionError::Execution(format!(
+                            "Invalid escape sequence: \\{}",
+                            next
                         )))
                     }
-                });
+                }
+            } else {
+                return Err(sql_datafusion_err!(ParserError::TokenizerError(
+                    "incomplete escape sequence: trailing backslash".to_string()
+                )));
             }
         } else {
-            result.push(char);
+            result.push(ch);
         }
     }
 
@@ -318,6 +334,14 @@ mod tests {
              &validator,
          )?;
         assert!(matches!(result, ValidationResult::Invalid(Some(_))));
+
+        let result = readline_direct(
+            Cursor::new(
+                r"select '\', '\\', '\\\\\', 'dsdsds\\\\', '\t', '\0', '\n';".as_bytes(),
+            ),
+            &validator,
+        )?;
+        assert!(matches!(result, ValidationResult::Valid(None)));
 
         Ok(())
     }
