@@ -66,23 +66,44 @@ use crate::{
 /// Use [`Self::build`] to create a [`DataSourceExec`] from a ``FileScanConfig`.
 ///
 /// # Example
-/// ```ignore
+/// ```
+/// # use std::any::Any;
 /// # use std::sync::Arc;
-/// # use arrow::datatypes::{Field, Fields, DataType, Schema};
+/// # use arrow::datatypes::{Field, Fields, DataType, Schema, SchemaRef};
+/// # use object_store::ObjectStore;
+/// # use datafusion_common::Statistics;
+/// # use datafusion_datasource::file::FileSource;
 /// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource::file_stream::FileOpener;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
-/// # use datafusion::datasource::physical_plan::ArrowSource;
 /// # use datafusion_physical_plan::ExecutionPlan;
+/// # use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 /// # let file_schema = Arc::new(Schema::new(vec![
 /// #  Field::new("c1", DataType::Int32, false),
 /// #  Field::new("c2", DataType::Int32, false),
 /// #  Field::new("c3", DataType::Int32, false),
 /// #  Field::new("c4", DataType::Int32, false),
 /// # ]));
-/// // create FileScan config for reading arrow files from file://
+/// # // Note: crate mock ParquetSource, as ParquetSource is not in the datasource crate
+/// # struct ParquetSource {};
+/// # impl FileSource for ParquetSource {
+/// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
+/// #  fn as_any(&self) -> &dyn Any { self  }
+/// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
+/// #  fn with_schema(&self, _: SchemaRef) -> Arc<dyn FileSource> { unimplemented!() }
+/// #  fn with_projection(&self, _: &FileScanConfig) -> Arc<dyn FileSource> { unimplemented!() }
+/// #  fn with_statistics(&self, _: Statistics) -> Arc<dyn FileSource> { Arc::new(Self::new()) }
+/// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
+/// #  fn statistics(&self) -> datafusion_common::Result<Statistics> { unimplemented!() }
+/// #  fn file_type(&self) -> &str { "parquet" }
+/// #  }
+/// # impl ParquetSource {
+/// #  fn new() -> Self { Self{} }
+/// # }
+/// // create FileScan config for reading parquet files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
-/// let file_source = Arc::new(ArrowSource::default());
+/// let file_source = Arc::new(ParquetSource::new());
 /// let config = FileScanConfig::new(object_store_url, file_schema, file_source)
 ///   .with_limit(Some(1000))            // read only the first 1000 records
 ///   .with_projection(Some(vec![2, 3])) // project columns 2 and 3
