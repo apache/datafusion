@@ -158,7 +158,7 @@ impl Precision<usize> {
     /// rows are selected. A selectivity of `0.5` means half the rows are
     /// selected. Will always return inexact statistics.
     pub fn with_estimated_selectivity(self, selectivity: f64) -> Self {
-        self.map(|v| ((v as f64 * selectivity).ceil()) as usize)
+        self.map(|v| (v as f64 * selectivity).ceil() as usize)
             .to_inexact()
     }
 }

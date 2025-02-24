@@ -416,12 +416,9 @@ impl Interval {
         )
     }
 
-    pub fn is_null(&self) -> bool {
+    /// Check whether this interval has no boundary in either direction
+    pub fn is_unbounded(&self) -> bool {
         self.lower.is_null() && self.upper.is_null()
-    }
-
-    pub fn is_not_null(&self) -> bool {
-        !(self.lower.is_null() || self.upper.is_null())
     }
 
     pub const CERTAINLY_FALSE: Self = Self {
@@ -1698,7 +1695,7 @@ impl Display for NullableInterval {
 
 impl From<&Interval> for NullableInterval {
     fn from(value: &Interval) -> Self {
-        if value.is_null() {
+        if value.is_unbounded() {
             Self::Null {
                 datatype: value.data_type(),
             }
@@ -2925,6 +2922,11 @@ mod tests {
             (
                 Interval::make(Some(16.0), Some(32.0))?,
                 Interval::make(Some(32.0), Some(64.0))?,
+                Interval::UNCERTAIN,
+            ),
+            (
+                Interval::make::<i64>(Some(3_i64), Some(5_i64))?,
+                Interval::make::<i64>(Some(0_i64), Some(9_i64))?,
                 Interval::UNCERTAIN,
             ),
             (

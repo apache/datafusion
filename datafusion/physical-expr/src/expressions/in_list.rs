@@ -1468,4 +1468,37 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_in_list_bounds_eval() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let col_a = col("a", &schema)?;
+        let list = vec![lit(0i64), lit(2i64), lit(9i64), lit(6i64)];
+
+        let expr = in_list(col_a, list, &false, &schema).unwrap();
+
+        let child_intervals: &[&Interval] = &[
+            &Interval::make(Some(3_i64), Some(5_i64))?,
+            &Interval::make(Some(0_i64), Some(2_i64))?,
+            &Interval::make(Some(6_i64), Some(9_i64))?,
+        ];
+        let result = expr.evaluate_bounds(child_intervals)?;
+        debug_assert_eq!(result, Interval::UNCERTAIN);
+
+        let child_intervals: &[&Interval] = &[
+            &Interval::make(Some(3_i64), Some(5_i64))?,
+            &Interval::make(Some(4_i64), Some(4_i64))?,
+        ];
+        let result = expr.evaluate_bounds(child_intervals)?;
+        debug_assert_eq!(result, Interval::CERTAINLY_TRUE);
+
+        let child_intervals: &[&Interval] = &[
+            &Interval::make(Some(3_i64), Some(5_i64))?,
+            &Interval::make(Some(10_i64), Some(10_i64))?,
+        ];
+        let result = expr.evaluate_bounds(child_intervals)?;
+        debug_assert_eq!(result, Interval::CERTAINLY_FALSE);
+
+        Ok(())
+    }
 }

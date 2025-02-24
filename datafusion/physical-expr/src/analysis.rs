@@ -25,7 +25,7 @@ use crate::intervals::cp_solver::{ExprIntervalGraph, PropagationResult};
 use crate::utils::collect_columns;
 use crate::PhysicalExpr;
 
-use arrow::datatypes::Schema;
+use arrow::datatypes::{Field, Schema};
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_datafusion_err, internal_err, ColumnStatistics, Result, ScalarValue,
@@ -60,12 +60,23 @@ impl AnalysisContext {
 
     /// Create a new analysis context from column statistics.
     pub fn try_from_statistics(
-        input_schema: &Schema,
+        schema: &Schema,
         statistics: &[ColumnStatistics],
     ) -> Result<Self> {
-        (0..input_schema.fields.len())
-            .map(|idx| {
-                ExprBoundaries::try_from_column(input_schema, &statistics[idx], idx)
+        assert_eq!(schema.fields().len(),
+                   statistics.len(),
+                   "Mismatching number of fields in schema and column statistics. schema: {}, column statistics: {}",
+                   schema.fields().len(),
+                   statistics.len()
+        );
+
+        schema
+            .fields()
+            .iter()
+            .zip(statistics.iter())
+            .enumerate()
+            .map(|(idx, (field, stats))| {
+                ExprBoundaries::try_from_column(field.as_ref(), stats, idx)
             })
             .collect::<Result<Vec<_>>>()
             .map(Self::new)
@@ -94,17 +105,10 @@ pub struct ExprBoundaries {
 impl ExprBoundaries {
     /// Create a new `ExprBoundaries` object from column level statistics.
     pub fn try_from_column(
-        schema: &Schema,
+        field: &Field,
         col_stats: &ColumnStatistics,
         col_index: usize,
     ) -> Result<Self> {
-        let field = schema.fields().get(col_index).ok_or_else(|| {
-            internal_datafusion_err!(
-                "Could not create `ExprBoundaries`: in `try_from_column` `col_index` 
-                has gone out of bounds with a value of {col_index}, the schema has {} columns.",
-                schema.fields.len()
-            )
-        })?;
         let empty_field =
             ScalarValue::try_from(field.data_type()).unwrap_or(ScalarValue::Null);
         let interval = Interval::try_new(

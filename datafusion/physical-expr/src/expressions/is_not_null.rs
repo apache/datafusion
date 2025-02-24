@@ -108,7 +108,7 @@ impl PhysicalExpr for IsNotNullExpr {
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         let inner = children[0];
-        Ok(if inner.is_null() {
+        Ok(if inner.is_unbounded() {
             Interval::CERTAINLY_FALSE
         } else if inner.lower().is_null() || inner.upper().is_null() {
             Interval::UNCERTAIN

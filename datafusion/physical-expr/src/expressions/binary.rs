@@ -390,7 +390,7 @@ impl PhysicalExpr for BinaryExpr {
             }
         }
 
-        self.op().supports_bounds_evaluation()
+        self.op().supports_interval_evaluation()
             && self.left.supports_bounds_evaluation(schema)
             && self.right.supports_bounds_evaluation(schema)
     }

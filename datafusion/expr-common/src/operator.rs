@@ -165,7 +165,7 @@ impl Operator {
     }
 
     /// Indicates whether this operator supports interval arithmetic
-    pub fn supports_bounds_evaluation(&self) -> bool {
+    pub fn supports_interval_evaluation(&self) -> bool {
         matches!(
             &self,
             &Operator::Plus
