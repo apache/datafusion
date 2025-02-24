@@ -398,6 +398,11 @@ pub fn serialize_partitioning(
                 *partition_count as u64,
             )),
         },
+        Partitioning::OnDemand(partition_count) => protobuf::Partitioning {
+            partition_method: Some(protobuf::partitioning::PartitionMethod::OnDemand(
+                *partition_count as u64,
+            )),
+        },
         Partitioning::Hash(exprs, partition_count) => {
             let serialized_exprs = serialize_physical_exprs(exprs, codec)?;
             protobuf::Partitioning {

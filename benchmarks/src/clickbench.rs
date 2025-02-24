@@ -27,6 +27,9 @@ use datafusion_common::exec_datafusion_err;
 use datafusion_common::instant::Instant;
 use structopt::StructOpt;
 
+// hack to avoid `default_value is meaningless for bool` errors
+type BoolDefaultTrue = bool;
+
 /// Run the clickbench benchmark
 ///
 /// The ClickBench[1] benchmarks are widely cited in the industry and
@@ -68,6 +71,11 @@ pub struct RunOpt {
     /// If present, write results json here
     #[structopt(parse(from_os_str), short = "o", long = "output")]
     output_path: Option<PathBuf>,
+
+    /// If true then round robin repartitioning is used, if false then on demand repartitioning
+    /// True by default.
+    #[structopt(short = "r", long = "prefer_round_robin", default_value = "true")]
+    prefer_round_robin: BoolDefaultTrue,
 }
 
 struct AllQueries {
@@ -124,6 +132,10 @@ impl RunOpt {
             parquet_options.binary_as_string = true;
         }
 
+        config
+            .options_mut()
+            .optimizer
+            .prefer_round_robin_repartition = self.prefer_round_robin;
         let rt_builder = self.common.runtime_env_builder()?;
         let ctx = SessionContext::new_with_config_rt(config, rt_builder.build_arc()?);
         self.register_hits(&ctx).await?;
