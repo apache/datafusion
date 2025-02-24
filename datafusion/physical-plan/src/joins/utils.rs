@@ -212,11 +212,11 @@ pub trait JoinHashMapType {
         deleted_offset: usize,
     ) {
         let (mut_map, mut_list) = self.get_mut();
-        for (row, hash_value) in iter {
+        for (row, &hash_value) in iter {
             let item = mut_map.find_or_find_insert_slot(
-                *hash_value,
-                |(hash, _)| hash_value == hash,
-                |(hash, _)| *hash,
+                hash_value,
+                |&(hash, _)| hash_value == hash,
+                |&(hash, _)| hash,
             );
             match item {
                 Ok(bucket) => {
@@ -234,9 +234,9 @@ pub trait JoinHashMapType {
                     // SAFETY: slot is valid (retrieved above) and not mutated
                     unsafe {
                         mut_map.insert_in_slot(
-                            *hash_value,
+                            hash_value,
                             slot,
-                            (*hash_value, (row + 1) as u64),
+                            (hash_value, (row + 1) as u64),
                         )
                     };
                     // chained list at `row` is already initialized with 0
