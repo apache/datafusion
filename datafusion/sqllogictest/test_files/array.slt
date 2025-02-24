@@ -2237,17 +2237,9 @@ select array_sort(make_array(1, 3, null, 5, NULL, -5)), array_sort(make_array(1,
 
 query error
 select array_sort(column1, 'DESC', 'NULLS LAST') from arrays_values;
-----
-DataFusion error: Internal error: UDF array_sort returned a different number of rows than expected. Expected: 8, Got: 1.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
-
 
 query error
 select array_sort(column1, 'ASC', 'NULLS FIRST') from arrays_values;
-----
-DataFusion error: Internal error: UDF array_sort returned a different number of rows than expected. Expected: 8, Got: 1.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
-
 
 # test with empty array
 query ?
