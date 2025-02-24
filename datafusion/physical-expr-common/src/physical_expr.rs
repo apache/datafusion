@@ -26,10 +26,13 @@ use arrow::array::BooleanArray;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{internal_err, not_impl_err, Result};
+use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
+use datafusion_expr_common::statistics::Distribution;
+
+use itertools::izip;
 
 /// Shared [`PhysicalExpr`].
 pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
@@ -98,10 +101,15 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Computes the output interval for the expression, given the input
     /// intervals.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `children` are the intervals for the children (inputs) of this
     ///   expression.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the output interval for the expression in
+    /// case of success, or an error object in case of failure.
     ///
     /// # Example
     ///
@@ -116,19 +124,20 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     ///
     /// This is used to propagate constraints down through an expression tree.
     ///
-    /// # Arguments
+    /// # Parameters
     ///
     /// * `interval` is the currently known interval for this expression.
     /// * `children` are the current intervals for the children of this expression.
     ///
     /// # Returns
     ///
-    /// A `Vec` of new intervals for the children, in order.
+    /// A `Result` containing a `Vec` of new intervals for the children (in order)
+    /// in case of success, or an error object in case of failure.
     ///
     /// If constraint propagation reveals an infeasibility for any child, returns
-    /// [`None`]. If none of the children intervals change as a result of propagation,
-    /// may return an empty vector instead of cloning `children`. This is the default
-    /// (and conservative) return value.
+    /// [`None`]. If none of the children intervals change as a result of
+    /// propagation, may return an empty vector instead of cloning `children`.
+    /// This is the default (and conservative) return value.
     ///
     /// # Example
     ///
@@ -144,6 +153,111 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         Ok(Some(vec![]))
     }
 
+    /// Computes the output statistics for the expression, given the input
+    /// statistics.
+    ///
+    /// # Parameters
+    ///
+    /// * `children` are the statistics for the children (inputs) of this
+    ///   expression.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the output statistics for the expression in
+    /// case of success, or an error object in case of failure.
+    ///
+    /// Expressions (should) implement this function and utilize the independence
+    /// assumption, match on children distribution types and compute the output
+    /// statistics accordingly. The default implementation simply creates an
+    /// unknown output distribution by combining input ranges. This logic loses
+    /// distribution information, but is a safe default.
+    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
+        let children_ranges = children
+            .iter()
+            .map(|c| c.range())
+            .collect::<Result<Vec<_>>>()?;
+        let children_ranges_refs = children_ranges.iter().collect::<Vec<_>>();
+        let output_interval = self.evaluate_bounds(children_ranges_refs.as_slice())?;
+        let dt = output_interval.data_type();
+        if dt.eq(&DataType::Boolean) {
+            let p = if output_interval.eq(&Interval::CERTAINLY_TRUE) {
+                ScalarValue::new_one(&dt)
+            } else if output_interval.eq(&Interval::CERTAINLY_FALSE) {
+                ScalarValue::new_zero(&dt)
+            } else {
+                ScalarValue::try_from(&dt)
+            }?;
+            Distribution::new_bernoulli(p)
+        } else {
+            Distribution::new_from_interval(output_interval)
+        }
+    }
+
+    /// Updates children statistics using the given parent statistic for this
+    /// expression.
+    ///
+    /// This is used to propagate statistics down through an expression tree.
+    ///
+    /// # Parameters
+    ///
+    /// * `parent` is the currently known statistics for this expression.
+    /// * `children` are the current statistics for the children of this expression.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing a `Vec` of new statistics for the children (in order)
+    /// in case of success, or an error object in case of failure.
+    ///
+    /// If statistics propagation reveals an infeasibility for any child, returns
+    /// [`None`]. If none of the children statistics change as a result of
+    /// propagation, may return an empty vector instead of cloning `children`.
+    /// This is the default (and conservative) return value.
+    ///
+    /// Expressions (should) implement this function and apply Bayes rule to
+    /// reconcile and update parent/children statistics. This involves utilizing
+    /// the independence assumption, and matching on distribution types. The
+    /// default implementation simply creates an unknown distribution if it can
+    /// narrow the range by propagating ranges. This logic loses distribution
+    /// information, but is a safe default.
+    fn propagate_statistics(
+        &self,
+        parent: &Distribution,
+        children: &[&Distribution],
+    ) -> Result<Option<Vec<Distribution>>> {
+        let children_ranges = children
+            .iter()
+            .map(|c| c.range())
+            .collect::<Result<Vec<_>>>()?;
+        let children_ranges_refs = children_ranges.iter().collect::<Vec<_>>();
+        let parent_range = parent.range()?;
+        let Some(propagated_children) =
+            self.propagate_constraints(&parent_range, children_ranges_refs.as_slice())?
+        else {
+            return Ok(None);
+        };
+        izip!(propagated_children.into_iter(), children_ranges, children)
+            .map(|(new_interval, old_interval, child)| {
+                if new_interval == old_interval {
+                    // We weren't able to narrow the range, preserve the old statistics.
+                    Ok((*child).clone())
+                } else if new_interval.data_type().eq(&DataType::Boolean) {
+                    let dt = old_interval.data_type();
+                    let p = if new_interval.eq(&Interval::CERTAINLY_TRUE) {
+                        ScalarValue::new_one(&dt)
+                    } else if new_interval.eq(&Interval::CERTAINLY_FALSE) {
+                        ScalarValue::new_zero(&dt)
+                    } else {
+                        unreachable!("Given that we have a range reduction for a boolean interval, we should have certainty")
+                    }?;
+                    Distribution::new_bernoulli(p)
+                } else {
+                    Distribution::new_from_interval(new_interval)
+                }
+            })
+            .collect::<Result<_>>()
+            .map(Some)
+    }
+
     /// Calculates the properties of this [`PhysicalExpr`] based on its
     /// children's properties (i.e. order and range), recursively aggregating
     /// the information from its children. In cases where the [`PhysicalExpr`]
@@ -155,7 +269,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
 }
 
 /// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object
-/// safe. To ease implementation blanket implementation is provided for [`Eq`] types.
+/// safe. To ease implementation, blanket implementation is provided for [`Eq`] types.
 pub trait DynEq {
     fn dyn_eq(&self, other: &dyn Any) -> bool;
 }
