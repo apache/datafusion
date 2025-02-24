@@ -71,7 +71,7 @@ async fn csv_opener() -> Result<()> {
         .with_batch_size(8192)
         .with_projection(&scan_config);
 
-    let opener = config.create_file_opener(Ok(object_store), &scan_config, 0)?;
+    let opener = config.create_file_opener(object_store, &scan_config, 0);
 
     let mut result = vec![];
     let mut stream =

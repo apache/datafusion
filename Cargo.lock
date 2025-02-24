@@ -2232,7 +2232,6 @@ version = "45.0.0"
 dependencies = [
  "arrow",
  "datafusion-common",
- "datafusion-datasource",
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-expr-common",
@@ -2399,13 +2398,11 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-optimizer",
- "datafusion-physical-expr",
  "datafusion-physical-plan",
  "datafusion-sql",
  "getrandom 0.2.15",
  "tokio",
  "wasm-bindgen",
- "wasm-bindgen-futures",
  "wasm-bindgen-test",
 ]
 
@@ -3708,9 +3705,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.25"
+version = "0.4.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04cbf5b083de1c7e0222a7a51dbfdba1cbe1c6ab0b15e29fff3f6c077fd9cd9f"
+checksum = "30bde2b3dc3671ae49d8e2e9f044c7c005836e7a023ee57cffa25ab82764bb9e"
 
 [[package]]
 name = "lz4_flex"

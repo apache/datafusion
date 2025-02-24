@@ -262,18 +262,18 @@ impl JsonSource {
 impl FileSource for JsonSource {
     fn create_file_opener(
         &self,
-        object_store: Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(JsonOpener {
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(JsonOpener {
             batch_size: self
                 .batch_size
                 .expect("Batch size must set before creating opener"),
             projected_schema: base_config.projected_file_schema(),
             file_compression_type: base_config.file_compression_type,
-            object_store: object_store?,
-        }))
+            object_store,
+        })
     }
 
     fn as_any(&self) -> &dyn Any {

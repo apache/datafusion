@@ -162,7 +162,7 @@ impl DataSource for FileScanConfig {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let object_store = context.runtime_env().object_store(&self.object_store_url);
+        let object_store = context.runtime_env().object_store(&self.object_store_url)?;
 
         let source = self
             .source
@@ -170,7 +170,7 @@ impl DataSource for FileScanConfig {
             .with_schema(Arc::clone(&self.file_schema))
             .with_projection(self);
 
-        let opener = source.create_file_opener(object_store, self, partition)?;
+        let opener = source.create_file_opener(object_store, self, partition);
 
         let stream = FileStream::new(self, partition, opener, source.metrics())?;
         Ok(Box::pin(stream))
