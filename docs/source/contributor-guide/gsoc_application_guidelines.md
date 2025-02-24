@@ -25,7 +25,7 @@ To apply, follow these steps:
    - Review the list of proposed GSoC projects for Apache DataFusion.
    - If you have your own project idea, discuss it with potential mentors before submitting your proposal.
 2. **Engage with the Community**
-   - Join our [mailing list](mailto:dev@datafusion.apache.org) and [Discord](https://discord.gg/Q9eh6S2T) to introduce yourself and ask questions.
+   - Join our [mailing list](mailto:dev@datafusion.apache.org) and [Discord](https://discord.gg/jHzkpK4em5) to introduce yourself and ask questions.
    - Optional: Submit a small pull request (PR) for an issue marked with the **good first issue** tag to understand/test whether you enjoy working on Apache DataFusion, get comfortable with navigating the codebase and demonstrate your ability.
 3. **Write a Clear Proposal**
    - You can use the template below to structure your proposal.
