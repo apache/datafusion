@@ -50,8 +50,8 @@ use arrow::compute::{cast, concat};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::{CsvOptions, JsonOptions};
 use datafusion_common::{
-    exec_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, ParamValues,
-    ScalarValue, SchemaError, UnnestOptions,
+    exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
+    DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
 };
 use datafusion_expr::{
     case,
@@ -1932,26 +1932,26 @@ impl DataFrame {
     }
 
     /// Fill null values in specified columns with a given value
-    /// If no columns are specified, applies to all columns
+    /// If no columns are specified (empty vector), applies to all columns
     /// Only fills if the value can be cast to the column's type
     ///
     /// # Arguments
     /// * `value` - Value to fill nulls with
-    /// * `columns` - Optional list of column names to fill. If None, fills all columns
+    /// * `columns` - List of column names to fill. If empty, fills all columns
     pub fn fill_null(
         &self,
         value: ScalarValue,
-        columns: Option<Vec<String>>,
+        columns: Vec<String>,
     ) -> Result<DataFrame> {
-        let cols = match columns {
-            Some(names) => self.find_columns(&names)?,
-            None => self
-                .logical_plan()
+        let cols = if columns.is_empty() {
+            self.logical_plan()
                 .schema()
                 .fields()
                 .iter()
                 .map(|f| f.as_ref().clone())
-                .collect(),
+                .collect()
+        } else {
+            self.find_columns(&columns)?
         };
 
         // Create projections for each column
@@ -1989,9 +1989,10 @@ impl DataFrame {
         names
             .iter()
             .map(|name| {
-                schema.field_with_name(None, name).cloned().map_err(|_| {
-                    DataFusionError::Plan(format!("Column '{}' not found", name))
-                })
+                schema
+                    .field_with_name(None, name)
+                    .cloned()
+                    .map_err(|_| plan_datafusion_err!("Column '{}' not found", name))
             })
             .collect()
     }
