@@ -53,9 +53,8 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
-    plan_datafusion_err, plan_err, Column, Constraint, Constraints, DFSchema,
-    DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference, ToDFSchema,
-    UnnestOptions,
+    plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions,
 };
 use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 
@@ -64,19 +63,12 @@ use indexmap::IndexSet;
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
-#[derive(Debug, Clone)]
+/// Options for [`LogicalPlanBuilder`]
+#[derive(Default, Debug, Clone)]
 pub struct LogicalPlanBuilderOptions {
     /// Flag indicating whether the plan builder should add
     /// functionally dependent expressions as additional aggregation groupings.
     add_implicit_group_by_exprs: bool,
-}
-
-impl Default for LogicalPlanBuilderOptions {
-    fn default() -> Self {
-        Self {
-            add_implicit_group_by_exprs: false,
-        }
-    }
 }
 
 impl LogicalPlanBuilderOptions {
@@ -84,6 +76,7 @@ impl LogicalPlanBuilderOptions {
         Default::default()
     }
 
+    /// Should the builder add functionally dependent expressions as additional aggregation groupings.
     pub fn with_add_implicit_group_by_exprs(mut self, add: bool) -> Self {
         self.add_implicit_group_by_exprs = add;
         self
@@ -2097,7 +2090,7 @@ mod tests {
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
 
     use crate::test::function_stub::sum;
-    use datafusion_common::{RecursionUnnestOption, SchemaError};
+    use datafusion_common::{Constraint, RecursionUnnestOption, SchemaError};
 
     #[test]
     fn plan_builder_simple() -> Result<()> {
