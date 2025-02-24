@@ -359,7 +359,7 @@ pub(crate) fn window_equivalence_properties(
         let mut partition_by_orders = vec![];
         for pb_order in partitioning_exprs {
             let all_orders_at_current_level =
-                all_possible_sort_options(Arc::clone(pb_order));
+                sort_options_resolving_constant(Arc::clone(pb_order));
             partition_by_orders.push(all_orders_at_current_level);
         }
         let all_orders_cartesian =
@@ -400,7 +400,7 @@ pub(crate) fn window_equivalence_properties(
                     .flat_map(|lex| {
                         let orderings = lex.to_vec();
                         let new_partial_consts =
-                            all_possible_sort_options(Arc::new(window_col.clone()));
+                            sort_options_resolving_constant(Arc::new(window_col.clone()));
 
                         new_partial_consts.into_iter().map(move |partial| {
                             let mut existing = orderings.clone();
@@ -475,7 +475,7 @@ pub(crate) fn window_equivalence_properties(
                     sliding_expr.get_aggregate_expr().expressions().to_vec();
                 let args_all_lex_combinations = window_fn_args
                     .into_iter()
-                    .map(all_possible_sort_options)
+                    .map(sort_options_resolving_constant)
                     .collect::<Vec<_>>();
                 let mut args_all_lexs = args_all_lex_combinations
                     .into_iter()
@@ -645,11 +645,9 @@ pub fn get_window_mode(
     None
 }
 
-fn all_possible_sort_options(expr: Arc<dyn PhysicalExpr>) -> Vec<PhysicalSortExpr> {
+fn sort_options_resolving_constant(expr: Arc<dyn PhysicalExpr>) -> Vec<PhysicalSortExpr> {
     vec![
         PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, false)),
-        PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(false, true)),
-        PhysicalSortExpr::new(Arc::clone(&expr), SortOptions::new(true, false)),
         PhysicalSortExpr::new(expr, SortOptions::new(true, true)),
     ]
 }

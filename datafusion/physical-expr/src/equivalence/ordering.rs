@@ -249,8 +249,10 @@ impl OrderingEquivalenceClass {
     /// TODO: If [`SortOptions`] eventually supports encoding constantness information, this function
     ///       may become obsolete.
     pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
-        let mut variants =
-            HashSet::from([(false, false), (false, true), (true, false), (true, true)]);
+        let mut constantness_defining_pairs = [
+            HashSet::from([(false, false), (true, true)]),
+            HashSet::from([(false, true), (true, false)]),
+        ];
 
         for ordering in self.iter() {
             if let Some(leading_ordering) = ordering.first() {
@@ -259,12 +261,15 @@ impl OrderingEquivalenceClass {
                         leading_ordering.options.descending,
                         leading_ordering.options.nulls_first,
                     );
-                    variants.remove(&opt);
+                    constantness_defining_pairs[0].remove(&opt);
+                    constantness_defining_pairs[1].remove(&opt);
                 }
             }
         }
 
-        variants.is_empty()
+        constantness_defining_pairs
+            .iter()
+            .any(|pair| pair.is_empty())
     }
 }
 
