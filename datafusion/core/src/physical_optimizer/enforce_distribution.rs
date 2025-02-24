@@ -1374,24 +1374,27 @@ fn ensure_distribution(
         plan.with_new_children(children_plans)?
     };
 
+    let mut optimized_distribution_ctx =
+        DistributionContext::new(Arc::clone(&plan), data.clone(), children);
+
     // If `fetch` was not consumed, it means that there was `SortPreservingMergeExec` with fetch before
     // It was removed by `remove_dist_changing_operators`
     // and we need to add it back.
     if fetch.is_some() {
-        plan = Arc::new(
+        let plan = Arc::new(
             SortPreservingMergeExec::new(
                 plan.output_ordering()
                     .unwrap_or(&LexOrdering::default())
                     .clone(),
-                plan.clone(),
+                plan,
             )
             .with_fetch(fetch.take()),
-        )
+        );
+        optimized_distribution_ctx =
+            DistributionContext::new(plan, data, vec![optimized_distribution_ctx]);
     }
 
-    Ok(Transformed::yes(DistributionContext::new(
-        plan, data, children,
-    )))
+    Ok(Transformed::yes(optimized_distribution_ctx))
 }
 
 /// Keeps track of distribution changing operators (like `RepartitionExec`,
