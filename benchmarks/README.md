@@ -157,9 +157,6 @@ Benchmark tpch_mem.json
 └──────────────┴──────────────┴──────────────┴───────────────┘
 ```
 
-Note that you can also execute an automatic comparison of the changes in a given PR against the base
-by including the trigger `/benchmark` in any comment.
-
 ### Running Benchmarks Manually
 
 Assuming data is in the `data` directory, the `tpch` benchmark can be run with a command like this:
