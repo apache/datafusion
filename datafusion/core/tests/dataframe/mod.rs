@@ -5376,10 +5376,10 @@ async fn test_fill_null() -> Result<()> {
 
     // Use fill_null to replace nulls on each column.
     let df_filled = df
-        .fill_null(ScalarValue::Int32(Some(0)), Some(vec!["a".to_string()]))?
+        .fill_null(ScalarValue::Int32(Some(0)), vec!["a".to_string()])?
         .fill_null(
             ScalarValue::Utf8(Some("default".to_string())),
-            Some(vec!["b".to_string()]),
+            vec!["b".to_string()],
         )?;
 
     let results = df_filled.collect().await?;
@@ -5403,7 +5403,8 @@ async fn test_fill_null_all_columns() -> Result<()> {
     // Use fill_null to replace nulls on all columns.
     // Only column "b" will be replaced since ScalarValue::Utf8(Some("default".to_string()))
     // can be cast to Utf8.
-    let df_filled = df.fill_null(ScalarValue::Utf8(Some("default".to_string())), None)?;
+    let df_filled =
+        df.fill_null(ScalarValue::Utf8(Some("default".to_string())), vec![])?;
 
     let results = df_filled.clone().collect().await?;
 
@@ -5420,7 +5421,7 @@ async fn test_fill_null_all_columns() -> Result<()> {
     assert_batches_sorted_eq!(expected, &results);
 
     // Fill column "a" null values with a value that cannot be cast to Int32.
-    let df_filled = df_filled.fill_null(ScalarValue::Int32(Some(0)), None)?;
+    let df_filled = df_filled.fill_null(ScalarValue::Int32(Some(0)), vec![])?;
 
     let results = df_filled.collect().await?;
     let expected = [
