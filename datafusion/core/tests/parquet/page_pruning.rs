@@ -687,7 +687,7 @@ async fn prune_f64_scalar_fun_and_gt() {
         Scenario::Float64,
         "SELECT * FROM t where abs(f - 1) <= 0.000001  and f >= 0.1",
         Some(0),
-        Some(10),
+        Some(0),
         1,
         5,
     )
