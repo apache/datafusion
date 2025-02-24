@@ -66,11 +66,11 @@ use crate::{
 /// Use [`Self::build`] to create a [`DataSourceExec`] from a ``FileScanConfig`.
 ///
 /// # Example
-/// ```
+/// ```ignore
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Field, Fields, DataType, Schema};
-/// # use datafusion::datasource::listing::PartitionedFile;
-/// # use datafusion::datasource::physical_plan::FileScanConfig;
+/// # use datafusion_datasource::PartitionedFile;
+/// # use datafusion_datasource::file_scan_config::FileScanConfig;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion::datasource::physical_plan::ArrowSource;
 /// # use datafusion_physical_plan::ExecutionPlan;
