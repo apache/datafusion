@@ -1017,14 +1017,42 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_util::MockSource;
+    use crate::{test_util::MockSource, tests::aggr_test_schema};
 
     use super::*;
-    use arrow::array::{Int32Array, RecordBatch};
-    use datafusion::physical_planner::create_physical_sort_expr;
-    use datafusion::{test::columns, test_util::aggr_test_schema};
-    use datafusion_common::assert_batches_eq;
+    use arrow::{
+        array::{Int32Array, RecordBatch},
+        compute::SortOptions,
+    };
+
+    use datafusion_common::{assert_batches_eq, DFSchema};
+    use datafusion_expr::{execution_props::ExecutionProps, SortExpr};
+    use datafusion_physical_expr::create_physical_expr;
     use std::collections::HashMap;
+
+    fn create_physical_sort_expr(
+        e: &SortExpr,
+        input_dfschema: &DFSchema,
+        execution_props: &ExecutionProps,
+    ) -> Result<PhysicalSortExpr> {
+        let SortExpr {
+            expr,
+            asc,
+            nulls_first,
+        } = e;
+        Ok(PhysicalSortExpr {
+            expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+            options: SortOptions {
+                descending: !asc,
+                nulls_first: *nulls_first,
+            },
+        })
+    }
+
+    /// Returns the column names on the schema
+    pub fn columns(schema: &Schema) -> Vec<String> {
+        schema.fields().iter().map(|f| f.name().clone()).collect()
+    }
 
     #[test]
     fn physical_plan_config_no_projection() {
@@ -1375,7 +1403,7 @@ mod tests {
             name: &'static str,
             file_schema: Schema,
             files: Vec<File>,
-            sort: Vec<datafusion_expr::SortExpr>,
+            sort: Vec<SortExpr>,
             expected_result: Result<Vec<Vec<&'static str>>, &'static str>,
         }
 

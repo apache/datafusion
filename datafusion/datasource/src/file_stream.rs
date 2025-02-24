@@ -523,17 +523,15 @@ impl FileStreamMetrics {
 #[cfg(test)]
 mod tests {
     use crate::file_scan_config::FileScanConfig;
+    use crate::tests::make_partition;
     use crate::PartitionedFile;
     use arrow::error::ArrowError;
     use datafusion_common::error::Result;
+    use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use futures::{FutureExt as _, StreamExt as _};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-
-    use datafusion::datasource::object_store::ObjectStoreUrl;
-    use datafusion::prelude::SessionContext;
-    use datafusion::test::{make_partition, object_store::register_test_store};
 
     use crate::file_meta::FileMeta;
     use crate::file_stream::{FileOpenFuture, FileOpener, FileStream, OnError};
@@ -641,17 +639,15 @@ mod tests {
                 .map(|batch| batch.schema())
                 .unwrap_or_else(|| Arc::new(Schema::empty()));
 
-            let ctx = SessionContext::new();
+            // let ctx = SessionContext::new();
             let mock_files: Vec<(String, u64)> = (0..self.num_files)
                 .map(|idx| (format!("mock_file{idx}"), 10_u64))
                 .collect();
 
-            let mock_files_ref: Vec<(&str, u64)> = mock_files
-                .iter()
-                .map(|(name, size)| (name.as_str(), *size))
-                .collect();
-
-            register_test_store(&ctx, &mock_files_ref);
+            // let mock_files_ref: Vec<(&str, u64)> = mock_files
+            //     .iter()
+            //     .map(|(name, size)| (name.as_str(), *size))
+            //     .collect();
 
             let file_group = mock_files
                 .into_iter()

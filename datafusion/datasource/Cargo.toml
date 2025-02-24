@@ -71,7 +71,6 @@ xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
-datafusion = { workspace = true, default-features = true }
 tempfile = { workspace = true }
 
 [lints]
