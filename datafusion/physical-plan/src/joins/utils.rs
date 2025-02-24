@@ -221,7 +221,7 @@ pub trait JoinHashMapType {
             match item {
                 Ok(bucket) => {
                     // Already exists: add index to next array
-                    // SAFETY: is initialized
+                    // SAFETY: is already initialized
                     let index = unsafe { bucket.as_mut() };
                     let prev_index = index.1;
                     // Store new value inside hashmap
