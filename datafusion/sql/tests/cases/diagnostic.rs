@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
+use datafusion_functions::string;
+use std::{collections::HashMap, sync::Arc};
 
 use datafusion_common::{Diagnostic, Location, Result, Span};
 use datafusion_sql::planner::{ParserOptions, SqlToRel};
@@ -35,8 +36,8 @@ fn do_query(sql: &'static str) -> Diagnostic {
         collect_spans: true,
         ..ParserOptions::default()
     };
-
-    let state = MockSessionState::default();
+    let state = MockSessionState::default()
+        .with_scalar_function(Arc::new(string::concat().as_ref().clone()));
     let context = MockContextProvider { state };
     let sql_to_rel = SqlToRel::new_with_options(&context, options);
     match sql_to_rel.sql_statement_to_plan(statement) {
@@ -272,5 +273,16 @@ fn test_ambiguous_column_suggestion() -> Result<()> {
     suggested_fields.sort();
     assert_eq!(suggested_fields, vec!["person.id", "test_decimal.id"]);
 
+    Ok(())
+}
+
+#[test]
+fn test_invalid_function() -> Result<()> {
+    let query = "SELECT /*whole*/concat_not_exist/*whole*/()";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+    assert_eq!(diag.message, "Invalid function 'concat_not_exist'");
+    assert_eq!(diag.notes[0].message, "possible function concat");
+    assert_eq!(diag.span, Some(spans["whole"]));
     Ok(())
 }
