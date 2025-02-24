@@ -54,5 +54,6 @@ fn cli_quick_test<'a>(
 ) {
     let mut cmd = Command::cargo_bin("datafusion-cli").unwrap();
     cmd.args(args);
+    println!("Self output {:?}", cmd.output());
     cmd.assert().stdout(predicate::eq(expected));
 }

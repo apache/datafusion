@@ -74,27 +74,6 @@ pub struct PrintOptions {
     pub color: bool,
 }
 
-// Returns the query execution details formatted
-pub fn get_execution_details_formatted(
-    row_count: usize,
-    maxrows: MaxRows,
-    query_start_time: Instant,
-) -> String {
-    let nrows_shown_msg = match maxrows {
-        MaxRows::Limited(nrows) if nrows < row_count => {
-            format!("(First {nrows} displayed. Use --maxrows to adjust)")
-        }
-        _ => String::new(),
-    };
-
-    format!(
-        "{} row(s) fetched. {}\nElapsed {:.3} seconds.\n",
-        row_count,
-        nrows_shown_msg,
-        query_start_time.elapsed().as_secs_f64()
-    )
-}
-
 impl PrintOptions {
     /// Print the batches to stdout using the specified format
     pub fn print_batches(
@@ -110,7 +89,7 @@ impl PrintOptions {
         self.format
             .print_batches(&mut writer, schema, batches, self.maxrows, true)?;
 
-        let formatted_exec_details = get_execution_details_formatted(
+        let formatted_exec_details = self.get_execution_details_formatted(
             row_count,
             if self.format == PrintFormat::Table {
                 self.maxrows
@@ -158,7 +137,7 @@ impl PrintOptions {
             with_header = false;
         }
 
-        let formatted_exec_details = get_execution_details_formatted(
+        let formatted_exec_details = self.get_execution_details_formatted(
             row_count,
             MaxRows::Unlimited,
             query_start_time,
@@ -169,5 +148,27 @@ impl PrintOptions {
         }
 
         Ok(())
+    }
+
+    // Returns the query execution details formatted
+    pub fn get_execution_details_formatted(
+        &self,
+        row_count: usize,
+        maxrows: MaxRows,
+        query_start_time: Instant,
+    ) -> String {
+        let nrows_shown_msg = match maxrows {
+            MaxRows::Limited(nrows) if nrows < row_count => {
+                format!("(First {nrows} displayed. Use --maxrows to adjust)")
+            }
+            _ => String::new(),
+        };
+
+        format!(
+            "{} row(s) fetched. {}\nElapsed {:.3} seconds.\n",
+            row_count,
+            nrows_shown_msg,
+            query_start_time.elapsed().as_secs_f64()
+        )
     }
 }
