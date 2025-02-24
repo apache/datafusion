@@ -63,6 +63,32 @@ use indexmap::IndexSet;
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
+#[derive(Debug, Clone)]
+pub struct LogicalPlanBuilderOptions {
+    /// Flag indicating whether the plan builder should add
+    /// functionally dependent expressions as additional aggregation groupings.
+    add_implicit_group_by_exprs: bool,
+}
+
+impl Default for LogicalPlanBuilderOptions {
+    fn default() -> Self {
+        Self {
+            add_implicit_group_by_exprs: false,
+        }
+    }
+}
+
+impl LogicalPlanBuilderOptions {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn with_add_implicit_group_by_exprs(mut self, add: bool) -> Self {
+        self.add_implicit_group_by_exprs = add;
+        self
+    }
+}
+
 /// Builder for logical plans
 ///
 /// # Example building a simple plan
@@ -103,6 +129,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 #[derive(Debug, Clone)]
 pub struct LogicalPlanBuilder {
     plan: Arc<LogicalPlan>,
+    options: LogicalPlanBuilderOptions,
 }
 
 impl LogicalPlanBuilder {
@@ -110,12 +137,21 @@ impl LogicalPlanBuilder {
     pub fn new(plan: LogicalPlan) -> Self {
         Self {
             plan: Arc::new(plan),
+            options: LogicalPlanBuilderOptions::default(),
         }
     }
 
     /// Create a builder from an existing plan
     pub fn new_from_arc(plan: Arc<LogicalPlan>) -> Self {
-        Self { plan }
+        Self {
+            plan,
+            options: LogicalPlanBuilderOptions::default(),
+        }
+    }
+
+    pub fn with_options(mut self, options: LogicalPlanBuilderOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// Return the output schema of the plan build so far
@@ -1138,8 +1174,12 @@ impl LogicalPlanBuilder {
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
 
-        let group_expr =
-            add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?;
+        let group_expr = if self.options.add_implicit_group_by_exprs {
+            add_group_by_exprs_from_dependencies(group_expr, self.plan.schema())?
+        } else {
+            group_expr
+        };
+
         Aggregate::try_new(self.plan, group_expr, aggr_expr)
             .map(LogicalPlan::Aggregate)
             .map(Self::new)
@@ -1550,6 +1590,7 @@ pub fn add_group_by_exprs_from_dependencies(
     }
     Ok(group_expr)
 }
+
 /// Errors if one or more expressions have equal names.
 pub fn validate_unique_names<'a>(
     node_name: &str,
@@ -2023,7 +2064,6 @@ pub fn unnest_with_options(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::logical_plan::StringifiedPlan;
     use crate::{col, expr, expr_fn::exists, in_subquery, lit, scalar_subquery};
