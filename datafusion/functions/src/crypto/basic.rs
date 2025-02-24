@@ -121,11 +121,9 @@ pub fn digest(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         );
     }
     let digest_algorithm = match &args[1] {
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8View(Some(method))
-            | ScalarValue::Utf8(Some(method))
-            | ScalarValue::LargeUtf8(Some(method)) => method.parse::<DigestAlgorithm>(),
-            other => exec_err!("Unsupported data type {other:?} for function digest"),
+        ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+            Some(Some(method)) => method.parse::<DigestAlgorithm>(),
+            _ => exec_err!("Unsupported data type {scalar:?} for function digest"),
         },
         ColumnarValue::Array(_) => {
             internal_err!("Digest using dynamically decided method is not yet supported")

@@ -651,6 +651,7 @@ impl Accumulator for LastValueAccumulator {
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set
+                || self.requirement_satisfied
                 || compare_rows(&self.orderings, last_ordering, &sort_options)?.is_lt()
             {
                 // Update with last value in the state. Note that we should exclude the

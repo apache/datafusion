@@ -20,21 +20,22 @@
 use crate::utils::make_scalar_function;
 use arrow::array::{Capacities, MutableArrayData};
 use arrow::compute;
+use arrow::compute::cast;
 use arrow_array::{
-    new_null_array, Array, ArrayRef, GenericListArray, Int64Array, ListArray,
-    OffsetSizeTrait,
+    new_null_array, Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait,
+    UInt64Array,
 };
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::DataType::{LargeList, List};
 use arrow_schema::{DataType, Field};
-use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
+use datafusion_common::cast::{as_large_list_array, as_list_array, as_uint64_array};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     ArrayRepeat,
@@ -43,16 +44,50 @@ make_udf_expr_and_func!(
     "returns an array containing element `count` times.", // doc
     array_repeat_udf // internal function name
 );
+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an array containing element `count` times.",
+    syntax_example = "array_repeat(element, count)",
+    sql_example = r#"```sql
+> select array_repeat(1, 3);
++---------------------------------+
+| array_repeat(Int64(1),Int64(3)) |
++---------------------------------+
+| [1, 1, 1]                       |
++---------------------------------+
+> select array_repeat([1, 2], 2);
++------------------------------------+
+| array_repeat(List([1,2]),Int64(2)) |
++------------------------------------+
+| [[1, 2], [1, 2]]                   |
++------------------------------------+
+```"#,
+    argument(
+        name = "element",
+        description = "Element expression. Can be a constant, column, or function, and any combination of array operators."
+    ),
+    argument(
+        name = "count",
+        description = "Value of how many times to repeat the element."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct ArrayRepeat {
+pub struct ArrayRepeat {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for ArrayRepeat {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArrayRepeat {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
             aliases: vec![String::from("list_repeat")],
         }
     }
@@ -90,56 +125,47 @@ impl ScalarUDFImpl for ArrayRepeat {
         &self.aliases
     }
 
-    fn documentation(&self) -> Option<&Documentation> {
-        Some(get_array_repeat_doc())
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return exec_err!("array_repeat expects two arguments");
+        }
+
+        let element_type = &arg_types[0];
+        let first = element_type.clone();
+
+        let count_type = &arg_types[1];
+
+        // Coerce the second argument to Int64/UInt64 if it's a numeric type
+        let second = match count_type {
+            DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
+                DataType::Int64
+            }
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
+                DataType::UInt64
+            }
+            _ => return exec_err!("count must be an integer type"),
+        };
+
+        Ok(vec![first, second])
     }
-}
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_array_repeat_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns an array containing element `count` times.",
-
-            "array_repeat(element, count)")
-            .with_sql_example(
-                r#"```sql
-> select array_repeat(1, 3);
-+---------------------------------+
-| array_repeat(Int64(1),Int64(3)) |
-+---------------------------------+
-| [1, 1, 1]                       |
-+---------------------------------+
-> select array_repeat([1, 2], 2);
-+------------------------------------+
-| array_repeat(List([1,2]),Int64(2)) |
-+------------------------------------+
-| [[1, 2], [1, 2]]                   |
-+------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "element",
-                "Element expression. Can be a constant, column, or function, and any combination of array operators.",
-            )
-            .with_argument(
-                "count",
-                "Value of how many times to repeat the element.",
-            )
-            .build()
-    })
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 /// Array_repeat SQL function
 pub fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_repeat expects two arguments");
-    }
-
     let element = &args[0];
-    let count_array = as_int64_array(&args[1])?;
+    let count_array = &args[1];
+
+    let count_array = match count_array.data_type() {
+        DataType::Int64 => &cast(count_array, &DataType::UInt64)?,
+        DataType::UInt64 => count_array,
+        _ => return exec_err!("count must be an integer type"),
+    };
+
+    let count_array = as_uint64_array(count_array)?;
 
     match element.data_type() {
         List(_) => {
@@ -168,7 +194,7 @@ pub fn array_repeat_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// ```
 fn general_repeat<O: OffsetSizeTrait>(
     array: &ArrayRef,
-    count_array: &Int64Array,
+    count_array: &UInt64Array,
 ) -> Result<ArrayRef> {
     let data_type = array.data_type();
     let mut new_values = vec![];
@@ -222,7 +248,7 @@ fn general_repeat<O: OffsetSizeTrait>(
 /// ```
 fn general_list_repeat<O: OffsetSizeTrait>(
     list_array: &GenericListArray<O>,
-    count_array: &Int64Array,
+    count_array: &UInt64Array,
 ) -> Result<ArrayRef> {
     let data_type = list_array.data_type();
     let value_type = list_array.value_type();

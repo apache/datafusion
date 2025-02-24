@@ -251,22 +251,13 @@ macro_rules! compute_utf8_flag_op_scalar {
             .downcast_ref::<$ARRAYTYPE>()
             .expect("compute_utf8_flag_op_scalar failed to downcast array");
 
-        let string_value = match $RIGHT {
-            ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) => string_value,
-            ScalarValue::Dictionary(_, value) => {
-                match *value {
-                    ScalarValue::Utf8(Some(string_value)) | ScalarValue::LargeUtf8(Some(string_value)) => string_value,
-                    other => return internal_err!(
-                            "compute_utf8_flag_op_scalar failed to cast dictionary value {} for operation '{}'",
-                            other, stringify!($OP)
-                        )
-                }
-            },
+        let string_value = match $RIGHT.try_as_str() {
+            Some(Some(string_value)) => string_value,
+            // null literal or non string
             _ => return internal_err!(
-                "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
-                $RIGHT, stringify!($OP)
-            )
-
+                        "compute_utf8_flag_op_scalar failed to cast literal value {} for operation '{}'",
+                        $RIGHT, stringify!($OP)
+                    )
         };
 
         let flag = $FLAG.then_some("i");

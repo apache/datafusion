@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::error::Result;
+use datafusion::logical_expr::{LogicalPlan, PlanType};
 use datafusion::physical_plan::displayable;
 use datafusion::physical_planner::DefaultPhysicalPlanner;
 use datafusion::prelude::*;
-use datafusion::{error::Result, physical_plan::ExecutionPlan};
-use datafusion_expr::{LogicalPlan, PlanType};
 
 /// This example demonstrates the process of converting logical plan
 /// into physical execution plans using DataFusion.

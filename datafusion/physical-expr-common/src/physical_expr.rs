@@ -31,6 +31,9 @@ use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
 
+/// Shared [`PhysicalExpr`].
+pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
+
 /// [`PhysicalExpr`]s represent expressions such as `A + 1` or `CAST(c1 AS int)`.
 ///
 /// `PhysicalExpr` knows its type, nullability and can be evaluated directly on
@@ -159,9 +162,7 @@ pub trait DynEq {
 
 impl<T: Eq + Any> DynEq for T {
     fn dyn_eq(&self, other: &dyn Any) -> bool {
-        other
-            .downcast_ref::<Self>()
-            .map_or(false, |other| other == self)
+        other.downcast_ref::<Self>() == Some(self)
     }
 }
 

@@ -21,16 +21,16 @@ use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef};
-use arrow::datatypes::Field;
-use arrow::record_batch::RecordBatch;
-
 use crate::aggregate::AggregateFunctionExpr;
 use crate::window::window_expr::AggregateWindowExpr;
 use crate::window::{
     PartitionBatches, PartitionWindowAggStates, PlainAggregateWindowExpr, WindowExpr,
 };
 use crate::{expressions::PhysicalSortExpr, reverse_order_bys, PhysicalExpr};
+
+use arrow::array::{Array, ArrayRef};
+use arrow::datatypes::Field;
+use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{Accumulator, WindowFrame};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -119,7 +119,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
         self.aggregate.reverse_expr().map(|reverse_expr| {
             let reverse_window_frame = self.window_frame.reverse();
-            if reverse_window_frame.start_bound.is_unbounded() {
+            if reverse_window_frame.is_ever_expanding() {
                 Arc::new(PlainAggregateWindowExpr::new(
                     Arc::new(reverse_expr),
                     &self.partition_by.clone(),

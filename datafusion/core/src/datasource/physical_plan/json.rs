@@ -39,6 +39,7 @@ use crate::physical_plan::{
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
+use datafusion_common::Constraints;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -66,11 +67,16 @@ impl NdJsonExec {
         base_config: FileScanConfig,
         file_compression_type: FileCompressionType,
     ) -> Self {
-        let (projected_schema, projected_statistics, projected_output_ordering) =
-            base_config.project();
+        let (
+            projected_schema,
+            projected_constraints,
+            projected_statistics,
+            projected_output_ordering,
+        ) = base_config.project();
         let cache = Self::compute_properties(
             projected_schema,
             &projected_output_ordering,
+            projected_constraints,
             &base_config,
         );
         Self {
@@ -100,10 +106,12 @@ impl NdJsonExec {
     fn compute_properties(
         schema: SchemaRef,
         orderings: &[LexOrdering],
+        constraints: Constraints,
         file_scan_config: &FileScanConfig,
     ) -> PlanProperties {
         // Equivalence Properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings);
+        let eq_properties = EquivalenceProperties::new_with_orderings(schema, orderings)
+            .with_constraints(constraints);
 
         PlanProperties::new(
             eq_properties,

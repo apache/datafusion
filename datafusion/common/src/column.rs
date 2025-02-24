@@ -368,7 +368,8 @@ mod tests {
                 &[],
             )
             .expect_err("should've failed to find field");
-        let expected = r#"Schema error: No field named z. Valid fields are t1.a, t1.b, t2.c, t2.d, t3.a, t3.b, t3.c, t3.d, t3.e."#;
+        let expected = "Schema error: No field named z. \
+            Valid fields are t1.a, t1.b, t2.c, t2.d, t3.a, t3.b, t3.c, t3.d, t3.e.";
         assert_eq!(err.strip_backtrace(), expected);
 
         // ambiguous column reference

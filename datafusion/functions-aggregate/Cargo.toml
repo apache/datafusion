@@ -40,6 +40,7 @@ path = "src/lib.rs"
 [dependencies]
 ahash = { workspace = true }
 arrow = { workspace = true }
+arrow-buffer = { workspace = true }
 arrow-schema = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
@@ -64,4 +65,8 @@ harness = false
 
 [[bench]]
 name = "sum"
+harness = false
+
+[[bench]]
+name = "array_agg"
 harness = false

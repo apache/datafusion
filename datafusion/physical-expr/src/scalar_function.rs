@@ -34,6 +34,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::Hash;
 use std::sync::Arc;
 
+use crate::expressions::Literal;
 use crate::PhysicalExpr;
 
 use arrow::datatypes::{DataType, Schema};
@@ -43,7 +44,9 @@ use datafusion_common::{internal_err, DFSchema, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
 use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
-use datafusion_expr::{expr_vec_fmt, ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF};
+use datafusion_expr::{
+    expr_vec_fmt, ColumnarValue, Expr, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
+};
 
 /// Physical expression of a scalar function
 #[derive(Eq, PartialEq, Hash)]
@@ -81,6 +84,49 @@ impl ScalarFunctionExpr {
             return_type,
             nullable: true,
         }
+    }
+
+    /// Create a new Scalar function
+    pub fn try_new(
+        fun: Arc<ScalarUDF>,
+        args: Vec<Arc<dyn PhysicalExpr>>,
+        schema: &Schema,
+    ) -> Result<Self> {
+        let name = fun.name().to_string();
+        let arg_types = args
+            .iter()
+            .map(|e| e.data_type(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        // verify that input data types is consistent with function's `TypeSignature`
+        data_types_with_scalar_udf(&arg_types, &fun)?;
+
+        let nullables = args
+            .iter()
+            .map(|e| e.nullable(schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        let arguments = args
+            .iter()
+            .map(|e| {
+                e.as_any()
+                    .downcast_ref::<Literal>()
+                    .map(|literal| literal.value())
+            })
+            .collect::<Vec<_>>();
+        let ret_args = ReturnTypeArgs {
+            arg_types: &arg_types,
+            scalar_arguments: &arguments,
+            nullables: &nullables,
+        };
+        let (return_type, nullable) = fun.return_type_from_args(ret_args)?.into_parts();
+        Ok(Self {
+            fun,
+            name,
+            args,
+            return_type,
+            nullable,
+        })
     }
 
     /// Get the scalar function implementation
@@ -218,6 +264,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 }
 
 /// Create a physical expression for the UDF.
+#[deprecated(since = "45.0.0", note = "use ScalarFunctionExpr::new() instead")]
 pub fn create_physical_expr(
     fun: &ScalarUDF,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],

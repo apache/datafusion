@@ -507,18 +507,19 @@ fn type_union_resolution_coercion(
                 None
             }
 
-            let types = lhs
+            let coerced_types = lhs
                 .iter()
                 .map(|lhs_field| search_corresponding_coerced_type(lhs_field, rhs))
                 .collect::<Option<Vec<_>>>()?;
 
-            let fields = types
+            // preserve the field name and nullability
+            let orig_fields = std::iter::zip(lhs.iter(), rhs.iter());
+
+            let fields: Vec<FieldRef> = coerced_types
                 .into_iter()
-                .enumerate()
-                .map(|(i, datatype)| {
-                    Arc::new(Field::new(format!("c{i}"), datatype, true))
-                })
-                .collect::<Vec<FieldRef>>();
+                .zip(orig_fields)
+                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
+                .collect();
             Some(DataType::Struct(fields.into()))
         }
         _ => {
@@ -684,8 +685,10 @@ fn string_numeric_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
     match (lhs_type, rhs_type) {
         (Utf8, _) if rhs_type.is_numeric() => Some(Utf8),
         (LargeUtf8, _) if rhs_type.is_numeric() => Some(LargeUtf8),
+        (Utf8View, _) if rhs_type.is_numeric() => Some(Utf8View),
         (_, Utf8) if lhs_type.is_numeric() => Some(Utf8),
         (_, LargeUtf8) if lhs_type.is_numeric() => Some(LargeUtf8),
+        (_, Utf8View) if lhs_type.is_numeric() => Some(Utf8View),
         _ => None,
     }
 }
@@ -777,29 +780,19 @@ pub fn binary_numeric_coercion(
         (_, Float32) | (Float32, _) => Some(Float32),
         // The following match arms encode the following logic: Given the two
         // integral types, we choose the narrowest possible integral type that
-        // accommodates all values of both types. Note that some information
-        // loss is inevitable when we have a signed type and a `UInt64`, in
-        // which case we use `Int64`;i.e. the widest signed integral type.
-
-        // TODO: For i64 and u64, we can use decimal or float64
-        // Postgres has no unsigned type :(
-        // DuckDB v.0.10.0 has double (double precision floating-point number (8 bytes))
-        // for largest signed (signed sixteen-byte integer) and unsigned integer (unsigned sixteen-byte integer)
+        // accommodates all values of both types. Note that to avoid information
+        // loss when combining UInt64 with signed integers we use Decimal128(20, 0).
+        (UInt64, Int64 | Int32 | Int16 | Int8)
+        | (Int64 | Int32 | Int16 | Int8, UInt64) => Some(Decimal128(20, 0)),
+        (UInt64, _) | (_, UInt64) => Some(UInt64),
         (Int64, _)
         | (_, Int64)
-        | (UInt64, Int8)
-        | (Int8, UInt64)
-        | (UInt64, Int16)
-        | (Int16, UInt64)
-        | (UInt64, Int32)
-        | (Int32, UInt64)
         | (UInt32, Int8)
         | (Int8, UInt32)
         | (UInt32, Int16)
         | (Int16, UInt32)
         | (UInt32, Int32)
         | (Int32, UInt32) => Some(Int64),
-        (UInt64, _) | (_, UInt64) => Some(UInt64),
         (Int32, _)
         | (_, Int32)
         | (UInt16, Int16)
@@ -928,16 +921,16 @@ pub fn get_wider_type(lhs: &DataType, rhs: &DataType) -> Result<DataType> {
 }
 
 /// Convert the numeric data type to the decimal data type.
-/// Now, we just support the signed integer type and floating-point type.
+/// We support signed and unsigned integer types and floating-point type.
 fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     // This conversion rule is from spark
     // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
     match numeric_type {
-        Int8 => Some(Decimal128(3, 0)),
-        Int16 => Some(Decimal128(5, 0)),
-        Int32 => Some(Decimal128(10, 0)),
-        Int64 => Some(Decimal128(20, 0)),
+        Int8 | UInt8 => Some(Decimal128(3, 0)),
+        Int16 | UInt16 => Some(Decimal128(5, 0)),
+        Int32 | UInt32 => Some(Decimal128(10, 0)),
+        Int64 | UInt64 => Some(Decimal128(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float32 => Some(Decimal128(14, 7)),
         Float64 => Some(Decimal128(30, 15)),
@@ -946,16 +939,16 @@ fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
 }
 
 /// Convert the numeric data type to the decimal data type.
-/// Now, we just support the signed integer type and floating-point type.
+/// We support signed and unsigned integer types and floating-point type.
 fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     // This conversion rule is from spark
     // https://github.com/apache/spark/blob/1c81ad20296d34f137238dadd67cc6ae405944eb/sql/catalyst/src/main/scala/org/apache/spark/sql/types/DecimalType.scala#L127
     match numeric_type {
-        Int8 => Some(Decimal256(3, 0)),
-        Int16 => Some(Decimal256(5, 0)),
-        Int32 => Some(Decimal256(10, 0)),
-        Int64 => Some(Decimal256(20, 0)),
+        Int8 | UInt8 => Some(Decimal256(3, 0)),
+        Int16 | UInt16 => Some(Decimal256(5, 0)),
+        Int32 | UInt32 => Some(Decimal256(10, 0)),
+        Int64 | UInt64 => Some(Decimal256(20, 0)),
         // TODO if we convert the floating-point data to the decimal type, it maybe overflow.
         Float32 => Some(Decimal256(14, 7)),
         Float64 => Some(Decimal256(30, 15)),
@@ -971,21 +964,29 @@ fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
                 return None;
             }
 
-            let types = std::iter::zip(lhs_fields.iter(), rhs_fields.iter())
+            let coerced_types = std::iter::zip(lhs_fields.iter(), rhs_fields.iter())
                 .map(|(lhs, rhs)| comparison_coercion(lhs.data_type(), rhs.data_type()))
                 .collect::<Option<Vec<DataType>>>()?;
 
-            let fields = types
+            // preserve the field name and nullability
+            let orig_fields = std::iter::zip(lhs_fields.iter(), rhs_fields.iter());
+
+            let fields: Vec<FieldRef> = coerced_types
                 .into_iter()
-                .enumerate()
-                .map(|(i, datatype)| {
-                    Arc::new(Field::new(format!("c{i}"), datatype, true))
-                })
-                .collect::<Vec<FieldRef>>();
+                .zip(orig_fields)
+                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
+                .collect();
             Some(Struct(fields.into()))
         }
         _ => None,
     }
+}
+
+/// returns the result of coercing two fields to a common type
+fn coerce_fields(common_type: DataType, lhs: &FieldRef, rhs: &FieldRef) -> FieldRef {
+    let is_nullable = lhs.is_nullable() || rhs.is_nullable();
+    let name = lhs.name(); // pick the name from the left field
+    Arc::new(Field::new(name, common_type, is_nullable))
 }
 
 /// Returns the output type of applying mathematics operations such as
@@ -1994,6 +1995,18 @@ mod tests {
             Operator::Gt,
             DataType::UInt32
         );
+        test_coercion_binary_rule!(
+            DataType::UInt64,
+            DataType::UInt8,
+            Operator::Eq,
+            DataType::UInt64
+        );
+        test_coercion_binary_rule!(
+            DataType::UInt64,
+            DataType::Int64,
+            Operator::Eq,
+            DataType::Decimal128(20, 0)
+        );
         // numeric/decimal
         test_coercion_binary_rule!(
             DataType::Int64,
@@ -2024,6 +2037,12 @@ mod tests {
             DataType::Decimal128(10, 3),
             Operator::GtEq,
             DataType::Decimal128(15, 3)
+        );
+        test_coercion_binary_rule!(
+            DataType::UInt64,
+            DataType::Decimal128(20, 0),
+            Operator::Eq,
+            DataType::Decimal128(20, 0)
         );
 
         // Binary

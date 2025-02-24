@@ -27,7 +27,7 @@ use arrow_array::types::{
     Date32Type, IntervalMonthDayNanoType, TimestampNanosecondType as TSNT,
 };
 use arrow_array::{NullArray, TimestampNanosecondArray};
-use arrow_buffer::{BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
 use arrow_schema::DataType::*;
 use arrow_schema::IntervalUnit::MonthDayNano;
 use arrow_schema::TimeUnit::Nanosecond;
@@ -37,16 +37,16 @@ use datafusion_common::cast::{
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, not_impl_datafusion_err, Result,
 };
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_ARRAY;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use itertools::Itertools;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::iter::from_fn;
 use std::str::FromStr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 make_udf_expr_and_func!(
     Range,
@@ -55,10 +55,49 @@ make_udf_expr_and_func!(
     "create a list of values in the range between start and stop",
     range_udf
 );
+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.",
+    syntax_example = "range(start, stop, step)",
+    sql_example = r#"```sql
+> select range(2, 10, 3);
++-----------------------------------+
+| range(Int64(2),Int64(10),Int64(3))|
++-----------------------------------+
+| [2, 5, 8]                         |
++-----------------------------------+
+
+> select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
++--------------------------------------------------------------+
+| range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH) |
++--------------------------------------------------------------+
+| [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] |
++--------------------------------------------------------------+
+```"#,
+    argument(
+        name = "start",
+        description = "Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported."
+    ),
+    argument(
+        name = "end",
+        description = "End of the range (not included). Type must be the same as start."
+    ),
+    argument(
+        name = "step",
+        description = "Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges."
+    )
+)]
 #[derive(Debug)]
-pub(super) struct Range {
+pub struct Range {
     signature: Signature,
     aliases: Vec<String>,
+}
+
+impl Default for Range {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 impl Range {
     pub fn new() -> Self {
@@ -141,50 +180,8 @@ impl ScalarUDFImpl for Range {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_range_doc())
+        self.doc()
     }
-}
-
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_range_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Returns an Arrow array between start and stop with step. The range start..end contains all values with start <= x < end. It is empty if start >= end. Step cannot be 0.",
-
-            "range(start, stop, step)")
-            .with_sql_example(
-                r#"```sql
-> select range(2, 10, 3);
-+-----------------------------------+
-| range(Int64(2),Int64(10),Int64(3))|
-+-----------------------------------+
-| [2, 5, 8]                         |
-+-----------------------------------+
-
-> select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
-+--------------------------------------------------------------+
-| range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH) |
-+--------------------------------------------------------------+
-| [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] |
-+--------------------------------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "start",
-                "Start of the range. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.",
-            )
-            .with_argument(
-                "end",
-                "End of the range (not included). Type must be the same as start.",
-            )
-            .with_argument(
-                "step",
-                "Increase by step (cannot be 0). Steps less than a day are supported only for timestamp ranges.",
-            )
-            .build()
-    })
 }
 
 make_udf_expr_and_func!(
@@ -194,6 +191,32 @@ make_udf_expr_and_func!(
     "create a list of values in the range between start and stop, include upper bound",
     gen_series_udf
 );
+
+#[user_doc(
+    doc_section(label = "Array Functions"),
+    description = "Similar to the range function, but it includes the upper bound.",
+    syntax_example = "generate_series(start, stop, step)",
+    sql_example = r#"```sql
+> select generate_series(1,3);
++------------------------------------+
+| generate_series(Int64(1),Int64(3)) |
++------------------------------------+
+| [1, 2, 3]                          |
++------------------------------------+
+```"#,
+    argument(
+        name = "start",
+        description = "Start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported."
+    ),
+    argument(
+        name = "end",
+        description = "End of the series (included). Type must be the same as start."
+    ),
+    argument(
+        name = "step",
+        description = "Increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges."
+    )
+)]
 #[derive(Debug)]
 pub(super) struct GenSeries {
     signature: Signature,
@@ -283,43 +306,8 @@ impl ScalarUDFImpl for GenSeries {
     }
 
     fn documentation(&self) -> Option<&Documentation> {
-        Some(get_generate_series_doc())
+        self.doc()
     }
-}
-
-static GENERATE_SERIES_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_generate_series_doc() -> &'static Documentation {
-    GENERATE_SERIES_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_ARRAY,
-                "Similar to the range function, but it includes the upper bound.",
-
-            "generate_series(start, stop, step)")
-            .with_sql_example(
-                r#"```sql
-> select generate_series(1,3);
-+------------------------------------+
-| generate_series(Int64(1),Int64(3)) |
-+------------------------------------+
-| [1, 2, 3]                          |
-+------------------------------------+
-```"#,
-            )
-            .with_argument(
-                "start",
-                "start of the series. Ints, timestamps, dates or string types that can be coerced to Date32 are supported.",
-            )
-            .with_argument(
-                "end",
-                "end of the series (included). Type must be the same as start.",
-            )
-            .with_argument(
-                "step",
-                "increase by step (can not be 0). Steps less than a day are supported only for timestamp ranges.",
-            )
-            .build()
-    })
 }
 
 /// Generates an array of integers from start to stop with a given step.
@@ -357,7 +345,7 @@ pub(super) fn gen_range_inner(
 
     let mut values = vec![];
     let mut offsets = vec![0];
-    let mut valid = BooleanBufferBuilder::new(stop_array.len());
+    let mut valid = NullBufferBuilder::new(stop_array.len());
     for (idx, stop) in stop_array.iter().enumerate() {
         match retrieve_range_args(start_array, stop, step_array, idx) {
             Some((_, _, 0)) => {
@@ -381,12 +369,12 @@ pub(super) fn gen_range_inner(
                         .step_by(step_abs),
                 );
                 offsets.push(values.len() as i32);
-                valid.append(true);
+                valid.append_non_null();
             }
             // If any of the arguments is NULL, append a NULL value to the result.
             None => {
                 offsets.push(values.len() as i32);
-                valid.append(false);
+                valid.append_null();
             }
         };
     }
@@ -394,7 +382,7 @@ pub(super) fn gen_range_inner(
         Arc::new(Field::new_list_field(Int64, true)),
         OffsetBuffer::new(offsets.into()),
         Arc::new(Int64Array::from(values)),
-        Some(NullBuffer::new(valid.finish())),
+        valid.finish(),
     )?);
     Ok(arr)
 }
@@ -460,10 +448,18 @@ fn gen_range_date(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayR
     let values_builder = Date32Builder::new();
     let mut list_builder = ListBuilder::new(values_builder);
 
-    for (idx, stop) in stop_array.iter().enumerate() {
-        let mut stop = stop.unwrap_or(0);
+    for idx in 0..stop_array.len() {
+        if stop_array.is_null(idx) {
+            list_builder.append_null();
+            continue;
+        }
+        let mut stop = stop_array.value(idx);
 
         let start = if let Some(start_array_values) = start_array {
+            if start_array_values.is_null(idx) {
+                list_builder.append_null();
+                continue;
+            }
             start_array_values.value(idx)
         } else {
             list_builder.append_null();
@@ -471,6 +467,10 @@ fn gen_range_date(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayR
         };
 
         let step = if let Some(step) = step_array {
+            if step.is_null(idx) {
+                list_builder.append_null();
+                continue;
+            }
             step.value(idx)
         } else {
             list_builder.append_null();

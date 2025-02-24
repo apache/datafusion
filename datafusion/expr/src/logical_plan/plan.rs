@@ -24,6 +24,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
+use super::invariants::{
+    assert_always_invariants, assert_executable_invariants, InvariantLevel,
+};
 use super::DdlStatement;
 use crate::builder::{change_redundant_column, unnest_with_options};
 use crate::expr::{Placeholder, Sort as SortExpr, WindowFunction};
@@ -212,10 +215,14 @@ pub enum LogicalPlan {
     /// Windows input based on a set of window spec and window
     /// function (e.g. SUM or RANK).  This is used to implement SQL
     /// window functions, and the `OVER` clause.
+    ///
+    /// See [`Window`] for more details
     Window(Window),
     /// Aggregates its input based on a set of grouping and aggregate
     /// expressions (e.g. SUM). This is used to implement SQL aggregates
     /// and `GROUP BY`.
+    ///
+    /// See [`Aggregate`] for more details
     Aggregate(Aggregate),
     /// Sorts its input according to a list of sort expressions. This
     /// is used to implement SQL `ORDER BY`
@@ -692,15 +699,13 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Union(Union { inputs, schema }) => {
-                let input_schema = inputs[0].schema();
-                // If inputs are not pruned do not change schema
-                // TODO this seems wrong (shouldn't we always use the schema of the input?)
-                let schema = if schema.fields().len() == input_schema.fields().len() {
-                    Arc::clone(&schema)
+                let first_input_schema = inputs[0].schema();
+                if schema.fields().len() == first_input_schema.fields().len() {
+                    // If inputs are not pruned do not change schema
+                    Ok(LogicalPlan::Union(Union { inputs, schema }))
                 } else {
-                    Arc::clone(input_schema)
-                };
-                Ok(LogicalPlan::Union(Union { inputs, schema }))
+                    Ok(LogicalPlan::Union(Union::try_new(inputs)?))
+                }
             }
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
@@ -1127,6 +1132,14 @@ impl LogicalPlan {
         }
     }
 
+    /// checks that the plan conforms to the listed invariant level, returning an Error if not
+    pub fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        match check {
+            InvariantLevel::Always => assert_always_invariants(self),
+            InvariantLevel::Executable => assert_executable_invariants(self),
+        }
+    }
+
     /// Helper for [Self::with_new_exprs] to use when no expressions are expected.
     #[inline]
     #[allow(clippy::needless_pass_by_value)] // expr is moved intentionally to ensure it's not used again
@@ -1306,18 +1319,13 @@ impl LogicalPlan {
                 join_type,
                 ..
             }) => match join_type {
-                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
-                    match (left.max_rows(), right.max_rows()) {
-                        (Some(left_max), Some(right_max)) => {
-                            let min_rows = match join_type {
-                                JoinType::Left => left_max,
-                                JoinType::Right => right_max,
-                                JoinType::Full => left_max + right_max,
-                                _ => 0,
-                            };
-                            Some((left_max * right_max).max(min_rows))
-                        }
-                        _ => None,
+                JoinType::Inner => Some(left.max_rows()? * right.max_rows()?),
+                JoinType::Left | JoinType::Right | JoinType::Full => {
+                    match (left.max_rows()?, right.max_rows()?, join_type) {
+                        (0, 0, _) => Some(0),
+                        (max_rows, 0, JoinType::Left | JoinType::Full) => Some(max_rows),
+                        (0, max_rows, JoinType::Right | JoinType::Full) => Some(max_rows),
+                        (left_max, right_max, _) => Some(left_max * right_max),
                     }
                 }
                 JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
@@ -1326,17 +1334,12 @@ impl LogicalPlan {
                 JoinType::RightSemi | JoinType::RightAnti => right.max_rows(),
             },
             LogicalPlan::Repartition(Repartition { input, .. }) => input.max_rows(),
-            LogicalPlan::Union(Union { inputs, .. }) => inputs
-                .iter()
-                .map(|plan| plan.max_rows())
-                .try_fold(0usize, |mut acc, input_max| {
-                    if let Some(i_max) = input_max {
-                        acc += i_max;
-                        Some(acc)
-                    } else {
-                        None
-                    }
-                }),
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                inputs.iter().try_fold(0usize, |mut acc, plan| {
+                    acc += plan.max_rows()?;
+                    Some(acc)
+                })
+            }
             LogicalPlan::TableScan(TableScan { fetch, .. }) => *fetch,
             LogicalPlan::EmptyRelation(_) => Some(0),
             LogicalPlan::RecursiveQuery(_) => None,
@@ -1492,7 +1495,9 @@ impl LogicalPlan {
                             (_, Some(dt)) => {
                                 param_types.insert(id.clone(), Some(dt.clone()));
                             }
-                            _ => {}
+                            _ => {
+                                param_types.insert(id.clone(), None);
+                            }
                         }
                     }
                     Ok(TreeNodeRecursion::Continue)
@@ -2364,6 +2369,19 @@ impl Filter {
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
+///
+/// # Output Schema
+///
+/// The output schema is the input schema followed by the window function
+/// expressions, in order.
+///
+/// For example, given the input schema `"A", "B", "C"` and the window function
+/// `SUM(A) OVER (PARTITION BY B+1 ORDER BY C)`, the output schema will be `"A",
+/// "B", "C", "SUM(A) OVER ..."` where `"SUM(A) OVER ..."` is the name of the
+/// output column.
+///
+/// Note that the `PARTITION BY` expression "B+1" is not produced in the output
+/// schema.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Window {
     /// The incoming logical plan
@@ -2623,6 +2641,107 @@ pub struct Union {
     pub inputs: Vec<Arc<LogicalPlan>>,
     /// Union schema. Should be the same for all inputs.
     pub schema: DFSchemaRef,
+}
+
+impl Union {
+    /// Constructs new Union instance deriving schema from inputs.
+    fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+        let schema = Self::derive_schema_from_inputs(&inputs, false)?;
+        Ok(Union { inputs, schema })
+    }
+
+    /// Constructs new Union instance deriving schema from inputs.
+    /// Inputs do not have to have matching types and produced schema will
+    /// take type from the first input.
+    // TODO (https://github.com/apache/datafusion/issues/14380): Avoid creating uncoerced union at all.
+    pub fn try_new_with_loose_types(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+        let schema = Self::derive_schema_from_inputs(&inputs, true)?;
+        Ok(Union { inputs, schema })
+    }
+
+    /// Constructs new Union instance deriving schema from inputs.
+    ///
+    /// `loose_types` if true, inputs do not have to have matching types and produced schema will
+    /// take type from the first input. TODO (<https://github.com/apache/datafusion/issues/14380>) this is not necessarily reasonable behavior.
+    fn derive_schema_from_inputs(
+        inputs: &[Arc<LogicalPlan>],
+        loose_types: bool,
+    ) -> Result<DFSchemaRef> {
+        if inputs.len() < 2 {
+            return plan_err!("UNION requires at least two inputs");
+        }
+        let first_schema = inputs[0].schema();
+        let fields_count = first_schema.fields().len();
+        for input in inputs.iter().skip(1) {
+            if fields_count != input.schema().fields().len() {
+                return plan_err!(
+                    "UNION queries have different number of columns: \
+                    left has {} columns whereas right has {} columns",
+                    fields_count,
+                    input.schema().fields().len()
+                );
+            }
+        }
+
+        let union_fields = (0..fields_count)
+            .map(|i| {
+                let fields = inputs
+                    .iter()
+                    .map(|input| input.schema().field(i))
+                    .collect::<Vec<_>>();
+                let first_field = fields[0];
+                let name = first_field.name();
+                let data_type = if loose_types {
+                    // TODO apply type coercion here, or document why it's better to defer
+                    // temporarily use the data type from the left input and later rely on the analyzer to
+                    // coerce the two schemas into a common one.
+                    first_field.data_type()
+                } else {
+                    fields.iter().skip(1).try_fold(
+                        first_field.data_type(),
+                        |acc, field| {
+                            if acc != field.data_type() {
+                                return plan_err!(
+                                    "UNION field {i} have different type in inputs: \
+                                    left has {} whereas right has {}",
+                                    first_field.data_type(),
+                                    field.data_type()
+                                );
+                            }
+                            Ok(acc)
+                        },
+                    )?
+                };
+                let nullable = fields.iter().any(|field| field.is_nullable());
+                let mut field = Field::new(name, data_type.clone(), nullable);
+                let field_metadata =
+                    intersect_maps(fields.iter().map(|field| field.metadata()));
+                field.set_metadata(field_metadata);
+                // TODO reusing table reference from the first schema is probably wrong
+                let table_reference = first_schema.qualified_field(i).0.cloned();
+                Ok((table_reference, Arc::new(field)))
+            })
+            .collect::<Result<_>>()?;
+        let union_schema_metadata =
+            intersect_maps(inputs.iter().map(|input| input.schema().metadata()));
+
+        // Functional Dependencies doesn't preserve after UNION operation
+        let schema = DFSchema::new_with_metadata(union_fields, union_schema_metadata)?;
+        let schema = Arc::new(schema);
+
+        Ok(schema)
+    }
+}
+
+fn intersect_maps<'a>(
+    inputs: impl IntoIterator<Item = &'a HashMap<String, String>>,
+) -> HashMap<String, String> {
+    let mut inputs = inputs.into_iter();
+    let mut merged: HashMap<String, String> = inputs.next().cloned().unwrap_or_default();
+    for input in inputs {
+        merged.retain(|k, v| input.get(k) == Some(v));
+    }
+    merged
 }
 
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
@@ -2967,6 +3086,16 @@ impl PartialOrd for DistinctOn {
 
 /// Aggregates its input based on a set of grouping and aggregate
 /// expressions (e.g. SUM).
+///
+/// # Output Schema
+///
+/// The output schema is the group expressions followed by the aggregate
+/// expressions in order.
+///
+/// For example, given the input schema `"A", "B", "C"` and the aggregate
+/// `SUM(A) GROUP BY C+B`, the output schema will be `"C+B", "SUM(A)"` where
+/// "C+B" and "SUM(A)" are the names of the output columns. Note that "C+B" is a
+/// single new column
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
@@ -3422,15 +3551,15 @@ pub enum Partitioning {
 ///   input             output_name
 ///  ┌─────────┐      ┌─────────┐
 ///  │{{1,2}}  │      │ 1       │
-///  ├─────────┼─────►├─────────┤           
-///  │{{3}}    │      │ 2       │           
-///  ├─────────┤      ├─────────┤           
-///  │{{4},{5}}│      │ 3       │           
-///  └─────────┘      ├─────────┤           
-///                   │ 4       │           
-///                   ├─────────┤           
-///                   │ 5       │           
-///                   └─────────┘           
+///  ├─────────┼─────►├─────────┤
+///  │{{3}}    │      │ 2       │
+///  ├─────────┤      ├─────────┤
+///  │{{4},{5}}│      │ 3       │
+///  └─────────┘      ├─────────┤
+///                   │ 4       │
+///                   ├─────────┤
+///                   │ 5       │
+///                   └─────────┘
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 pub struct ColumnUnnestList {
@@ -4318,5 +4447,26 @@ digraph {
         let mut rewriter = ProjectJumpRewriter::new();
         plan.rewrite_with_subqueries(&mut rewriter).unwrap();
         assert!(!rewriter.filter_found);
+    }
+
+    #[test]
+    fn test_with_unresolved_placeholders() {
+        let field_name = "id";
+        let placeholder_value = "$1";
+        let schema = Schema::new(vec![Field::new(field_name, DataType::Int32, false)]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .filter(col(field_name).eq(placeholder(placeholder_value)))
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Check that the placeholder parameters have not received a DataType.
+        let params = plan.get_parameter_types().unwrap();
+        assert_eq!(params.len(), 1);
+
+        let parameter_type = params.clone().get(placeholder_value).unwrap().clone();
+        assert_eq!(parameter_type, None);
     }
 }

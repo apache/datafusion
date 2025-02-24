@@ -89,6 +89,31 @@ pub(crate) fn find_unnest_node_within_select(plan: &LogicalPlan) -> Option<&Unne
     }
 }
 
+/// Recursively searches children of [LogicalPlan] to find Unnest node if exist
+/// until encountering a Relation node with single input
+pub(crate) fn find_unnest_node_until_relation(plan: &LogicalPlan) -> Option<&Unnest> {
+    // Note that none of the nodes that have a corresponding node can have more
+    // than 1 input node. E.g. Projection / Filter always have 1 input node.
+    let input = plan.inputs();
+    let input = if input.len() > 1 {
+        return None;
+    } else {
+        input.first()?
+    };
+
+    if let LogicalPlan::Unnest(unnest) = input {
+        Some(unnest)
+    } else if let LogicalPlan::TableScan(_) = input {
+        None
+    } else if let LogicalPlan::Subquery(_) = input {
+        None
+    } else if let LogicalPlan::SubqueryAlias(_) = input {
+        None
+    } else {
+        find_unnest_node_within_select(input)
+    }
+}
+
 /// Recursively searches children of [LogicalPlan] to find Window nodes if exist
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
 /// If Window node is not found prior to this or at all before reaching the end

@@ -16,16 +16,17 @@
 // under the License.
 
 use std::any::Any;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType;
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 
 use crate::utils::make_scalar_function;
-use datafusion_common::{internal_err, Result};
-use datafusion_expr::scalar_doc_sections::DOC_SECTION_STRING;
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_expr::{ColumnarValue, Documentation, Expr, Like};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_macros::user_doc;
 
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
@@ -34,6 +35,21 @@ pub fn starts_with(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(result) as ArrayRef)
 }
 
+#[user_doc(
+    doc_section(label = "String Functions"),
+    description = "Tests if a string starts with a substring.",
+    syntax_example = "starts_with(str, substr)",
+    sql_example = r#"```sql
+> select starts_with('datafusion','data');
++----------------------------------------------+
+| starts_with(Utf8("datafusion"),Utf8("data")) |
++----------------------------------------------+
+| true                                         |
++----------------------------------------------+
+```"#,
+    standard_argument(name = "str", prefix = "String"),
+    argument(name = "substr", description = "Substring to test for.")
+)]
 #[derive(Debug)]
 pub struct StartsWithFunc {
     signature: Signature,
@@ -83,34 +99,51 @@ impl ScalarUDFImpl for StartsWithFunc {
         }
     }
 
-    fn documentation(&self) -> Option<&Documentation> {
-        Some(get_starts_with_doc())
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &dyn SimplifyInfo,
+    ) -> Result<ExprSimplifyResult> {
+        if let Expr::Literal(scalar_value) = &args[1] {
+            // Convert starts_with(col, 'prefix') to col LIKE 'prefix%' with proper escaping
+            // Example: starts_with(col, 'ja%') -> col LIKE 'ja\%%'
+            //   1. 'ja%'         (input pattern)
+            //   2. 'ja\%'        (escape special char '%')
+            //   3. 'ja\%%'       (add suffix for starts_with)
+            let like_expr = match scalar_value {
+                ScalarValue::Utf8(Some(pattern)) => {
+                    let escaped_pattern = pattern.replace("%", "\\%");
+                    let like_pattern = format!("{}%", escaped_pattern);
+                    Expr::Literal(ScalarValue::Utf8(Some(like_pattern)))
+                }
+                ScalarValue::LargeUtf8(Some(pattern)) => {
+                    let escaped_pattern = pattern.replace("%", "\\%");
+                    let like_pattern = format!("{}%", escaped_pattern);
+                    Expr::Literal(ScalarValue::LargeUtf8(Some(like_pattern)))
+                }
+                ScalarValue::Utf8View(Some(pattern)) => {
+                    let escaped_pattern = pattern.replace("%", "\\%");
+                    let like_pattern = format!("{}%", escaped_pattern);
+                    Expr::Literal(ScalarValue::Utf8View(Some(like_pattern)))
+                }
+                _ => return Ok(ExprSimplifyResult::Original(args)),
+            };
+
+            return Ok(ExprSimplifyResult::Simplified(Expr::Like(Like {
+                negated: false,
+                expr: Box::new(args[0].clone()),
+                pattern: Box::new(like_expr),
+                escape_char: None,
+                case_insensitive: false,
+            })));
+        }
+
+        Ok(ExprSimplifyResult::Original(args))
     }
-}
 
-static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-
-fn get_starts_with_doc() -> &'static Documentation {
-    DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_STRING,
-            "Tests if a string starts with a substring.",
-            "starts_with(str, substr)",
-        )
-        .with_sql_example(
-            r#"```sql
-> select starts_with('datafusion','data');
-+----------------------------------------------+
-| starts_with(Utf8("datafusion"),Utf8("data")) |
-+----------------------------------------------+
-| true                                         |
-+----------------------------------------------+
-```"#,
-        )
-        .with_standard_argument("str", Some("String"))
-        .with_argument("substr", "Substring to test for.")
-        .build()
-    })
+    fn documentation(&self) -> Option<&Documentation> {
+        self.doc()
+    }
 }
 
 #[cfg(test)]

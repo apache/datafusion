@@ -24,6 +24,11 @@ use std::sync::Arc;
 use super::{DisplayAs, DisplayFormatType, PlanProperties};
 use crate::display::{display_orderings, ProjectSchemaDisplay};
 use crate::execution_plan::{Boundedness, EmissionType};
+use crate::limit::LimitStream;
+use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::projection::{
+    all_alias_free_columns, new_projections_for_columns, update_expr, ProjectionExec,
+};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
 
@@ -31,10 +36,8 @@ use arrow::datatypes::SchemaRef;
 use arrow_schema::Schema;
 use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_execution::TaskContext;
-use datafusion_physical_expr::{EquivalenceProperties, LexOrdering};
+use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalSortExpr};
 
-use crate::limit::LimitStream;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use log::debug;
@@ -270,6 +273,53 @@ impl ExecutionPlan for StreamingTableExec {
                 ))
             }
         })
+    }
+
+    /// Tries to embed `projection` to its input (`streaming table`).
+    /// If possible, returns [`StreamingTableExec`] as the top plan. Otherwise,
+    /// returns `None`.
+    fn try_swapping_with_projection(
+        &self,
+        projection: &ProjectionExec,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if !all_alias_free_columns(projection.expr()) {
+            return Ok(None);
+        }
+
+        let streaming_table_projections =
+            self.projection().as_ref().map(|i| i.as_ref().to_vec());
+        let new_projections = new_projections_for_columns(
+            projection,
+            &streaming_table_projections
+                .unwrap_or((0..self.schema().fields().len()).collect()),
+        );
+
+        let mut lex_orderings = vec![];
+        for lex_ordering in self.projected_output_ordering().into_iter() {
+            let mut orderings = LexOrdering::default();
+            for order in lex_ordering {
+                let Some(new_ordering) =
+                    update_expr(&order.expr, projection.expr(), false)?
+                else {
+                    return Ok(None);
+                };
+                orderings.push(PhysicalSortExpr {
+                    expr: new_ordering,
+                    options: order.options,
+                });
+            }
+            lex_orderings.push(orderings);
+        }
+
+        StreamingTableExec::try_new(
+            Arc::clone(self.partition_schema()),
+            self.partitions().clone(),
+            Some(new_projections.as_ref()),
+            lex_orderings,
+            self.is_infinite(),
+            self.limit(),
+        )
+        .map(|e| Some(Arc::new(e) as _))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
