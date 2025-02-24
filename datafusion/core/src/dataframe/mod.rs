@@ -1941,12 +1941,19 @@ impl DataFrame {
     ///
     /// # Example
     /// ```
-    /// // Example usage of fill_null:
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # use datafusion_common::ScalarValue;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
     /// // Fill nulls in only columns "a" and "c":
     /// let df = df.fill_null(ScalarValue::from(0), vec!["a".to_owned(), "c".to_owned()])?;
     /// // Fill nulls across all columns:
     /// let df = df.fill_null(ScalarValue::from(0), vec![])?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn fill_null(
         &self,
