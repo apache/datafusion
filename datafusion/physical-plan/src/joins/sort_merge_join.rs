@@ -524,7 +524,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         )?;
         let new_props = new_plan.cache.clone().with_node_id(_node_id);
         new_plan.cache = new_props;
-        Ok(Some(Arc::new(new_plan))) }
+        Ok(Some(Arc::new(new_plan)))
+    }
     /// Tries to swap the projection with its input [`SortMergeJoinExec`]. If it can be done,
     /// it returns the new swapped version having the [`SortMergeJoinExec`] as the top plan.
     /// Otherwise, it returns None.

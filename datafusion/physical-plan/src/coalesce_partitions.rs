@@ -191,7 +191,8 @@ impl ExecutionPlan for CoalescePartitionsExec {
         let mut new_plan = CoalescePartitionsExec::new(self.input.clone());
         let new_props = new_plan.cache.clone().with_node_id(_node_id);
         new_plan.cache = new_props;
-        Ok(Some(Arc::new(new_plan)))}
+        Ok(Some(Arc::new(new_plan)))
+    }
 
     /// Tries to swap `projection` with its input, which is known to be a
     /// [`CoalescePartitionsExec`]. If possible, performs the swap and returns

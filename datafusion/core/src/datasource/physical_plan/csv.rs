@@ -502,7 +502,8 @@ impl ExecutionPlan for CsvExec {
             metrics: self.metrics.clone(),
             file_compression_type: self.file_compression_type,
             cache: new_cache,
-        })))}
+        })))
+    }
     fn try_swapping_with_projection(
         &self,
         projection: &ProjectionExec,

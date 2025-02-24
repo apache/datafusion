@@ -257,7 +257,6 @@ impl ExecutionPlan for DataSinkExec {
         let mut new_plan = DataSinkExec::new(
             self.input.clone(),
             self.sink.clone(),
-            self.sink_schema.clone(),
             self.sort_order.clone(),
         );
         let new_props = new_plan.cache.clone().with_node_id(_node_id);

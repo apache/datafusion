@@ -415,7 +415,7 @@ impl ExecutionPlan for FilterExec {
         new_plan.cache = new_props;
         Ok(Some(Arc::new(new_plan)))
     }
-    
+
     /// Tries to swap `projection` with its input (`filter`). If possible, performs
     /// the swap and returns [`FilterExec`] as the top plan. Otherwise, returns `None`.
     fn try_swapping_with_projection(

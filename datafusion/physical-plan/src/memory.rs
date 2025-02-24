@@ -185,7 +185,8 @@ impl ExecutionPlan for MemoryExec {
         };
         let new_props = new_plan.cache.clone().with_node_id(_node_id);
         new_plan.cache = new_props;
-        Ok(Some(Arc::new(new_plan)))}
+        Ok(Some(Arc::new(new_plan)))
+    }
     fn try_swapping_with_projection(
         &self,
         projection: &ProjectionExec,

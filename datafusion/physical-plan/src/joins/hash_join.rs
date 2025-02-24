@@ -885,7 +885,8 @@ impl ExecutionPlan for HashJoinExec {
         )?;
         let new_props = new_plan.cache.clone().with_node_id(_node_id);
         new_plan.cache = new_props;
-        Ok(Some(Arc::new(new_plan))) }
+        Ok(Some(Arc::new(new_plan)))
+    }
     /// Tries to push `projection` down through `hash_join`. If possible, performs the
     /// pushdown and returns a new [`HashJoinExec`] as the top plan which has projections
     /// as its children. Otherwise, returns `None`.
