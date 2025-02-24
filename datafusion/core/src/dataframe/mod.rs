@@ -1937,7 +1937,17 @@ impl DataFrame {
     ///
     /// # Arguments
     /// * `value` - Value to fill nulls with
-    /// * `columns` - List of column names to fill. If empty, fills all columns
+    /// * `columns` - List of column names to fill. If empty, fills all columns.
+    ///
+    /// # Example
+    /// ```
+    /// // Example usage of fill_null:
+    /// let df = ctx.read_csv("tests/data/example.csv", CsvReadOptions::new()).await?;
+    /// // Fill nulls in only columns "a" and "c":
+    /// let df = df.fill_null(ScalarValue::from(0), vec!["a".to_owned(), "c".to_owned()])?;
+    /// // Fill nulls across all columns:
+    /// let df = df.fill_null(ScalarValue::from(0), vec![])?;
+    /// ```
     pub fn fill_null(
         &self,
         value: ScalarValue,
