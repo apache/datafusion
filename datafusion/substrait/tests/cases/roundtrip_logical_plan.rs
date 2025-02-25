@@ -687,15 +687,38 @@ async fn simple_intersect() -> Result<()> {
     // Substrait treats both count(*) and count(1) the same
     assert_expected_plan(
         "SELECT count(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
-        "Aggregate: groupBy=[[]], aggr=[[count(*)]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
          \n  Projection: \
          \n    LeftSemi Join: data.a = data2.a\
          \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
          \n        TableScan: data projection=[a]\
          \n      TableScan: data2 projection=[a]",
         true
-    )
-        .await
+    ).await?;
+
+    assert_expected_plan(
+        "SELECT count() FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count()]]\
+         \n  Projection: \
+         \n    LeftSemi Join: data.a = data2.a\
+         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
+         \n        TableScan: data projection=[a]\
+         \n      TableScan: data2 projection=[a]",
+        true
+    ).await?;
+
+    assert_expected_plan(
+        "SELECT count(1) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+         \n  Projection: \
+         \n    LeftSemi Join: data.a = data2.a\
+         \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
+         \n        TableScan: data projection=[a]\
+         \n      TableScan: data2 projection=[a]",
+        true
+    ).await?;
+    
+    Ok(())
 }
 
 #[tokio::test]
@@ -821,8 +844,8 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     // In this case the aliasing happens at a different point in the plan, so we cannot use roundtrip.
     // Schema check works because we set aliases to what the Substrait consumer will generate.
     assert_expected_plan(
-        "SELECT count() FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);",
-        "Aggregate: groupBy=[[]], aggr=[[count(*)]]\
+        "SELECT count(*) FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);",
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
         \n  Projection: \
         \n    LeftSemi Join: left.a = right.a\
         \n      SubqueryAlias: left\
@@ -831,7 +854,35 @@ async fn simple_intersect_table_reuse() -> Result<()> {
         \n      SubqueryAlias: right\
         \n        TableScan: data projection=[a]",
         true
-    ).await
+    ).await?;
+
+    assert_expected_plan(
+        "SELECT count() FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);",
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count()]]\
+        \n  Projection: \
+        \n    LeftSemi Join: left.a = right.a\
+        \n      SubqueryAlias: left\
+        \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n          TableScan: data projection=[a]\
+        \n      SubqueryAlias: right\
+        \n        TableScan: data projection=[a]",
+        true
+    ).await?;
+
+    assert_expected_plan(
+        "SELECT count(1) FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);",
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        \n  Projection: \
+        \n    LeftSemi Join: left.a = right.a\
+        \n      SubqueryAlias: left\
+        \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n          TableScan: data projection=[a]\
+        \n      SubqueryAlias: right\
+        \n        TableScan: data projection=[a]",
+        true
+    ).await?;
+
+    Ok(())
 }
 
 #[tokio::test]
