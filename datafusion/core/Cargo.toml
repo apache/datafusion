@@ -29,12 +29,11 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
-
-[lib]
-name = "datafusion"
-path = "src/lib.rs"
 
 [features]
 nested_expressions = ["datafusion-functions-nested"]
@@ -132,7 +131,7 @@ zstd = { version = "0.13", optional = true, default-features = false }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-criterion = { version = "0.5", features = ["async_tokio"] }
+criterion = { workspace = true, features = ["async_tokio"] }
 ctor = { workspace = true }
 dashmap = "6.1.0"
 datafusion-doc = { workspace = true }
@@ -222,3 +221,7 @@ required-features = ["nested_expressions"]
 [[bench]]
 harness = false
 name = "dataframe"
+
+[[bench]]
+harness = false
+name = "spm"

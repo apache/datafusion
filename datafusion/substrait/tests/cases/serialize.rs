@@ -17,6 +17,7 @@
 
 #[cfg(test)]
 mod tests {
+    use datafusion::common::assert_contains;
     use datafusion::datasource::provider_as_source;
     use datafusion::logical_expr::LogicalPlanBuilder;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
@@ -30,6 +31,25 @@ mod tests {
     use substrait::proto::plan_rel::RelType;
     use substrait::proto::rel_common::{Emit, EmitKind};
     use substrait::proto::{rel, RelCommon};
+
+    #[tokio::test]
+    async fn serialize_to_file() -> Result<()> {
+        let ctx = create_context().await?;
+        let path = "tests/serialize_to_file.bin";
+        let sql = "SELECT a, b FROM data";
+
+        // Test case 1: serializing to a non-existing file should succeed.
+        serializer::serialize(sql, &ctx, path).await?;
+        serializer::deserialize(path).await?;
+
+        // Test case 2: serializing to an existing file should fail.
+        let got = serializer::serialize(sql, &ctx, path).await.unwrap_err();
+        assert_contains!(got.to_string(), "File exists");
+
+        fs::remove_file(path)?;
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn serialize_simple_select() -> Result<()> {

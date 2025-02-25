@@ -37,7 +37,8 @@ use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
-use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::{

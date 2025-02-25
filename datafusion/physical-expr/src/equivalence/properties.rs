@@ -640,7 +640,7 @@ impl EquivalenceProperties {
                         req.expr.eq(&existing.expr)
                             && req
                                 .options
-                                .map_or(true, |req_opts| req_opts == existing.options)
+                                .is_none_or(|req_opts| req_opts == existing.options)
                     },
                 )
         })
@@ -2259,7 +2259,7 @@ impl UnionEquivalentOrderingBuilder {
     ) -> AddedOrdering {
         if ordering.is_empty() {
             AddedOrdering::Yes
-        } else if constants.is_empty() && properties.ordering_satisfy(ordering.as_ref()) {
+        } else if properties.ordering_satisfy(ordering.as_ref()) {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);

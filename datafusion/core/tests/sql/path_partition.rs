@@ -26,6 +26,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
     assert_batches_sorted_eq,
     datasource::{
@@ -43,7 +44,6 @@ use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::{col, lit, Expr, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
 use bytes::Bytes;
