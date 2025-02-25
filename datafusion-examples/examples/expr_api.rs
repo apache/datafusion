@@ -24,7 +24,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::stats::Precision;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{ColumnStatistics, DFSchema};
+use datafusion::common::{internal_datafusion_err, ColumnStatistics, DFSchema};
 use datafusion::common::{ScalarValue, ToDFSchema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::first_last::first_value_udaf;
@@ -302,10 +302,17 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
         distinct_count: Precision::Absent,
     };
 
+    let field = schema.fields().first().ok_or_else(|| {
+        internal_datafusion_err!("schema does not have a field at index 0")
+    })?;
+
     // We can then build our expression boundaries from the column statistics
     // allowing the analysis to be more precise.
-    let initial_boundaries =
-        vec![ExprBoundaries::try_from_column(&schema, &column_stats, 0)?];
+    let initial_boundaries = vec![ExprBoundaries::try_from_column(
+        field.as_ref(),
+        &column_stats,
+        0,
+    )?];
 
     // With the above we can perform the boundary analysis similar to the previous
     // example.

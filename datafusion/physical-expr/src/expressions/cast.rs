@@ -23,7 +23,7 @@ use std::sync::Arc;
 use crate::physical_expr::PhysicalExpr;
 
 use arrow::compute::{can_cast_types, CastOptions};
-use arrow::datatypes::{DataType, DataType::*, Schema};
+use arrow::datatypes::{DataType, DataType::*, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{not_impl_err, Result};
@@ -162,6 +162,10 @@ impl PhysicalExpr for CastExpr {
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         // Cast current node's interval to the right type:
         children[0].cast_to(&self.cast_type, &self.cast_options)
+    }
+
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        self.expr().supports_bounds_evaluation(schema)
     }
 
     fn propagate_constraints(
