@@ -81,7 +81,7 @@ pub trait BatchDeserializer<T>: Send + fmt::Debug {
 /// [`arrow::csv::reader::Decoder`]: ::arrow::csv::reader::Decoder
 /// [`Decoder::decode`]: ::arrow::json::reader::Decoder::decode
 /// [`Decoder::flush`]: ::arrow::json::reader::Decoder::flush
-pub trait Decoder: Send + fmt::Debug {
+pub(crate) trait Decoder: Send + fmt::Debug {
     /// See [`arrow::json::reader::Decoder::decode`].
     ///
     /// [`arrow::json::reader::Decoder::decode`]: ::arrow::json::reader::Decoder::decode
@@ -155,7 +155,7 @@ impl<T: Decoder> BatchDeserializer<Bytes> for DecoderDeserializer<T> {
 /// encoded data, into a stream of `RecordBatch` objects, following the specified
 /// schema and formatting options. It also handles any buffering necessary to satisfy
 /// the `Decoder` interface.
-pub struct DecoderDeserializer<T: Decoder> {
+pub(crate) struct DecoderDeserializer<T: Decoder> {
     /// The underlying decoder used for deserialization
     pub(crate) decoder: T,
     /// The buffer used to store the remaining bytes to be decoded
