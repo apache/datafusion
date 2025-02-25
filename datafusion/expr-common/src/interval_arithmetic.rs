@@ -960,10 +960,18 @@ pub fn apply_operator(op: &Operator, lhs: &Interval, rhs: &Interval) -> Result<I
         Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
             NullableInterval::from(lhs)
                 .apply_operator(op, &rhs.into())
-                .and_then(|x| {
-                    x.values().cloned().ok_or(DataFusionError::Internal(
-                        "Unexpected null value interval".to_string(),
-                    ))
+                .and_then(|nullable_interval| match nullable_interval {
+                    NullableInterval::Null { .. } => {
+                        let return_type = BinaryTypeCoercer::new(
+                            &lhs.data_type(),
+                            op,
+                            &rhs.data_type(),
+                        )
+                        .get_result_type()?;
+                        Interval::make_unbounded(&return_type)
+                    }
+                    NullableInterval::MaybeNull { values }
+                    | NullableInterval::NotNull { values } => Ok(values),
                 })
         }
         _ => internal_err!("Interval arithmetic does not support the operator {op}"),
