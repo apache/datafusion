@@ -212,6 +212,7 @@ impl PrintFormat {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn process_batch(
         &self,
         batch: &RecordBatch,
@@ -273,7 +274,7 @@ impl PrintFormat {
     pub fn print_header(
         &self,
         schema: &SchemaRef,
-        widths: &Vec<usize>,
+        widths: &[usize],
         writer: &mut dyn std::io::Write,
     ) -> Result<()> {
         Self::print_border(widths, writer)?;
@@ -293,7 +294,7 @@ impl PrintFormat {
     pub fn print_batch_with_widths(
         &self,
         batch: &RecordBatch,
-        widths: &Vec<usize>,
+        widths: &[usize],
         writer: &mut dyn std::io::Write,
     ) -> Result<()> {
         let formatters = batch
@@ -312,38 +313,33 @@ impl PrintFormat {
         Ok(())
     }
 
-    // 辅助函数：打印一行点行，用于表示被省略的行
     pub fn print_dotted_line(
         &self,
-        widths: &Vec<usize>,
+        widths: &[usize],
         writer: &mut dyn std::io::Write,
     ) -> Result<()> {
-        // 构造每个单元格，点号左对齐，长度与对应宽度相同
         let cells: Vec<String> = widths
             .iter()
             .map(|&w| format!(" {: <width$} ", ".", width = w))
             .collect();
-        // 按照 " | " 拼接，并在两侧加上边框符号
         writeln!(writer, "|{}|", cells.join("|"))?;
         Ok(())
     }
 
-    // 辅助函数：打印底部边框
     pub fn print_bottom_border(
         &self,
-        widths: &Vec<usize>,
+        widths: &[usize],
         writer: &mut dyn std::io::Write,
     ) -> Result<()> {
-        // 构造每个单元格对应的边框部分，例如 "+------------+"
         let cells: Vec<String> = widths
             .iter()
-            .map(|&w| "-".repeat(w + 2)) // 加2可以对齐左右两侧的空格
+            .map(|&w| "-".repeat(w + 2))
             .collect();
         writeln!(writer, "+{}+", cells.join("+"))?;
         Ok(())
     }
 
-    fn print_border(widths: &Vec<usize>, writer: &mut dyn std::io::Write) -> Result<()> {
+    fn print_border(widths: &[usize], writer: &mut dyn std::io::Write) -> Result<()> {
         let cells: Vec<String> = widths.iter().map(|&w| "-".repeat(w + 2)).collect();
         writeln!(writer, "+{}+", cells.join("+"))?;
         Ok(())

@@ -128,62 +128,60 @@ impl PrintOptions {
             let batch = batch?;
             let batch_rows = batch.num_rows();
 
-            if !max_rows_reached {
-                if total_count < max_rows {
-                    if total_count + batch_rows > max_rows {
-                        let needed = max_rows - total_count;
-                        let batch_to_print = batch.slice(0, needed);
-                        print_options.format.process_batch(
-                            &batch_to_print,
-                            schema.clone(),
-                            &mut preview_batches,
-                            &mut preview_row_count,
-                            preview_limit,
-                            &mut precomputed_widths,
-                            &mut header_printed,
-                            writer,
-                        )?;
-                        if precomputed_widths.is_none() {
-                            let widths = print_options.format.compute_column_widths(
-                                &preview_batches,
-                                schema.clone(),
+            if !max_rows_reached && total_count < max_rows {
+                if total_count + batch_rows > max_rows {
+                    let needed = max_rows - total_count;
+                    let batch_to_print = batch.slice(0, needed);
+                    print_options.format.process_batch(
+                        &batch_to_print,
+                        schema.clone(),
+                        &mut preview_batches,
+                        &mut preview_row_count,
+                        preview_limit,
+                        &mut precomputed_widths,
+                        &mut header_printed,
+                        writer,
+                    )?;
+                    if precomputed_widths.is_none() {
+                        let widths = print_options
+                            .format
+                            .compute_column_widths(&preview_batches, schema.clone())?;
+                        precomputed_widths = Some(widths.clone());
+                        if !header_printed {
+                            print_options
+                                .format
+                                .print_header(&schema, &widths, writer)?;
+                            header_printed = true;
+                        }
+                        for preview_batch in preview_batches.drain(..) {
+                            print_options.format.print_batch_with_widths(
+                                &preview_batch,
+                                &widths,
+                                writer,
                             )?;
-                            precomputed_widths = Some(widths.clone());
-                            if !header_printed {
-                                print_options
-                                    .format
-                                    .print_header(&schema, &widths, writer)?;
-                                header_printed = true;
-                            }
-                            for preview_batch in preview_batches.drain(..) {
-                                print_options.format.print_batch_with_widths(
-                                    &preview_batch,
-                                    &widths,
-                                    writer,
-                                )?;
-                            }
                         }
-                        if let Some(ref widths) = precomputed_widths {
-                            for _ in 0..3 {
-                                print_options.format.print_dotted_line(widths, writer)?;
-                            }
-                            print_options.format.print_bottom_border(widths, writer)?;
-                        }
-                        max_rows_reached = true;
-                    } else {
-                        print_options.format.process_batch(
-                            &batch,
-                            schema.clone(),
-                            &mut preview_batches,
-                            &mut preview_row_count,
-                            preview_limit,
-                            &mut precomputed_widths,
-                            &mut header_printed,
-                            writer,
-                        )?;
                     }
+                    if let Some(ref widths) = precomputed_widths {
+                        for _ in 0..3 {
+                            print_options.format.print_dotted_line(widths, writer)?;
+                        }
+                        print_options.format.print_bottom_border(widths, writer)?;
+                    }
+                    max_rows_reached = true;
+                } else {
+                    print_options.format.process_batch(
+                        &batch,
+                        schema.clone(),
+                        &mut preview_batches,
+                        &mut preview_row_count,
+                        preview_limit,
+                        &mut precomputed_widths,
+                        &mut header_printed,
+                        writer,
+                    )?;
                 }
             }
+
             total_count += batch_rows;
         }
 
@@ -199,7 +197,6 @@ impl PrintOptions {
                         precomputed_widths.as_ref().unwrap(),
                         writer,
                     )?;
-                    header_printed = true;
                 }
             }
             if let Some(ref widths) = precomputed_widths {
@@ -207,11 +204,10 @@ impl PrintOptions {
             }
         }
 
-        // 打印执行详情（例如总行数、耗时等）
         let formatted_exec_details = print_options.get_execution_details_formatted(
             total_count,
             print_options.maxrows,
-            now, // 查询开始时间或当前时间
+            now,
         );
         if !print_options.quiet {
             writeln!(writer, "{}", formatted_exec_details)?;

@@ -26,25 +26,17 @@ use crate::{
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
-use arrow::array::RecordBatch;
-use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
-use arrow::util::display::{ArrayFormatter, ValueFormatter};
-use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
-use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
 use datafusion::sql::parser::{DFParser, Statement};
 use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
-use futures::StreamExt;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
 use std::collections::HashMap;
@@ -240,11 +232,6 @@ pub(super) async fn exec_and_print(
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
 
-        // Track memory usage for the query result if it's bounded
-        let mut reservation = MemoryConsumer::new("DataFusion-Cli")
-            .with_can_spill(false)
-            .register(task_ctx.memory_pool());
-
         let is_unbounded = physical_plan.boundedness().is_unbounded();
         let mut stream = execute_stream(Arc::clone(&physical_plan), task_ctx.clone())?;
 
@@ -286,7 +273,7 @@ pub(super) async fn exec_and_print(
             adjusted
                 .into_inner()
                 .print_table_batch(
-                    &print_options,
+                    print_options,
                     schema,
                     &mut stream,
                     max_rows,
