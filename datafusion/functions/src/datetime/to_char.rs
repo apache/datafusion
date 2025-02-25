@@ -150,7 +150,7 @@ impl ScalarUDFImpl for ToCharFunc {
             // constant format
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(format))) => {
                 // invoke to_char_scalar with the known string, without converting to array
-                _to_char_scalar(date_time.clone(), Some(&format))
+                _to_char_scalar(date_time.clone(), Some(format))
             }
             ColumnarValue::Array(_) => _to_char_array(&args),
             _ => {
