@@ -56,10 +56,28 @@ impl ExprPlanner for AggregateFunctionPlanner {
 
         let saved_name = NamePreserver::new_for_projection().save(&origin_expr);
 
-        let Expr::AggregateFunction(AggregateFunction { func, params: AggregateFunctionParams { args, distinct, filter, order_by, null_treatment } }) = origin_expr else {
+        let Expr::AggregateFunction(AggregateFunction {
+            func,
+            params:
+                AggregateFunctionParams {
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                },
+        }) = origin_expr
+        else {
             unreachable!("")
         };
-        let raw_expr = RawAggregateExpr { func, args, distinct, filter, order_by, null_treatment };
+        let raw_expr = RawAggregateExpr {
+            func,
+            args,
+            distinct,
+            filter,
+            order_by,
+            null_treatment,
+        };
 
         // handle count() and count(*) case
         // convert to count(1) as "count()"
