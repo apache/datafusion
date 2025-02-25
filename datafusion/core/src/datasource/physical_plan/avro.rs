@@ -21,14 +21,16 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use super::{FileOpener, FileScanConfig};
+use super::FileOpener;
 #[cfg(feature = "avro")]
 use crate::datasource::avro_to_arrow::Reader as AvroReader;
-use crate::datasource::data_source::FileSource;
+
 use crate::error::Result;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};

@@ -22,8 +22,8 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::{calculate_range, FileScanConfig, RangeCalculation};
-use crate::datasource::data_source::FileSource;
+use super::{calculate_range, RangeCalculation};
+
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
@@ -35,6 +35,8 @@ use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};

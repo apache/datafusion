@@ -38,7 +38,8 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
-    GroupingSet, LogicalPlan, LogicalPlanBuilder, Partitioning,
+    GroupingSet, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
+    Partitioning,
 };
 
 use indexmap::IndexMap;
@@ -371,7 +372,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let agg_expr = agg.aggr_expr.clone();
                 let (new_input, new_group_by_exprs) =
                     self.try_process_group_by_unnest(agg)?;
+                let options = LogicalPlanBuilderOptions::new()
+                    .with_add_implicit_group_by_exprs(true);
                 LogicalPlanBuilder::from(new_input)
+                    .with_options(options)
                     .aggregate(new_group_by_exprs, agg_expr)?
                     .build()
             }
@@ -744,7 +748,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         aggr_exprs: &[Expr],
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
         // create the aggregate plan
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
         let plan = LogicalPlanBuilder::from(input.clone())
+            .with_options(options)
             .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
         let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {

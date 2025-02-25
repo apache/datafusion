@@ -32,9 +32,7 @@ use super::{
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::demux::DemuxedStreamReceiver;
 use crate::datasource::file_format::write::BatchSerializer;
-use crate::datasource::physical_plan::{
-    FileGroupDisplay, FileSink, FileSinkConfig, JsonSource,
-};
+use crate::datasource::physical_plan::{FileSink, FileSinkConfig, JsonSource};
 use crate::error::Result;
 use crate::execution::SessionState;
 use crate::physical_plan::insert::{DataSink, DataSinkExec};
@@ -52,12 +50,13 @@ use datafusion_common::config::{ConfigField, ConfigFileType, JsonOptions};
 use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::{not_impl_err, GetExt, DEFAULT_JSON_EXTENSION};
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_datasource::display::FileGroupDisplay;
+use datafusion_datasource::file::FileSource;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_plan::ExecutionPlan;
 
-use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
