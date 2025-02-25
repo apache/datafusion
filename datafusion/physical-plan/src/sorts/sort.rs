@@ -24,7 +24,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::common::{spawn_buffered, IPCWriter};
+use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
@@ -35,6 +35,7 @@ use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::{
     get_record_batch_memory_size, read_spill_as_stream, spill_record_batches,
+    IPCStreamWriter,
 };
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
@@ -402,7 +403,7 @@ impl ExternalSorter {
         let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let batches = std::mem::take(&mut self.in_mem_batches);
         let (spilled_rows, spilled_bytes) = spill_record_batches(
-            batches,
+            &batches,
             spill_file.path().into(),
             Arc::clone(&self.schema),
         )?;
@@ -439,36 +440,35 @@ impl ExternalSorter {
         // `self.in_mem_batches` is already taken away by the sort_stream, now it is empty.
         // We'll gradually collect the sorted stream into self.in_mem_batches, or directly
         // write sorted batches to disk when the memory is insufficient.
-        let mut spill_writer: Option<IPCWriter> = None;
+        let mut spill_writer: Option<IPCStreamWriter> = None;
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
-            match &mut spill_writer {
-                None => {
-                    let sorted_size = get_reserved_byte_for_record_batch(&batch);
-                    if self.reservation.try_grow(sorted_size).is_err() {
-                        // Directly write in_mem_batches as well as all the remaining batches in
-                        // sorted_stream to disk. Further batches fetched from `sorted_stream` will
-                        // be handled by the `Some(writer)` matching arm.
-                        let spill_file =
-                            self.runtime.disk_manager.create_tmp_file("Sorting")?;
-                        let mut writer = IPCWriter::new(spill_file.path(), &self.schema)?;
-                        // Flush everything in memory to the spill file
-                        for batch in self.in_mem_batches.drain(..) {
-                            writer.write(&batch)?;
-                        }
-                        // as well as the newly sorted batch
-                        writer.write(&batch)?;
-                        spill_writer = Some(writer);
-                        self.reservation.free();
-                        self.spills.push(spill_file);
-                    } else {
-                        self.in_mem_batches.push(batch);
-                        self.in_mem_batches_sorted = true;
-                    }
-                }
-                Some(writer) => {
+
+            // If we've started spilling, just keep spilling
+            if let Some(spill_writer) = &mut spill_writer {
+                spill_writer.write(&batch)?;
+                continue;
+            }
+
+            let sorted_size = get_reserved_byte_for_record_batch(&batch);
+            if self.reservation.try_grow(sorted_size).is_err() {
+                // Directly write in_mem_batches as well as all the remaining batches in
+                // sorted_stream to disk. Further batches fetched from `sorted_stream` will
+                // be handled by the `Some(writer)` matching arm.
+                let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
+                let mut writer = IPCStreamWriter::new(spill_file.path(), &self.schema)?;
+                // Flush everything in memory to the spill file
+                for batch in self.in_mem_batches.drain(..) {
                     writer.write(&batch)?;
                 }
+                // as well as the newly sorted batch
+                writer.write(&batch)?;
+                spill_writer = Some(writer);
+                self.reservation.free();
+                self.spills.push(spill_file);
+            } else {
+                self.in_mem_batches.push(batch);
+                self.in_mem_batches_sorted = true;
             }
         }
 
