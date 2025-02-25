@@ -3209,29 +3209,19 @@ async fn apply_enforce_distribution_multiple_times() -> Result<()> {
         |_, _| (),
     )?;
 
-    let optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
-        Arc::new(OutputRequirements::new_add_mode()),
-        Arc::new(EnforceDistribution::new()),
-        Arc::new(EnforceSorting::new()),
-        Arc::new(ProjectionPushdown::new()),
-        Arc::new(CoalesceBatches::new()),
-        Arc::new(EnforceDistribution::new()), // -- Add enforce distribution rule again
-        // The second `EnforceDistribution` should be run before removing `OutputRequirements` to reproduce the bug.
-        Arc::new(OutputRequirements::new_remove_mode()),
-        Arc::new(ProjectionPushdown::new()),
-        Arc::new(LimitPushdown::new()),
-        Arc::new(SanityCheckPlan::new()),
-    ];
-
     let planner = DefaultPhysicalPlanner::default();
     let session_state = SessionStateBuilder::new()
         .with_config(ctx.copied_config())
         .with_default_features()
-        .with_physical_optimizer_rules(optimizers)
+        // The second `EnforceDistribution` should be run with `OutputRequirements` to reproduce the bug.
+        .with_physical_optimizer_rule(Arc::new(OutputRequirements::new_add_mode()))
+        .with_physical_optimizer_rule(Arc::new(EnforceDistribution::new())) // -- Add enforce distribution rule again
+        .with_physical_optimizer_rule(Arc::new(OutputRequirements::new_remove_mode()))
         .build();
     let optimized_physical_plan = planner
         .create_physical_plan(&optimized_logical_plan, &session_state)
         .await?;
+
     let normalizer = ExplainNormalizer::new();
     let actual = format!(
         "{}",
