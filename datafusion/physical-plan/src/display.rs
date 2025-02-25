@@ -18,7 +18,7 @@
 //! Implementation of physical plan display. See
 //! [`crate::displayable`] for examples of how to format
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Formatter;
 use std::{fmt, str::FromStr};
 
@@ -777,7 +777,10 @@ impl TreeRenderVisitor<'_, '_> {
 
         let mut requires_padding = false;
         let mut was_inlined = false;
-        for (key, value) in extra_info {
+
+        // use BTreeMap for repeatable key order
+        let sorted_extra_info: BTreeMap<_, _> = extra_info.iter().collect();
+        for (key, value) in sorted_extra_info {
             let mut str = Self::remove_padding(value);
             if str.is_empty() {
                 continue;
