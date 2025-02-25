@@ -1068,7 +1068,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: digest(test.column1_utf8view, Utf8View("md5")) AS c
+01)Projection: digest(test.column1_utf8view, Utf8("md5")) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no unexpected casts for string_to_array

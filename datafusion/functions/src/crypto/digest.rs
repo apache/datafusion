@@ -69,17 +69,17 @@ impl Default for DigestFunc {
 impl DigestFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::new(
-                TypeSignature::Coercible(vec![
-                    // First argument: Accepts string types and can coerce from binary
-                    Coercion::new_implicit(
-                        TypeSignatureClass::Native(logical_string()),
-                        vec![TypeSignatureClass::Native(logical_binary())],
-                        NativeType::String,
-                    ),
-                    // Second argument: Only accepts string types, no coercion from binary
-                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                ]),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_binary())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                ],
                 Volatility::Immutable,
             ),
         }
