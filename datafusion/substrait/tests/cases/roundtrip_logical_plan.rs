@@ -717,7 +717,7 @@ async fn simple_intersect() -> Result<()> {
          \n      TableScan: data2 projection=[a]",
         true
     ).await?;
-    
+
     Ok(())
 }
 
