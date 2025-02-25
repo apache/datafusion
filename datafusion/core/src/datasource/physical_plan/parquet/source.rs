@@ -20,13 +20,10 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::datasource::data_source::FileSource;
 use crate::datasource::physical_plan::parquet::opener::ParquetOpener;
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::DefaultParquetFileReaderFactory;
-use crate::datasource::physical_plan::{
-    FileOpener, FileScanConfig, ParquetFileReaderFactory,
-};
+use crate::datasource::physical_plan::{FileOpener, ParquetFileReaderFactory};
 use crate::datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
@@ -34,6 +31,8 @@ use crate::datasource::schema_adapter::{
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::Statistics;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
