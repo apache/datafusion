@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 
 use arrow::array::ArrayData;
-use arrow::datatypes::SchemaRef;
-use arrow::ipc::reader::FileReader;
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
 use arrow::record_batch::RecordBatch;
 use log::debug;
 use tokio::sync::mpsc::Sender;
@@ -34,7 +34,6 @@ use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::human_readable_size;
 use datafusion_execution::SendableRecordBatchStream;
 
-use crate::common::IPCWriter;
 use crate::stream::RecordBatchReceiverStream;
 
 /// Read spilled batches from the disk
@@ -59,13 +58,13 @@ pub(crate) fn read_spill_as_stream(
 ///
 /// Returns total number of the rows spilled to disk.
 pub(crate) fn spill_record_batches(
-    batches: Vec<RecordBatch>,
+    batches: &[RecordBatch],
     path: PathBuf,
     schema: SchemaRef,
 ) -> Result<(usize, usize)> {
-    let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
+    let mut writer = IPCStreamWriter::new(path.as_ref(), schema.as_ref())?;
     for batch in batches {
-        writer.write(&batch)?;
+        writer.write(batch)?;
     }
     writer.finish()?;
     debug!(
@@ -79,7 +78,7 @@ pub(crate) fn spill_record_batches(
 
 fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
     let file = BufReader::new(File::open(path)?);
-    let reader = FileReader::try_new(file, None)?;
+    let reader = StreamReader::try_new(file, None)?;
     for batch in reader {
         sender
             .blocking_send(batch.map_err(Into::into))
@@ -98,7 +97,7 @@ pub fn spill_record_batch_by_size(
 ) -> Result<()> {
     let mut offset = 0;
     let total_rows = batch.num_rows();
-    let mut writer = IPCWriter::new(&path, schema.as_ref())?;
+    let mut writer = IPCStreamWriter::new(&path, schema.as_ref())?;
 
     while offset < total_rows {
         let length = std::cmp::min(total_rows - offset, batch_size_rows);
@@ -130,7 +129,7 @@ pub fn spill_record_batch_by_size(
 /// {xxxxxxxxxxxxxxxxxxx} <--- buffer
 ///       ^    ^  ^    ^
 ///       |    |  |    |
-/// col1->{    }  |    |    
+/// col1->{    }  |    |
 /// col2--------->{    }
 ///
 /// In the above case, `get_record_batch_memory_size` will return the size of
@@ -179,6 +178,51 @@ fn count_array_data_memory_size(
     }
 }
 
+/// Write in Arrow IPC Stream format to a file.
+///
+/// Stream format is used for spill because it supports dictionary replacement, and the random
+/// access of IPC File format is not needed (IPC File format doesn't support dictionary replacement).
+pub(crate) struct IPCStreamWriter {
+    /// Inner writer
+    pub writer: StreamWriter<File>,
+    /// Batches written
+    pub num_batches: usize,
+    /// Rows written
+    pub num_rows: usize,
+    /// Bytes written
+    pub num_bytes: usize,
+}
+
+impl IPCStreamWriter {
+    /// Create new writer
+    pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
+        let file = File::create(path).map_err(|e| {
+            exec_datafusion_err!("Failed to create partition file at {path:?}: {e:?}")
+        })?;
+        Ok(Self {
+            num_batches: 0,
+            num_rows: 0,
+            num_bytes: 0,
+            writer: StreamWriter::try_new(file, schema)?,
+        })
+    }
+
+    /// Write one single batch
+    pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.writer.write(batch)?;
+        self.num_batches += 1;
+        self.num_rows += batch.num_rows();
+        let num_bytes: usize = batch.get_array_memory_size();
+        self.num_bytes += num_bytes;
+        Ok(())
+    }
+
+    /// Finish the writer
+    pub fn finish(&mut self) -> Result<()> {
+        self.writer.finish().map_err(Into::into)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +234,7 @@ mod tests {
     use datafusion_common::Result;
     use datafusion_execution::disk_manager::DiskManagerConfig;
     use datafusion_execution::DiskManager;
+    use itertools::Itertools;
     use std::fs::File;
     use std::io::BufReader;
     use std::sync::Arc;
@@ -214,17 +259,19 @@ mod tests {
         let schema = batch1.schema();
         let num_rows = batch1.num_rows() + batch2.num_rows();
         let (spilled_rows, _) = spill_record_batches(
-            vec![batch1, batch2],
+            &[batch1, batch2],
             spill_file.path().into(),
             Arc::clone(&schema),
         )?;
         assert_eq!(spilled_rows, num_rows);
 
         let file = BufReader::new(File::open(spill_file.path())?);
-        let reader = FileReader::try_new(file, None)?;
+        let reader = StreamReader::try_new(file, None)?;
 
-        assert_eq!(reader.num_batches(), 2);
         assert_eq!(reader.schema(), schema);
+
+        let batches = reader.collect_vec();
+        assert!(batches.len() == 2);
 
         Ok(())
     }
@@ -249,10 +296,12 @@ mod tests {
         )?;
 
         let file = BufReader::new(File::open(spill_file.path())?);
-        let reader = FileReader::try_new(file, None)?;
+        let reader = StreamReader::try_new(file, None)?;
 
-        assert_eq!(reader.num_batches(), 4);
         assert_eq!(reader.schema(), schema);
+
+        let batches = reader.collect_vec();
+        assert!(batches.len() == 4);
 
         Ok(())
     }
