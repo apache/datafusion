@@ -73,6 +73,7 @@ tpch:                   TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), s
 tpch_mem:               TPCH inspired benchmark on Scale Factor (SF) 1 (~1GB), query from memory
 tpch10:                 TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), single parquet file per table, hash join
 tpch_mem10:             TPCH inspired benchmark on Scale Factor (SF) 10 (~10GB), query from memory
+cancellation:           How long cancelling a query takes
 parquet:                Benchmark of parquet reader's filtering speed
 sort:                   Benchmark of sorting speed
 sort_tpch:              Benchmark of sorting speed for end-to-end sort queries on TPCH dataset
@@ -232,6 +233,7 @@ main() {
                     run_tpch_mem "1"
                     run_tpch "10"
                     run_tpch_mem "10"
+                    run_cancellation
                     run_parquet
                     run_sort
                     run_clickbench_1
@@ -254,6 +256,9 @@ main() {
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
+                    ;;
+                cancellation)
+                    run_cancellation
                     ;;
                 parquet)
                     run_parquet
@@ -397,6 +402,14 @@ run_tpch_mem() {
     $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}"
 }
 
+# Runs the cancellation benchmark
+run_cancellation() {
+    RESULTS_FILE="${RESULTS_DIR}/cancellation.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running cancellation benchmark..."
+    $CARGO_COMMAND --bin dfbench -- cancellation --iterations 5 --path "${DATA_DIR}/cancellation" -o "${RESULTS_FILE}"
+}
+
 # Runs the parquet filter benchmark
 run_parquet() {
     RESULTS_FILE="${RESULTS_DIR}/parquet.json"
@@ -490,9 +503,9 @@ data_imdb() {
     local imdb_temp_gz="${imdb_dir}/imdb.tgz"
     local imdb_url="https://event.cwi.nl/da/job/imdb.tgz"
 
-   # imdb has 21 files, we just separate them into 3 groups for better readability 
+   # imdb has 21 files, we just separate them into 3 groups for better readability
     local first_required_files=(
-        "aka_name.parquet"    
+        "aka_name.parquet"
         "aka_title.parquet"
         "cast_info.parquet"
         "char_name.parquet"
@@ -539,13 +552,13 @@ data_imdb() {
     if [ "$convert_needed" = true ]; then
         # Expected size of the dataset
         expected_size="1263193115" # 1.18 GB
-        
+
         echo -n "Looking for imdb.tgz... "
         if [ -f "${imdb_temp_gz}" ]; then
             echo "found"
             echo -n "Checking size... "
             OUTPUT_SIZE=$(wc -c "${imdb_temp_gz}" 2>/dev/null | awk '{print $1}' || true)
-            
+
             #Checking the size of the existing file
             if [ "${OUTPUT_SIZE}" = "${expected_size}" ]; then
                 # Existing file is of the expected size, no need for download
@@ -559,7 +572,7 @@ data_imdb() {
 
                 # Download the dataset
                 curl -o "${imdb_temp_gz}" "${imdb_url}"
-                
+
                 # Size check of the installed file
                 DOWNLOADED_SIZE=$(wc -c "${imdb_temp_gz}" | awk '{print $1}')
                 if [ "${DOWNLOADED_SIZE}" != "${expected_size}" ]; then
@@ -591,7 +604,7 @@ data_imdb() {
 # Runs the imdb benchmark
 run_imdb() {
     IMDB_DIR="${DATA_DIR}/imdb"
-    
+
     RESULTS_FILE="${RESULTS_DIR}/imdb.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
@@ -726,9 +739,9 @@ run_external_aggr() {
     echo "Running external aggregation benchmark..."
 
     # Only parquet is supported.
-    # Since per-operator memory limit is calculated as (total-memory-limit / 
+    # Since per-operator memory limit is calculated as (total-memory-limit /
     # number-of-partitions), and by default `--partitions` is set to number of
-    # CPU cores, we set a constant number of partitions to prevent this 
+    # CPU cores, we set a constant number of partitions to prevent this
     # benchmark to fail on some machines.
     $CARGO_COMMAND --bin external_aggr -- benchmark --partitions 4 --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}"
 }

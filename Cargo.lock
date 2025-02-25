@@ -1793,13 +1793,16 @@ dependencies = [
  "futures",
  "log",
  "mimalloc",
+ "object_store",
  "parquet",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "snmalloc-rs",
  "structopt",
  "test-utils",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
