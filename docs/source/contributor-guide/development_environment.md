@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Getting Started
+# Development Environment
 
 This section describes how you can get started at developing DataFusion.
 

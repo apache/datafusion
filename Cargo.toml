@@ -66,7 +66,9 @@ homepage = "https://datafusion.apache.org"
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/apache/datafusion"
+# Define Minimum Supported Rust Version (MSRV)
 rust-version = "1.82.0"
+# Define DataFusion version
 version = "45.0.0"
 
 [workspace.dependencies]
@@ -144,7 +146,6 @@ pbjson = { version = "0.7.0" }
 pbjson-types = "0.7"
 # Should match arrow-flight's version of prost.
 prost = "0.13.1"
-prost-derive = "0.13.1"
 rand = "0.8.5"
 recursive = "0.1.1"
 regex = "1.8"

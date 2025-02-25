@@ -258,17 +258,19 @@ pub(super) async fn exec_and_print(
             let mut stream = execute_stream(physical_plan, task_ctx.clone())?;
             let mut results = vec![];
             let mut row_count = 0_usize;
+            let max_rows = match print_options.maxrows {
+                MaxRows::Unlimited => usize::MAX,
+                MaxRows::Limited(n) => n,
+            };
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
                 let curr_num_rows = batch.num_rows();
-                if let MaxRows::Limited(max_rows) = print_options.maxrows {
-                    // Stop collecting results if the number of rows exceeds the limit
-                    // results batch should include the last batch that exceeds the limit
-                    if row_count < max_rows + curr_num_rows {
-                        // Try to grow the reservation to accommodate the batch in memory
-                        reservation.try_grow(get_record_batch_memory_size(&batch))?;
-                        results.push(batch);
-                    }
+                // Stop collecting results if the number of rows exceeds the limit
+                // results batch should include the last batch that exceeds the limit
+                if row_count < max_rows + curr_num_rows {
+                    // Try to grow the reservation to accommodate the batch in memory
+                    reservation.try_grow(get_record_batch_memory_size(&batch))?;
+                    results.push(batch);
                 }
                 row_count += curr_num_rows;
             }
