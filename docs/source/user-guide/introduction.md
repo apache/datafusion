@@ -114,6 +114,7 @@ Here are some active projects using DataFusion:
 - [OpenObserve](https://github.com/openobserve/openobserve) Distributed cloud native observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
 - [Parseable](https://github.com/parseablehq/parseable) Log storage and observability platform
+- [Polygon.io](https://polygon.io/) Stock Market API
 - [qv](https://github.com/timvw/qv) Quickly view your data
 - [Restate](https://github.com/restatedev) Easily build resilient applications using distributed durable async/await
 - [ROAPI](https://github.com/roapi/roapi)
