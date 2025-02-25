@@ -239,19 +239,34 @@ impl PrintOptions {
 
         let mut row_count = 0_usize;
         let mut with_header = true;
+        let mut max_rows_reached = false;
 
         while let Some(maybe_batch) = stream.next().await {
             let batch = maybe_batch?;
-            row_count += batch.num_rows();
-            if row_count < max_count || (with_header && row_count > max_count) {
-                self.format.print_batches(
-                    &mut writer,
-                    batch.schema(),
-                    &[batch],
-                    max_rows,
-                    with_header,
-                )?;
+            let curr_batch_rows = batch.num_rows();
+            if !max_rows_reached && row_count < max_count {
+                if row_count + curr_batch_rows > max_count {
+                    let needed = max_count - row_count;
+                    let batch_to_print = batch.slice(0, needed);
+                    self.format.print_batches(
+                        &mut writer,
+                        batch.schema(),
+                        &[batch_to_print],
+                        max_rows,
+                        with_header,
+                    )?;
+                    max_rows_reached = true;
+                } else {
+                    self.format.print_batches(
+                        &mut writer,
+                        batch.schema(),
+                        &[batch],
+                        max_rows,
+                        with_header,
+                    )?;
+                }
             }
+            row_count += curr_batch_rows;
             with_header = false;
         }
 

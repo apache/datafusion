@@ -259,7 +259,6 @@ pub(super) async fn exec_and_print(
             let mut writer = stdout.lock();
 
             // If we don't want to print the table, we should use the streaming print same as above
-            // todo json and csv need to be improved
             if print_options.format != PrintFormat::Table
                 && print_options.format != PrintFormat::Automatic
             {
