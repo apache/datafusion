@@ -184,7 +184,21 @@ pub struct DataFrame {
     // Box the (large) SessionState to reduce the size of DataFrame on the stack
     session_state: Box<SessionState>,
     plan: LogicalPlan,
-    // whether we can skip validation for projection ops
+    // Whether projection ops can skip validation or not. This flag if false
+    // allows for an optimization in `with_column` and `with_column_renamed` functions
+    // where the recursive work required to columnize and normalize expressions can
+    // be skipped if set to false. Since these function calls are often chained or
+    // called many times in dataframe operations this can result in a significant
+    // performance gain.
+    //
+    // The conditions where this can be set to false is when the dataframe function
+    // call results in the last operation being a
+    // `LogicalPlanBuilder::from(plan).project(fields)?.build()` or
+    // `LogicalPlanBuilder::from(plan).project_with_validation(fields)?.build()`
+    // call. This requirement guarantees that the plan has had all columnization
+    // and normalization applied to existing expressions and only new expressions
+    // will require that work. Any operation that update the plan in any way
+    // via anything other than a `project` call should set this to true.
     projection_requires_validation: bool,
 }
 
