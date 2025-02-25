@@ -115,6 +115,11 @@ required-features = ["string_expressions"]
 
 [[bench]]
 harness = false
+name = "gcd"
+required-features = ["math_expressions"]
+
+[[bench]]
+harness = false
 name = "uuid"
 required-features = ["string_expressions"]
 

@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 /// Returns all default table functions
 pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
-    vec![generate_series()]
+    vec![generate_series(), range()]
 }
 
 /// Creates a singleton instance of a table function
@@ -55,3 +55,4 @@ macro_rules! create_udtf_function {
 }
 
 create_udtf_function!(generate_series::GenerateSeriesFunc, "generate_series");
+create_udtf_function!(generate_series::RangeFunc, "range");

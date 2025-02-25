@@ -26,12 +26,11 @@ use super::file_compression_type::FileCompressionType;
 use super::FileFormat;
 use super::FileFormatFactory;
 use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
-use crate::datasource::physical_plan::{AvroSource, FileScanConfig};
+use crate::datasource::physical_plan::AvroSource;
 use crate::error::Result;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
-use crate::datasource::data_source::FileSource;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
@@ -40,6 +39,8 @@ use datafusion_common::internal_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::GetExt;
 use datafusion_common::DEFAULT_AVRO_EXTENSION;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 

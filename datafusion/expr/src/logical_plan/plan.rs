@@ -2869,7 +2869,11 @@ fn intersect_maps<'a>(
     let mut inputs = inputs.into_iter();
     let mut merged: HashMap<String, String> = inputs.next().cloned().unwrap_or_default();
     for input in inputs {
-        merged.retain(|k, v| input.get(k) == Some(v));
+        // The extra dereference below (`&*v`) is a workaround for https://github.com/rkyv/rkyv/issues/434.
+        // When this crate is used in a workspace that enables the `rkyv-64` feature in the `chrono` crate,
+        // this triggers a Rust compilation error:
+        // error[E0277]: can't compare `Option<&std::string::String>` with `Option<&mut std::string::String>`.
+        merged.retain(|k, v| input.get(k) == Some(&*v));
     }
     merged
 }
