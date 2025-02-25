@@ -483,12 +483,21 @@ impl SessionState {
                      MsSQL, ClickHouse, BigQuery, Ansi."
             )
         })?;
-        let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
+
+        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+
+        let mut statements = DFParser::parse_sql_with_dialect_limit(
+            sql,
+            dialect.as_ref(),
+            recursion_limit,
+        )?;
+
         if statements.len() > 1 {
             return not_impl_err!(
                 "The context currently only supports a single SQL statement"
             );
         }
+
         let statement = statements.pop_front().ok_or_else(|| {
             plan_datafusion_err!("No SQL statements were provided in the query string")
         })?;
@@ -522,7 +531,12 @@ impl SessionState {
             )
         })?;
 
-        let expr = DFParser::parse_sql_into_expr_with_dialect(sql, dialect.as_ref())?;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let expr = DFParser::parse_sql_into_expr_with_dialect_limit(
+            sql,
+            dialect.as_ref(),
+            recursion_limit,
+        )?;
 
         Ok(expr)
     }
