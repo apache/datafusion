@@ -23,7 +23,7 @@ use arrow::array::{
     ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray, StringArrayType,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -79,15 +79,15 @@ impl ScalarUDFImpl for StrposFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "strpos/instr/position")
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_type_from_args should be used instead")
     }
 
     fn return_type_from_args(
         &self,
         args: datafusion_expr::ReturnTypeArgs,
     ) -> Result<datafusion_expr::ReturnInfo> {
-        self.return_type(args.arg_types).map(|data_type| {
+        utf8_to_int_type(&args.arg_types[0], "strpos/instr/position").map(|data_type| {
             datafusion_expr::ReturnInfo::new(data_type, args.nullables.iter().any(|x| *x))
         })
     }
