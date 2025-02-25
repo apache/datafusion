@@ -1,0 +1,56 @@
+{
+  "columns": [
+    {
+      "name": "s_suppkey",
+      "arrowType": {
+        "INT64": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "s_name",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "s_address",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "s_nationkey",
+      "arrowType": {
+        "INT32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "s_phone",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "s_acctbal",
+      "arrowType": {
+        "DECIMAL": {
+          "precision": 15,
+          "scale": 2
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "s_comment",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    }
+  ]
+}
