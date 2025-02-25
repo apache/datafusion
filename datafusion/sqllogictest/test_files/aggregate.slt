@@ -6332,6 +6332,95 @@ select count(1) * count(1) from t;
 ----
 4
 
+query I
+select count(2) * count(2) from t;
+----
+4
+
+query I
+select count() * count() from t;
+----
+4
+
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\)\)" at position 0 and "count\(Int64\(1\)\)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
+select count(1), count(1) from t;
+
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\)\)" at position 0 and "count\(Int64\(1\)\)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
+explain select count(1), count(1) from t;
+
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\) AS \)" at position 0 and "count\(Int64\(1\) AS \)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
+select count(), count() from t;
+
+# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\) AS \)" at position 0 and "count\(Int64\(1\) AS \)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
+explain select count(), count() from t;
+
+query II
+select count(1), count(2) from t;
+----
+2 2
+
+query TT
+explain select count(1), count(2) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
+02)--TableScan: t projection=[]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[count(Int64(1)), count(Int64(2))]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query II
+select count(1), count() from t;
+----
+2 2
+
+query TT
+explain select count(1), count() from t;
+----
+logical_plan
+01)Projection: __common_expr_1 AS count(Int64(1)), __common_expr_1 AS count()
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __common_expr_1]]
+03)----TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count()]
+02)--PlaceholderRowExec
+
+query II
+select count(1), count(*) from t;
+----
+2 2
+
+query TT
+explain select count(1), count(*) from t;
+----
+logical_plan
+01)Projection: __common_expr_1 AS count(Int64(1)), __common_expr_1 AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __common_expr_1]]
+03)----TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(*)]
+02)--PlaceholderRowExec
+
+query II
+select count(), count(*) from t;
+----
+2 2
+
+query TT
+explain select count(), count(*) from t;
+----
+logical_plan
+01)Projection: __common_expr_1 AS count(), __common_expr_1 AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __common_expr_1]]
+03)----TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[2 as count(), 2 as count(*)]
+02)--PlaceholderRowExec
+
 query TT
 explain select count(1) * count(2) from t;
 ----

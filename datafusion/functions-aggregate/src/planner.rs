@@ -21,6 +21,7 @@ use datafusion_common::Result;
 use datafusion_expr::{
     expr::AggregateFunction,
     planner::{ExprPlanner, PlannerResult, RawAggregateExpr},
+    utils::COUNT_STAR_EXPANSION,
     Expr,
 };
 
@@ -32,10 +33,18 @@ impl ExprPlanner for AggregateFunctionPlanner {
         &self,
         expr: RawAggregateExpr,
     ) -> Result<PlannerResult<RawAggregateExpr>> {
+        // handle count() and count(*) case
+        // convert to count(1) as "count()"
+        // or         count(1) as "count(*)"
         if expr.func.name() == "count"
             && (expr.args.len() == 1 && matches!(expr.args[0], Expr::Wildcard { .. })
                 || expr.args.is_empty())
         {
+            let (orig_relation, orig_name) = match expr.args.len() {
+                0 => (None, "".into()),
+                _ => expr.args[0].qualified_name(),
+            };
+
             let RawAggregateExpr {
                 func,
                 args: _,
@@ -47,7 +56,8 @@ impl ExprPlanner for AggregateFunctionPlanner {
             return Ok(PlannerResult::Planned(Expr::AggregateFunction(
                 AggregateFunction::new_udf(
                     func,
-                    vec![],
+                    vec![Expr::Literal(COUNT_STAR_EXPANSION)
+                        .alias_qualified(orig_relation, orig_name)],
                     distinct,
                     filter,
                     order_by,

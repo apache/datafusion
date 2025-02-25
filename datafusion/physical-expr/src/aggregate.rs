@@ -102,8 +102,7 @@ impl AggregateExprBuilder {
             is_distinct,
             is_reversed,
         } = self;
-        // only count function can have empty args
-        if args.is_empty() && fun.name() != "count" {
+        if args.is_empty() {
             return internal_err!("args should not be empty");
         }
 

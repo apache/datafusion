@@ -23,7 +23,6 @@ use crate::aggregates::{
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
-use arrow::array::{ArrayRef, Int64Array};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
@@ -223,14 +222,10 @@ fn aggregate_batch(
             let n_rows = batch.num_rows();
 
             // 1.3
-            // Handle count(*) case
-            let values = if expr.is_empty() {
-                vec![Arc::new(Int64Array::from(vec![1; n_rows])) as ArrayRef]
-            } else {
-                expr.iter()
-                    .map(|e| e.evaluate(&batch).and_then(|v| v.into_array(n_rows)))
-                    .collect::<Result<Vec<_>>>()?
-            };
+            let values = expr
+                .iter()
+                .map(|e| e.evaluate(&batch).and_then(|v| v.into_array(n_rows)))
+                .collect::<Result<Vec<_>>>()?;
 
             // 1.4
             let size_pre = accum.size();

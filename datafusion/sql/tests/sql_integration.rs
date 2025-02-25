@@ -1460,15 +1460,15 @@ fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby()
 #[test]
 fn select_simple_aggregate_with_groupby_can_use_positions() {
     quick_test(
-        "SELECT state, age AS b, count() FROM person GROUP BY 1, 2",
-        "Projection: person.state, person.age AS b, count(*)\
-             \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[count(*)]]\
+        "SELECT state, age AS b, count(1) FROM person GROUP BY 1, 2",
+        "Projection: person.state, person.age AS b, count(Int64(1))\
+             \n  Aggregate: groupBy=[[person.state, person.age]], aggr=[[count(Int64(1))]]\
              \n    TableScan: person",
     );
     quick_test(
-        "SELECT state, age AS b, count() FROM person GROUP BY 2, 1",
-        "Projection: person.state, person.age AS b, count(*)\
-             \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[count(*)]]\
+        "SELECT state, age AS b, count(1) FROM person GROUP BY 2, 1",
+        "Projection: person.state, person.age AS b, count(Int64(1))\
+             \n  Aggregate: groupBy=[[person.age, person.state]], aggr=[[count(Int64(1))]]\
              \n    TableScan: person",
     );
 }
