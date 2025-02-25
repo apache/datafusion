@@ -24,6 +24,7 @@ use super::power::PowerFunc;
 
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use datafusion_common::types::NativeType;
 use datafusion_common::{
     exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
@@ -32,9 +33,10 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     lit, ColumnarValue, Documentation, Expr, ScalarFunctionArgs, ScalarUDF,
-    TypeSignature::*,
+    TypeSignature, TypeSignatureClass,
 };
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -58,14 +60,26 @@ impl Default for LogFunc {
 
 impl LogFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Float32]),
-                    Exact(vec![Float64]),
-                    Exact(vec![Float32, Float32]),
-                    Exact(vec![Float64, Float64]),
+                    TypeSignature::Coercible(vec![Coercion::new_implicit(
+                        TypeSignatureClass::Float,
+                        vec![TypeSignatureClass::Integer],
+                        NativeType::Float64,
+                    )]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Float,
+                            vec![TypeSignatureClass::Integer],
+                            NativeType::Float32,
+                        ),
+                        Coercion::new_implicit(
+                            TypeSignatureClass::Float,
+                            vec![TypeSignatureClass::Integer],
+                            NativeType::Float64,
+                        ),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),
