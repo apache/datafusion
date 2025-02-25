@@ -311,7 +311,9 @@ impl Debug for MemSink {
 impl DisplayAs for MemSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 let partition_count = self.batches.len();
                 write!(f, "MemoryTable (partitions={partition_count})")
             }

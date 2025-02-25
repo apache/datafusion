@@ -633,7 +633,9 @@ impl HashJoinExec {
 impl DisplayAs for HashJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 let display_filter = self.filter.as_ref().map_or_else(
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),

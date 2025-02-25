@@ -235,7 +235,9 @@ impl DisplayAs for BoundedWindowAggExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(f, "BoundedWindowAggExec: ")?;
                 let g: Vec<String> = self
                     .window_expr

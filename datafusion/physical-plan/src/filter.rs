@@ -308,7 +308,9 @@ impl DisplayAs for FilterExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 let display_projections = if let Some(projection) =
                     self.projection.as_ref()
                 {

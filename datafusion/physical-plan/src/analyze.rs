@@ -105,7 +105,9 @@ impl DisplayAs for AnalyzeExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(f, "AnalyzeExec verbose={}", self.verbose)
             }
         }

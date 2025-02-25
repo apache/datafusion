@@ -667,7 +667,9 @@ impl Debug for CsvSink {
 impl DisplayAs for CsvSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(f, "CsvSink(file_groups=",)?;
                 FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
                 write!(f, ")")

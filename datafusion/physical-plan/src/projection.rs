@@ -151,7 +151,9 @@ impl DisplayAs for ProjectionExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 let expr: Vec<String> = self
                     .expr
                     .iter()

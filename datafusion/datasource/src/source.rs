@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -43,6 +44,7 @@ pub trait DataSource: Send + Sync {
     ) -> datafusion_common::Result<SendableRecordBatchStream>;
     fn as_any(&self) -> &dyn Any;
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
+    fn collect_info(&self) -> HashMap<String, String>;
     fn repartitioned(
         &self,
         _target_partitions: usize,
@@ -83,6 +85,10 @@ impl DisplayAs for DataSourceExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         write!(f, "DataSourceExec: ")?;
         self.source.fmt_as(t, f)
+    }
+
+    fn collect_info(&self) -> HashMap<String, String> {
+        self.source.collect_info()
     }
 }
 

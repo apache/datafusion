@@ -192,6 +192,7 @@ impl DisplayAs for LazyMemoryExec {
                         .join(", ")
                 )
             }
+            _ => todo!(),
         }
     }
 }

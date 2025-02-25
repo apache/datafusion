@@ -80,7 +80,9 @@ impl DisplayAs for TestMemoryExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         write!(f, "DataSourceExec: ")?;
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 let partition_sizes: Vec<_> =
                     self.partitions.iter().map(|b| b.len()).collect();
 
@@ -105,10 +107,10 @@ impl DisplayAs for TestMemoryExec {
                     .map_or(String::new(), |limit| format!(", fetch={}", limit));
                 if self.show_sizes {
                     write!(
-                        f,
-                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                        partition_sizes.len(),
-                    )
+                                f,
+                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                                partition_sizes.len(),
+                            )
                 } else {
                     write!(
                         f,

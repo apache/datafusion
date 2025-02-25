@@ -697,7 +697,9 @@ impl Debug for TopKExec {
 impl DisplayAs for TopKExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 write!(f, "TopKExec: k={}", self.k)
             }
         }

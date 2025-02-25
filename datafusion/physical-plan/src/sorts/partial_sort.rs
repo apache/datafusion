@@ -217,7 +217,9 @@ impl DisplayAs for PartialSortExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 let common_prefix_length = self.common_prefix_length;
                 match self.fetch {
                     Some(fetch) => {
