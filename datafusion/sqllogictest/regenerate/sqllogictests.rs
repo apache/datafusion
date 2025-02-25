@@ -16,10 +16,10 @@
 // under the License.
 
 use clap::Parser;
-use datafusion_common::instant::Instant;
-use datafusion_common::utils::get_available_parallelism;
-use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result};
-use datafusion_common_runtime::SpawnedTask;
+use datafusion::common::instant::Instant;
+use datafusion::common::utils::get_available_parallelism;
+use datafusion::common::{exec_datafusion_err, exec_err, DataFusionError, Result};
+use datafusion::common::runtime::SpawnedTask;
 use datafusion_sqllogictest::{DataFusion, TestContext};
 use futures::stream::StreamExt;
 use indicatif::{
@@ -378,7 +378,7 @@ async fn run_test_file_with_postgres(
     _mp: MultiProgress,
     _mp_style: ProgressStyle,
 ) -> Result<()> {
-    use datafusion_common::plan_err;
+    use datafusion::common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
 }
 
@@ -512,7 +512,7 @@ async fn run_complete_file_with_postgres(
     _mp: MultiProgress,
     _mp_style: ProgressStyle,
 ) -> Result<()> {
-    use datafusion_common::plan_err;
+    use datafusion::common::plan_err;
     plan_err!("Can not run with postgres as postgres feature is not enabled")
 }
 

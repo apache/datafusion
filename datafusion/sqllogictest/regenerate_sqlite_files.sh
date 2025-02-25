@@ -168,8 +168,10 @@ sd -f i '^sqllogictest.*' 'sqllogictest = { git = "https://github.com/Omega359/s
 
 echo "Replacing the datafusion/sqllogictest/bin/sqllogictests.rs file with a custom version required for running completion"
 
-# replace the sqllogictest.rs with a customized version.
-cp datafusion/sqllogictest/regenerate/sqllogictests.rs datafusion/sqllogictest/bin/sqllogictests.rs
+# replace the sqllogictest.rs with a customized versions.
+cp datafusion/sqllogictest/regenerate/sqllogictests.rs                        datafusion/sqllogictest/bin/sqllogictests.rs
+cp datafusion/sqllogictest/regenerate/src/engines/postgres_engine/mod.rs      datafusion/sqllogictest/src/engines/postgres_engine/mod.rs
+cp datafusion/sqllogictest/regenerate/src/engines/datafusion_engine/runner.rs datafusion/sqllogictest/src/engines/datafusion_engine/runner.rs
 
 echo "Running the sqllogictests with sqlite completion. This will take approximately an hour to run"
 
@@ -200,6 +202,5 @@ echo "Cleaning up source code changes and temporary files and directories"
 cd "$DF_HOME" || exit;
 find ./datafusion-testing/data/sqlite/ -type f -name "*.bak" -exec rm {} \;
 find ./datafusion/sqllogictest/test_files/pg_compat/ -type f -name "*.bak" -exec rm {} \;
-git checkout datafusion/sqllogictest/Cargo.toml
-git checkout datafusion/sqllogictest/bin/sqllogictests.rs
+git checkout datafusion/sqllogictest
 rm -rf /tmp/sqlitetesting
