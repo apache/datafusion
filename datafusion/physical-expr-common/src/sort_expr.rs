@@ -172,13 +172,11 @@ impl PhysicalSortExpr {
         let nullable = self.expr.nullable(schema).unwrap_or(true);
         self.expr.eq(&requirement.expr)
             && if nullable {
-                requirement
-                    .options
-                    .map_or(true, |opts| self.options == opts)
+                requirement.options.is_none_or(|opts| self.options == opts)
             } else {
                 requirement
                     .options
-                    .map_or(true, |opts| self.options.descending == opts.descending)
+                    .is_none_or(|opts| self.options.descending == opts.descending)
             }
     }
 }
@@ -293,7 +291,7 @@ impl PhysicalSortRequirement {
         self.expr.eq(&other.expr)
             && other
                 .options
-                .map_or(true, |other_opts| self.options == Some(other_opts))
+                .is_none_or(|other_opts| self.options == Some(other_opts))
     }
 
     #[deprecated(since = "43.0.0", note = "use  LexRequirement::from_lex_ordering")]

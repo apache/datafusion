@@ -20,10 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::data_source::FileSource;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{
-    FileMeta, FileOpenFuture, FileOpener, FileScanConfig, JsonSource,
+    FileMeta, FileOpenFuture, FileOpener, JsonSource,
 };
 use crate::error::Result;
 
@@ -32,12 +31,14 @@ use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
@@ -211,14 +212,14 @@ pub struct ArrowSource {
 impl FileSource for ArrowSource {
     fn create_file_opener(
         &self,
-        object_store: Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(ArrowOpener {
-            object_store: object_store?,
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(ArrowOpener {
+            object_store,
             projection: base_config.file_column_projection_indices(),
-        }))
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -255,10 +256,6 @@ impl FileSource for ArrowSource {
 
     fn file_type(&self) -> &str {
         "arrow"
-    }
-
-    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
-        !(config.file_compression_type.is_compressed() || config.new_lines_in_values)
     }
 }
 

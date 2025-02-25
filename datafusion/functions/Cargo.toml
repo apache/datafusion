@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -60,9 +63,6 @@ unicode_expressions = ["unicode-segmentation"]
 
 [lib]
 name = "datafusion_functions"
-path = "src/lib.rs"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 arrow = { workspace = true }
@@ -85,11 +85,11 @@ rand = { workspace = true }
 regex = { workspace = true, optional = true }
 sha2 = { version = "^0.10.1", optional = true }
 unicode-segmentation = { version = "^1.7.1", optional = true }
-uuid = { version = "1.13", features = ["v4"], optional = true }
+uuid = { version = "1.14", features = ["v4"], optional = true }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["test_utils"] }
-criterion = "0.5"
+criterion = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 
@@ -112,6 +112,11 @@ required-features = ["encoding_expressions"]
 harness = false
 name = "chr"
 required-features = ["string_expressions"]
+
+[[bench]]
+harness = false
+name = "gcd"
+required-features = ["math_expressions"]
 
 [[bench]]
 harness = false

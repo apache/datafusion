@@ -433,7 +433,7 @@ impl ReturnInfo {
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use std::sync::OnceLock;
+/// # use std::sync::LazyLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Documentation, ScalarFunctionArgs, Signature, Volatility};
@@ -453,14 +453,14 @@ impl ReturnInfo {
 ///   }
 /// }
 ///
-/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-///
-/// fn get_doc() -> &'static Documentation {
-///     DOCUMENTATION.get_or_init(|| {
+/// static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
 ///         Documentation::builder(DOC_SECTION_MATH, "Add one to an int32", "add_one(2)")
 ///             .with_argument("arg1", "The int32 number to add one to")
 ///             .build()
-///     })
+///     });
+///
+/// fn get_doc() -> &'static Documentation {
+///     &DOCUMENTATION
 /// }
 ///
 /// /// Implement the ScalarUDFImpl trait for AddOne

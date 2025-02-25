@@ -28,7 +28,9 @@ pub mod json;
 pub mod options;
 #[cfg(feature = "parquet")]
 pub mod parquet;
+use datafusion_datasource::file::FileSource;
 pub use datafusion_datasource::file_compression_type;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 pub use datafusion_datasource::write;
 
 use std::any::Any;
@@ -40,7 +42,7 @@ use std::task::Poll;
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use crate::arrow::error::ArrowError;
-use crate::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
+use crate::datasource::physical_plan::FileSinkConfig;
 use crate::error::Result;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
@@ -50,7 +52,6 @@ use datafusion_common::{internal_err, not_impl_err, GetExt};
 use datafusion_expr::Expr;
 use datafusion_physical_expr::PhysicalExpr;
 
-use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use datafusion_physical_expr_common::sort_expr::LexRequirement;

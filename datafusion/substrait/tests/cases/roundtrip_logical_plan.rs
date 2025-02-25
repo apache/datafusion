@@ -309,6 +309,17 @@ async fn aggregate_grouping_rollup() -> Result<()> {
 }
 
 #[tokio::test]
+async fn multilayer_aggregate() -> Result<()> {
+    assert_expected_plan(
+        "SELECT a, sum(partial_count_b) FROM (SELECT a, count(b) as partial_count_b FROM data GROUP BY a) GROUP BY a",
+        "Aggregate: groupBy=[[data.a]], aggr=[[sum(count(data.b)) AS sum(partial_count_b)]]\
+        \n  Aggregate: groupBy=[[data.a]], aggr=[[count(data.b)]]\
+        \n    TableScan: data projection=[a, b]",
+        true
+    ).await
+}
+
+#[tokio::test]
 async fn decimal_literal() -> Result<()> {
     roundtrip("SELECT * FROM data WHERE b > 2.5").await
 }
@@ -687,7 +698,7 @@ async fn simple_intersect() -> Result<()> {
     // Substrait treats both count(*) and count(1) the same
     assert_expected_plan(
         "SELECT count(*) FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);",
-        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(*)]]\
          \n  Projection: \
          \n    LeftSemi Join: data.a = data2.a\
          \n      Aggregate: groupBy=[[data.a]], aggr=[[]]\
@@ -822,7 +833,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
     // Schema check works because we set aliases to what the Substrait consumer will generate.
     assert_expected_plan(
         "SELECT count(1) FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);",
-        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(*)]]\
         \n  Projection: \
         \n    LeftSemi Join: left.a = right.a\
         \n      SubqueryAlias: left\
