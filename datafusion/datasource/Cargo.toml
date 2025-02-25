@@ -31,6 +31,8 @@ version.workspace = true
 all-features = true
 
 [features]
+# Temporary feature while I move things around
+avro = []
 compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
 

@@ -20,10 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::data_source::FileSource;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{
-    FileMeta, FileOpenFuture, FileOpener, FileScanConfig, JsonSource,
+    FileMeta, FileOpenFuture, FileOpener, JsonSource,
 };
 use crate::error::Result;
 
@@ -32,6 +31,8 @@ use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};

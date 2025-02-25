@@ -437,12 +437,13 @@ mod tests {
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
+    use datafusion_datasource::file_scan_config::FileScanConfig;
     use object_store::path::Path;
     use object_store::ObjectMeta;
 
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::{FileScanConfig, ParquetSource};
+    use crate::datasource::physical_plan::ParquetSource;
     use crate::datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
