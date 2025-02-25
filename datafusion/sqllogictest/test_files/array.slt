@@ -1204,8 +1204,10 @@ select array_element([1, 2], NULL);
 ----
 NULL
 
-query error
+query I
 select array_element(NULL, 2);
+----
+NULL
 
 # array_element scalar function #1 (with positive index)
 query IT
@@ -2235,11 +2237,29 @@ select array_sort(make_array(1, 3, null, 5, NULL, -5)), array_sort(make_array(1,
 ----
 [NULL, NULL, -5, 1, 3, 5] [NULL, 1, 2, 3] [NULL, 3, 2, 1]
 
-query error
+query ?
 select array_sort(column1, 'DESC', 'NULLS LAST') from arrays_values;
+----
+[10, 9, 8, 7, 6, 5, 4, 3, 2, NULL]
+[20, 18, 17, 16, 15, 14, 13, 12, 11, NULL]
+[30, 29, 28, 27, 26, 25, 23, 22, 21, NULL]
+[40, 39, 38, 37, 35, 34, 33, 32, 31, NULL]
+NULL
+[NULL, 50, 49, 48, 47, 46, 45, 44, 43, 42]
+[41, 60, 59, 58, 57, 56, 55, 54, 52, 51]
+[NULL, 70, 69, 68, 67, 66, 65, 64, 63, 62]
 
-query error
+query ?
 select array_sort(column1, 'ASC', 'NULLS FIRST') from arrays_values;
+----
+[NULL, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+[NULL, 11, 12, 13, 14, 15, 16, 17, 18, 20]
+[NULL, 21, 22, 23, 25, 26, 27, 28, 29, 30]
+[NULL, 31, 32, 33, 34, 35, 37, 38, 39, 40]
+NULL
+[NULL, 41, 42, 43, 44, 45, 46, 47, 48, 49]
+[50, NULL, 51, 52, 54, 55, 56, 57, 58, 59]
+[60, 61, 62, 63, 64, 65, 66, 67, 68, 69]
 
 # test with empty array
 query ?
@@ -2297,8 +2317,10 @@ select list_sort(make_array(1, 3, null, 5, NULL, -5)), list_sort(make_array(1, 3
 
 # array_append with NULLs
 
-query error
+query ?
 select array_append(null, 1);
+----
+[1]
 
 query error
 select array_append(null, [2, 3]);
@@ -2546,8 +2568,10 @@ select array_append(column1, arrow_cast(make_array(1, 11, 111), 'FixedSizeList(3
 # DuckDB: [4]
 # ClickHouse: Null
 # Since they dont have the same result, we just follow Postgres, return error
-query error
+query ?
 select array_prepend(4, NULL);
+----
+[4]
 
 query ?
 select array_prepend(4, []);
@@ -2582,11 +2606,10 @@ select array_prepend(null, [[1,2,3]]);
 query error
 select array_prepend([], []);
 
-# DuckDB: [null]
-# ClickHouse: [null]
-# TODO: We may also return [null]
-query error
+query ?
 select array_prepend(null, null);
+----
+[NULL]
 
 query ?
 select array_append([], null);
@@ -5271,9 +5294,11 @@ NULL [3] [5]
 # array_ndims scalar function #1
 
 #follow PostgreSQL
-query error
+query I
 select
   array_ndims(null);
+----
+NULL
 
 query I
 select

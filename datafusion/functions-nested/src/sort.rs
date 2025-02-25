@@ -168,8 +168,8 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         return exec_err!("array_sort expects one to three arguments");
     }
 
-    if args.iter().any(|array| array.logical_null_count() > 0) {
-        return Ok(new_null_array(args[0].data_type(), 1));
+    if args[1..].iter().any(|array| array.is_null(0)) {
+        return Ok(new_null_array(args[0].data_type(), args[0].len()));
     }
 
     let sort_option = match args.len() {
@@ -204,6 +204,7 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     for i in 0..row_count {
         if list_array.is_null(i) {
             array_lengths.push(0);
+            arrays.push(new_null_array(list_array.value(i).data_type(), 1));
             valid.append_null();
         } else {
             let arr_ref = list_array.value(i);

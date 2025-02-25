@@ -19,7 +19,7 @@ use super::binary::{binary_numeric_coercion, comparison_coercion};
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use arrow::{
     compute::can_cast_types,
-    datatypes::{DataType, TimeUnit},
+    datatypes::{DataType, Field, TimeUnit},
 };
 use datafusion_common::types::LogicalType;
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, ListCoercion};
@@ -400,7 +400,6 @@ fn get_valid_types(
             DataType::List(ref field)
             | DataType::LargeList(ref field)
             | DataType::FixedSizeList(ref field, _) => field.data_type(),
-            DataType::Null => &DataType::Null,
             _ => return Ok(vec![vec![]]),
         };
 
@@ -435,10 +434,12 @@ fn get_valid_types(
 
     fn array(array_type: &DataType) -> Option<DataType> {
         match array_type {
-            DataType::List(_) | DataType::LargeList(_) | DataType::Null => {
-                Some(array_type.clone())
-            }
+            DataType::List(_) | DataType::LargeList(_) => Some(array_type.clone()),
             DataType::FixedSizeList(field, _) => Some(DataType::List(Arc::clone(field))),
+            DataType::Null => Some(DataType::List(Arc::new(Field::new_list_field(
+                DataType::Null,
+                true,
+            )))),
             _ => None,
         }
     }
