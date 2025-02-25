@@ -156,23 +156,29 @@ impl<'a> From<&'a ForeignAccumulatorArgs> for AccumulatorArgs<'a> {
 #[cfg(test)]
 mod tests {
     use super::{FFI_AccumulatorArgs, ForeignAccumulatorArgs};
-    use arrow::datatypes::{DataType, Schema};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::{
-        error::Result, logical_expr::function::AccumulatorArgs,
-        physical_expr::LexOrdering,
+        error::Result,
+        logical_expr::function::AccumulatorArgs,
+        physical_expr::{LexOrdering, PhysicalSortExpr},
+        physical_plan::expressions::col,
     };
 
     #[test]
     fn test_round_trip_accumulator_args() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
         let orig_args = AccumulatorArgs {
             return_type: &DataType::Float64,
-            schema: &Schema::empty(),
+            schema: &schema,
             ignore_nulls: false,
-            ordering_req: &LexOrdering::new(vec![]),
+            ordering_req: &LexOrdering::new(vec![PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: Default::default(),
+            }]),
             is_reversed: false,
             name: "round_trip",
             is_distinct: true,
-            exprs: &[],
+            exprs: &[col("a", &schema)?],
         };
         let orig_str = format!("{:?}", orig_args);
 
@@ -185,6 +191,7 @@ mod tests {
         // Since AccumulatorArgs doesn't implement Eq, simply compare
         // the debug strings.
         assert_eq!(orig_str, round_trip_str);
+        println!("{}", round_trip_str);
 
         Ok(())
     }
