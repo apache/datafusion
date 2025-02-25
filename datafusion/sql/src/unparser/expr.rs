@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion_expr::expr::{AggregateFunctionParams, Unnest};
+use datafusion_expr::expr::{AggregateFunctionParams, Unnest, WindowFunctionParams};
 use sqlparser::ast::Value::SingleQuotedString;
 use sqlparser::ast::{
     self, Array, BinaryOperator, Expr as AstExpr, Function, Ident, Interval, ObjectName,
@@ -189,11 +189,14 @@ impl Unparser<'_> {
             Expr::Alias(Alias { expr, name: _, .. }) => self.expr_to_sql_inner(expr),
             Expr::WindowFunction(WindowFunction {
                 fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment: _,
+                params:
+                    WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        ..
+                    },
             }) => {
                 let func_name = fun.name();
 
@@ -1582,9 +1585,7 @@ impl Unparser<'_> {
             DataType::Duration(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Interval(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
+            DataType::Interval(_) => Ok(ast::DataType::Interval),
             DataType::Binary => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1621,9 +1622,7 @@ impl Unparser<'_> {
             DataType::Union(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Dictionary(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
+            DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
             DataType::Decimal128(precision, scale)
             | DataType::Decimal256(precision, scale) => {
                 let mut new_precision = *precision as u64;
@@ -1929,30 +1928,34 @@ mod tests {
             (
                 Expr::WindowFunction(WindowFunction {
                     fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
-                    args: vec![col("col")],
-                    partition_by: vec![],
-                    order_by: vec![],
-                    window_frame: WindowFrame::new(None),
-                    null_treatment: None,
+                    params: WindowFunctionParams {
+                        args: vec![col("col")],
+                        partition_by: vec![],
+                        order_by: vec![],
+                        window_frame: WindowFrame::new(None),
+                        null_treatment: None,
+                    },
                 }),
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
             (
                 Expr::WindowFunction(WindowFunction {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
-                    args: vec![wildcard()],
-                    partition_by: vec![],
-                    order_by: vec![Sort::new(col("a"), false, true)],
-                    window_frame: WindowFrame::new_bounds(
-                        datafusion_expr::WindowFrameUnits::Range,
-                        datafusion_expr::WindowFrameBound::Preceding(
-                            ScalarValue::UInt32(Some(6)),
+                    params: WindowFunctionParams {
+                        args: vec![wildcard()],
+                        partition_by: vec![],
+                        order_by: vec![Sort::new(col("a"), false, true)],
+                        window_frame: WindowFrame::new_bounds(
+                            datafusion_expr::WindowFrameUnits::Range,
+                            datafusion_expr::WindowFrameBound::Preceding(
+                                ScalarValue::UInt32(Some(6)),
+                            ),
+                            datafusion_expr::WindowFrameBound::Following(
+                                ScalarValue::UInt32(Some(2)),
+                            ),
                         ),
-                        datafusion_expr::WindowFrameBound::Following(
-                            ScalarValue::UInt32(Some(2)),
-                        ),
-                    ),
-                    null_treatment: None,
+                        null_treatment: None,
+                    },
                 }),
                 r#"count(*) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
@@ -2785,7 +2788,7 @@ mod tests {
             let unparser = Unparser::new(dialect.as_ref());
             let func = WindowFunctionDefinition::WindowUDF(rank_udwf());
             let mut window_func = WindowFunction::new(func, vec![]);
-            window_func.order_by = vec![Sort::new(col("a"), true, true)];
+            window_func.params.order_by = vec![Sort::new(col("a"), true, true)];
             let expr = Expr::WindowFunction(window_func);
             let ast = unparser.expr_to_sql(&expr)?;
 
@@ -2794,6 +2797,22 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_dictionary_to_sql() -> Result<()> {
+        let dialect = CustomDialectBuilder::new().build();
+
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Utf8),
+        ))?;
+
+        assert_eq!(ast_dtype, ast::DataType::Varchar(None));
+
         Ok(())
     }
 

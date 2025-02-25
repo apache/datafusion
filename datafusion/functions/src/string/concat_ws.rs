@@ -30,7 +30,7 @@ use datafusion_common::{exec_err, internal_err, plan_err, Result, ScalarValue};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{lit, ColumnarValue, Documentation, Expr, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -102,11 +102,9 @@ impl ScalarUDFImpl for ConcatWsFunc {
 
     /// Concatenates all but the first argument, with separators. The first argument is used as the separator string, and should not be NULL. Other NULL arguments are ignored.
     /// concat_ws(',', 'abcde', 2, NULL, 22) = 'abcde,2,22'
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ScalarFunctionArgs { args, .. } = args;
+
         // do not accept 0 arguments.
         if args.len() < 2 {
             return exec_err!(
@@ -411,7 +409,7 @@ mod tests {
     use crate::string::concat_ws::ConcatWsFunc;
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
-    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+    use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use crate::utils::test::test_function;
 
@@ -482,10 +480,14 @@ mod tests {
             None,
             Some("z"),
         ])));
-        let args = &[c0, c1, c2];
 
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
-        let result = ConcatWsFunc::new().invoke_batch(args, 3)?;
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2],
+            number_rows: 3,
+            return_type: &Utf8,
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
         let expected =
             Arc::new(StringArray::from(vec!["foo,x", "bar", "baz,z"])) as ArrayRef;
         match &result {
@@ -508,10 +510,14 @@ mod tests {
             Some("y"),
             Some("z"),
         ])));
-        let args = &[c0, c1, c2];
 
-        #[allow(deprecated)] // TODO migrate UDF invoke to invoke_batch
-        let result = ConcatWsFunc::new().invoke_batch(args, 3)?;
+        let args = ScalarFunctionArgs {
+            args: vec![c0, c1, c2],
+            number_rows: 3,
+            return_type: &Utf8,
+        };
+
+        let result = ConcatWsFunc::new().invoke_with_args(args)?;
         let expected =
             Arc::new(StringArray::from(vec![Some("foo,x"), None, Some("baz+z")]))
                 as ArrayRef;

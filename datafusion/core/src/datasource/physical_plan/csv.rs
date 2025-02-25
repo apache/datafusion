@@ -23,8 +23,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::{calculate_range, FileScanConfig, RangeCalculation};
-use crate::datasource::data_source::FileSource;
+use super::{calculate_range, RangeCalculation};
+
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
@@ -37,13 +37,15 @@ use arrow::csv;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use futures::{StreamExt, TryStreamExt};
@@ -409,7 +411,7 @@ impl ExecutionPlan for CsvExec {
 /// # };
 /// # use datafusion::datasource::physical_plan::CsvSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
-/// # use datafusion_physical_plan::source::DataSourceExec;
+/// # use datafusion::datasource::source::DataSourceExec;
 ///
 /// # let object_store_url = ObjectStoreUrl::local_filesystem();
 /// # let file_schema = Arc::new(Schema::empty());
@@ -564,15 +566,15 @@ impl CsvOpener {
 impl FileSource for CsvSource {
     fn create_file_opener(
         &self,
-        object_store: Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(CsvOpener {
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(CsvOpener {
             config: Arc::new(self.clone()),
             file_compression_type: base_config.file_compression_type,
-            object_store: object_store?,
-        }))
+            object_store,
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -617,9 +619,6 @@ impl FileSource for CsvSource {
     }
     fn fmt_extra(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, ", has_header={}", self.has_header)
-    }
-    fn supports_repartition(&self, config: &FileScanConfig) -> bool {
-        !(config.file_compression_type.is_compressed() || config.new_lines_in_values)
     }
 }
 

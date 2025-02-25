@@ -23,7 +23,7 @@ use datafusion_common::{
     DFSchema, Dependency, Result,
 };
 use datafusion_expr::expr::{ScalarFunction, Unnest};
-use datafusion_expr::planner::PlannerResult;
+use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
 use datafusion_expr::{
     expr, qualified_wildcard, wildcard, Expr, ExprFunctionExt, ExprSchemable,
     WindowFrame, WindowFunctionDefinition,
@@ -315,15 +315,38 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
-                return Expr::WindowFunction(expr::WindowFunction::new(
-                    fun,
-                    self.function_args_to_expr(args, schema, planner_context)?,
-                ))
-                .partition_by(partition_by)
-                .order_by(order_by)
-                .window_frame(window_frame)
-                .null_treatment(null_treatment)
-                .build();
+                let args = self.function_args_to_expr(args, schema, planner_context)?;
+                let mut window_expr = RawWindowExpr {
+                    func_def: fun,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                };
+
+                for planner in self.context_provider.get_expr_planners().iter() {
+                    match planner.plan_window(window_expr)? {
+                        PlannerResult::Planned(expr) => return Ok(expr),
+                        PlannerResult::Original(expr) => window_expr = expr,
+                    }
+                }
+
+                let RawWindowExpr {
+                    func_def,
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                } = window_expr;
+
+                return Expr::WindowFunction(expr::WindowFunction::new(func_def, args))
+                    .partition_by(partition_by)
+                    .order_by(order_by)
+                    .window_frame(window_frame)
+                    .null_treatment(null_treatment)
+                    .build();
             }
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
@@ -341,8 +364,33 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
                     .transpose()?
                     .map(Box::new);
+
+                let mut aggregate_expr = RawAggregateExpr {
+                    func: fm,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                };
+                for planner in self.context_provider.get_expr_planners().iter() {
+                    match planner.plan_aggregate(aggregate_expr)? {
+                        PlannerResult::Planned(expr) => return Ok(expr),
+                        PlannerResult::Original(expr) => aggregate_expr = expr,
+                    }
+                }
+
+                let RawAggregateExpr {
+                    func,
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                } = aggregate_expr;
+
                 return Ok(Expr::AggregateFunction(expr::AggregateFunction::new_udf(
-                    fm,
+                    func,
                     args,
                     distinct,
                     filter,

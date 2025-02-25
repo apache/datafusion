@@ -20,13 +20,10 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::datasource::data_source::FileSource;
 use crate::datasource::physical_plan::parquet::opener::ParquetOpener;
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
 use crate::datasource::physical_plan::parquet::DefaultParquetFileReaderFactory;
-use crate::datasource::physical_plan::{
-    FileOpener, FileScanConfig, ParquetFileReaderFactory,
-};
+use crate::datasource::physical_plan::{FileOpener, ParquetFileReaderFactory};
 use crate::datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
@@ -34,6 +31,8 @@ use crate::datasource::schema_adapter::{
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::Statistics;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
@@ -81,7 +80,7 @@ use object_store::ObjectStore;
 /// # use datafusion::datasource::listing::PartitionedFile;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_expr::expressions::lit;
-/// # use datafusion_physical_plan::source::DataSourceExec;
+/// # use datafusion::datasource::source::DataSourceExec;
 /// # use datafusion_common::config::TableParquetOptions;
 ///
 /// # let file_schema = Arc::new(Schema::empty());
@@ -160,7 +159,7 @@ use object_store::ObjectStore;
 /// # use arrow::datatypes::Schema;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
 /// # use datafusion::datasource::listing::PartitionedFile;
-/// # use datafusion_physical_plan::source::DataSourceExec;
+/// # use datafusion::datasource::source::DataSourceExec;
 ///
 /// # fn parquet_exec() -> DataSourceExec { unimplemented!() }
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
@@ -202,7 +201,7 @@ use object_store::ObjectStore;
 /// # use datafusion::datasource::physical_plan::FileScanConfig;
 /// # use datafusion::datasource::physical_plan::parquet::source::ParquetSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
-/// # use datafusion_physical_plan::source::DataSourceExec;
+/// # use datafusion::datasource::source::DataSourceExec;
 ///
 /// # fn schema() -> SchemaRef {
 /// #   Arc::new(Schema::empty())
@@ -463,10 +462,10 @@ impl ParquetSource {
 impl FileSource for ParquetSource {
     fn create_file_opener(
         &self,
-        object_store: datafusion_common::Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> datafusion_common::Result<Arc<dyn FileOpener>> {
+    ) -> Arc<dyn FileOpener> {
         let projection = base_config
             .file_column_projection_indices()
             .unwrap_or_else(|| (0..base_config.file_schema.fields().len()).collect());
@@ -475,17 +474,12 @@ impl FileSource for ParquetSource {
             .clone()
             .unwrap_or_else(|| Arc::new(DefaultSchemaAdapterFactory));
 
-        let parquet_file_reader_factory = self
-            .parquet_file_reader_factory
-            .as_ref()
-            .map(|f| Ok(Arc::clone(f)))
-            .unwrap_or_else(|| {
-                object_store.map(|store| {
-                    Arc::new(DefaultParquetFileReaderFactory::new(store)) as _
-                })
-            })?;
+        let parquet_file_reader_factory =
+            self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
+                Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
+            });
 
-        Ok(Arc::new(ParquetOpener {
+        Arc::new(ParquetOpener {
             partition_index: partition,
             projection: Arc::from(projection),
             batch_size: self
@@ -504,7 +498,7 @@ impl FileSource for ParquetSource {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             schema_adapter_factory,
-        }))
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -585,8 +579,5 @@ impl FileSource for ParquetSource {
                 write!(f, "{}{}", predicate_string, pruning_predicate_string)
             }
         }
-    }
-    fn supports_repartition(&self, _config: &FileScanConfig) -> bool {
-        true
     }
 }

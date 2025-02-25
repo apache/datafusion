@@ -25,7 +25,7 @@ use crate::utils::{make_scalar_function, utf8_to_str_type};
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -82,15 +82,13 @@ impl ScalarUDFImpl for ReplaceFunc {
         utf8_to_str_type(&arg_types[0], "replace")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
-            DataType::Utf8 => make_scalar_function(replace::<i32>, vec![])(args),
-            DataType::LargeUtf8 => make_scalar_function(replace::<i64>, vec![])(args),
-            DataType::Utf8View => make_scalar_function(replace_view, vec![])(args),
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
+            DataType::Utf8 => make_scalar_function(replace::<i32>, vec![])(&args.args),
+            DataType::LargeUtf8 => {
+                make_scalar_function(replace::<i64>, vec![])(&args.args)
+            }
+            DataType::Utf8View => make_scalar_function(replace_view, vec![])(&args.args),
             other => {
                 exec_err!("Unsupported data type {other:?} for function replace")
             }

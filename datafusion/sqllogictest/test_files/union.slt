@@ -449,7 +449,7 @@ SELECT count(*) FROM (
 ----
 logical_plan
 01)Projection: count(*)
-02)--Aggregate: groupBy=[[t1.name]], aggr=[[count(Int64(1)) AS count(*)]]
+02)--Aggregate: groupBy=[[t1.name]], aggr=[[count(*)]]
 03)----Union
 04)------Aggregate: groupBy=[[t1.name]], aggr=[[]]
 05)--------TableScan: t1 projection=[name]
@@ -493,7 +493,7 @@ logical_plan
 02)--Union
 03)----Projection: count(*) AS cnt
 04)------Limit: skip=0, fetch=3
-05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+05)--------Aggregate: groupBy=[[]], aggr=[[count(*)]]
 06)----------SubqueryAlias: a
 07)------------Projection: 
 08)--------------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
@@ -651,7 +651,7 @@ select x, y from (select 1 as x , max(10) as y) b
 logical_plan
 01)Union
 02)--Projection: count(*) AS count, a.n
-03)----Aggregate: groupBy=[[a.n]], aggr=[[count(Int64(1)) AS count(*)]]
+03)----Aggregate: groupBy=[[a.n]], aggr=[[count(*)]]
 04)------SubqueryAlias: a
 05)--------Projection: Int64(5) AS n
 06)----------EmptyRelation

@@ -33,7 +33,8 @@ use crate::execution::context::{SessionState, TaskContext};
 use crate::execution::FunctionRegistry;
 use crate::logical_expr::utils::find_window_exprs;
 use crate::logical_expr::{
-    col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning, TableType,
+    col, Expr, JoinType, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
+    Partitioning, TableType,
 };
 use crate::physical_plan::{
     collect, collect_partitioned, execute_stream, execute_stream_partitioned,
@@ -532,7 +533,10 @@ impl DataFrame {
     ) -> Result<DataFrame> {
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
         let aggr_expr_len = aggr_expr.len();
+        let options =
+            LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
         let plan = LogicalPlanBuilder::from(self.plan)
+            .with_options(options)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
         let plan = if is_grouping_set {

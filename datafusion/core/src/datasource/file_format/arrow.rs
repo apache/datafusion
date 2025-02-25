@@ -31,9 +31,7 @@ use super::write::{create_writer, SharedBuffer};
 use super::FileFormatFactory;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::file_format::FileFormat;
-use crate::datasource::physical_plan::{
-    ArrowSource, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
-};
+use crate::datasource::physical_plan::{ArrowSource, FileSink, FileSinkConfig};
 use crate::error::Result;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
@@ -49,13 +47,15 @@ use datafusion_common::{
     not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_datasource::display::FileGroupDisplay;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 
-use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;

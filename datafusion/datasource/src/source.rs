@@ -20,10 +20,12 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::execution_plan::{Boundedness, EmissionType};
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use crate::projection::ProjectionExec;
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
+};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};

@@ -21,7 +21,6 @@
 
 pub mod avro_to_arrow;
 pub mod cte_worktable;
-pub mod data_source;
 pub mod default_table_source;
 pub mod dynamic_file;
 pub mod empty;
@@ -35,6 +34,8 @@ pub mod schema_adapter;
 mod statistics;
 pub mod stream;
 pub mod view;
+
+pub use datafusion_datasource::source;
 
 // backwards compatibility
 pub use self::default_table_source::{

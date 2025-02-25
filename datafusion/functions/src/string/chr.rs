@@ -19,7 +19,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::array::StringArray;
+use arrow::array::GenericStringBuilder;
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::Int64;
 use arrow::datatypes::DataType::Utf8;
@@ -28,7 +28,7 @@ use crate::utils::make_scalar_function;
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 /// Returns the character with the given code. chr(0) is disallowed because text data types cannot store that character.
@@ -36,26 +36,39 @@ use datafusion_macros::user_doc;
 pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     let integer_array = as_int64_array(&args[0])?;
 
-    // first map is the iterator, second is for the `Option<_>`
-    let result = integer_array
-        .iter()
-        .map(|integer: Option<i64>| {
-            integer
-                .map(|integer| {
-                    if integer == 0 {
-                        exec_err!("null character not permitted.")
-                    } else {
-                        match core::char::from_u32(integer as u32) {
-                            Some(integer) => Ok(integer.to_string()),
-                            None => {
-                                exec_err!("requested character too large for encoding.")
-                            }
+    let mut builder = GenericStringBuilder::<i32>::with_capacity(
+        integer_array.len(),
+        // 1 byte per character, assuming that is the common case
+        integer_array.len(),
+    );
+
+    let mut buf = [0u8; 4];
+
+    for integer in integer_array {
+        match integer {
+            Some(integer) => {
+                if integer == 0 {
+                    return exec_err!("null character not permitted.");
+                } else {
+                    match core::char::from_u32(integer as u32) {
+                        Some(c) => {
+                            builder.append_value(c.encode_utf8(&mut buf));
+                        }
+                        None => {
+                            return exec_err!(
+                                "requested character too large for encoding."
+                            );
                         }
                     }
-                })
-                .transpose()
-        })
-        .collect::<Result<StringArray>>()?;
+                }
+            }
+            None => {
+                builder.append_null();
+            }
+        }
+    }
+
+    let result = builder.finish();
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -70,7 +83,7 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
 | chr(Int64(128640)) |
 +--------------------+
 | 🚀                 |
-+--------------------+ 
++--------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "String"),
     related_udf(name = "ascii")
@@ -111,12 +124,8 @@ impl ScalarUDFImpl for ChrFunc {
         Ok(Utf8)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        make_scalar_function(chr, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(chr, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

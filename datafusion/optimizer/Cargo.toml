@@ -28,12 +28,14 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [lib]
 name = "datafusion_optimizer"
-path = "src/lib.rs"
 
 [features]
 recursive_protection = ["dep:recursive"]

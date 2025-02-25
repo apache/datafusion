@@ -131,12 +131,11 @@ impl ScalarUDFImpl for ArrayUnion {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_union_inner)(args)
+        make_scalar_function(array_union_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -211,12 +210,11 @@ impl ScalarUDFImpl for ArrayIntersect {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_intersect_inner)(args)
+        make_scalar_function(array_intersect_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -288,12 +286,11 @@ impl ScalarUDFImpl for ArrayDistinct {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_distinct_inner)(args)
+        make_scalar_function(array_distinct_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
