@@ -518,7 +518,7 @@ pub fn coerce_file_schema_to_view_type(
 
 /// If the table schema uses a string type, coerce the file schema to use a string type.
 ///
-/// See [parquet::ParquetFormat::binary_as_string] for details
+/// See [ParquetFormat::binary_as_string] for details
 #[cfg(not(target_arch = "wasm32"))]
 pub fn coerce_file_schema_to_string_type(
     table_schema: &Schema,
@@ -582,7 +582,7 @@ fn field_with_new_type(field: &FieldRef, new_type: DataType) -> FieldRef {
 
 /// Transform a schema to use view types for Utf8 and Binary
 ///
-/// See [parquet::ParquetFormat::force_view_types] for details
+/// See [ParquetFormat::force_view_types] for details
 pub fn transform_schema_to_view(schema: &Schema) -> Schema {
     let transformed_fields: Vec<Arc<Field>> = schema
         .fields
