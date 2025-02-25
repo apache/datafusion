@@ -331,10 +331,7 @@ impl PrintFormat {
         widths: &[usize],
         writer: &mut dyn std::io::Write,
     ) -> Result<()> {
-        let cells: Vec<String> = widths
-            .iter()
-            .map(|&w| "-".repeat(w + 2))
-            .collect();
+        let cells: Vec<String> = widths.iter().map(|&w| "-".repeat(w + 2)).collect();
         writeln!(writer, "+{}+", cells.join("+"))?;
         Ok(())
     }
@@ -697,7 +694,7 @@ mod tests {
         let widths = format.compute_column_widths(&batches, schema).unwrap();
         assert_eq!(widths, vec![1]);
 
-        let schema =  three_column_schema();
+        let schema = three_column_schema();
         let batches = vec![three_column_batch_with_widths()];
         let format = PrintFormat::Table;
         let widths = format.compute_column_widths(&batches, schema).unwrap();
@@ -711,11 +708,7 @@ mod tests {
         let mut writer = Vec::new();
         let format = PrintFormat::Table;
         format.print_header(&schema, &widths, &mut writer).unwrap();
-        let expected = &[
-            "+---+---+---+",
-            "| a | b | c |",
-            "+---+---+---+",
-        ];
+        let expected = &["+---+---+---+", "| a | b | c |", "+---+---+---+"];
         let binding = String::from_utf8(writer.clone()).unwrap();
         let actual: Vec<_> = binding.trim_end().split('\n').collect();
         assert_eq!(actual, expected);
@@ -727,12 +720,10 @@ mod tests {
         let widths = vec![1, 1, 1];
         let mut writer = Vec::new();
         let format = PrintFormat::Table;
-        format.print_batch_with_widths(&batch, &widths, &mut writer).unwrap();
-        let expected = &[
-            "| 1 | 4 | 7 |",
-            "| 2 | 5 | 8 |",
-            "| 3 | 6 | 9 |",
-        ];
+        format
+            .print_batch_with_widths(&batch, &widths, &mut writer)
+            .unwrap();
+        let expected = &["| 1 | 4 | 7 |", "| 2 | 5 | 8 |", "| 3 | 6 | 9 |"];
         let binding = String::from_utf8(writer.clone()).unwrap();
         let actual: Vec<_> = binding.trim_end().split('\n').collect();
         assert_eq!(actual, expected);
@@ -744,7 +735,9 @@ mod tests {
         let widths = vec![7, 5, 6];
         let mut writer = Vec::new();
         let format = PrintFormat::Table;
-        format.print_batch_with_widths(&batch, &widths, &mut writer).unwrap();
+        format
+            .print_batch_with_widths(&batch, &widths, &mut writer)
+            .unwrap();
         let expected = &[
             "| 1       | 42222 | 7      |",
             "| 2222222 | 5     | 8      |",
@@ -761,9 +754,7 @@ mod tests {
         let mut writer = Vec::new();
         let format = PrintFormat::Table;
         format.print_dotted_line(&widths, &mut writer).unwrap();
-        let expected = &[
-            "| . | . | . |",
-        ];
+        let expected = &["| . | . | . |"];
         let binding = String::from_utf8(writer.clone()).unwrap();
         let actual: Vec<_> = binding.trim_end().split('\n').collect();
         assert_eq!(actual, expected);
@@ -775,9 +766,7 @@ mod tests {
         let mut writer = Vec::new();
         let format = PrintFormat::Table;
         format.print_bottom_border(&widths, &mut writer).unwrap();
-        let expected = &[
-            "+---+---+---+",
-        ];
+        let expected = &["+---+---+---+"];
         let binding = String::from_utf8(writer.clone()).unwrap();
         let actual: Vec<_> = binding.trim_end().split('\n').collect();
         assert_eq!(actual, expected);
@@ -794,16 +783,16 @@ mod tests {
         for max_rows in [MaxRows::Unlimited, MaxRows::Limited(5), MaxRows::Limited(3)] {
             let mut writer = Vec::new();
             format
-                .print_batches(&mut writer, schema.clone(), &[batch.clone()], max_rows, true)
+                .print_batches(
+                    &mut writer,
+                    schema.clone(),
+                    &[batch.clone()],
+                    max_rows,
+                    true,
+                )
                 .unwrap();
             let expected = &[
-                "+---+",
-                "| a |",
-                "+---+",
-                "| 1 |",
-                "| 2 |",
-                "| 3 |",
-                "+---+",
+                "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "+---+",
             ];
             let binding = String::from_utf8(writer.clone()).unwrap();
             let actual: Vec<_> = binding.trim_end().split('\n').collect();
@@ -813,17 +802,16 @@ mod tests {
         // should truncate output if limit is less than number of batches
         let mut writer = Vec::new();
         format
-            .print_batches(&mut writer, schema.clone(), &[batch.clone()], MaxRows::Limited(1), true)
+            .print_batches(
+                &mut writer,
+                schema.clone(),
+                &[batch.clone()],
+                MaxRows::Limited(1),
+                true,
+            )
             .unwrap();
         let expected = &[
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| . |",
-            "| . |",
-            "| . |",
-            "+---+",
+            "+---+", "| a |", "+---+", "| 1 |", "| . |", "| . |", "| . |", "+---+",
         ];
         let binding = String::from_utf8(writer.clone()).unwrap();
         let actual: Vec<_> = binding.trim_end().split('\n').collect();
@@ -869,7 +857,6 @@ mod tests {
         let actual: Vec<_> = binding.trim_end().split('\n').collect();
         assert_eq!(actual, expected);
     }
-
 
     #[test]
     fn test_print_batches_with_preview_and_later_batches() {
