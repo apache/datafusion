@@ -1256,7 +1256,7 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 /// Coercion rules for binary (Binary/LargeBinary) to string (Utf8/LargeUtf8):
 /// If one argument is binary and the other is a string then coerce to string
 /// (e.g. for `like`)
-fn binary_to_string_coercion(
+pub fn binary_to_string_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {

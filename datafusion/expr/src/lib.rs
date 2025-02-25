@@ -78,7 +78,7 @@ pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::signature::{
-    ArrayFunctionArgument, ArrayFunctionSignature, Signature, TypeSignature,
+    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature, TypeSignature,
     TypeSignatureClass, Volatility, TIMEZONE_WILDCARD,
 };
 pub use datafusion_expr_common::type_coercion::binary;
