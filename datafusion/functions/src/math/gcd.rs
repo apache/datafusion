@@ -30,8 +30,9 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -54,9 +55,14 @@ impl Default for GcdFunc {
 
 impl GcdFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(2, vec![Int64], Volatility::Immutable),
+            signature: Signature::new(
+                TypeSignature::Coercible(vec![
+                    Coercion::new_exact(TypeSignatureClass::Integer),
+                    Coercion::new_exact(TypeSignatureClass::Integer),
+                ]),
+                Volatility::Immutable,
+            ),
         }
     }
 }

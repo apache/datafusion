@@ -26,11 +26,11 @@ use arrow::datatypes::DataType::{Float32, Float64, Int32};
 use arrow::datatypes::{DataType, Float32Type, Float64Type, Int32Type};
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -56,14 +56,16 @@ impl Default for RoundFunc {
 
 impl RoundFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
             signature: Signature::one_of(
                 vec![
-                    Exact(vec![Float64, Int64]),
-                    Exact(vec![Float32, Int64]),
-                    Exact(vec![Float64]),
-                    Exact(vec![Float32]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Float,
+                    )]),
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Float),
+                        Coercion::new_exact(TypeSignatureClass::Integer),
+                    ]),
                 ],
                 Volatility::Immutable,
             ),

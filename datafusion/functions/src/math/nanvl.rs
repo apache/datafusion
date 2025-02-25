@@ -23,12 +23,14 @@ use crate::utils::make_scalar_function;
 use arrow::array::{ArrayRef, AsArray, Float32Array, Float64Array};
 use arrow::datatypes::DataType::{Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
+use datafusion_common::types::NativeType;
 use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_expr::TypeSignature::Exact;
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+use datafusion_expr::{TypeSignature, TypeSignatureClass};
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -58,10 +60,16 @@ impl Default for NanvlFunc {
 
 impl NanvlFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![Exact(vec![Float32, Float32]), Exact(vec![Float64, Float64])],
+            signature: Signature::new(
+                TypeSignature::Coercible(vec![
+                    Coercion::new_exact(TypeSignatureClass::Float),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Float,
+                        vec![TypeSignatureClass::Integer],
+                        NativeType::Float64,
+                    ),
+                ]),
                 Volatility::Immutable,
             ),
         }
