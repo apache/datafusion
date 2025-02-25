@@ -780,7 +780,7 @@ async fn explain_logical_plan_only() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Aggregate: groupBy=[[]], aggr=[[count(*)]]\
+            "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
             \n  SubqueryAlias: t\
             \n    Projection: \
             \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"

@@ -20,7 +20,6 @@
 use datafusion_common::Result;
 use datafusion_expr::{
     expr::WindowFunction,
-    lit,
     planner::{ExprPlanner, PlannerResult, RawWindowExpr},
     utils::COUNT_STAR_EXPANSION,
     Expr, ExprFunctionExt,
@@ -35,6 +34,11 @@ impl ExprPlanner for WindowFunctionPlanner {
             && (expr.args.len() == 1 && matches!(expr.args[0], Expr::Wildcard { .. })
                 || expr.args.is_empty())
         {
+            let (orig_relation, orig_name) = match expr.args.len() {
+                0 => (None, "".into()),
+                _ => expr.args[0].qualified_name(),
+            };
+
             let RawWindowExpr {
                 func_def,
                 args: _,
@@ -46,7 +50,8 @@ impl ExprPlanner for WindowFunctionPlanner {
             return Ok(PlannerResult::Planned(
                 Expr::WindowFunction(WindowFunction::new(
                     func_def,
-                    vec![lit(COUNT_STAR_EXPANSION)],
+                    vec![Expr::Literal(COUNT_STAR_EXPANSION)
+                        .alias_qualified(orig_relation, orig_name)],
                 ))
                 .partition_by(partition_by)
                 .order_by(order_by)

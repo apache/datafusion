@@ -219,13 +219,12 @@ fn aggregate_batch(
                 None => Cow::Borrowed(&batch),
             };
 
+            let n_rows = batch.num_rows();
+
             // 1.3
-            let values = &expr
+            let values = expr
                 .iter()
-                .map(|e| {
-                    e.evaluate(&batch)
-                        .and_then(|v| v.into_array(batch.num_rows()))
-                })
+                .map(|e| e.evaluate(&batch).and_then(|v| v.into_array(n_rows)))
                 .collect::<Result<Vec<_>>>()?;
 
             // 1.4
@@ -233,9 +232,9 @@ fn aggregate_batch(
             let res = match mode {
                 AggregateMode::Partial
                 | AggregateMode::Single
-                | AggregateMode::SinglePartitioned => accum.update_batch(values),
+                | AggregateMode::SinglePartitioned => accum.update_batch(&values),
                 AggregateMode::Final | AggregateMode::FinalPartitioned => {
-                    accum.merge_batch(values)
+                    accum.merge_batch(&values)
                 }
             };
             let size_post = accum.size();

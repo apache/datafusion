@@ -286,6 +286,7 @@ pub struct NamePreserver {
 
 /// If the qualified name of an expression is remembered, it will be preserved
 /// when rewriting the expression
+#[derive(Debug)]
 pub enum SavedName {
     /// Saved qualified name to be preserved
     Saved {
