@@ -6312,35 +6312,35 @@ select count() from t;
 ----
 2
 
-query I
-select count(1) * count(2) from t;
+query III
+select count(1), count(2), count(1) * count(2) from t;
 ----
-4
+2 2 4
 
-query I
-select count(1) * count(*) from t;
+query III
+select count(1), count(*), count(1) * count(*) from t;
 ----
-4
+2 2 4
 
-query I
-select count(*) * count(*) from t;
+query II
+select count(*), count(*) * count(*) from t;
 ----
-4
+2 4
 
-query I
-select count(1) * count(1) from t;
+query II
+select count(1), count(1) * count(1) from t;
 ----
-4
+2 4
 
-query I
-select count(2) * count(2) from t;
+query II
+select count(2), count(2) * count(2) from t;
 ----
-4
+2 4
 
-query I
-select count() * count() from t;
+query II
+select count(), count() * count() from t;
 ----
-4
+2 4
 
 # DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\)\)" at position 0 and "count\(Int64\(1\)\)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
 query error
