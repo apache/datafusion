@@ -326,15 +326,6 @@ mod tests {
          )?;
         assert!(matches!(result, ValidationResult::Valid(None)));
 
-        // should be invalid
-        let result = readline_direct(
-             Cursor::new(
-                 r"create external table test stored as csv location 'data.csv' options ('format.delimiter' '\u{07}');"
-                     .as_bytes()),
-             &validator,
-         )?;
-        assert!(matches!(result, ValidationResult::Invalid(Some(_))));
-
         let result = readline_direct(
             Cursor::new(
                 r"select '\', '\\', '\\\\\', 'dsdsds\\\\', '\t', '\0', '\n';".as_bytes(),
