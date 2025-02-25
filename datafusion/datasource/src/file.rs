@@ -15,18 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DataSource and FileSource trait implementations
+//! Common behaviors that every file format needs to implement
 
 use std::any::Any;
 use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::datasource::physical_plan::{FileOpener, FileScanConfig};
-
+use crate::file_groups::FileGroupPartitioner;
+use crate::file_scan_config::FileScanConfig;
+use crate::file_stream::FileOpener;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Statistics;
-use datafusion_datasource::file_groups::FileGroupPartitioner;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
@@ -40,10 +40,10 @@ pub trait FileSource: Send + Sync {
     /// Creates a `dyn FileOpener` based on given parameters
     fn create_file_opener(
         &self,
-        object_store: datafusion_common::Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         partition: usize,
-    ) -> datafusion_common::Result<Arc<dyn FileOpener>>;
+    ) -> Arc<dyn FileOpener>;
     /// Any
     fn as_any(&self) -> &dyn Any;
     /// Initialize new type with batch size configuration

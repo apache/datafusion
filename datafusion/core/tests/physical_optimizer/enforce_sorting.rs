@@ -28,6 +28,7 @@ use crate::physical_optimizer::test_utils::{
     spr_repartition_exec, stream_exec_ordered, union_exec, RequirementsTestExec,
 };
 
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_plan::displayable;
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
@@ -46,7 +47,7 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
+use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;

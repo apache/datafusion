@@ -51,7 +51,6 @@ pub mod function;
 pub mod groups_accumulator {
     pub use datafusion_expr_common::groups_accumulator::*;
 }
-
 pub mod interval_arithmetic {
     pub use datafusion_expr_common::interval_arithmetic::*;
 }
@@ -61,6 +60,9 @@ pub mod registry;
 pub mod simplify;
 pub mod sort_properties {
     pub use datafusion_expr_common::sort_properties::*;
+}
+pub mod statistics {
+    pub use datafusion_expr_common::statistics::*;
 }
 pub mod test;
 pub mod tree_node;

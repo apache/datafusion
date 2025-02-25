@@ -21,14 +21,16 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use super::{FileOpener, FileScanConfig};
+use super::FileOpener;
 #[cfg(feature = "avro")]
 use crate::datasource::avro_to_arrow::Reader as AvroReader;
-use crate::datasource::data_source::FileSource;
+
 use crate::error::Result;
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
@@ -194,23 +196,23 @@ impl FileSource for AvroSource {
     #[cfg(feature = "avro")]
     fn create_file_opener(
         &self,
-        object_store: Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(private::AvroOpener {
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(private::AvroOpener {
             config: Arc::new(self.clone()),
-            object_store: object_store?,
-        }))
+            object_store,
+        })
     }
 
     #[cfg(not(feature = "avro"))]
     fn create_file_opener(
         &self,
-        _object_store: Result<Arc<dyn ObjectStore>>,
+        _object_store: Arc<dyn ObjectStore>,
         _base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
+    ) -> Arc<dyn FileOpener> {
         panic!("Avro feature is not enabled in this build")
     }
 
