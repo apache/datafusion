@@ -160,10 +160,10 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
+
     ) -> Result<ColumnarValue> {
         let (granularity, array) = (&args[0], &args[1]);
 
