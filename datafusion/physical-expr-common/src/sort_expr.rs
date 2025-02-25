@@ -363,6 +363,11 @@ impl LexOrdering {
         self.inner.clear()
     }
 
+    /// Takes ownership of the actual vector of `PhysicalSortExpr`s in the LexOrdering.
+    pub fn take_exprs(self) -> Vec<PhysicalSortExpr> {
+        self.inner
+    }
+
     /// Returns `true` if the LexOrdering contains `expr`
     pub fn contains(&self, expr: &PhysicalSortExpr) -> bool {
         self.inner.contains(expr)

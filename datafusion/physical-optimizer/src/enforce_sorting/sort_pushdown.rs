@@ -192,13 +192,14 @@ fn pushdown_requirement_to_children(
                 Ok(Some(vec![req]))
             }
             RequirementsCompatibility::Compatible(adjusted) => {
-                // If parent requirements are more specific than output ordering of the window plan,
-                // then we can deduce that parent expects an ordering from the columns constructed
-                // by the window functions. If that's the case, we block the pushdown of sort operation.
-                let avoid_pushdown = !plan
+                // If parent requirements are more specific than output ordering
+                // of the window plan, then we can deduce that the parent expects
+                // an ordering from the columns created by window functions. If
+                // that's the case, we block the pushdown of sort operation.
+                if !plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(parent_required);
-                if avoid_pushdown {
+                    .ordering_satisfy_requirement(parent_required)
+                {
                     return Ok(None);
                 }
 

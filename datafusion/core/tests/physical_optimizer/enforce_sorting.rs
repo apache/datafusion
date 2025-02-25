@@ -27,36 +27,34 @@ use crate::physical_optimizer::test_utils::{
     union_exec, RequirementsTestExec,
 };
 
-use datafusion_physical_plan::{displayable, InputOrderMode};
 use arrow::compute::SortOptions;
-use arrow::datatypes::SchemaRef;
-use arrow_schema::DataType;
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{JoinType, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
-use datafusion_physical_expr::expressions::{col, Column, NotExpr};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_expr::Partitioning;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting,PlanWithCorrespondingCoalescePartitions,PlanWithCorrespondingSort,parallelize_sorts,ensure_sorting};
-use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants,OrderPreservationContext};
-use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
-use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion_physical_plan::repartition::RepartitionExec;
-use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TransformedResult};
-use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
+use datafusion_common::{Result, ScalarValue};
+use datafusion_expr::{JoinType, WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
+use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::expressions::{col, Column, NotExpr};
+use datafusion_physical_expr::Partitioning;
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec, WindowAggExec};
+use datafusion_physical_plan::{displayable, get_plan_string, ExecutionPlan, InputOrderMode};
+use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig, ParquetSource};
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion_physical_optimizer::enforce_sorting::{EnforceSorting, PlanWithCorrespondingCoalescePartitions, PlanWithCorrespondingSort, parallelize_sorts, ensure_sorting};
+use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
+use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown, assign_initial_requirements, pushdown_sorts};
+use datafusion_physical_optimizer::enforce_distribution::EnforceDistribution;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
-use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec, WindowAggExec};
 
 use rstest::rstest;
 

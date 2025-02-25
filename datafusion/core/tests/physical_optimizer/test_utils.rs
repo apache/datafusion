@@ -38,8 +38,9 @@ use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{expressions, PhysicalExpr};
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr_common::sort_expr::{
+    LexOrdering, LexRequirement, PhysicalSortExpr,
+};
 use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::aggregates::{
@@ -60,11 +61,10 @@ use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::windows::{create_window_expr, BoundedWindowAggExec};
-use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::{
-    displayable, DisplayAs, DisplayFormatType, PlanProperties,
+    displayable, DisplayAs, DisplayFormatType, ExecutionPlan, InputOrderMode,
+    Partitioning, PlanProperties,
 };
-use datafusion_physical_plan::{InputOrderMode, Partitioning};
 
 /// Create a non sorted parquet exec
 pub fn parquet_exec(schema: &SchemaRef) -> Arc<DataSourceExec> {

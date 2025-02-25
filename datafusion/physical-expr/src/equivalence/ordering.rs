@@ -237,40 +237,58 @@ impl OrderingEquivalenceClass {
         None
     }
 
-    /// Checks whether the given expression is constant according to `self`'s ordering equivalence class.
+    /// Checks whether the given expression is partially constant according to
+    /// this ordering equivalence class.
     ///
-    /// This function determines whether `expr` appears in at least one combination of `descending`
-    /// and `nulls_first` options that indicate constantness. Specifically, an expression is
-    /// considered constant if it satisfies either of the following conditions:
-    /// - `descending & nulls_first` and `ascending & nulls_last`
-    /// - `descending & nulls_last` and `ascending & nulls_first`
+    /// This function determines whether `expr` appears in at least one combination
+    /// of `descending` and `nulls_first` options that indicate partial constantness
+    /// in a lexicographical ordering. Specifically, an expression is considered
+    /// a partial constant in this context if its `SortOptions` satisfies either
+    /// of the following conditions:
+    /// - It is `descending` with `nulls_first` and _also_ `ascending` with
+    ///   `nulls_last`, OR
+    /// - It is `descending` with `nulls_last` and _also_ `ascending` with
+    ///   `nulls_first`.
     ///
-    /// We primarily use `ConstExpr` to represent globally constant expressions. However, some expressions
-    /// may only be constant within secondary ordering constraints. This function helps identify such cases.
-    /// If an expression is constant within a prefix ordering, it is added as a constant during
-    /// `ordering_satisfy_requirement()` iterations after the corresponding prefix requirement is satisfied.
+    /// The equivalence mechanism primarily uses `ConstExpr`s to represent globally
+    /// constant expressions. However, some expressions may only be partially
+    /// constant within a lexicographical ordering. This function helps identify
+    /// such cases. If an expression is constant within a prefix ordering, it is
+    /// added as a constant during `ordering_satisfy_requirement()` iterations
+    /// after the corresponding prefix requirement is satisfied.
     ///
-    /// ### Example Scenarios (Assuming All Expressions Share the Same Sort Properties)
+    /// ### Example Scenarios
+    ///
+    /// In these scenarios, we assume that all expressions share the same sort
+    /// properties.
     ///
     /// #### Case 1: Sort Requirement `[a, c]`
-    /// - **Existing Orderings:** `[[a, b, c], [a, d]]`, **Constants:** `[]`
-    /// 1. `ordering_satisfy_single()` returns `true` because the requirement `[a]` is satisfied by `[a, b, c].first()`
-    /// 2. `[a]` is added as a constant to the existing orderings
-    /// 3. The normalized orderings become `[[b, c], [d]]`
-    /// 4. `ordering_satisfy_single()` returns `false` for `[c]`, as neither `[b, c]` nor `[d]` satisfies `[c]`
+    ///
+    /// **Existing Orderings:** `[[a, b, c], [a, d]]`, **Constants:** `[]`
+    /// 1. `ordering_satisfy_single()` returns `true` because the requirement
+    ///    `a` is satisfied by `[a, b, c].first()`.
+    /// 2. `a` is added as a constant for the next iteration.
+    /// 3. The normalized orderings become `[[b, c], [d]]`.
+    /// 4. `ordering_satisfy_single()` returns `false` for `c`, as neither
+    ///    `[b, c]` nor `[d]` satisfies `c`.
     ///
     /// #### Case 2: Sort Requirement `[a, d]`
-    /// - **Existing Orderings:** `[[a, b, c], [a, d]]`, **Constants:** `[]`
-    /// 1. `ordering_satisfy_single()` returns `true` because `[a]` is satisfied by `[a, b, c].first()`
-    /// 2. `[a]` is added as a constant to the existing orderings
-    /// 3. The normalized orderings become `[[b, c], [d]]`
-    /// 4. `ordering_satisfy_single()` returns `true` for `[d]`, as `[d]` satisfies `[d]`
+    ///
+    /// **Existing Orderings:** `[[a, b, c], [a, d]]`, **Constants:** `[]`
+    /// 1. `ordering_satisfy_single()` returns `true` because the requirement
+    ///    `a` is satisfied by `[a, b, c].first()`.
+    /// 2. `a` is added as a constant for the next iteration.
+    /// 3. The normalized orderings become `[[b, c], [d]]`.
+    /// 4. `ordering_satisfy_single()` returns `true` for `d`, as `[d]` satisfies
+    ///    `d`.
     ///
     /// ### Future Improvements
-    /// This function may become unnecessary if any of the following improvements are implemented:
+    ///
+    /// This function may become unnecessary if any of the following improvements
+    /// are implemented:
     /// 1. `SortOptions` supports encoding constantness information.
-    /// 2. `EquivalenceProperties` gains `FunctionalDependency` awareness, eliminating the need for
-    ///    `Constant` and `Constraints`.
+    /// 2. `EquivalenceProperties` gains `FunctionalDependency` awareness, eliminating
+    ///    the need for `Constant` and `Constraints`.
     pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         let mut constantness_defining_pairs = [
             HashSet::from([(false, false), (true, true)]),
