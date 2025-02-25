@@ -63,13 +63,6 @@ impl AnalysisContext {
         schema: &Schema,
         statistics: &[ColumnStatistics],
     ) -> Result<Self> {
-        assert_eq!(schema.fields().len(),
-                   statistics.len(),
-                   "Mismatching number of fields in schema and column statistics. schema: {}, column statistics: {}",
-                   schema.fields().len(),
-                   statistics.len()
-        );
-
         schema
             .fields()
             .iter()
