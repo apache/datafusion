@@ -23,8 +23,10 @@ use crate::print_options::MaxRows;
 
 use arrow::csv::writer::WriterBuilder;
 use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::record_batch::RecordBatch;
+use arrow::util::display::{ArrayFormatter, ValueFormatter};
 use arrow::util::pretty::pretty_format_batches_with_options;
 use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
 use datafusion::error::Result;
@@ -208,6 +210,145 @@ impl PrintFormat {
             _ => {}
         }
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn process_batch(
+        &self,
+        batch: &RecordBatch,
+        schema: SchemaRef,
+        preview_batches: &mut Vec<RecordBatch>,
+        preview_row_count: &mut usize,
+        preview_limit: usize,
+        precomputed_widths: &mut Option<Vec<usize>>,
+        header_printed: &mut bool,
+        writer: &mut dyn std::io::Write,
+    ) -> Result<()> {
+        if precomputed_widths.is_none() {
+            preview_batches.push(batch.clone());
+            *preview_row_count += batch.num_rows();
+            if *preview_row_count >= preview_limit {
+                let widths =
+                    Self::compute_column_widths(self, preview_batches, schema.clone())?;
+                *precomputed_widths = Some(widths.clone());
+                Self::print_header(self, &schema, &widths, writer)?;
+                *header_printed = true;
+                for preview_batch in preview_batches.drain(..) {
+                    Self::print_batch_with_widths(self, &preview_batch, &widths, writer)?;
+                }
+            }
+        } else {
+            let widths = precomputed_widths.as_ref().unwrap();
+            if !*header_printed {
+                Self::print_header(self, &schema, widths, writer)?;
+                *header_printed = true;
+            }
+            Self::print_batch_with_widths(self, batch, widths, writer)?;
+        }
+        Ok(())
+    }
+
+    pub fn compute_column_widths(
+        &self,
+        batches: &Vec<RecordBatch>,
+        schema: SchemaRef,
+    ) -> Result<Vec<usize>> {
+        let mut widths: Vec<usize> =
+            schema.fields().iter().map(|f| f.name().len()).collect();
+        for batch in batches {
+            let formatters = batch
+                .columns()
+                .iter()
+                .map(|c| ArrayFormatter::try_new(c.as_ref(), &DEFAULT_CLI_FORMAT_OPTIONS))
+                .collect::<Result<Vec<_>, ArrowError>>()?;
+            for row in 0..batch.num_rows() {
+                for (i, formatter) in formatters.iter().enumerate() {
+                    let cell = formatter.value(row);
+                    widths[i] = widths[i].max(cell.to_string().len());
+                }
+            }
+        }
+        Ok(widths)
+    }
+
+    pub fn print_header(
+        &self,
+        schema: &SchemaRef,
+        widths: &[usize],
+        writer: &mut dyn std::io::Write,
+    ) -> Result<()> {
+        Self::print_border(widths, writer)?;
+
+        let header: Vec<String> = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, field)| Self::pad_cell(field.name(), widths[i]))
+            .collect();
+        writeln!(writer, "| {} |", header.join(" | "))?;
+
+        Self::print_border(widths, writer)?;
+        Ok(())
+    }
+
+    pub fn print_batch_with_widths(
+        &self,
+        batch: &RecordBatch,
+        widths: &[usize],
+        writer: &mut dyn std::io::Write,
+    ) -> Result<()> {
+        let formatters = batch
+            .columns()
+            .iter()
+            .map(|c| ArrayFormatter::try_new(c.as_ref(), &DEFAULT_CLI_FORMAT_OPTIONS))
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+        for row in 0..batch.num_rows() {
+            let cells: Vec<String> = formatters
+                .iter()
+                .enumerate()
+                .map(|(i, formatter)| Self::pad_value(&formatter.value(row), widths[i]))
+                .collect();
+            writeln!(writer, "| {} |", cells.join(" | "))?;
+        }
+        Ok(())
+    }
+
+    pub fn print_dotted_line(
+        &self,
+        widths: &[usize],
+        writer: &mut dyn std::io::Write,
+    ) -> Result<()> {
+        let cells: Vec<String> = widths
+            .iter()
+            .map(|&w| format!(" {: <width$} ", ".", width = w))
+            .collect();
+        writeln!(writer, "|{}|", cells.join("|"))?;
+        Ok(())
+    }
+
+    pub fn print_bottom_border(
+        &self,
+        widths: &[usize],
+        writer: &mut dyn std::io::Write,
+    ) -> Result<()> {
+        let cells: Vec<String> = widths.iter().map(|&w| "-".repeat(w + 2)).collect();
+        writeln!(writer, "+{}+", cells.join("+"))?;
+        Ok(())
+    }
+
+    fn print_border(widths: &[usize], writer: &mut dyn std::io::Write) -> Result<()> {
+        let cells: Vec<String> = widths.iter().map(|&w| "-".repeat(w + 2)).collect();
+        writeln!(writer, "+{}+", cells.join("+"))?;
+        Ok(())
+    }
+
+    fn pad_cell(cell: &str, width: usize) -> String {
+        format!("{:<width$}", cell, width = width)
+    }
+
+    fn pad_value(formatter: &ValueFormatter, width: usize) -> String {
+        let s = formatter.try_to_string().unwrap_or_default();
+        format!("{:<width$}", s, width = width)
     }
 }
 
@@ -539,6 +680,329 @@ mod tests {
             .run();
     }
 
+    #[test]
+    fn test_compute_column_widths() {
+        let schema = three_column_schema();
+        let batches = vec![three_column_batch()];
+        let format = PrintFormat::Table;
+        let widths = format.compute_column_widths(&batches, schema).unwrap();
+        assert_eq!(widths, vec![1, 1, 1]);
+
+        let schema = one_column_schema();
+        let batches = vec![one_column_batch()];
+        let format = PrintFormat::Table;
+        let widths = format.compute_column_widths(&batches, schema).unwrap();
+        assert_eq!(widths, vec![1]);
+
+        let schema = three_column_schema();
+        let batches = vec![three_column_batch_with_widths()];
+        let format = PrintFormat::Table;
+        let widths = format.compute_column_widths(&batches, schema).unwrap();
+        assert_eq!(widths, [7, 5, 6]);
+    }
+
+    #[test]
+    fn test_print_header() {
+        let schema = three_column_schema();
+        let widths = vec![1, 1, 1];
+        let mut writer = Vec::new();
+        let format = PrintFormat::Table;
+        format.print_header(&schema, &widths, &mut writer).unwrap();
+        let expected = &["+---+---+---+", "| a | b | c |", "+---+---+---+"];
+        let binding = String::from_utf8(writer.clone()).unwrap();
+        let actual: Vec<_> = binding.trim_end().split('\n').collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_print_batch_with_same_widths() {
+        let batch = three_column_batch();
+        let widths = vec![1, 1, 1];
+        let mut writer = Vec::new();
+        let format = PrintFormat::Table;
+        format
+            .print_batch_with_widths(&batch, &widths, &mut writer)
+            .unwrap();
+        let expected = &["| 1 | 4 | 7 |", "| 2 | 5 | 8 |", "| 3 | 6 | 9 |"];
+        let binding = String::from_utf8(writer.clone()).unwrap();
+        let actual: Vec<_> = binding.trim_end().split('\n').collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_print_batch_with_different_widths() {
+        let batch = three_column_batch_with_widths();
+        let widths = vec![7, 5, 6];
+        let mut writer = Vec::new();
+        let format = PrintFormat::Table;
+        format
+            .print_batch_with_widths(&batch, &widths, &mut writer)
+            .unwrap();
+        let expected = &[
+            "| 1       | 42222 | 7      |",
+            "| 2222222 | 5     | 8      |",
+            "| 3       | 6     | 922222 |",
+        ];
+        let binding = String::from_utf8(writer.clone()).unwrap();
+        let actual: Vec<_> = binding.trim_end().split('\n').collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_print_dotted_line() {
+        let widths = vec![1, 1, 1];
+        let mut writer = Vec::new();
+        let format = PrintFormat::Table;
+        format.print_dotted_line(&widths, &mut writer).unwrap();
+        let expected = &["| . | . | . |"];
+        let binding = String::from_utf8(writer.clone()).unwrap();
+        let actual: Vec<_> = binding.trim_end().split('\n').collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_print_bottom_border() {
+        let widths = vec![1, 1, 1];
+        let mut writer = Vec::new();
+        let format = PrintFormat::Table;
+        format.print_bottom_border(&widths, &mut writer).unwrap();
+        let expected = &["+---+---+---+"];
+        let binding = String::from_utf8(writer.clone()).unwrap();
+        let actual: Vec<_> = binding.trim_end().split('\n').collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_print_batches_with_maxrows() {
+        let batch = one_column_batch();
+        let schema = one_column_schema();
+        let format = PrintFormat::Table;
+
+        // should print out entire output with no truncation if unlimited or
+        // limit greater than number of batches or equal to the number of batches
+        for max_rows in [MaxRows::Unlimited, MaxRows::Limited(5), MaxRows::Limited(3)] {
+            let mut writer = Vec::new();
+            format
+                .print_batches(
+                    &mut writer,
+                    schema.clone(),
+                    &[batch.clone()],
+                    max_rows,
+                    true,
+                )
+                .unwrap();
+            let expected = &[
+                "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "+---+",
+            ];
+            let binding = String::from_utf8(writer.clone()).unwrap();
+            let actual: Vec<_> = binding.trim_end().split('\n').collect();
+            assert_eq!(actual, expected);
+        }
+
+        // should truncate output if limit is less than number of batches
+        let mut writer = Vec::new();
+        format
+            .print_batches(
+                &mut writer,
+                schema.clone(),
+                &[batch.clone()],
+                MaxRows::Limited(1),
+                true,
+            )
+            .unwrap();
+        let expected = &[
+            "+---+", "| a |", "+---+", "| 1 |", "| . |", "| . |", "| . |", "+---+",
+        ];
+        let binding = String::from_utf8(writer.clone()).unwrap();
+        let actual: Vec<_> = binding.trim_end().split('\n').collect();
+        assert_eq!(actual, expected);
+    }
+
+    // test print_batch with different batch widths
+    // and preview count is less than the first batch
+    #[test]
+    fn test_print_batches_with_preview_count_less_than_first_batch() {
+        let batch = three_column_batch_with_widths();
+        let schema = three_column_schema();
+        let format = PrintFormat::Table;
+        let preview_limit = 2;
+        let mut preview_batches = Vec::new();
+        let mut preview_row_count = 0;
+        let mut precomputed_widths = None;
+        let mut header_printed = false;
+        let mut writer = Vec::new();
+
+        format
+            .process_batch(
+                &batch,
+                schema.clone(),
+                &mut preview_batches,
+                &mut preview_row_count,
+                preview_limit,
+                &mut precomputed_widths,
+                &mut header_printed,
+                &mut writer,
+            )
+            .unwrap();
+
+        let expected = &[
+            "+---------+-------+--------+",
+            "| a       | b     | c      |",
+            "+---------+-------+--------+",
+            "| 1       | 42222 | 7      |",
+            "| 2222222 | 5     | 8      |",
+            "| 3       | 6     | 922222 |",
+        ];
+        let binding = String::from_utf8(writer.clone()).unwrap();
+        let actual: Vec<_> = binding.trim_end().split('\n').collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_print_batches_with_preview_and_later_batches() {
+        let batch1 = three_column_batch();
+        let batch2 = three_column_batch_with_widths();
+        let schema = three_column_schema();
+        let format = PrintFormat::Table;
+        // preview limit is less than the first batch
+        // so the second batch if it's width is greater than the first batch, it will be unformatted
+        let preview_limit = 2;
+        let mut preview_batches = Vec::new();
+        let mut preview_row_count = 0;
+        let mut precomputed_widths = None;
+        let mut header_printed = false;
+        let mut writer = Vec::new();
+
+        format
+            .process_batch(
+                &batch1,
+                schema.clone(),
+                &mut preview_batches,
+                &mut preview_row_count,
+                preview_limit,
+                &mut precomputed_widths,
+                &mut header_printed,
+                &mut writer,
+            )
+            .unwrap();
+
+        format
+            .process_batch(
+                &batch2,
+                schema.clone(),
+                &mut preview_batches,
+                &mut preview_row_count,
+                preview_limit,
+                &mut precomputed_widths,
+                &mut header_printed,
+                &mut writer,
+            )
+            .unwrap();
+
+        format
+            .process_batch(
+                &batch1,
+                schema.clone(),
+                &mut preview_batches,
+                &mut preview_row_count,
+                preview_limit,
+                &mut precomputed_widths,
+                &mut header_printed,
+                &mut writer,
+            )
+            .unwrap();
+
+        let expected = &[
+            "+---+---+---+",
+            "| a | b | c |",
+            "+---+---+---+",
+            "| 1 | 4 | 7 |",
+            "| 2 | 5 | 8 |",
+            "| 3 | 6 | 9 |",
+            "| 1 | 42222 | 7 |",
+            "| 2222222 | 5 | 8 |",
+            "| 3 | 6 | 922222 |",
+            "| 1 | 4 | 7 |",
+            "| 2 | 5 | 8 |",
+            "| 3 | 6 | 9 |",
+        ];
+        let binding = String::from_utf8(writer.clone()).unwrap();
+        let actual: Vec<_> = binding.trim_end().split('\n').collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_print_batches_with_preview_cover_later_batches() {
+        let batch1 = three_column_batch();
+        let batch2 = three_column_batch_with_widths();
+        let schema = three_column_schema();
+        let format = PrintFormat::Table;
+        // preview limit is greater than the first batch
+        let preview_limit = 4;
+        let mut preview_batches = Vec::new();
+        let mut preview_row_count = 0;
+        let mut precomputed_widths = None;
+        let mut header_printed = false;
+        let mut writer = Vec::new();
+
+        format
+            .process_batch(
+                &batch1,
+                schema.clone(),
+                &mut preview_batches,
+                &mut preview_row_count,
+                preview_limit,
+                &mut precomputed_widths,
+                &mut header_printed,
+                &mut writer,
+            )
+            .unwrap();
+
+        format
+            .process_batch(
+                &batch2,
+                schema.clone(),
+                &mut preview_batches,
+                &mut preview_row_count,
+                preview_limit,
+                &mut precomputed_widths,
+                &mut header_printed,
+                &mut writer,
+            )
+            .unwrap();
+
+        format
+            .process_batch(
+                &batch1,
+                schema.clone(),
+                &mut preview_batches,
+                &mut preview_row_count,
+                preview_limit,
+                &mut precomputed_widths,
+                &mut header_printed,
+                &mut writer,
+            )
+            .unwrap();
+
+        let expected = &[
+            "+---------+-------+--------+",
+            "| a       | b     | c      |",
+            "+---------+-------+--------+",
+            "| 1       | 4     | 7      |",
+            "| 2       | 5     | 8      |",
+            "| 3       | 6     | 9      |",
+            "| 1       | 42222 | 7      |",
+            "| 2222222 | 5     | 8      |",
+            "| 3       | 6     | 922222 |",
+            "| 1       | 4     | 7      |",
+            "| 2       | 5     | 8      |",
+            "| 3       | 6     | 9      |",
+        ];
+        let binding = String::from_utf8(writer.clone()).unwrap();
+        let actual: Vec<_> = binding.trim_end().split('\n').collect();
+        assert_eq!(actual, expected);
+    }
+
     #[derive(Debug)]
     struct PrintBatchesTest {
         format: PrintFormat,
@@ -667,6 +1131,19 @@ mod tests {
                 Arc::new(Int32Array::from(vec![1, 2, 3])),
                 Arc::new(Int32Array::from(vec![4, 5, 6])),
                 Arc::new(Int32Array::from(vec![7, 8, 9])),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// Return a batch with three columns and three rows, but with different widths
+    fn three_column_batch_with_widths() -> RecordBatch {
+        RecordBatch::try_new(
+            three_column_schema(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2222222, 3])),
+                Arc::new(Int32Array::from(vec![42222, 5, 6])),
+                Arc::new(Int32Array::from(vec![7, 8, 922222])),
             ],
         )
         .unwrap()
