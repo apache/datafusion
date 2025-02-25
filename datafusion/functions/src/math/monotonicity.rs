@@ -49,7 +49,7 @@ static DOCUMENTATION_ACOS: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_acos_doc() -> &'static Documentation {
-    &*DOCUMENTATION_ACOS
+    &DOCUMENTATION_ACOS
 }
 
 /// Non-decreasing for x ≥ 1, undefined otherwise.
@@ -72,15 +72,15 @@ pub fn acosh_order(input: &[ExprProperties]) -> Result<SortProperties> {
 static DOCUMENTATION_ACOSH: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_MATH,
-            "Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.",
-
-        "acosh(numeric_expression)")
-        .with_standard_argument("numeric_expression", Some("Numeric"))
-        .build()
+        "Returns the area hyperbolic cosine or inverse hyperbolic cosine of a number.",
+        "acosh(numeric_expression)",
+    )
+    .with_standard_argument("numeric_expression", Some("Numeric"))
+    .build()
 });
 
 pub fn get_acosh_doc() -> &'static Documentation {
-    &*DOCUMENTATION_ACOSH
+    &DOCUMENTATION_ACOSH
 }
 
 /// Non-decreasing on the interval \[−1, 1\], undefined otherwise.
@@ -109,7 +109,7 @@ static DOCUMENTATION_ASIN: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_asin_doc() -> &'static Documentation {
-    &*DOCUMENTATION_ASIN
+    &DOCUMENTATION_ASIN
 }
 
 /// Non-decreasing for all real numbers.
@@ -128,7 +128,7 @@ static DOCUMENTATION_ASINH: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_asinh_doc() -> &'static Documentation {
-    &*DOCUMENTATION_ASINH
+    &DOCUMENTATION_ASINH
 }
 
 /// Non-decreasing for all real numbers.
@@ -147,7 +147,7 @@ static DOCUMENTATION_ATAN: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_atan_doc() -> &'static Documentation {
-    &*DOCUMENTATION_ATAN
+    &DOCUMENTATION_ATAN
 }
 
 /// Non-decreasing on the interval \[−1, 1\], undefined otherwise.
@@ -168,15 +168,15 @@ pub fn atanh_order(input: &[ExprProperties]) -> Result<SortProperties> {
 static DOCUMENTATION_ATANH: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_MATH,
-            "Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.",
-
-        "atanh(numeric_expression)")
-        .with_standard_argument("numeric_expression", Some("Numeric"))
-        .build()
+        "Returns the area hyperbolic tangent or inverse hyperbolic tangent of a number.",
+        "atanh(numeric_expression)",
+    )
+    .with_standard_argument("numeric_expression", Some("Numeric"))
+    .build()
 });
 
 pub fn get_atanh_doc() -> &'static Documentation {
-    &*DOCUMENTATION_ATANH
+    &DOCUMENTATION_ATANH
 }
 
 /// Order depends on the quadrant.
@@ -188,18 +188,24 @@ pub fn atan2_order(_input: &[ExprProperties]) -> Result<SortProperties> {
 static DOCUMENTATION_ATANH2: LazyLock<Documentation> = LazyLock::new(|| {
     Documentation::builder(
         DOC_SECTION_MATH,
-            "Returns the arc tangent or inverse tangent of `expression_y / expression_x`.",
-
-        "atan2(expression_y, expression_x)")
-        .with_argument("expression_y", r#"First numeric expression to operate on.
-Can be a constant, column, or function, and any combination of arithmetic operators."#)
-        .with_argument("expression_x", r#"Second numeric expression to operate on.
-Can be a constant, column, or function, and any combination of arithmetic operators."#)
-        .build()
+        "Returns the arc tangent or inverse tangent of `expression_y / expression_x`.",
+        "atan2(expression_y, expression_x)",
+    )
+    .with_argument(
+        "expression_y",
+        r#"First numeric expression to operate on.
+Can be a constant, column, or function, and any combination of arithmetic operators."#,
+    )
+    .with_argument(
+        "expression_x",
+        r#"Second numeric expression to operate on.
+Can be a constant, column, or function, and any combination of arithmetic operators."#,
+    )
+    .build()
 });
 
 pub fn get_atan2_doc() -> &'static Documentation {
-    &*DOCUMENTATION_ATANH2
+    &DOCUMENTATION_ATANH2
 }
 
 /// Non-decreasing for all real numbers.
@@ -218,7 +224,7 @@ static DOCUMENTATION_CBRT: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_cbrt_doc() -> &'static Documentation {
-    &*DOCUMENTATION_CBRT
+    &DOCUMENTATION_CBRT
 }
 
 /// Non-decreasing for all real numbers.
@@ -237,7 +243,7 @@ static DOCUMENTATION_CEIL: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_ceil_doc() -> &'static Documentation {
-    &*DOCUMENTATION_CEIL
+    &DOCUMENTATION_CEIL
 }
 
 /// Non-increasing on \[0, π\] and then non-decreasing on \[π, 2π\].
@@ -258,7 +264,7 @@ static DOCUMENTATION_COS: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_cos_doc() -> &'static Documentation {
-    &*DOCUMENTATION_COS
+    &DOCUMENTATION_COS
 }
 
 /// Non-decreasing for x ≥ 0 and symmetrically non-increasing for x ≤ 0.
@@ -288,7 +294,7 @@ static DOCUMENTATION_COSH: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_cosh_doc() -> &'static Documentation {
-    &*DOCUMENTATION_COSH
+    &DOCUMENTATION_COSH
 }
 
 /// Non-decreasing function that converts radians to degrees.
@@ -307,7 +313,7 @@ static DOCUMENTATION_DEGREES: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_degrees_doc() -> &'static Documentation {
-    &*DOCUMENTATION_DEGREES
+    &DOCUMENTATION_DEGREES
 }
 
 /// Non-decreasing for all real numbers.
@@ -326,7 +332,7 @@ static DOCUMENTATION_EXP: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_exp_doc() -> &'static Documentation {
-    &*DOCUMENTATION_EXP
+    &DOCUMENTATION_EXP
 }
 
 /// Non-decreasing for all real numbers.
@@ -345,7 +351,7 @@ static DOCUMENTATION_FLOOR: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_floor_doc() -> &'static Documentation {
-    &*DOCUMENTATION_FLOOR
+    &DOCUMENTATION_FLOOR
 }
 
 /// Non-decreasing for x ≥ 0, undefined otherwise.
@@ -373,7 +379,7 @@ static DOCUMENTATION_LN: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_ln_doc() -> &'static Documentation {
-    &*DOCUMENTATION_LN
+    &DOCUMENTATION_LN
 }
 
 /// Non-decreasing for x ≥ 0, undefined otherwise.
@@ -401,7 +407,7 @@ static DOCUMENTATION_LOG2: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_log2_doc() -> &'static Documentation {
-    &*DOCUMENTATION_LOG2
+    &DOCUMENTATION_LOG2
 }
 
 /// Non-decreasing for x ≥ 0, undefined otherwise.
@@ -429,7 +435,7 @@ static DOCUMENTATION_LOG10: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_log10_doc() -> &'static Documentation {
-    &*DOCUMENTATION_LOG10
+    &DOCUMENTATION_LOG10
 }
 
 /// Non-decreasing for all real numbers x.
@@ -448,7 +454,7 @@ static DOCUMENTATION_RADIONS: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_radians_doc() -> &'static Documentation {
-    &*DOCUMENTATION_RADIONS
+    &DOCUMENTATION_RADIONS
 }
 
 /// Non-decreasing on \[0, π\] and then non-increasing on \[π, 2π\].
@@ -469,7 +475,7 @@ static DOCUMENTATION_SIN: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_sin_doc() -> &'static Documentation {
-    &*DOCUMENTATION_SIN
+    &DOCUMENTATION_SIN
 }
 
 /// Non-decreasing for all real numbers.
@@ -488,7 +494,7 @@ static DOCUMENTATION_SINH: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_sinh_doc() -> &'static Documentation {
-    &*DOCUMENTATION_SINH
+    &DOCUMENTATION_SINH
 }
 
 /// Non-decreasing for x ≥ 0, undefined otherwise.
@@ -516,7 +522,7 @@ static DOCUMENTATION_SQRT: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_sqrt_doc() -> &'static Documentation {
-    &*DOCUMENTATION_SQRT
+    &DOCUMENTATION_SQRT
 }
 
 /// Non-decreasing between vertical asymptotes at x = k * π ± π / 2 for any
@@ -537,7 +543,7 @@ static DOCUMENTATION_TAN: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_tan_doc() -> &'static Documentation {
-    &*DOCUMENTATION_TAN
+    &DOCUMENTATION_TAN
 }
 
 /// Non-decreasing for all real numbers.
@@ -556,7 +562,7 @@ static DOCUMENTATION_TANH: LazyLock<Documentation> = LazyLock::new(|| {
 });
 
 pub fn get_tanh_doc() -> &'static Documentation {
-    &*DOCUMENTATION_TANH
+    &DOCUMENTATION_TANH
 }
 
 #[cfg(test)]
