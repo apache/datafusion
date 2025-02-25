@@ -1162,6 +1162,11 @@ async fn roundtrip_repartition_hash() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_read_filter() -> Result<()> {
+    roundtrip_verify_read_filter_counts("SELECT a FROM data where a < 5", 0, 1).await
+}
+
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
     // search for target_rel and field value in proto
     match &rel.rel_type {
@@ -1243,6 +1248,73 @@ async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
             None => return plan_err!("Cannot parse plan relation: None"),
         }
     }
+
+    Ok(())
+}
+
+fn count_read_filters(
+    rel: &Rel,
+    filter_count: &mut u32,
+    best_effort_filter_count: &mut u32,
+) -> Result<()> {
+    // search for target_rel and field value in proto
+    match &rel.rel_type {
+        Some(RelType::Read(read)) => {
+            // increment counter for read filter if not None
+            if read.filter.is_some() {
+                *filter_count += 1;
+            }
+            if read.best_effort_filter.is_some() {
+                *best_effort_filter_count += 1;
+            }
+            Ok(())
+        }
+        Some(RelType::Filter(filter)) => count_read_filters(
+            filter.input.as_ref().unwrap().as_ref(),
+            filter_count,
+            best_effort_filter_count,
+        ),
+        _ => Ok(()),
+    }
+}
+
+async fn assert_read_filter_counts(
+    proto: Box<Plan>,
+    expected_filter_count: u32,
+    expected_best_effort_filter_count: u32,
+) -> Result<()> {
+    let mut filter_count: u32 = 0;
+    let mut best_effort_filter_count: u32 = 0;
+    for relation in &proto.relations {
+        match relation.rel_type.as_ref() {
+            Some(rt) => match rt {
+                plan_rel::RelType::Rel(rel) => {
+                    match count_read_filters(
+                        rel,
+                        &mut filter_count,
+                        &mut best_effort_filter_count,
+                    ) {
+                        Err(e) => return Err(e),
+                        Ok(_) => continue,
+                    }
+                }
+                plan_rel::RelType::Root(root) => {
+                    match count_read_filters(
+                        root.input.as_ref().unwrap(),
+                        &mut filter_count,
+                        &mut best_effort_filter_count,
+                    ) {
+                        Err(e) => return Err(e),
+                        Ok(_) => continue,
+                    }
+                }
+            },
+            None => return plan_err!("Cannot parse plan relation: None"),
+        }
+    }
+
+    assert_eq!(expected_filter_count, filter_count);
+    assert_eq!(expected_best_effort_filter_count, best_effort_filter_count);
 
     Ok(())
 }
@@ -1415,6 +1487,23 @@ async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
 
     // verify that the join filters are None
     verify_post_join_filter_value(proto).await
+}
+
+async fn roundtrip_verify_read_filter_counts(
+    sql: &str,
+    expected_filter_count: u32,
+    expected_best_effort_filter_count: u32,
+) -> Result<()> {
+    let ctx = create_context().await?;
+    let proto = roundtrip_with_ctx(sql, ctx).await?;
+
+    // verify that filter counts in read relations are as expected
+    assert_read_filter_counts(
+        proto,
+        expected_filter_count,
+        expected_best_effort_filter_count,
+    )
+    .await
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {
