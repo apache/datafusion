@@ -18,6 +18,7 @@
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use std::any::Any;
+use std::sync::Arc;
 
 use crate::string::common::*;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
@@ -36,7 +37,7 @@ fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let use_string_view = args[0].data_type() == &DataType::Utf8View;
     let args = if args.len() > 1 {
         let arg1 = arrow::compute::kernels::cast::cast(&args[1], args[0].data_type())?;
-        vec![args[0].clone(), arg1]
+        vec![Arc::clone(&args[0]), arg1]
     } else {
         args.to_owned()
     };

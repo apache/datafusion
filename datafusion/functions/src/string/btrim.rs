@@ -28,6 +28,7 @@ use datafusion_expr::{
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
+use std::sync::Arc;
 
 /// Returns the longest string with leading and trailing characters removed. If the characters are not specified, whitespace is removed.
 /// btrim('xyxtrimyyx', 'xyz') = 'trim'
@@ -35,7 +36,7 @@ fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let use_string_view = args[0].data_type() == &DataType::Utf8View;
     let args = if args.len() > 1 {
         let arg1 = arrow::compute::kernels::cast::cast(&args[1], args[0].data_type())?;
-        vec![args[0].clone(), arg1]
+        vec![Arc::clone(&args[0]), arg1]
     } else {
         args.to_owned()
     };
