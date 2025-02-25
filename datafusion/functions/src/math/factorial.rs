@@ -19,6 +19,7 @@ use arrow::{
     array::{ArrayRef, Int64Array},
     error::ArrowError,
 };
+use datafusion_expr_common::signature::Coercion;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -27,11 +28,13 @@ use arrow::datatypes::DataType::Int64;
 
 use crate::utils::make_scalar_function;
 use datafusion_common::{
-    arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
+    arrow_datafusion_err, exec_err, internal_datafusion_err,
+    types::{logical_int64, logical_null, NativeType},
+    DataFusionError, Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -55,7 +58,17 @@ impl Default for FactorialFunc {
 impl FactorialFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(1, vec![Int64], Volatility::Immutable),
+            signature: Signature::new(
+                TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_int64()),
+                    vec![
+                        TypeSignatureClass::Integer,
+                        TypeSignatureClass::Native(logical_null()),
+                    ],
+                    NativeType::Int64,
+                )]),
+                Volatility::Immutable,
+            ),
         }
     }
 }

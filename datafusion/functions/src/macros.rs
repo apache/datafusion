@@ -160,13 +160,16 @@ macro_rules! make_math_unary_udf {
 
             use arrow::array::{ArrayRef, AsArray};
             use arrow::datatypes::{DataType, Float32Type, Float64Type};
+            use datafusion_common::types::logical_null;
+            use datafusion_common::types::NativeType;
             use datafusion_common::{exec_err, Result};
             use datafusion_expr::interval_arithmetic::Interval;
             use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
             use datafusion_expr::{
                 ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
-                Signature, Volatility,
+                Signature, TypeSignatureClass, Volatility,
             };
+            use datafusion_expr_common::signature::Coercion;
 
             #[derive(Debug)]
             pub struct $UDF {
@@ -175,11 +178,16 @@ macro_rules! make_math_unary_udf {
 
             impl $UDF {
                 pub fn new() -> Self {
-                    use DataType::*;
                     Self {
-                        signature: Signature::uniform(
-                            1,
-                            vec![Float64, Float32],
+                        signature: Signature::coercible(
+                            vec![Coercion::new_implicit(
+                                TypeSignatureClass::Float,
+                                vec![
+                                    TypeSignatureClass::Integer,
+                                    TypeSignatureClass::Native(logical_null()),
+                                ],
+                                NativeType::Float64,
+                            )],
                             Volatility::Immutable,
                         ),
                     }

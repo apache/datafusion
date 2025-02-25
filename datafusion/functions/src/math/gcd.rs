@@ -19,6 +19,7 @@ use arrow::array::{new_null_array, ArrayRef, AsArray, Int64Array, PrimitiveArray
 use arrow::compute::try_binary;
 use arrow::datatypes::{DataType, Int64Type};
 use arrow::error::ArrowError;
+use datafusion_common::types::{logical_int64, logical_null, NativeType};
 use std::any::Any;
 use std::mem::swap;
 use std::sync::Arc;
@@ -26,8 +27,9 @@ use std::sync::Arc;
 use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignatureClass, Volatility,
 };
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -51,9 +53,25 @@ impl Default for GcdFunc {
 impl GcdFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(
-                2,
-                vec![DataType::Int64],
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![
+                            TypeSignatureClass::Integer,
+                            TypeSignatureClass::Native(logical_null()),
+                        ],
+                        NativeType::Int64,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![
+                            TypeSignatureClass::Integer,
+                            TypeSignatureClass::Native(logical_null()),
+                        ],
+                        NativeType::Int64,
+                    ),
+                ],
                 Volatility::Immutable,
             ),
         }
