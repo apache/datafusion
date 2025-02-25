@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
     boundary_analysis_and_selectivity_demo()?;
 
     // See how boundary analysis works for `AND` & `OR` conjunctions.
-    bounday_analysis_in_conjuctions_demo()?;
+    boundary_analysis_in_conjuctions_demo()?;
 
     // See how to determine the data types of expressions
     expression_type_demo()?;
@@ -352,7 +352,7 @@ fn boundary_analysis_and_selectivity_demo() -> Result<()> {
 
 /// This function shows how to think about and leverage the analysis API
 /// to infer boundaries in `AND` & `OR` conjunctions.
-fn bounday_analysis_in_conjuctions_demo() -> Result<()> {
+fn boundary_analysis_in_conjuctions_demo() -> Result<()> {
     // Let us consider the more common case of AND & OR conjunctions.
     //
     // age > 18 AND age <= 25
