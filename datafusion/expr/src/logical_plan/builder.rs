@@ -639,7 +639,7 @@ impl LogicalPlanBuilder {
         }
     }
 
-    fn ambiguous_distinct_check(
+    pub fn ambiguous_distinct_check(
         missing_exprs: &[Expr],
         missing_cols: &IndexSet<Column>,
         projection_exprs: &[Expr],
