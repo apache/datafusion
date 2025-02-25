@@ -1241,35 +1241,72 @@ macro_rules! extensions_options {
                 Box::new(self.clone())
             }
 
-            fn set(&mut self, key: &str, value: &str) -> $crate::Result<()> {
-                match key {
-                    $(
-                       stringify!($field_name) => {
-                        self.$field_name = value.parse().map_err(|e| {
-                            $crate::DataFusionError::Context(
-                                format!(concat!("Error parsing {} as ", stringify!($t),), value),
-                                Box::new($crate::DataFusionError::External(Box::new(e))),
-                            )
-                        })?;
-                        Ok(())
-                       }
-                    )*
-                    _ => Err($crate::DataFusionError::Configuration(
-                        format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
-                    ))
-                }
+            fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
+                $crate::config::ConfigField::set(self, key, value)
             }
 
             fn entries(&self) -> Vec<$crate::config::ConfigEntry> {
-                vec![
+                struct Visitor(Vec<$crate::config::ConfigEntry>);
+
+                impl $crate::config::Visit for Visitor {
+                    fn some<V: std::fmt::Display>(
+                        &mut self,
+                        key: &str,
+                        value: V,
+                        description: &'static str,
+                    ) {
+                        self.0.push($crate::config::ConfigEntry {
+                            key: key.to_string(),
+                            value: Some(value.to_string()),
+                            description,
+                        })
+                    }
+
+                    fn none(&mut self, key: &str, description: &'static str) {
+                        self.0.push($crate::config::ConfigEntry {
+                            key: key.to_string(),
+                            value: None,
+                            description,
+                        })
+                    }
+                }
+
+                let mut v = Visitor(vec![]);
+                // The prefix is not used for extensions.
+                // The description is generated in ConfigField::visit.
+                // We can just pass empty strings here.
+                $crate::config::ConfigField::visit(self, &mut v, "", "");
+                v.0
+            }
+        }
+
+        impl $crate::config::ConfigField for $struct_name {
+            fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
+                let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+                match key {
                     $(
-                        $crate::config::ConfigEntry {
-                            key: stringify!($field_name).to_owned(),
-                            value: (self.$field_name != $default).then(|| self.$field_name.to_string()),
-                            description: concat!($($d),*).trim(),
+                        stringify!($field_name) => {
+                            // Safely apply deprecated attribute if present
+                            // $(#[allow(deprecated)])?
+                            {
+                                #[allow(deprecated)]
+                                self.$field_name.set(rem, value.as_ref())
+                            }
                         },
                     )*
-                ]
+                    _ => return $crate::error::_config_err!(
+                        "Config value \"{}\" not found on {}", key, stringify!($struct_name)
+                    )
+                }
+            }
+
+            fn visit<V: $crate::config::Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
+                $(
+                    let key = stringify!($field_name).to_string();
+                    let desc = concat!($($d),*).trim();
+                    #[allow(deprecated)]
+                    self.$field_name.visit(v, key.as_str(), desc);
+                )*
             }
         }
     }

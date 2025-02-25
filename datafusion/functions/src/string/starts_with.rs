@@ -25,7 +25,7 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::utils::make_scalar_function;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Like};
-use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 
 /// Returns true if string starts with prefix.
@@ -86,14 +86,10 @@ impl ScalarUDFImpl for StartsWithFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
-                make_scalar_function(starts_with, vec![])(args)
+                make_scalar_function(starts_with, vec![])(&args.args)
             }
             _ => internal_err!("Unsupported data types for starts_with. Expected Utf8, LargeUtf8 or Utf8View")?,
         }

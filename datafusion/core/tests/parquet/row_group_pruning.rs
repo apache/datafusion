@@ -1506,9 +1506,6 @@ async fn test_bloom_filter_binary_dict() {
         .await;
 }
 
-// Makes sense to enable (or at least try to) after
-// https://github.com/apache/datafusion/issues/13821
-#[ignore]
 #[tokio::test]
 async fn test_bloom_filter_decimal_dict() {
     RowGroupPruningTest::new()
