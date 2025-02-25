@@ -1,0 +1,186 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for tree explain
+
+
+
+statement ok
+set datafusion.explain.format = "pretty";
+
+########  Setup Data Files #######
+
+# table1: CSV
+query I
+COPY (VALUES (1, 'foo', 1, '2023-01-01'), (2, 'bar', 2, '2023-01-02'), (3, 'baz', 3, '2023-01-03'))
+TO 'test_files/scratch/explain_tree/table1.csv';
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE table1 (
+  int_col INT,
+  string_col TEXT,
+  bigint_col BIGINT,
+  date_col DATE
+)
+STORED AS CSV
+LOCATION 'test_files/scratch/explain_tree/table1.csv';
+
+# table2: Parquet
+query I
+COPY (SELECT * from table1)
+TO 'test_files/scratch/explain_tree/table2.parquet'
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE table2
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_tree/table2.parquet';
+
+
+######## Begin Queries ########
+
+# Filter
+query TT
+explain SELECT int_col FROM table1 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8("foo")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│      RepartitionExec      │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│       DataSourceExec      │
+12)└───────────────────────────┘
+
+# Aggregate
+query TT
+explain SELECT string_col, SUM(bigint_col) FROM table1 GROUP BY string_col;
+----
+logical_plan
+01)Aggregate: groupBy=[[table1.string_col]], aggr=[[sum(table1.bigint_col)]]
+02)--TableScan: table1 projection=[string_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       AggregateExec       │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│    CoalesceBatchesExec    │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│      RepartitionExec      │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│       AggregateExec       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│      RepartitionExec      │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)└───────────────────────────┘
+
+# 2 Joins
+query TT
+explain SELECT table1.string_col, table2.date_col FROM table1 JOIN table2 ON table1.int_col = table2.int_col;
+----
+logical_plan
+01)Projection: table1.string_col, table2.date_col
+02)--Inner Join: table1.int_col = table2.int_col
+03)----TableScan: table1 projection=[int_col, string_col]
+04)----TableScan: table2 projection=[int_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│        HashJoinExec       ├──────────────┐
+06)└─────────────┬─────────────┘              │
+07)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+08)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    │
+09)└─────────────┬─────────────┘└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+11)│      RepartitionExec      ││      RepartitionExec      │
+12)└─────────────┬─────────────┘└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+14)│      RepartitionExec      ││      RepartitionExec      │
+15)└─────────────┬─────────────┘└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+17)│       DataSourceExec      ││       DataSourceExec      │
+18)└───────────────────────────┘└───────────────────────────┘
+
+# 3 Joins
+query TT
+explain SELECT
+  table1.string_col,
+  table2.date_col,
+  t1.date_col
+FROM
+  table1 JOIN table2 ON table1.int_col = table2.int_col
+         JOIN table1 AS t1 ON table2.int_col = t1.int_col;
+----
+logical_plan
+01)Projection: table1.string_col, table2.date_col, t1.date_col
+02)--Inner Join: table2.int_col = t1.int_col
+03)----Projection: table1.string_col, table2.int_col, table2.date_col
+04)------Inner Join: table1.int_col = table2.int_col
+05)--------TableScan: table1 projection=[int_col, string_col]
+06)--------TableScan: table2 projection=[int_col, date_col]
+07)----SubqueryAlias: t1
+08)------TableScan: table1 projection=[int_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│        HashJoinExec       ├───────────────────────────────────────────┐
+06)└─────────────┬─────────────┘                                           │
+07)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
+08)│    CoalesceBatchesExec    │                             │    CoalesceBatchesExec    │
+09)└─────────────┬─────────────┘                             └─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
+11)│        HashJoinExec       ├──────────────┐              │      RepartitionExec      │
+12)└─────────────┬─────────────┘              │              └─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+14)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    ││      RepartitionExec      │
+15)└─────────────┬─────────────┘└─────────────┬─────────────┘└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+17)│      RepartitionExec      ││      RepartitionExec      ││       DataSourceExec      │
+18)└─────────────┬─────────────┘└─────────────┬─────────────┘└───────────────────────────┘
+19)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+20)│      RepartitionExec      ││      RepartitionExec      │
+21)└─────────────┬─────────────┘└─────────────┬─────────────┘
+22)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+23)│       DataSourceExec      ││       DataSourceExec      │
+24)└───────────────────────────┘└───────────────────────────┘
+
+
+
+# cleanup
+statement ok
+drop table table1;
