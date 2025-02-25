@@ -231,7 +231,7 @@ config_namespace! {
     /// [`SessionConfig`]: https://docs.rs/datafusion/latest/datafusion/prelude/struct.SessionConfig.html
     pub struct SqlParserOptions {
         /// When set to true, SQL parser will parse float as decimal type
-        pub parse_float_as_decimal: bool, default = false
+        pub parse_float_as_decimal: bool, default = true
 
         /// When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)
         pub enable_ident_normalization: bool, default = true
