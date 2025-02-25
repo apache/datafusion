@@ -6382,8 +6382,8 @@ query TT
 explain select count(1), count() from t;
 ----
 logical_plan
-01)Projection: __common_expr_1 AS count(Int64(1)), __common_expr_1 AS count()
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __common_expr_1]]
+01)Projection: count(Int64(1)), count(Int64(1)) AS count()
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
 01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count()]
@@ -6398,8 +6398,8 @@ query TT
 explain select count(1), count(*) from t;
 ----
 logical_plan
-01)Projection: __common_expr_1 AS count(Int64(1)), __common_expr_1 AS count(*)
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __common_expr_1]]
+01)Projection: count(Int64(1)), count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
 01)ProjectionExec: expr=[2 as count(Int64(1)), 2 as count(*)]
@@ -6414,8 +6414,8 @@ query TT
 explain select count(), count(*) from t;
 ----
 logical_plan
-01)Projection: __common_expr_1 AS count(), __common_expr_1 AS count(*)
-02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS __common_expr_1]]
+01)Projection: count(Int64(1)) AS count(), count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
 01)ProjectionExec: expr=[2 as count(), 2 as count(*)]

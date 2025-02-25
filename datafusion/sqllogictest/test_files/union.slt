@@ -448,16 +448,16 @@ SELECT count(*) FROM (
 ) GROUP BY name
 ----
 logical_plan
-01)Projection: count(*)
-02)--Aggregate: groupBy=[[t1.name]], aggr=[[count(Int64(1)) AS count(*)]]
+01)Projection: count(Int64(1)) AS count(*)
+02)--Aggregate: groupBy=[[t1.name]], aggr=[[count(Int64(1))]]
 03)----Union
 04)------Aggregate: groupBy=[[t1.name]], aggr=[[]]
 05)--------TableScan: t1 projection=[name]
 06)------Aggregate: groupBy=[[t2.name]], aggr=[[]]
 07)--------TableScan: t2 projection=[name]
 physical_plan
-01)ProjectionExec: expr=[count(*)@1 as count(*)]
-02)--AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[count(*)]
+01)ProjectionExec: expr=[count(Int64(1))@1 as count(*)]
+02)--AggregateExec: mode=SinglePartitioned, gby=[name@0 as name], aggr=[count(Int64(1))]
 03)----InterleaveExec
 04)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 05)--------CoalesceBatchesExec: target_batch_size=2
@@ -491,9 +491,9 @@ EXPLAIN
 logical_plan
 01)Limit: skip=0, fetch=3
 02)--Union
-03)----Projection: count(*) AS cnt
+03)----Projection: count(Int64(1)) AS count(*) AS cnt
 04)------Limit: skip=0, fetch=3
-05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+05)--------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 06)----------SubqueryAlias: a
 07)------------Projection: 
 08)--------------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
@@ -512,10 +512,10 @@ logical_plan
 physical_plan
 01)CoalescePartitionsExec: fetch=3
 02)--UnionExec
-03)----ProjectionExec: expr=[count(*)@0 as cnt]
-04)------AggregateExec: mode=Final, gby=[], aggr=[count(*)]
+03)----ProjectionExec: expr=[count(Int64(1))@0 as cnt]
+04)------AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
 05)--------CoalescePartitionsExec
-06)----------AggregateExec: mode=Partial, gby=[], aggr=[count(*)]
+06)----------AggregateExec: mode=Partial, gby=[], aggr=[count(Int64(1))]
 07)------------ProjectionExec: expr=[]
 08)--------------AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[]
 09)----------------CoalesceBatchesExec: target_batch_size=2
@@ -650,8 +650,8 @@ select x, y from (select 1 as x , max(10) as y) b
 ----
 logical_plan
 01)Union
-02)--Projection: count(*) AS count, a.n
-03)----Aggregate: groupBy=[[a.n]], aggr=[[count(Int64(1)) AS count(*)]]
+02)--Projection: count(Int64(1)) AS count(*) AS count, a.n
+03)----Aggregate: groupBy=[[a.n]], aggr=[[count(Int64(1))]]
 04)------SubqueryAlias: a
 05)--------Projection: Int64(5) AS n
 06)----------EmptyRelation
@@ -662,8 +662,8 @@ logical_plan
 11)----------EmptyRelation
 physical_plan
 01)UnionExec
-02)--ProjectionExec: expr=[count(*)@1 as count, n@0 as n]
-03)----AggregateExec: mode=SinglePartitioned, gby=[n@0 as n], aggr=[count(*)], ordering_mode=Sorted
+02)--ProjectionExec: expr=[count(Int64(1))@1 as count, n@0 as n]
+03)----AggregateExec: mode=SinglePartitioned, gby=[n@0 as n], aggr=[count(Int64(1))], ordering_mode=Sorted
 04)------ProjectionExec: expr=[5 as n]
 05)--------PlaceholderRowExec
 06)--ProjectionExec: expr=[1 as count, max(Int64(10))@0 as n]
