@@ -1667,7 +1667,7 @@ pub fn project(
 /// This function errors under any of the following conditions:
 /// * Two or more expressions have the same name
 /// * An invalid expression is used (e.g. a `sort` expression)
-pub fn project_with_validation(
+fn project_with_validation(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = (impl Into<Expr>, bool)>,
 ) -> Result<LogicalPlan> {
