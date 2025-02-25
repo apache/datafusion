@@ -187,10 +187,9 @@ impl ScalarUDFImpl for DateBinFunc {
         }
     }
 
-    fn invoke_batch(
+     fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         if args.len() == 2 {
             // Default to unix EPOCH
@@ -516,7 +515,7 @@ mod tests {
     #[test]
     #[allow(deprecated)] // TODO migrate UDF invoke from invoke_batch
     fn test_date_bin() {
-        let res = DateBinFunc::new().invoke_batch(
+        let res = DateBinFunc::new().invoke_with_args(
             &[
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
                     IntervalDayTime {

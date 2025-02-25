@@ -167,10 +167,10 @@ impl ScalarUDFImpl for DatePartFunc {
             )
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
+
     ) -> Result<ColumnarValue> {
         let [part, array] = take_function_args(self.name(), args)?;
 

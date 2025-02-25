@@ -117,10 +117,9 @@ impl ScalarUDFImpl for FromUnixtimeFunc {
         internal_err!("call return_type_from_args instead")
     }
 
-    fn invoke_batch(
+     fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         let len = args.len();
         if len != 1 && len != 2 {

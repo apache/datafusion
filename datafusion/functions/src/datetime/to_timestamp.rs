@@ -299,10 +299,9 @@ impl ScalarUDFImpl for ToTimestampFunc {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
@@ -359,10 +358,9 @@ impl ScalarUDFImpl for ToTimestampSecondsFunc {
         Ok(return_type_for(&arg_types[0], Second))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
@@ -414,10 +412,9 @@ impl ScalarUDFImpl for ToTimestampMillisFunc {
         Ok(return_type_for(&arg_types[0], Millisecond))
     }
 
-    fn invoke_batch(
+   fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
@@ -471,10 +468,9 @@ impl ScalarUDFImpl for ToTimestampMicrosFunc {
         Ok(return_type_for(&arg_types[0], Microsecond))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
@@ -528,10 +524,9 @@ impl ScalarUDFImpl for ToTimestampNanosFunc {
         Ok(return_type_for(&arg_types[0], Nanosecond))
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+       args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         if args.is_empty() {
             return exec_err!(
