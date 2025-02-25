@@ -359,7 +359,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let mut diagnostic =
                         Diagnostic::new_error(format!("Invalid function '{name}'"), span);
                     diagnostic.add_note(
-                        format!("possible function {}", suggested_func_name),
+                        format!("Possible function '{}'", suggested_func_name),
                         None,
                     );
                     e.with_diagnostic(diagnostic)
