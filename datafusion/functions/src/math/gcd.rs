@@ -23,9 +23,7 @@ use std::any::Any;
 use std::mem::swap;
 use std::sync::Arc;
 
-use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, Result, ScalarValue,
-};
+use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -114,13 +112,6 @@ impl ScalarUDFImpl for GcdFunc {
 fn compute_gcd_for_arrays(a: &ArrayRef, b: &ArrayRef) -> Result<ColumnarValue> {
     let a = a.as_primitive::<Int64Type>();
     let b = b.as_primitive::<Int64Type>();
-    if a.len() != b.len() {
-        return internal_err!(
-            "Length of arguments for function gcd do not match: {} vs {}",
-            a.len(),
-            b.len()
-        );
-    }
     try_binary(a, b, compute_gcd)
         .map(|arr: PrimitiveArray<Int64Type>| {
             ColumnarValue::Array(Arc::new(arr) as ArrayRef)
