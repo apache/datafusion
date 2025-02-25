@@ -366,12 +366,11 @@ impl ScalarUDFImpl for ToLocalTimeFunc {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        let [time_value] = take_function_args(self.name(), args)?;
+        let [time_value] = take_function_args(self.name(), args.args)?;
 
         self.to_local_time(&[time_value.clone()])
     }
@@ -603,10 +602,12 @@ mod tests {
                 .map(|s| Some(string_to_timestamp_nanos(s).unwrap()))
                 .collect::<TimestampNanosecondArray>();
             let batch_size = input.len();
-            #[allow(deprecated)] // TODO: migrate to invoke_with_args
-            let result = ToLocalTimeFunc::new()
-                .invoke_batch(&[ColumnarValue::Array(Arc::new(input))], batch_size)
-                .unwrap();
+            let args = ScalarFunctionArgs {
+                args: vec![ColumnarValue::Array(Arc::new(input))],
+                number_rows: batch_size,
+                return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            };
+            let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {
                 assert_eq!(
                     result.data_type(),
