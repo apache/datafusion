@@ -30,28 +30,28 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, ValueFormatter};
+use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::memory_pool::MemoryConsumer;
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
+use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
 use datafusion::sql::parser::{DFParser, Statement};
+use datafusion::sql::sqlparser;
 use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use futures::StreamExt;
+use rustyline::error::ReadlineError;
+use rustyline::Editor;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
-
-use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
-use datafusion::execution::memory_pool::MemoryConsumer;
-use datafusion::physical_plan::spill::get_record_batch_memory_size;
-use datafusion::sql::sqlparser;
-use rustyline::error::ReadlineError;
-use rustyline::Editor;
+use std::sync::Arc;
 use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -232,7 +232,10 @@ pub(super) async fn exec_and_print(
 
     let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
     for statement in statements {
+        let adjusted =
+            AdjustedPrintOptions::new(print_options.clone()).with_statement(&statement);
         let plan = create_plan(ctx, statement).await?;
+        let adjusted = adjusted.with_plan(&plan);
 
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
@@ -242,8 +245,11 @@ pub(super) async fn exec_and_print(
             .with_can_spill(false)
             .register(task_ctx.memory_pool());
 
+        let is_unbounded = physical_plan.boundedness().is_unbounded();
+        let mut stream = execute_stream(Arc::clone(&physical_plan), task_ctx.clone())?;
+
         // Both bounded and unbounded streams are streaming prints
-        if print_options.format != PrintFormat::Table {
+        if is_unbounded {
             if physical_plan.pipeline_behavior() == EmissionType::Final {
                 return plan_err!(
                     "The given query can generate a valid result only once \
@@ -252,264 +258,44 @@ pub(super) async fn exec_and_print(
             }
             // As the input stream comes, we can generate results.
             // However, memory safety is not guaranteed.
-            let stream = execute_stream(physical_plan, task_ctx.clone())?;
-            print_options.print_stream(stream, now).await?;
+            print_options
+                .print_stream(MaxRows::Unlimited, stream, now)
+                .await?;
         } else {
             // Bounded stream; collected results size is limited by the maxrows option
             let schema = physical_plan.schema();
-            let mut stream = execute_stream(physical_plan, task_ctx.clone())?;
             let max_rows = match print_options.maxrows {
                 MaxRows::Unlimited => usize::MAX,
                 MaxRows::Limited(n) => n,
             };
-
-            let preview_limit: usize = 1000;
-            let mut preview_batches: Vec<RecordBatch> = vec![];
-            let mut preview_row_count = 0_usize;
-            let mut total_count = 0_usize;
-            let mut precomputed_widths: Option<Vec<usize>> = None;
-            let mut header_printed = false;
-            let mut max_rows_reached = false;
-
             let stdout = std::io::stdout();
             let mut writer = stdout.lock();
 
-            while let Some(batch) = stream.next().await {
-                let batch = batch?;
-                let batch_rows = batch.num_rows();
-
-                if !max_rows_reached {
-                    if total_count < max_rows {
-                        if total_count + batch_rows > max_rows {
-                            let needed = max_rows - total_count;
-                            let batch_to_print = batch.slice(0, needed);
-                            process_batch(
-                                &batch_to_print,
-                                schema.clone(),
-                                &mut preview_batches,
-                                &mut preview_row_count,
-                                preview_limit,
-                                &mut precomputed_widths,
-                                &mut header_printed,
-                                &mut writer,
-                            )?;
-                            if precomputed_widths.is_none() {
-                                let widths = compute_column_widths(
-                                    &preview_batches,
-                                    schema.clone(),
-                                )?;
-                                precomputed_widths = Some(widths.clone());
-                                if !header_printed {
-                                    print_header(&schema, &widths, &mut writer)?;
-                                    header_printed = true;
-                                }
-                                for preview_batch in preview_batches.drain(..) {
-                                    print_batch_with_widths(
-                                        &preview_batch,
-                                        &widths,
-                                        &mut writer,
-                                    )?;
-                                }
-                            }
-                            if let Some(ref widths) = precomputed_widths {
-                                for _ in 0..3 {
-                                    print_dotted_line(widths, &mut writer)?;
-                                }
-                                print_bottom_border(widths, &mut writer)?;
-                            }
-                            max_rows_reached = true;
-                        } else {
-                            process_batch(
-                                &batch,
-                                schema.clone(),
-                                &mut preview_batches,
-                                &mut preview_row_count,
-                                preview_limit,
-                                &mut precomputed_widths,
-                                &mut header_printed,
-                                &mut writer,
-                            )?;
-                        }
-                    }
-                }
-                total_count += batch_rows;
+            // If we don't want to print the table, we should use the streaming print same as above
+            // todo json and csv need to be improved
+            if print_options.format != PrintFormat::Table
+                && print_options.format != PrintFormat::Automatic
+            {
+                print_options
+                    .print_stream(print_options.maxrows, stream, now)
+                    .await?;
+                continue;
             }
 
-            if !max_rows_reached {
-                if precomputed_widths.is_none() && !preview_batches.is_empty() {
-                    let widths = compute_column_widths(&preview_batches, schema.clone())?;
-                    precomputed_widths = Some(widths);
-                    if !header_printed {
-                        print_header(
-                            &schema,
-                            precomputed_widths.as_ref().unwrap(),
-                            &mut writer,
-                        )?;
-                        header_printed = true;
-                    }
-                }
-                if let Some(ref widths) = precomputed_widths {
-                    print_bottom_border(widths, &mut writer)?;
-                }
-            }
-
-            let formatted_exec_details = print_options.get_execution_details_formatted(
-                total_count,
-                print_options.maxrows,
-                now,
-            );
-            if !print_options.quiet {
-                writeln!(writer, "{}", formatted_exec_details)?;
-            }
-            reservation.free();
+            // into_inner will finalize the print options to table if it's automatic
+            adjusted
+                .into_inner()
+                .print_table_batch(
+                    &print_options,
+                    schema,
+                    &mut stream,
+                    max_rows,
+                    &mut writer,
+                    now,
+                )
+                .await?;
         }
     }
-
-    Ok(())
-}
-
-fn process_batch(
-    batch: &RecordBatch,
-    schema: SchemaRef,
-    preview_batches: &mut Vec<RecordBatch>,
-    preview_row_count: &mut usize,
-    preview_limit: usize,
-    precomputed_widths: &mut Option<Vec<usize>>,
-    header_printed: &mut bool,
-    writer: &mut impl std::io::Write,
-) -> Result<()> {
-    if precomputed_widths.is_none() {
-        preview_batches.push(batch.clone());
-        *preview_row_count += batch.num_rows();
-        if *preview_row_count >= preview_limit {
-            let widths = compute_column_widths(preview_batches, schema.clone())?;
-            *precomputed_widths = Some(widths.clone());
-            print_header(&schema, &widths, writer)?;
-            *header_printed = true;
-            for preview_batch in preview_batches.drain(..) {
-                print_batch_with_widths(&preview_batch, &widths, writer)?;
-            }
-        }
-    } else {
-        let widths = precomputed_widths.as_ref().unwrap();
-        if !*header_printed {
-            print_header(&schema, widths, writer)?;
-            *header_printed = true;
-        }
-        print_batch_with_widths(batch, widths, writer)?;
-    }
-    Ok(())
-}
-
-/// Compute the maximum width of each column in the given batches
-fn compute_column_widths(
-    batches: &Vec<RecordBatch>,
-    schema: SchemaRef,
-) -> Result<Vec<usize>> {
-    // 以表头作为初始宽度
-    let mut widths: Vec<usize> = schema.fields().iter().map(|f| f.name().len()).collect();
-    // 遍历所有 batch 计算各列宽度
-    for batch in batches {
-        let formatters = batch
-            .columns()
-            .iter()
-            .map(|c| ArrayFormatter::try_new(c.as_ref(), &DEFAULT_CLI_FORMAT_OPTIONS))
-            .collect::<Result<Vec<_>, ArrowError>>()?;
-        for row in 0..batch.num_rows() {
-            for (i, formatter) in formatters.iter().enumerate() {
-                let cell = formatter.value(row);
-                widths[i] = widths[i].max(cell.to_string().len());
-            }
-        }
-    }
-    Ok(widths)
-}
-
-/// Print the header of a table
-fn print_header(
-    schema: &SchemaRef,
-    widths: &Vec<usize>,
-    writer: &mut impl std::io::Write,
-) -> Result<()> {
-    print_border(widths, writer)?;
-
-    let header: Vec<String> = schema
-        .fields()
-        .iter()
-        .enumerate()
-        .map(|(i, field)| pad_cell(field.name(), widths[i]))
-        .collect();
-    writeln!(writer, "| {} |", header.join(" | "))?;
-
-    print_border(widths, writer)?;
-    Ok(())
-}
-
-fn print_border(widths: &Vec<usize>, writer: &mut impl std::io::Write) -> Result<()> {
-    let cells: Vec<String> = widths.iter().map(|&w| "-".repeat(w + 2)).collect();
-    writeln!(writer, "+{}+", cells.join("+"))?;
-    Ok(())
-}
-
-/// Print a batch of records with the given widths for each column
-fn print_batch_with_widths(
-    batch: &RecordBatch,
-    widths: &Vec<usize>,
-    writer: &mut impl std::io::Write,
-) -> Result<()> {
-    let formatters = batch
-        .columns()
-        .iter()
-        .map(|c| ArrayFormatter::try_new(c.as_ref(), &DEFAULT_CLI_FORMAT_OPTIONS))
-        .collect::<Result<Vec<_>, ArrowError>>()?;
-    for row in 0..batch.num_rows() {
-        let cells: Vec<String> = formatters
-            .iter()
-            .enumerate()
-            .map(|(i, formatter)| pad_value(&formatter.value(row), widths[i]))
-            .collect();
-        // 修改这里：在前后各加一个 "|" 以保持和 header 格式一致
-        writeln!(writer, "| {} |", cells.join(" | "))?;
-    }
-    Ok(())
-}
-
-/// 为单元格内容补齐空格（左对齐）
-fn pad_cell(cell: &str, width: usize) -> String {
-    format!("{:<width$}", cell, width = width)
-}
-
-fn pad_value(formatter: &ValueFormatter, width: usize) -> String {
-    let s = formatter.try_to_string().unwrap_or_default();
-    format!("{:<width$}", s, width = width)
-}
-
-// 辅助函数：打印一行点行，用于表示被省略的行
-fn print_dotted_line(
-    widths: &Vec<usize>,
-    writer: &mut impl std::io::Write,
-) -> Result<()> {
-    // 构造每个单元格，点号左对齐，长度与对应宽度相同
-    let cells: Vec<String> = widths
-        .iter()
-        .map(|&w| format!(" {: <width$} ", ".", width = w))
-        .collect();
-    // 按照 " | " 拼接，并在两侧加上边框符号
-    writeln!(writer, "|{}|", cells.join("|"))?;
-    Ok(())
-}
-
-// 辅助函数：打印底部边框
-fn print_bottom_border(
-    widths: &Vec<usize>,
-    writer: &mut impl std::io::Write,
-) -> Result<()> {
-    // 构造每个单元格对应的边框部分，例如 "+------------+"
-    let cells: Vec<String> = widths
-        .iter()
-        .map(|&w| "-".repeat(w + 2)) // 加2可以对齐左右两侧的空格
-        .collect();
-    writeln!(writer, "+{}+", cells.join("+"))?;
     Ok(())
 }
 
