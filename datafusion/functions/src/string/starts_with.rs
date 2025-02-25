@@ -41,12 +41,12 @@ pub fn starts_with(args: &[ArrayRef]) -> Result<ArrayRef> {
         })
     {
         let arg0 = if args[0].data_type() == &coercion_data_type {
-            args[0].clone()
+            Arc::clone(&args[0])
         } else {
             arrow::compute::kernels::cast::cast(&args[0], &coercion_data_type)?
         };
         let arg1 = if args[1].data_type() == &coercion_data_type {
-            args[1].clone()
+            Arc::clone(&args[1])
         } else {
             arrow::compute::kernels::cast::cast(&args[1], &coercion_data_type)?
         };
