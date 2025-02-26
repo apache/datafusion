@@ -259,7 +259,7 @@ dependencies = [
  "arrow-ord",
  "arrow-row",
  "arrow-schema",
- "arrow-select 54.2.0",
+ "arrow-select",
  "arrow-string",
  "half",
  "pyo3",
@@ -310,7 +310,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "arrow-select 54.2.0",
+ "arrow-select",
  "atoi",
  "base64 0.22.1",
  "chrono",
@@ -331,7 +331,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "arrow-select 54.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-select",
  "atoi",
  "base64 0.22.1",
  "chrono",
@@ -378,7 +378,7 @@ dependencies = [
  "arrow-ord",
  "arrow-row",
  "arrow-schema",
- "arrow-select 54.2.0",
+ "arrow-select",
  "arrow-string",
  "base64 0.22.1",
  "bytes",
@@ -428,7 +428,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "arrow-select 54.2.0",
+ "arrow-select",
 ]
 
 [[package]]
@@ -462,20 +462,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arrow-select"
-version = "54.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac265273864a820c4a179fc67182ccc41ea9151b97024e1be956f0f2369c2539"
-dependencies = [
- "ahash 0.8.11",
- "arrow-array",
- "arrow-buffer",
- "arrow-data",
- "arrow-schema",
- "num",
-]
-
-[[package]]
 name = "arrow-string"
 version = "54.2.0"
 dependencies = [
@@ -483,7 +469,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-data",
  "arrow-schema",
- "arrow-select 54.2.0",
+ "arrow-select",
  "memchr",
  "num",
  "regex",
@@ -4058,7 +4044,7 @@ dependencies = [
  "arrow-data",
  "arrow-ipc",
  "arrow-schema",
- "arrow-select 54.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "arrow-select",
  "base64 0.22.1",
  "brotli",
  "bytes",

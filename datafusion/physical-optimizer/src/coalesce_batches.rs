@@ -63,15 +63,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
             let wrap_in_coalesce = plan_any.downcast_ref::<FilterExec>().is_some()
                 || plan_any.downcast_ref::<HashJoinExec>().is_some()
                 // Don't need to add CoalesceBatchesExec after a round robin RepartitionExec
-                || plan_any
-                    .downcast_ref::<RepartitionExec>()
-                    .map(|repart_exec| {
-                        !matches!(
-                            repart_exec.partitioning().clone(),
-                            Partitioning::RoundRobinBatch(_)
-                        )
-                    })
-                    .unwrap_or(false);
+;
             if wrap_in_coalesce {
                 Ok(Transformed::yes(Arc::new(CoalesceBatchesExec::new(
                     plan,

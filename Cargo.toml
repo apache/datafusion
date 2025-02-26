@@ -200,3 +200,4 @@ arrow-flight = { path = "../arrow-rs/arrow-flight" }
 arrow-ipc = { path = "../arrow-rs/arrow-ipc" }
 arrow-ord = { path = "../arrow-rs/arrow-ord" }
 arrow-schema = { path = "../arrow-rs/arrow-schema" }
+arrow-select = { path = "../arrow-rs/arrow-select" }

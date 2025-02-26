@@ -40,8 +40,8 @@ use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
 
-use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
-use arrow::compute::take_arrays;
+use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchBuilder, RecordBatchOptions};
+use arrow::compute::take_in_batch;
 use arrow::datatypes::{SchemaRef, UInt32Type};
 use datafusion_common::utils::transpose;
 use datafusion_common::HashMap;
@@ -188,6 +188,7 @@ enum BatchPartitionerState {
         exprs: Vec<Arc<dyn PhysicalExpr>>,
         num_partitions: usize,
         hash_buffer: Vec<u64>,
+        builders: Vec<RecordBatchBuilder>,
     },
     RoundRobin {
         num_partitions: usize,
@@ -213,6 +214,7 @@ impl BatchPartitioner {
                 // Use fixed random hash
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
+                builders: Vec::new(),
             },
             other => return not_impl_err!("Unsupported repartitioning scheme {other:?}"),
         };
@@ -263,7 +265,18 @@ impl BatchPartitioner {
                     exprs,
                     num_partitions: partitions,
                     hash_buffer,
+                    builders,
                 } => {
+                    if builders.is_empty() {
+                        for _part in 0..*partitions {
+                            builders.push(
+                                RecordBatchBuilder::with_capacity(
+                                    batch.schema(),
+                                    8192
+                                )
+                            );
+                        }
+                    }
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
 
@@ -297,23 +310,55 @@ impl BatchPartitioner {
                             let indices: PrimitiveArray<UInt32Type> = indices.into();
                             (!indices.is_empty()).then_some((partition, indices))
                         })
-                        .map(move |(partition, indices)| {
+                        .filter_map(move |(partition, indices)| {
                             // Tracking time required for repartitioned batches construction
                             let _timer = partitioner_timer.timer();
 
-                            // Produce batches based on indices
-                            let columns = take_arrays(batch.columns(), &indices, None)?;
+                            if indices.len() < 8192 - builders[partition].len() {
+                                let r = take_in_batch(
+                                    &batch,
+                                    &mut builders[partition],
+                                    &indices,
+                                    None
+                                );
 
-                            let mut options = RecordBatchOptions::new();
-                            options = options.with_row_count(Some(indices.len()));
-                            let batch = RecordBatch::try_new_with_options(
-                                batch.schema(),
-                                columns,
-                                &options,
-                            )
-                            .unwrap();
+                                match r {
+                                    Err(e) => Some(Err(e.into())),
+                                    _ => None,
+                                }
+                            } else {
+                                let out_batch = builders[partition].finish();
+                                let out_batch = match out_batch {
+                                    Ok(batch) => batch,
+                                    Err(e) => return Some(Err(e.into()))
+                                };
 
-                            Ok((partition, batch))
+                                let r = take_in_batch(
+                                    &batch,
+                                    &mut builders[partition],
+                                    &indices,
+                                    None
+                                );
+
+                                match r {
+                                    Err(e) => Some(Err(e.into())),
+                                    _ => Some(Ok((partition, out_batch)))
+                                }
+                            }
+
+                            // // Produce batches based on indices
+                            // let columns = take_arrays(batch.columns(), &indices, None)?;
+
+                            // let mut options = RecordBatchOptions::new();
+                            // options = options.with_row_count(Some(indices.len()));
+                            // let batch = RecordBatch::try_new_with_options(
+                            //     batch.schema(),
+                            //     columns,
+                            //     &options,
+                            // )
+                            // .unwrap();
+
+                            // Ok((partition, batch))
                         });
 
                     Box::new(it)
