@@ -40,7 +40,7 @@ nested_expressions = ["datafusion-functions-nested"]
 # This feature is deprecated. Use the `nested_expressions` feature instead.
 array_expressions = ["nested_expressions"]
 # Used to enable the avro format
-avro = ["apache-avro", "num-traits", "datafusion-common/avro"]
+avro = ["apache-avro", "num-traits", "datafusion-common/avro", "datafusion-datasource/avro"]
 backtrace = ["datafusion-common/backtrace"]
 compression = ["xz2", "bzip2", "flate2", "zstd", "datafusion-datasource/compression"]
 crypto_expressions = ["datafusion-functions/crypto_expressions"]
@@ -125,7 +125,7 @@ sqlparser = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-uuid = { version = "1.13", features = ["v4", "js"] }
+uuid = { version = "1.14", features = ["v4", "js"] }
 xz2 = { version = "0.1", optional = true, features = ["static"] }
 zstd = { version = "0.13", optional = true, default-features = false }
 

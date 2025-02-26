@@ -22,7 +22,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::iter;
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
 use crate::define_udwf_and_expr;
 use datafusion_common::arrow::array::ArrayRef;
@@ -102,40 +102,40 @@ pub enum RankType {
     Percent,
 }
 
-static RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(
+        DOC_SECTION_RANKING,
+            "Returns the rank of the current row within its partition, allowing \
+            gaps between ranks. This function provides a ranking similar to `row_number`, but \
+            skips ranks for identical values.",
+
+        "rank()")
+        .build()
+});
 
 fn get_rank_doc() -> &'static Documentation {
-    RANK_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(
-            DOC_SECTION_RANKING,
-                "Returns the rank of the current row within its partition, allowing \
-                gaps between ranks. This function provides a ranking similar to `row_number`, but \
-                skips ranks for identical values.",
-
-            "rank()")
-            .build()
-    })
+    &RANK_DOCUMENTATION
 }
 
-static DENSE_RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static DENSE_RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(DOC_SECTION_RANKING, "Returns the rank of the current row without gaps. This function ranks \
+            rows in a dense manner, meaning consecutive ranks are assigned even for identical \
+            values.", "dense_rank()")
+        .build()
+});
 
 fn get_dense_rank_doc() -> &'static Documentation {
-    DENSE_RANK_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(DOC_SECTION_RANKING, "Returns the rank of the current row without gaps. This function ranks \
-                rows in a dense manner, meaning consecutive ranks are assigned even for identical \
-                values.", "dense_rank()")
-            .build()
-    })
+    &DENSE_RANK_DOCUMENTATION
 }
 
-static PERCENT_RANK_DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+static PERCENT_RANK_DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+    Documentation::builder(DOC_SECTION_RANKING, "Returns the percentage rank of the current row within its partition. \
+            The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.", "percent_rank()")
+        .build()
+});
 
 fn get_percent_rank_doc() -> &'static Documentation {
-    PERCENT_RANK_DOCUMENTATION.get_or_init(|| {
-        Documentation::builder(DOC_SECTION_RANKING, "Returns the percentage rank of the current row within its partition. \
-                The value ranges from 0 to 1 and is computed as `(rank - 1) / (total_rows - 1)`.", "percent_rank()")
-            .build()
-    })
+    &PERCENT_RANK_DOCUMENTATION
 }
 
 impl WindowUDFImpl for Rank {

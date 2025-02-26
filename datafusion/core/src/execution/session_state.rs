@@ -480,7 +480,7 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                      Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi."
+                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
         let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
@@ -518,7 +518,7 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                          Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                         MsSQL, ClickHouse, BigQuery, Ansi."
+                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
 

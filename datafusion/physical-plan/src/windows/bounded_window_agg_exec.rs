@@ -998,8 +998,13 @@ impl BoundedWindowAggStream {
             return Poll::Ready(None);
         }
 
+        let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         match ready!(self.input.poll_next_unpin(cx)) {
             Some(Ok(batch)) => {
+                // Start the timer for compute time within this operator. It will be
+                // stopped when dropped.
+                let _timer = elapsed_compute.timer();
+
                 self.search_mode.update_partition_batch(
                     &mut self.input_buffer,
                     batch,
@@ -1013,6 +1018,8 @@ impl BoundedWindowAggStream {
             }
             Some(Err(e)) => Poll::Ready(Some(Err(e))),
             None => {
+                let _timer = elapsed_compute.timer();
+
                 self.finished = true;
                 for (_, partition_batch_state) in self.partition_buffers.iter_mut() {
                     partition_batch_state.is_end = true;

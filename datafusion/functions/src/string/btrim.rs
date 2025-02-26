@@ -19,20 +19,28 @@ use crate::string::common::*;
 use crate::utils::{make_scalar_function, utf8_to_str_type};
 use arrow::array::{ArrayRef, OffsetSizeTrait};
 use arrow::datatypes::DataType;
+use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
+use std::sync::Arc;
 
 /// Returns the longest string with leading and trailing characters removed. If the characters are not specified, whitespace is removed.
 /// btrim('xyxtrimyyx', 'xyz') = 'trim'
 fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let use_string_view = args[0].data_type() == &DataType::Utf8View;
-    general_trim::<T>(args, TrimType::Both, use_string_view)
+    let args = if args.len() > 1 {
+        let arg1 = arrow::compute::kernels::cast::cast(&args[1], args[0].data_type())?;
+        vec![Arc::clone(&args[0]), arg1]
+    } else {
+        args.to_owned()
+    };
+    general_trim::<T>(&args, TrimType::Both, use_string_view)
 }
 
 #[user_doc(
@@ -73,7 +81,15 @@ impl BTrimFunc {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![TypeSignature::String(2), TypeSignature::String(1)],
+                vec![
+                    TypeSignature::Coercible(vec![
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    ]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Native(logical_string()),
+                    )]),
+                ],
                 Volatility::Immutable,
             ),
             aliases: vec![String::from("trim")],

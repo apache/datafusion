@@ -29,11 +29,12 @@ use crate::datasource::{
         file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
     },
     get_statistics_with_limit,
-    physical_plan::{FileScanConfig, FileSinkConfig},
+    physical_plan::FileSinkConfig,
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};

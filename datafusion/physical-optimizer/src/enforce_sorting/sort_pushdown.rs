@@ -48,7 +48,7 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 /// of the parent node as its data.
 ///
 /// [`EnforceSorting`]: crate::enforce_sorting::EnforceSorting
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct ParentRequirements {
     ordering_requirement: Option<LexRequirement>,
     fetch: Option<usize>,
@@ -221,7 +221,20 @@ fn pushdown_requirement_to_children(
                     .then(|| LexRequirement::new(request_child.to_vec()));
                 Ok(Some(vec![req]))
             }
-            RequirementsCompatibility::Compatible(adjusted) => Ok(Some(vec![adjusted])),
+            RequirementsCompatibility::Compatible(adjusted) => {
+                // If parent requirements are more specific than output ordering
+                // of the window plan, then we can deduce that the parent expects
+                // an ordering from the columns created by window functions. If
+                // that's the case, we block the pushdown of sort operation.
+                if !plan
+                    .equivalence_properties()
+                    .ordering_satisfy_requirement(parent_required)
+                {
+                    return Ok(None);
+                }
+
+                Ok(Some(vec![adjusted]))
+            }
             RequirementsCompatibility::NonCompatible => Ok(None),
         }
     } else if let Some(sort_exec) = plan.as_any().downcast_ref::<SortExec>() {
