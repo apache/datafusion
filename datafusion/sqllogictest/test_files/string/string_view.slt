@@ -530,7 +530,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: btrim(test.column1_utf8view, Utf8View("foo")) AS l
+01)Projection: btrim(test.column1_utf8view, Utf8("foo")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test BTRIM with Utf8View bytes longer than 12
@@ -540,7 +540,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: btrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+01)Projection: btrim(test.column1_utf8view, Utf8("this is longer than 12")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for LTRIM
@@ -561,7 +561,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: ltrim(test.column1_utf8view, Utf8View("foo")) AS l
+01)Projection: ltrim(test.column1_utf8view, Utf8("foo")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test LTRIM with Utf8View bytes longer than 12
@@ -571,7 +571,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: ltrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+01)Projection: ltrim(test.column1_utf8view, Utf8("this is longer than 12")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 ## ensure no casts for RTRIM
@@ -592,7 +592,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: rtrim(test.column1_utf8view, Utf8View("foo")) AS l
+01)Projection: rtrim(test.column1_utf8view, Utf8("foo")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 # Test RTRIM with Utf8View bytes longer than 12
@@ -602,7 +602,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: rtrim(test.column1_utf8view, Utf8View("this is longer than 12")) AS l
+01)Projection: rtrim(test.column1_utf8view, Utf8("this is longer than 12")) AS l
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for CHARACTER_LENGTH
