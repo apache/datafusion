@@ -21,11 +21,31 @@
 
 ## DataFusion `46.0.0`
 
+
+### Changes to `invoke()` and `invoke_batch()` deprecated
+
+We are migrating away from `ScalarUDFImpl::invoke()` and
+`ScalarUDFImpl::invoke_batch()` in favor of `ScalarUDFImpl::invoke_with_args()`. (TODO get code links) 
+
+If you see errors such as 
+```text
+Example
+```
+
+You can resolve them by replacing all .invoke() and .invoke_batch()calls with .invoke_with_args(). 
+```text
+TODO example
+```
+
+Example of changes:
+- [PR XXXX] TODO
+
+
+### `ParquetExec`, `AvroExec`, `CsvExec`, `JsonExec` deprecated
+
 See more information
 - Change PR [PR #14224](https://github.com/apache/datafusion/pull/14224)
 - Example of an Upgrade [PR in delta-rs](https://github.com/delta-io/delta-rs/pull/3261)
-
-### `ParquetExec`, `AvroExec`, `CsvExec`, `JsonExec` deprecated
 
 DataFusion 46 has a major change to how the built in DataSources are organized. The 
 
