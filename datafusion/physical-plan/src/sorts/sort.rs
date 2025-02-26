@@ -422,6 +422,9 @@ impl ExternalSorter {
     /// Reconstruct `self.in_mem_batches` to organize the payload buffers of each
     /// `StringViewArray` in sequential order by calling `gc()` on them.
     ///
+    /// Note this is a workaround until <https://github.com/apache/arrow-rs/issues/7185> is
+    /// available
+    ///
     /// # Rationale
     /// After (merge-based) sorting, all batches will be sorted into a single run,
     /// but physically this sorted run is chunked into many small batches. For
