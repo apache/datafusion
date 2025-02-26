@@ -120,3 +120,7 @@ DataFusion 46 has a major change to how the built in DataSources are organized. 
         .with_limit(self.limit)
         .with_table_partition_cols(table_partition_cols);```
 
+// Build the actual scan like this
+parquet_scan: file_scan_config.build(),
+
+```
