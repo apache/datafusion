@@ -346,7 +346,7 @@ impl MemoryExec {
 }
 
 /// Data source configuration for reading in-memory batches of data
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemorySourceConfig {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
