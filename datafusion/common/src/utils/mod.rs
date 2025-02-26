@@ -24,6 +24,7 @@ pub mod string_utils;
 
 use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
 use crate::{DataFusionError, Result, ScalarValue};
+use crate::{Diagnostic, Span};
 use arrow::array::{
     cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
     OffsetSizeTrait,
@@ -986,6 +987,32 @@ pub fn take_function_args<const N: usize, T>(
             if N == 1 { "argument" } else { "arguments" },
             v.len()
         )
+    })
+}
+
+pub fn take_function_args_with_span<const N: usize, T>(
+    function_name: &str,
+    args: impl IntoIterator<Item = T>,
+    function_call_site: Option<Span>,
+) -> Result<[T; N]> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    args.try_into().map_err(|v: Vec<T>| {
+        let base_error = _exec_datafusion_err!(
+            "{} function requires {} {}, got {}",
+            function_name,
+            N,
+            if N == 1 { "argument" } else { "arguments" },
+            v.len()
+        );
+
+        let diagnostic = Diagnostic::new_error(
+            format!(
+                "Wrong number of arguments for {} function call",
+                function_name
+            ),
+            function_call_site,
+        );
+        base_error.with_diagnostic(diagnostic)
     })
 }
 

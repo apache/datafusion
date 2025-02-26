@@ -305,7 +305,7 @@ fn get_valid_types_with_aggregate_udf(
                     "Function '{}' user-defined coercion failed with {:?}",
                     func.name(),
                     e.strip_backtrace()
-                )
+                );
             }
         },
         TypeSignature::OneOf(signatures) => signatures
