@@ -31,7 +31,7 @@ explain update t1 set a=1, b=2, c=3.0, d=NULL;
 ----
 logical_plan
 01)Dml: op=[Update] table=[t1]
-02)--Projection: CAST(Int64(1) AS Int32) AS a, CAST(Int64(2) AS Utf8) AS b, Float64(3) AS c, CAST(NULL AS Int32) AS d
+02)--Projection: CAST(Int64(1) AS Int32) AS a, CAST(Int64(2) AS Utf8) AS b, CAST(Decimal128(Some(30),2,1) AS Float64) AS c, CAST(NULL AS Int32) AS d
 03)----TableScan: t1
 physical_plan_error This feature is not implemented: Unsupported logical plan: Dml(Update)
 

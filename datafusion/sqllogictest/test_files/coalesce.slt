@@ -41,7 +41,7 @@ select
   arrow_typeof(coalesce(1, 2.0))
 ;
 ----
-1 Float64
+1 Decimal128(21, 1)
 
 query RT
 select

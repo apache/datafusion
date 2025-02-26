@@ -43,7 +43,7 @@ Int32
 query T
 SELECT arrow_typeof(1.0)
 ----
-Float64
+Decimal128(2, 1)
 
 # arrow_typeof_f32
 query T
