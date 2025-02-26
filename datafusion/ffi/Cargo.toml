@@ -27,12 +27,15 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [lib]
 name = "datafusion_ffi"
-path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 abi_stable = "0.11.3"
@@ -44,7 +47,11 @@ datafusion-proto = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 prost = { workspace = true }
+semver = "1.0.24"
+tokio = { workspace = true }
 
 [dev-dependencies]
 doc-comment = { workspace = true }
-tokio = { workspace = true }
+
+[features]
+integration-tests = []

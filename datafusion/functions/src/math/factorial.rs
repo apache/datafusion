@@ -30,7 +30,8 @@ use datafusion_common::{
     arrow_datafusion_err, exec_err, internal_datafusion_err, DataFusionError, Result,
 };
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -76,12 +77,8 @@ impl ScalarUDFImpl for FactorialFunc {
         Ok(Int64)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        make_scalar_function(factorial, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(factorial, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {

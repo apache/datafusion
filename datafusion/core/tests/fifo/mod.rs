@@ -28,8 +28,7 @@ mod unix_test {
 
     use arrow::array::Array;
     use arrow::csv::ReaderBuilder;
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::SchemaRef;
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
     use datafusion::datasource::TableProvider;
     use datafusion::{

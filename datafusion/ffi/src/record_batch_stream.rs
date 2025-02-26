@@ -33,8 +33,12 @@ use datafusion::{
     execution::{RecordBatchStream, SendableRecordBatchStream},
 };
 use futures::{Stream, TryStreamExt};
+use tokio::runtime::Handle;
 
-use crate::arrow_wrappers::{WrappedArray, WrappedSchema};
+use crate::{
+    arrow_wrappers::{WrappedArray, WrappedSchema},
+    rresult,
+};
 
 /// A stable struct for sharing [`RecordBatchStream`] across FFI boundaries.
 /// We use the async-ffi crate for handling async calls across libraries.
@@ -58,12 +62,27 @@ pub struct FFI_RecordBatchStream {
     pub private_data: *mut c_void,
 }
 
+pub struct RecordBatchStreamPrivateData {
+    pub rbs: SendableRecordBatchStream,
+    pub runtime: Option<Handle>,
+}
+
 impl From<SendableRecordBatchStream> for FFI_RecordBatchStream {
     fn from(stream: SendableRecordBatchStream) -> Self {
+        Self::new(stream, None)
+    }
+}
+
+impl FFI_RecordBatchStream {
+    pub fn new(stream: SendableRecordBatchStream, runtime: Option<Handle>) -> Self {
+        let private_data = Box::into_raw(Box::new(RecordBatchStreamPrivateData {
+            rbs: stream,
+            runtime,
+        })) as *mut c_void;
         FFI_RecordBatchStream {
             poll_next: poll_next_fn_wrapper,
             schema: schema_fn_wrapper,
-            private_data: Box::into_raw(Box::new(stream)) as *mut c_void,
+            private_data,
         }
     }
 }
@@ -71,7 +90,8 @@ impl From<SendableRecordBatchStream> for FFI_RecordBatchStream {
 unsafe impl Send for FFI_RecordBatchStream {}
 
 unsafe extern "C" fn schema_fn_wrapper(stream: &FFI_RecordBatchStream) -> WrappedSchema {
-    let stream = stream.private_data as *const SendableRecordBatchStream;
+    let private_data = stream.private_data as *const RecordBatchStreamPrivateData;
+    let stream = &(*private_data).rbs;
 
     (*stream).schema().into()
 }
@@ -80,13 +100,12 @@ fn record_batch_to_wrapped_array(
     record_batch: RecordBatch,
 ) -> RResult<WrappedArray, RString> {
     let struct_array = StructArray::from(record_batch);
-    match to_ffi(&struct_array.to_data()) {
-        Ok((array, schema)) => RResult::ROk(WrappedArray {
+    rresult!(
+        to_ffi(&struct_array.to_data()).map(|(array, schema)| WrappedArray {
             array,
-            schema: WrappedSchema(schema),
-        }),
-        Err(e) => RResult::RErr(e.to_string().into()),
-    }
+            schema: WrappedSchema(schema)
+        })
+    )
 }
 
 // probably want to use pub unsafe fn from_ffi(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Result<ArrayData> {
@@ -106,7 +125,10 @@ unsafe extern "C" fn poll_next_fn_wrapper(
     stream: &FFI_RecordBatchStream,
     cx: &mut FfiContext,
 ) -> FfiPoll<ROption<RResult<WrappedArray, RString>>> {
-    let stream = stream.private_data as *mut SendableRecordBatchStream;
+    let private_data = stream.private_data as *mut RecordBatchStreamPrivateData;
+    let stream = &mut (*private_data).rbs;
+
+    let _guard = (*private_data).runtime.as_ref().map(|rt| rt.enter());
 
     let poll_result = cx.with_context(|std_cx| {
         (*stream)

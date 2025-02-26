@@ -267,16 +267,24 @@ statement error Did you mean 'to_timestamp_seconds'?
 SELECT to_TIMESTAMPS_second(v2) from test;
 
 # Aggregate function
-query error DataFusion error: Error during planning: Invalid function 'counter'
+query error
 SELECT counter(*) from test;
+----
+DataFusion error: Error during planning: Invalid function 'counter'.
+Did you mean 'count'?
+
 
 # Aggregate function
 statement error Did you mean 'stddev'?
 SELECT STDEV(v1) from test;
 
 # Aggregate function
-statement error DataFusion error: Error during planning: Invalid function 'covaria'.\nDid you mean 'covar'?
+statement error
 SELECT COVARIA(1,1);
+----
+DataFusion error: Error during planning: Invalid function 'covaria'.
+Did you mean 'covar'?
+
 
 # Window function
 statement error
@@ -712,6 +720,14 @@ select count(distinct u) from uuid_table;
 ----
 2
 
+# must be valid uuidv4 format
+query B
+SELECT REGEXP_LIKE(uuid(),
+       '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')
+       AS is_valid;
+----
+true
+
 statement ok
 drop table uuid_table
 
@@ -842,7 +858,7 @@ SELECT greatest(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
 123456789
 
 
-query error greatest does not support zero arguments
+query error 'greatest' does not support zero argument
 SELECT greatest()
 
 query I
@@ -1040,7 +1056,7 @@ SELECT least(-1, 1, 2.3, 123456789, 3 + 5, -(-4), abs(-9.0))
 -1
 
 
-query error least does not support zero arguments
+query error 'least' does not support zero arguments
 SELECT least()
 
 query I

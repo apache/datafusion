@@ -26,10 +26,11 @@ use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{metrics, ExecutionPlan};
 
+use arrow::array::{
+    ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch,
+};
 use arrow::compute::concat_batches;
-use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
-use arrow_schema::{Schema, SchemaRef};
+use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,
@@ -856,7 +857,8 @@ pub mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         let left_sort_filter_expr = build_filter_input_order(
             JoinSide::Left,
@@ -983,7 +985,8 @@ pub mod tests {
                 side: JoinSide::Right,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         let left_schema = Arc::new(left_schema);
         let right_schema = Arc::new(right_schema);
@@ -1055,7 +1058,8 @@ pub mod tests {
                 side: JoinSide::Left,
             },
         ];
-        let filter = JoinFilter::new(filter_expr, column_indices, intermediate_schema);
+        let filter =
+            JoinFilter::new(filter_expr, column_indices, Arc::new(intermediate_schema));
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),

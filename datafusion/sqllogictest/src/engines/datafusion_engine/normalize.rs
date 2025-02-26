@@ -15,21 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::super::conversion::*;
+use super::error::{DFSqlLogicTestError, Result};
 use crate::engines::output::DFColumnType;
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::Fields;
 use arrow::util::display::ArrayFormatter;
 use arrow::{array, array::ArrayRef, datatypes::DataType, record_batch::RecordBatch};
-use datafusion_common::format::DEFAULT_CLI_FORMAT_OPTIONS;
-use datafusion_common::DataFusionError;
+use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
+use datafusion::common::DataFusionError;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-use super::super::conversion::*;
-use super::error::{DFSqlLogicTestError, Result};
-
 /// Converts `batches` to a result as expected by sqllogictest.
-pub(crate) fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
+pub fn convert_batches(batches: Vec<RecordBatch>) -> Result<Vec<Vec<String>>> {
     if batches.is_empty() {
         Ok(vec![])
     } else {
@@ -120,13 +119,13 @@ fn expand_row(mut row: Vec<String>) -> impl Iterator<Item = Vec<String>> {
 /// normalize path references
 ///
 /// ```text
-/// CsvExec: files={1 group: [[path/to/datafusion/testing/data/csv/aggregate_test_100.csv]]}, ...
+/// DataSourceExec: files={1 group: [[path/to/datafusion/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 ///
 /// into:
 ///
 /// ```text
-/// CsvExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, ...
+/// DataSourceExec: files={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, ...
 /// ```
 fn normalize_paths(mut row: Vec<String>) -> Vec<String> {
     row.iter_mut().for_each(|s| {
@@ -250,7 +249,7 @@ pub fn cell_to_string(col: &ArrayRef, row: usize) -> Result<String> {
 }
 
 /// Converts columns to a result as expected by sqllogicteset.
-pub(crate) fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
+pub fn convert_schema_to_types(columns: &Fields) -> Vec<DFColumnType> {
     columns
         .iter()
         .map(|f| f.data_type())

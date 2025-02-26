@@ -19,37 +19,37 @@ use arrow::array::{
     Array, ArrayRef, AsArray, BooleanArray, Int32Array, RecordBatch, StringArray,
     UInt64Array,
 };
-use arrow::datatypes::Int32Type;
+use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow::util::pretty::pretty_format_batches;
-use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::{
+    internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
+};
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
+use datafusion::logical_expr::{
+    utils::conjunction, TableProviderFilterPushDown, TableType,
+};
 use datafusion::parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use datafusion::parquet::arrow::{
     arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter,
 };
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
-use datafusion_common::{
-    internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
-};
-use datafusion_expr::{utils::conjunction, TableProviderFilterPushDown, TableType};
-use datafusion_physical_expr::PhysicalExpr;
 use std::any::Any;
 use std::collections::HashSet;
 use std::fmt::Display;
-use std::fs::{self, DirEntry, File};
+use std::fs;
+use std::fs::{DirEntry, File};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
 
@@ -233,7 +233,7 @@ impl TableProvider for IndexTableProvider {
             .transpose()?
             // if there are no filters, use a literal true to have a predicate
             // that always evaluates to true we can pass to the index
-            .unwrap_or_else(|| datafusion_physical_expr::expressions::lit(true));
+            .unwrap_or_else(|| datafusion::physical_expr::expressions::lit(true));
 
         // Use the index to find the files that might have data that matches the
         // predicate. Any file that can not have data that matches the predicate
@@ -241,11 +241,14 @@ impl TableProvider for IndexTableProvider {
         let files = self.index.get_files(predicate.clone())?;
 
         let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let mut file_scan_config = FileScanConfig::new(object_store_url, self.schema())
-            .with_projection(projection.cloned())
-            .with_limit(limit);
+        let source =
+            Arc::new(ParquetSource::default().with_predicate(self.schema(), predicate));
+        let mut file_scan_config =
+            FileScanConfig::new(object_store_url, self.schema(), source)
+                .with_projection(projection.cloned())
+                .with_limit(limit);
 
-        // Transform to the format needed to pass to ParquetExec
+        // Transform to the format needed to pass to DataSourceExec
         // Create one file group per file (default to scanning them all in parallel)
         for (file_name, file_size) in files {
             let path = self.dir.join(file_name);
@@ -255,11 +258,7 @@ impl TableProvider for IndexTableProvider {
                 file_size,
             ));
         }
-        let exec = ParquetExec::builder(file_scan_config)
-            .with_predicate(predicate)
-            .build_arc();
-
-        Ok(exec)
+        Ok(file_scan_config.build())
     }
 
     /// Tell DataFusion to push filters down to the scan method

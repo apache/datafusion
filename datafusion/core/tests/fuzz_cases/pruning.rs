@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 
-use arrow_array::{Array, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema};
+use arrow::array::{Array, RecordBatch, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use bytes::{BufMut, Bytes, BytesMut};
 use datafusion::{
     datasource::{
         listing::PartitionedFile,
-        physical_plan::{parquet::ParquetExecBuilder, FileScanConfig},
+        physical_plan::{FileScanConfig, ParquetSource},
     },
     prelude::*,
 };
@@ -111,8 +111,22 @@ async fn test_utf8_not_like_prefix() {
 }
 
 #[tokio::test]
+async fn test_utf8_not_like_ecsape() {
+    Utf8Test::new(|value| col("a").not_like(lit(format!("\\%{}%", value))))
+        .run()
+        .await;
+}
+
+#[tokio::test]
 async fn test_utf8_not_like_suffix() {
     Utf8Test::new(|value| col("a").not_like(lit(format!("{}%", value))))
+        .run()
+        .await;
+}
+
+#[tokio::test]
+async fn test_utf8_not_like_suffix_one() {
+    Utf8Test::new(|value| col("a").not_like(lit(format!("{}_", value))))
         .run()
         .await;
 }
@@ -190,65 +204,24 @@ impl Utf8Test {
 
     ///  all combinations of interesting charactes  with lengths ranging from 1 to 4
     fn values() -> &'static [String] {
-        VALUES.get_or_init(|| {
-            let mut rng = rand::thread_rng();
-
-            let characters = [
-                "z",
-                "0",
-                "~",
-                "ß",
-                "℣",
-                "%", // this one is useful for like/not like tests since it will result in randomly inserted wildcards
-                "_", // this one is useful for like/not like tests since it will result in randomly inserted wildcards
-                "\u{7F}",
-                "\u{7FF}",
-                "\u{FF}",
-                "\u{10FFFF}",
-                "\u{D7FF}",
-                "\u{FDCF}",
-                // null character
-                "\u{0}",
-            ];
-            let value_lengths = [1, 2, 3];
-            let mut values = vec![];
-            for length in &value_lengths {
-                values.extend(
-                    characters
-                        .iter()
-                        .cloned()
-                        .combinations(*length)
-                        // now get all permutations of each combination
-                        .flat_map(|c| c.into_iter().permutations(*length))
-                        // and join them into strings
-                        .map(|c| c.join("")),
-                );
-            }
-            println!("Generated {} values", values.len());
-            // randomly pick 100 values
-            values.shuffle(&mut rng);
-            values.truncate(100);
-            values
-        })
+        &VALUES
     }
 
     /// return the in memory object store
     fn memory_store() -> &'static Arc<dyn ObjectStore> {
-        MEMORY_STORE.get_or_init(|| Arc::new(InMemory::new()))
+        &MEMORY_STORE
     }
 
     /// return the schema of the created test files
     fn schema() -> Arc<Schema> {
-        let schema = SCHEMA.get_or_init(|| {
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]))
-        });
+        let schema = &SCHEMA;
         Arc::clone(schema)
     }
 
     /// Return a list of test files with UTF8 data and combinations of
     /// [`Self::values`]
     async fn test_files() -> Vec<TestFile> {
-        let files_mutex = TESTFILES.get_or_init(|| Mutex::new(vec![]));
+        let files_mutex = &TESTFILES;
         let mut files = files_mutex.lock().await;
         if !files.is_empty() {
             return (*files).clone();
@@ -303,24 +276,25 @@ async fn execute_with_predicate(
     schema: Arc<Schema>,
     ctx: &SessionContext,
 ) -> Vec<String> {
-    let scan =
-        FileScanConfig::new(ObjectStoreUrl::parse("memory://").unwrap(), schema.clone())
-            .with_file_group(
-                files
-                    .iter()
-                    .map(|test_file| {
-                        PartitionedFile::new(
-                            test_file.path.clone(),
-                            test_file.size as u64,
-                        )
-                    })
-                    .collect(),
-            );
-    let mut builder = ParquetExecBuilder::new(scan);
-    if prune_stats {
-        builder = builder.with_predicate(predicate.clone())
-    }
-    let exec = Arc::new(builder.build()) as Arc<dyn ExecutionPlan>;
+    let parquet_source = if prune_stats {
+        ParquetSource::default().with_predicate(Arc::clone(&schema), predicate.clone())
+    } else {
+        ParquetSource::default()
+    };
+    let scan = FileScanConfig::new(
+        ObjectStoreUrl::parse("memory://").unwrap(),
+        schema.clone(),
+        Arc::new(parquet_source),
+    )
+    .with_file_group(
+        files
+            .iter()
+            .map(|test_file| {
+                PartitionedFile::new(test_file.path.clone(), test_file.size as u64)
+            })
+            .collect(),
+    );
+    let exec = scan.build();
     let exec =
         Arc::new(FilterExec::try_new(predicate, exec).unwrap()) as Arc<dyn ExecutionPlan>;
 
@@ -370,16 +344,57 @@ async fn write_parquet_file(
 }
 
 /// The string values for [Utf8Test::values]
-static VALUES: OnceLock<Vec<String>> = OnceLock::new();
+static VALUES: LazyLock<Vec<String>> = LazyLock::new(|| {
+    let mut rng = rand::thread_rng();
+
+    let characters = [
+        "z",
+        "0",
+        "~",
+        "ß",
+        "℣",
+        "%", // this one is useful for like/not like tests since it will result in randomly inserted wildcards
+        "_", // this one is useful for like/not like tests since it will result in randomly inserted wildcards
+        "\u{7F}",
+        "\u{7FF}",
+        "\u{FF}",
+        "\u{10FFFF}",
+        "\u{D7FF}",
+        "\u{FDCF}",
+        // null character
+        "\u{0}",
+    ];
+    let value_lengths = [1, 2, 3];
+    let mut values = vec![];
+    for length in &value_lengths {
+        values.extend(
+            characters
+                .iter()
+                .cloned()
+                .combinations(*length)
+                // now get all permutations of each combination
+                .flat_map(|c| c.into_iter().permutations(*length))
+                // and join them into strings
+                .map(|c| c.join("")),
+        );
+    }
+    println!("Generated {} values", values.len());
+    // randomly pick 100 values
+    values.shuffle(&mut rng);
+    values.truncate(100);
+    values
+});
 /// The schema for the [Utf8Test::schema]
-static SCHEMA: OnceLock<Arc<Schema>> = OnceLock::new();
+static SCHEMA: LazyLock<Arc<Schema>> =
+    LazyLock::new(|| Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)])));
 
 /// The InMemory object store
-static MEMORY_STORE: OnceLock<Arc<dyn ObjectStore>> = OnceLock::new();
+static MEMORY_STORE: LazyLock<Arc<dyn ObjectStore>> =
+    LazyLock::new(|| Arc::new(InMemory::new()));
 
 /// List of in memory parquet files with UTF8 data
-// Use a mutex rather than OnceLock to allow for async initialization
-static TESTFILES: OnceLock<Mutex<Vec<TestFile>>> = OnceLock::new();
+// Use a mutex rather than LazyLock to allow for async initialization
+static TESTFILES: LazyLock<Mutex<Vec<TestFile>>> = LazyLock::new(|| Mutex::new(vec![]));
 
 /// Holds a temporary parquet file path and its size
 #[derive(Debug, Clone)]

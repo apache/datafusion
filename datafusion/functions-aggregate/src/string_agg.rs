@@ -18,7 +18,7 @@
 //! [`StringAgg`] accumulator for the `string_agg` function
 
 use arrow::array::ArrayRef;
-use arrow_schema::DataType;
+use arrow::datatypes::DataType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, ScalarValue};
@@ -108,15 +108,14 @@ impl AggregateUDFImpl for StringAgg {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         if let Some(lit) = acc_args.exprs[1].as_any().downcast_ref::<Literal>() {
-            return match lit.value() {
-                ScalarValue::Utf8(Some(delimiter))
-                | ScalarValue::LargeUtf8(Some(delimiter)) => {
-                    Ok(Box::new(StringAggAccumulator::new(delimiter.as_str())))
+            return match lit.value().try_as_str() {
+                Some(Some(delimiter)) => {
+                    Ok(Box::new(StringAggAccumulator::new(delimiter)))
                 }
-                ScalarValue::Utf8(None)
-                | ScalarValue::LargeUtf8(None)
-                | ScalarValue::Null => Ok(Box::new(StringAggAccumulator::new(""))),
-                e => not_impl_err!("StringAgg not supported for delimiter {}", e),
+                Some(None) => Ok(Box::new(StringAggAccumulator::new(""))),
+                None => {
+                    not_impl_err!("StringAgg not supported for delimiter {}", lit.value())
+                }
             };
         }
 

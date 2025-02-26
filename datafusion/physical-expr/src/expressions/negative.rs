@@ -28,9 +28,12 @@ use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{internal_err, plan_err, Result};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
+use datafusion_expr::statistics::Distribution::{
+    self, Bernoulli, Exponential, Gaussian, Generic, Uniform,
+};
 use datafusion_expr::{
     type_coercion::{is_interval, is_null, is_signed_numeric, is_timestamp},
     ColumnarValue,
@@ -89,14 +92,13 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let arg = self.arg.evaluate(batch)?;
-        match arg {
+        match self.arg.evaluate(batch)? {
             ColumnarValue::Array(array) => {
                 let result = neg_wrapping(array.as_ref())?;
                 Ok(ColumnarValue::Array(result))
             }
             ColumnarValue::Scalar(scalar) => {
-                Ok(ColumnarValue::Scalar((scalar.arithmetic_negate())?))
+                Ok(ColumnarValue::Scalar(scalar.arithmetic_negate()?))
             }
         }
     }
@@ -116,10 +118,7 @@ impl PhysicalExpr for NegativeExpr {
     /// It replaces the upper and lower bounds after multiplying them with -1.
     /// Ex: `(a, b]` => `[-b, -a)`
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
-        Interval::try_new(
-            children[0].upper().arithmetic_negate()?,
-            children[0].lower().arithmetic_negate()?,
-        )
+        children[0].arithmetic_negate()
     }
 
     /// Returns a new [`Interval`] of a NegativeExpr  that has the existing `interval` given that
@@ -129,15 +128,35 @@ impl PhysicalExpr for NegativeExpr {
         interval: &Interval,
         children: &[&Interval],
     ) -> Result<Option<Vec<Interval>>> {
-        let child_interval = children[0];
-        let negated_interval = Interval::try_new(
-            interval.upper().arithmetic_negate()?,
-            interval.lower().arithmetic_negate()?,
-        )?;
+        let negated_interval = interval.arithmetic_negate()?;
 
-        Ok(child_interval
+        Ok(children[0]
             .intersect(negated_interval)?
             .map(|result| vec![result]))
+    }
+
+    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
+        match children[0] {
+            Uniform(u) => Distribution::new_uniform(u.range().arithmetic_negate()?),
+            Exponential(e) => Distribution::new_exponential(
+                e.rate().clone(),
+                e.offset().arithmetic_negate()?,
+                !e.positive_tail(),
+            ),
+            Gaussian(g) => Distribution::new_gaussian(
+                g.mean().arithmetic_negate()?,
+                g.variance().clone(),
+            ),
+            Bernoulli(_) => {
+                internal_err!("NegativeExpr cannot operate on Boolean datatypes")
+            }
+            Generic(u) => Distribution::new_generic(
+                u.mean().arithmetic_negate()?,
+                u.median().arithmetic_negate()?,
+                u.variance().clone(),
+                u.range().arithmetic_negate()?,
+            ),
+        }
     }
 
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
@@ -178,10 +197,10 @@ mod tests {
     use crate::expressions::{col, Column};
 
     use arrow::array::*;
+    use arrow::datatypes::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
     use arrow::datatypes::*;
-    use arrow_schema::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
     use datafusion_common::cast::as_primitive_array;
-    use datafusion_common::DataFusionError;
+    use datafusion_common::{DataFusionError, ScalarValue};
 
     use paste::paste;
 
@@ -234,6 +253,67 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluate_statistics() -> Result<()> {
+        let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+
+        // Uniform
+        assert_eq!(
+            negative_expr.evaluate_statistics(&[&Distribution::new_uniform(
+                Interval::make(Some(-2.), Some(3.))?
+            )?])?,
+            Distribution::new_uniform(Interval::make(Some(-3.), Some(2.))?)?
+        );
+
+        // Bernoulli
+        assert!(negative_expr
+            .evaluate_statistics(&[&Distribution::new_bernoulli(ScalarValue::from(
+                0.75
+            ))?])
+            .is_err());
+
+        // Exponential
+        assert_eq!(
+            negative_expr.evaluate_statistics(&[&Distribution::new_exponential(
+                ScalarValue::from(1.),
+                ScalarValue::from(1.),
+                true
+            )?])?,
+            Distribution::new_exponential(
+                ScalarValue::from(1.),
+                ScalarValue::from(-1.),
+                false
+            )?
+        );
+
+        // Gaussian
+        assert_eq!(
+            negative_expr.evaluate_statistics(&[&Distribution::new_gaussian(
+                ScalarValue::from(15),
+                ScalarValue::from(225),
+            )?])?,
+            Distribution::new_gaussian(ScalarValue::from(-15), ScalarValue::from(225),)?
+        );
+
+        // Unknown
+        assert_eq!(
+            negative_expr.evaluate_statistics(&[&Distribution::new_generic(
+                ScalarValue::from(15),
+                ScalarValue::from(15),
+                ScalarValue::from(10),
+                Interval::make(Some(10), Some(20))?
+            )?])?,
+            Distribution::new_generic(
+                ScalarValue::from(-15),
+                ScalarValue::from(-15),
+                ScalarValue::from(10),
+                Interval::make(Some(-20), Some(-10))?
+            )?
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_propagate_constraints() -> Result<()> {
         let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let original_child_interval = Interval::make(Some(-2), Some(3))?;
@@ -246,6 +326,35 @@ mod tests {
             )?,
             after_propagation
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_propagate_statistics_range_holders() -> Result<()> {
+        let negative_expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        let original_child_interval = Interval::make(Some(-2), Some(3))?;
+        let after_propagation = Interval::make(Some(-2), Some(0))?;
+
+        let parent = Distribution::new_uniform(Interval::make(Some(0), Some(4))?)?;
+        let children: Vec<Vec<Distribution>> = vec![
+            vec![Distribution::new_uniform(original_child_interval.clone())?],
+            vec![Distribution::new_generic(
+                ScalarValue::from(0),
+                ScalarValue::from(0),
+                ScalarValue::Int32(None),
+                original_child_interval.clone(),
+            )?],
+        ];
+
+        for child_view in children {
+            let child_refs: Vec<_> = child_view.iter().collect();
+            let actual = negative_expr.propagate_statistics(&parent, &child_refs)?;
+            let expected = Some(vec![Distribution::new_from_interval(
+                after_propagation.clone(),
+            )?]);
+            assert_eq!(actual, expected);
+        }
+
         Ok(())
     }
 

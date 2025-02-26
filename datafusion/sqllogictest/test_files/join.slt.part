@@ -1,0 +1,1389 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+
+#   http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+##########
+## Join Tests
+##########
+
+# Regression test: https://github.com/apache/datafusion/issues/4844
+statement ok
+CREATE TABLE IF NOT EXISTS students(name TEXT, mark INT) AS VALUES
+('Stuart', 28),
+('Amina', 89),
+('Christen', 50),
+('Salma', 77),
+('Samantha', 21);
+
+statement ok
+CREATE TABLE IF NOT EXISTS grades(grade INT, min INT, max INT) AS VALUES
+(1, 0, 14),
+(2, 15, 35),
+(3, 36, 55),
+(4, 56, 79),
+(5, 80, 100);
+
+query TII
+SELECT s.*, g.grade FROM students s join grades g on s.mark between g.min and g.max WHERE grade > 2 ORDER BY s.mark DESC
+----
+Amina 89 5
+Salma 77 4
+Christen 50 3
+
+statement ok
+drop table IF EXISTS students;
+
+statement ok
+drop table IF EXISTS grades;
+
+# issue: https://github.com/apache/datafusion/issues/5382
+statement ok
+CREATE TABLE IF NOT EXISTS test1(a int, b int) as select 1 as a, 2 as b;
+
+statement ok
+CREATE TABLE IF NOT EXISTS test2(a int, b int) as select 1 as a, 2 as b;
+
+query IIII rowsort
+SELECT * FROM test2 FULL JOIN test1 ON true;
+----
+1 2 1 2
+
+statement ok
+drop table IF EXISTS test1;
+
+statement ok
+drop table IF EXISTS test2;
+
+# tables for join
+statement ok
+CREATE TABLE IF NOT EXISTS t1(t1_id INT, t1_name TEXT, t1_int INT) AS VALUES
+(11, 'a', 1),
+(22, 'b', 2),
+(33, 'c', 3),
+(44, 'd', 4);
+
+statement ok
+CREATE TABLE IF NOT EXISTS t2(t2_id INT, t2_name TEXT, t2_int INT) AS VALUES
+(11, 'z', 3),
+(22, 'y', 1),
+(44, 'x', 3),
+(55, 'w', 3);
+
+statement ok
+CREATE TABLE IF NOT EXISTS t3(t3_id INT, t3_name TEXT, t3_int INT) AS VALUES
+(11, 'z', 3),
+(22, ' ', 6),
+(33, 'x', 7),
+(55, 'w', 4);
+
+# batch size
+statement ok
+set datafusion.execution.batch_size = 4096;
+
+# left semi with wrong where clause
+query error DataFusion error: Schema error: No field named t2\.t2_id\. Did you mean 't1\.t1_id'\?\.
+SELECT t1.t1_id, t1.t1_name, t1.t1_int
+FROM t1
+	LEFT SEMI JOIN t2 ON t1.t1_id = t2.t2_id
+WHERE t2.t2_id > 1
+
+# left semi join with on-filter
+query ITI rowsort
+SELECT t1.t1_id, t1.t1_name, t1.t1_int
+FROM t1
+	LEFT SEMI JOIN t2
+	ON t1.t1_id = t2.t2_id
+		AND t2.t2_int > 1
+----
+11 a 1
+44 d 4
+
+# equijoin
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id
+----
+11 a z
+22 b y
+44 d x
+
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id
+----
+11 a z
+22 b y
+44 d x
+
+# equijoin_multiple_condition_ordering
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t1_name <> t2_name
+----
+11 a z
+22 b y
+44 d x
+
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name <> t1_name
+----
+11 a z
+22 b y
+44 d x
+
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t1_name <> t2_name
+----
+11 a z
+22 b y
+44 d x
+
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id AND t2_name <> t1_name
+----
+11 a z
+22 b y
+44 d x
+
+# equijoin_and_other_condition
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name >= 'y'
+----
+11 a z
+22 b y
+
+# equijoin_left_and_condition_from_right
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y'
+----
+11 a z
+22 b y
+33 c NULL
+44 d NULL
+
+# equijoin_left_and_not_null_condition_from_right
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name is not null
+----
+11 a z
+22 b y
+33 c NULL
+44 d x
+
+# full_join_sub_query
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name 
+FROM (
+	SELECT * 
+	FROM (t1) AS t1
+) 
+    FULL JOIN (
+		SELECT * 
+		FROM (t2) AS t2
+	) 
+	ON t1_id = t2_id AND t2_name >= 'y'		
+----
+11 a z
+22 b y
+33 c NULL
+44 d NULL
+NULL NULL w
+NULL NULL x
+
+# equijoin_right_and_condition_from_left
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t1_id >= 22
+----
+22 b y
+44 d x
+NULL NULL w
+NULL NULL z
+
+# equijoin_left_and_condition_from_left
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_id >= 44
+----
+11 a NULL
+22 b NULL
+33 c NULL
+44 d x
+
+# equijoin_left_and_condition_from_both
+query III rowsort
+SELECT t1_id, t1_int, t2_int FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t1_int >= t2_int
+----
+11 1 NULL
+22 2 1
+33 3 NULL
+44 4 3
+
+# equijoin_right_and_condition_from_right
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_id >= 22
+----
+22 b y
+44 d x
+NULL NULL w
+NULL NULL z
+
+# equijoin_right_and_condition_from_both
+query III rowsort
+SELECT t1_int, t2_int, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int
+----
+2 1 22
+4 3 44
+NULL 3 11
+NULL 3 55
+
+# equijoin_full
+query ITIITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id
+----
+11 a 1 11 z 3
+22 b 2 22 y 1
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+NULL NULL NULL 55 w 3
+
+# equijoin_full_and_condition_from_both
+query ITIITI rowsort
+SELECT * FROM t1 FULL JOIN t2 ON t1_id = t2_id AND t2_int <= t1_int
+----
+11 a 1 NULL NULL NULL
+22 b 2 22 y 1
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+NULL NULL NULL 11 z 3
+NULL NULL NULL 55 w 3
+
+# left_join
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id
+----
+11 a z
+22 b y
+33 c NULL
+44 d x
+
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id
+----
+11 a z
+22 b y
+33 c NULL
+44 d x
+
+# right_join
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id
+----
+11 a z
+22 b y
+44 d x
+NULL NULL w
+
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t2_id = t1_id
+----
+11 a z
+22 b y
+44 d x
+NULL NULL w
+
+# full_join
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t1_id = t2_id
+----
+11 a z
+22 b y
+33 c NULL
+44 d x
+NULL NULL w
+
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t2_id = t1_id
+----
+11 a z
+22 b y
+33 c NULL
+44 d x
+NULL NULL w
+
+# equijoin_implicit_syntax
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t1_id = t2_id
+----
+11 a z
+22 b y
+44 d x
+
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id
+----
+11 a z
+22 b y
+44 d x
+
+# equijoin_implicit_syntax_with_filter
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t1_id > 0 AND t1_id = t2_id AND t2_id < 99
+----
+11 a z
+22 b y
+44 d x
+
+# equijoin_implicit_syntax_reversed
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id
+----
+11 a z
+22 b y
+44 d x
+
+# reduce_left_join_1
+query ITIITI rowsort
+SELECT t1_id, t1_name, t1_int, t2_id, t2_name, t2_int
+FROM t1
+	LEFT JOIN t2 ON t1.t1_id = t2.t2_id
+WHERE t2.t2_id < 100
+----
+11 a 1 11 z 3
+22 b 2 22 y 1
+44 d 4 44 x 3
+
+# reduce_left_join_2
+# filter expr:  `t2.t2_int < 10 or (t1.t1_int > 2 and t2.t2_name != 'w')`
+# could be write to: `(t1.t1_int > 2 or t2.t2_int < 10) and (t2.t2_name != 'w' or t2.t2_int < 10)`
+# the right part `(t2.t2_name != 'w' or t2.t2_int < 10)` could be push down left join side and remove in filter.
+query ITIITI rowsort
+SELECT t1_id, t1_name, t1_int, t2_id, t2_name, t2_int
+FROM t1
+	LEFT JOIN t2 ON t1.t1_id = t2.t2_id
+WHERE t2.t2_int < 10
+	OR (t1.t1_int > 2
+		AND t2.t2_name != 'w')
+----
+11 a 1 11 z 3
+22 b 2 22 y 1
+44 d 4 44 x 3
+
+# reduce_left_join_3
+query ITIITI
+SELECT *
+FROM (
+	SELECT t1.*
+	FROM t1
+		LEFT JOIN t2 ON t1.t1_id = t2.t2_id
+	WHERE t2.t2_int < 3
+) t3
+	LEFT JOIN t2 ON t3.t1_int = t2.t2_int
+WHERE t3.t1_id < 100
+----
+22 b 2 NULL NULL NULL
+
+# reduce_right_join_1
+query ITIITI rowsort
+SELECT t1_id, t1_name, t1_int, t2_id, t2_name, t2_int
+FROM t1
+	RIGHT JOIN t2 ON t1.t1_id = t2.t2_id
+WHERE t1.t1_int IS NOT NULL
+----
+11 a 1 11 z 3
+22 b 2 22 y 1
+44 d 4 44 x 3
+
+# reduce_right_join_2
+query ITIITI rowsort
+SELECT *
+FROM t1
+	RIGHT JOIN t2 ON t1.t1_id = t2.t2_id
+WHERE NOT t1.t1_int = t2.t2_int
+----
+11 a 1 11 z 3
+22 b 2 22 y 1
+44 d 4 44 x 3
+
+# reduce_full_join_to_right_join
+query ITIITI rowsort
+SELECT *
+FROM t1
+	FULL JOIN t2 ON t1.t1_id = t2.t2_id
+WHERE t2.t2_name IS NOT NULL
+----
+11 a 1 11 z 3
+22 b 2 22 y 1
+44 d 4 44 x 3
+NULL NULL NULL 55 w 3
+
+# reduce_full_join_to_left_join
+query ITIITI rowsort
+SELECT *
+FROM t1
+	FULL JOIN t2 ON t1.t1_id = t2.t2_id
+WHERE t1.t1_name != 'b'
+----
+11 a 1 11 z 3
+33 c 3 NULL NULL NULL
+44 d 4 44 x 3
+
+# reduce_full_join_to_inner_join
+query ITIITI rowsort
+SELECT *
+FROM t1
+	FULL JOIN t2 ON t1.t1_id = t2.t2_id
+WHERE t1.t1_name != 'b'
+	AND t2.t2_name = 'x'
+----
+44 d 4 44 x 3
+
+# left_join_with_nonequal_condition
+query ITT rowsort
+SELECT t1_id, t1_name, t2_name
+FROM t1
+	LEFT JOIN t2
+	ON t1_id != t2_id
+		AND t2_id >= 100
+----
+11 a NULL
+22 b NULL
+33 c NULL
+44 d NULL
+
+# reduce_cross_join_with_expr_join_key_all
+query ITIITI rowsort
+SELECT *
+FROM t1
+	CROSS JOIN t2
+WHERE t1.t1_id + 12 = t2.t2_id + 1
+----
+11 a 1 22 y 1
+33 c 3 44 x 3
+44 d 4 55 w 3
+
+# reduce_cross_join_with_cast_expr_join_key
+query IIT rowsort
+SELECT t1.t1_id, t2.t2_id, t1.t1_name
+FROM t1
+	CROSS JOIN t2
+WHERE t1.t1_id + 11 = CAST(t2.t2_id AS BIGINT)
+----
+11 22 a
+33 44 c
+44 55 d
+
+# reduce_cross_join_with_wildcard_and_expr
+query ITIITII rowsort
+SELECT *, t1.t1_id + 11
+FROM t1, t2
+WHERE t1.t1_id + 11 = t2.t2_id
+----
+11 a 1 22 y 1 22
+33 c 3 44 x 3 44
+44 d 4 55 w 3 55
+
+# both_side_expr_key_inner_join
+query IIT rowsort
+SELECT t1.t1_id, t2.t2_id, t1.t1_name 
+FROM t1 
+    INNER JOIN t2 ON 
+    t1.t1_id + cast(12 as INT UNSIGNED) = t2.t2_id + cast(1 as INT UNSIGNED)
+----
+11 22 a
+33 44 c
+44 55 d
+
+# left_side_expr_key_inner_join
+query IIT rowsort
+SELECT t1_id, t2_id, t1_name 
+FROM t1 
+    INNER JOIN t2 ON 
+    t1.t1_id + cast(11 as INT UNSIGNED) = t2.t2_id
+----
+11 22 a
+33 44 c
+44 55 d
+
+# right_side_expr_key_inner_join
+query IIT rowsort
+SELECT t1.t1_id, t2.t2_id, t1.t1_name 
+FROM t1 
+    INNER JOIN t2 ON 
+    t1.t1_id + cast(11 as INT UNSIGNED) = t2.t2_id
+----
+11 22 a
+33 44 c
+44 55 d
+
+# select_wildcard_with_expr_key_inner_join
+query ITIITI rowsort
+SELECT * FROM t1 INNER JOIN t2 ON t1.t1_id = t2.t2_id - cast(11 as INT UNSIGNED)
+----
+11 a 1 22 y 1
+33 c 3 44 x 3
+44 d 4 55 w 3
+
+# join_with_type_coercion_for_equi_expr
+query ITI rowsort
+SELECT t1.t1_id, t1.t1_name, t2.t2_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id + 11 = t2.t2_id
+----
+11 a 22
+33 c 44
+44 d 55
+
+# join_only_with_filter
+query ITI rowsort
+select t1.t1_id, t1.t1_name, t2.t2_id from t1 inner join t2 on t1.t1_id * 4 < t2.t2_id
+----
+11 a 55
+
+# type_coercion_join_with_filter_and_equi_expr
+query ITI rowsort
+SELECT t1.t1_id, t1.t1_name, t2.t2_id
+FROM t1
+	INNER JOIN t2
+	ON t1.t1_id * 5 = t2.t2_id
+		AND t1.t1_id * 4 < t2.t2_id
+----
+11 a 55
+
+# inner join multiple tables to one
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id
+----
+11 11 11
+22 22 22
+
+# inner join multiple tables to one with WHERE filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id
+WHERE t3.t3_int = 6
+----
+22 22 22
+
+# inner join multiple tables to one with JOIN filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t3.t3_int < 6
+----
+11 11 11
+
+# subsequent inner join
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_int = t3.t3_int
+----
+11 11 11
+44 44 11
+
+# subsequent inner join with filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_id = t3.t3_id
+WHERE t3.t3_int = 6
+----
+22 22 22
+
+# subsequent inner join with join filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t2.t2_id = t3.t3_id AND t3.t3_int < 6
+----
+11 11 11
+
+# multiple inner joins with mixed ON clause
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t2.t2_int = t3.t3_int
+----
+11 11 11
+
+# multiple inner joins with mixed ON clause and filter
+query III rowsort
+SELECT t1.t1_id, t2.t2_id, t3.t3_id
+FROM t1
+	INNER JOIN t2 ON t1.t1_id = t2.t2_id
+	INNER JOIN t3 ON t1.t1_id = t3.t3_id AND t2.t2_int = t3.t3_int
+WHERE t3.t3_name = 'no such name'
+----
+
+# test create table from query with LEFT join
+statement ok
+create table left_join_test as 
+with t1 as (select 1 as col1, 'asd' as col2), 
+     t2 as (select 1 as col3, 'sdf' as col4)
+select col2, col4 from t1 left join t2 on col1 = col3
+
+# test create table from query with RIGHT join
+statement ok
+create table right_join_test as 
+with t1 as (select 1 as col1, 'asd' as col2), 
+     t2 as (select 1 as col3, 'sdf' as col4)
+select col2, col4 from t1 right join t2 on col1 = col3
+
+# test create table from query with FULL OUTER join
+statement ok
+create table full_join_test as 
+with t1 as (select 1 as col1, 'asd' as col2), 
+     t2 as (select 1 as col3, 'sdf' as col4)
+select col2, col4 from t1 full outer join t2 on col1 = col3
+
+# test eliminate join when condition is false
+query TT
+explain select * from t1 join t2 on false;
+----
+logical_plan EmptyRelation
+physical_plan EmptyExec
+
+# Make batch size smaller than table row number. to introduce parallelism to the plan.
+statement ok
+set datafusion.execution.batch_size = 1;
+
+# test covert inner join to cross join when condition is true
+query TT
+explain select * from t1 inner join t2 on true;
+----
+logical_plan
+01)Cross Join: 
+02)--TableScan: t1 projection=[t1_id, t1_name, t1_int]
+03)--TableScan: t2 projection=[t2_id, t2_name, t2_int]
+physical_plan
+01)CrossJoinExec
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table IF EXISTS t1;
+
+statement ok
+drop table IF EXISTS t2;
+
+statement ok
+drop table IF EXISTS t3;
+
+statement ok
+drop table IF EXISTS left_join_test;
+
+statement ok
+drop table IF EXISTS right_join_test;
+
+statement ok
+drop table IF EXISTS full_join_test;
+
+# batch size
+statement ok
+set datafusion.execution.batch_size = 8192;
+
+# related to: https://github.com/apache/datafusion/issues/8374
+statement ok
+CREATE TABLE t1(a text, b int) AS VALUES ('Alice', 50), ('Alice', 100);
+
+statement ok
+CREATE TABLE t2(a text, b int) AS VALUES ('Alice', 2), ('Alice', 1);
+
+# test 'ORDER BY' joined result with same column name
+query TI
+SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t1.b;
+----
+Alice 50
+Alice 50
+Alice 100
+Alice 100
+
+query TI
+SELECT t1.a, t1.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t2.b;
+----
+Alice 50
+Alice 100
+Alice 50
+Alice 100
+
+query TITI
+SELECT t1.a, t1.b, t2.a, t2.b FROM t1 JOIN t2 ON t1.a = t2.a ORDER BY t1.a, t2.b;
+----
+Alice 50 Alice 1
+Alice 100 Alice 1
+Alice 50 Alice 2
+Alice 100 Alice 2
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+# make sure when target partition is 1, hash repartition is not added
+# to the final plan.
+query TT
+EXPLAIN SELECT *
+FROM t1,
+t1 as t2
+WHERE t1.a=t2.a;
+----
+logical_plan
+01)Inner Join: t1.a = t2.a
+02)--TableScan: t1 projection=[a, b]
+03)--SubqueryAlias: t2
+04)----TableScan: t1 projection=[a, b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Reset the configs to old values
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+# sort by company name and then by lead name
+statement ok
+CREATE TABLE companies(name VARCHAR, employees INT) AS VALUES ('Jeyork', 150),('Shalk', 350),('ShuttlP', 75)
+
+statement ok
+CREATE TABLE leads(name VARCHAR, company VARCHAR) AS VALUES ('Alex F', 'Jeyork'),('John B', 'Shalk'),('Samanta J', 'ShuttlP'),('Trevor R', 'Jeyork'),('Alice B', 'ShuttlP')
+
+query TT
+SELECT l.* FROM leads l LEFT JOIN companies c ON c."name" = l."company" ORDER BY c."name", l."name"
+----
+Alex F Jeyork
+Trevor R Jeyork
+John B Shalk
+Alice B ShuttlP
+Samanta J ShuttlP
+
+statement ok
+DROP TABLE companies
+
+statement ok
+DROP TABLE leads
+
+####
+## Test ON clause predicates are not pushed past join for OUTER JOINs
+####
+
+
+# create tables
+statement ok
+CREATE TABLE employees(emp_id INT, name VARCHAR);
+
+statement ok
+CREATE TABLE department(emp_id INT, dept_name VARCHAR);
+
+statement ok
+INSERT INTO employees (emp_id, name) VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol');
+
+statement ok
+INSERT INTO department (emp_id, dept_name) VALUES (1, 'HR'), (3, 'Engineering'), (4, 'Sales');
+
+# Can not push the ON filter below an OUTER JOIN
+query TT
+EXPLAIN SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+logical_plan
+01)Left Join:  Filter: e.name = Utf8("Alice") OR e.name = Utf8("Bob")
+02)--SubqueryAlias: e
+03)----TableScan: employees projection=[emp_id, name]
+04)--SubqueryAlias: d
+05)----TableScan: department projection=[dept_name]
+physical_plan
+01)ProjectionExec: expr=[emp_id@1 as emp_id, name@2 as name, dept_name@0 as dept_name]
+02)--NestedLoopJoinExec: join_type=Right, filter=name@0 = Alice OR name@0 = Bob
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+1 Alice HR
+1 Alice Engineering
+1 Alice Sales
+2 Bob HR
+2 Bob Engineering
+2 Bob Sales
+3 Carol NULL
+
+# neither RIGHT OUTER JOIN
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM department AS d
+RIGHT JOIN employees AS e
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+1 Alice HR
+1 Alice Engineering
+1 Alice Sales
+2 Bob HR
+2 Bob Engineering
+2 Bob Sales
+3 Carol NULL
+
+# neither FULL OUTER JOIN
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM department AS d
+FULL JOIN employees AS e
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+1 Alice HR
+1 Alice Engineering
+1 Alice Sales
+2 Bob HR
+2 Bob Engineering
+2 Bob Sales
+3 Carol NULL
+
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees e
+LEFT JOIN department d
+ON (e.name = 'NotExist1' OR e.name = 'NotExist2');
+----
+1 Alice NULL
+2 Bob NULL
+3 Carol NULL
+
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees e
+LEFT JOIN department d
+ON (e.name = 'Alice' OR e.name = 'NotExist');
+----
+1 Alice HR
+1 Alice Engineering
+1 Alice Sales
+2 Bob NULL
+3 Carol NULL
+
+# Can push the ON filter below the JOIN for INNER JOIN (expect to see a filter below the join)
+query TT
+EXPLAIN SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+JOIN department AS d
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+logical_plan
+01)Cross Join: 
+02)--SubqueryAlias: e
+03)----Filter: employees.name = Utf8("Alice") OR employees.name = Utf8("Bob")
+04)------TableScan: employees projection=[emp_id, name]
+05)--SubqueryAlias: d
+06)----TableScan: department projection=[dept_name]
+physical_plan
+01)CrossJoinExec
+02)--CoalesceBatchesExec: target_batch_size=8192
+03)----FilterExec: name@1 = Alice OR name@1 = Bob
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# expect no row for Carol
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+JOIN department AS d
+ON (e.name = 'Alice' OR e.name = 'Bob');
+----
+1 Alice HR
+1 Alice Engineering
+1 Alice Sales
+2 Bob HR
+2 Bob Engineering
+2 Bob Sales
+
+# OR conditions on Filter (not join filter)
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON e.emp_id = d.emp_id
+WHERE (e.name = 'Alice' OR e.name = 'Carol');
+----
+1 Alice HR
+3 Carol Engineering
+
+# Push down OR conditions on Filter through LEFT JOIN if possible
+query TT
+EXPLAIN SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON e.emp_id = d.emp_id
+WHERE ((dept_name != 'Engineering' AND e.name = 'Alice') OR (name != 'Alice' AND e.name = 'Carol'));
+----
+logical_plan
+01)Filter: d.dept_name != Utf8("Engineering") AND e.name = Utf8("Alice") OR e.name != Utf8("Alice") AND e.name = Utf8("Carol")
+02)--Projection: e.emp_id, e.name, d.dept_name
+03)----Left Join: e.emp_id = d.emp_id
+04)------SubqueryAlias: e
+05)--------Filter: employees.name = Utf8("Alice") OR employees.name != Utf8("Alice") AND employees.name = Utf8("Carol")
+06)----------TableScan: employees projection=[emp_id, name]
+07)------SubqueryAlias: d
+08)--------TableScan: department projection=[emp_id, dept_name]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: dept_name@2 != Engineering AND name@1 = Alice OR name@1 != Alice AND name@1 = Carol
+03)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------HashJoinExec: mode=CollectLeft, join_type=Left, on=[(emp_id@0, emp_id@0)], projection=[emp_id@0, name@1, dept_name@3]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------FilterExec: name@1 = Alice OR name@1 != Alice AND name@1 = Carol
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+query ITT
+SELECT e.emp_id, e.name, d.dept_name
+FROM employees AS e
+LEFT JOIN department AS d
+ON e.emp_id = d.emp_id
+WHERE ((dept_name != 'Engineering' AND e.name = 'Alice') OR (name != 'Alice' AND e.name = 'Carol'));
+----
+1 Alice HR
+3 Carol Engineering
+
+statement ok
+DROP TABLE employees
+
+statement ok
+DROP TABLE department
+
+
+statement ok
+CREATE TABLE t1 (v0 BIGINT) AS VALUES (-503661263);
+
+statement ok
+CREATE TABLE t2 (v0 DOUBLE) AS VALUES (-1.663563947387);
+
+statement ok
+CREATE TABLE t3 (v0 DOUBLE) AS VALUES (0.05112015193508901);
+
+# Test issue: https://github.com/apache/datafusion/issues/11269
+query RR
+SELECT t3.v0, t2.v0 FROM t1,t2,t3 WHERE t3.v0 >= t1.v0;
+----
+0.051120151935 -1.663563947387
+
+# Test issue: https://github.com/apache/datafusion/issues/11414
+query IRR
+SELECT * FROM t1 INNER JOIN t2 ON NULL RIGHT JOIN t3 ON TRUE;
+----
+NULL NULL 0.051120151935
+
+# ON expression must be boolean type
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Join condition must be boolean type, but got Utf8
+SELECT * FROM t1 INNER JOIN t2 ON 'TRUE'
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+statement ok
+DROP TABLE t3;
+
+
+statement ok
+CREATE TABLE t0 (v1 BOOLEAN) AS VALUES (false), (null);
+
+statement ok
+CREATE TABLE t1 (v1 BOOLEAN) AS VALUES (false), (null), (false);
+
+statement ok
+CREATE TABLE t2 (v1 BOOLEAN) AS VALUES (false), (true);
+
+# Test issue: https://github.com/apache/datafusion/issues/11275
+query BB
+SELECT t2.v1, t1.v1 FROM t0, t1, t2 WHERE t2.v1 IS DISTINCT FROM t0.v1 ORDER BY 1,2;
+----
+false false
+false false
+false NULL
+true false
+true false
+true false
+true false
+true NULL
+true NULL
+
+# Test issue: https://github.com/apache/datafusion/issues/11621
+query BB
+SELECT * FROM t1 JOIN t2 ON t1.v1 = t2.v1 WHERE (t1.v1 == t2.v1) OR t1.v1;
+----
+false false
+false false
+
+query BB
+SELECT * FROM t1 JOIN t2 ON t1.v1 = t2.v1 WHERE t1.v1 OR (t1.v1 == t2.v1);
+----
+false false
+false false
+
+statement ok
+DROP TABLE t0;
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;
+
+# Join Using Issue with Cast Expr
+# Found issue: https://github.com/apache/datafusion/issues/11412
+
+statement ok
+/*DML*/CREATE TABLE t60(v0 BIGINT, v1 BIGINT, v2 BOOLEAN, v3 BOOLEAN);
+
+statement ok
+/*DML*/CREATE TABLE t0(v0 DOUBLE, v1 BIGINT);
+
+statement ok
+/*DML*/CREATE TABLE t1(v0 DOUBLE);
+
+query I
+SELECT COUNT(*)
+FROM t1
+NATURAL JOIN t60
+INNER JOIN t0
+ON t60.v1 = t0.v0
+AND t0.v1 > t60.v1;
+----
+0
+
+query I
+SELECT COUNT(*)
+FROM t1
+JOIN t60
+USING (v0)
+INNER JOIN t0
+ON t60.v1 = t0.v0
+AND t0.v1 > t60.v1;
+----
+0
+
+statement ok
+DROP TABLE t60;
+
+statement ok
+DROP TABLE t0;
+
+statement ok
+DROP TABLE t1;
+
+# Test SQLancer issue: https://github.com/apache/datafusion/issues/11704
+query II
+WITH
+    t1 AS (SELECT NULL::int AS a),
+    t2 AS (SELECT NULL::int AS a)
+SELECT * FROM
+  (SELECT * FROM t1 CROSS JOIN t2)
+WHERE t1.a == t2.a
+  AND t1.a + t2.a IS NULL;
+----
+
+# Similar to above test case, but without the equality predicate
+query II
+WITH
+    t1 AS (SELECT NULL::int AS a),
+    t2 AS (SELECT NULL::int AS a)
+SELECT * FROM
+  (SELECT * FROM t1 CROSS JOIN t2)
+WHERE t1.a + t2.a IS NULL;
+----
+NULL NULL
+
+statement ok
+CREATE TABLE t5(v0 BIGINT, v1 STRING, v2 BIGINT, v3 STRING, v4 BOOLEAN);
+
+statement ok
+CREATE TABLE t1(v0 BIGINT, v1 STRING);
+
+statement ok
+CREATE TABLE t0(v0 BIGINT, v1 DOUBLE);
+
+query TT
+explain SELECT *
+FROM t1
+NATURAL JOIN t5
+INNER JOIN t0 ON (t0.v1 + t5.v0) > 0
+WHERE t0.v1 = t1.v0;
+----
+logical_plan
+01)Projection: t1.v0, t1.v1, t5.v2, t5.v3, t5.v4, t0.v0, t0.v1
+02)--Inner Join: CAST(t1.v0 AS Float64) = t0.v1 Filter: t0.v1 + CAST(t5.v0 AS Float64) > Float64(0)
+03)----Projection: t1.v0, t1.v1, t5.v0, t5.v2, t5.v3, t5.v4
+04)------Inner Join: t1.v0 = t5.v0, t1.v1 = t5.v1
+05)--------TableScan: t1 projection=[v0, v1]
+06)--------TableScan: t5 projection=[v0, v1, v2, v3, v4]
+07)----TableScan: t0 projection=[v0, v1]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(CAST(t1.v0 AS Float64)@6, v1@1)], filter=v1@1 + CAST(v0@0 AS Float64) > 0, projection=[v0@0, v1@1, v2@3, v3@4, v4@5, v0@7, v1@8]
+03)----CoalescePartitionsExec
+04)------ProjectionExec: expr=[v0@0 as v0, v1@1 as v1, v0@2 as v0, v2@3 as v2, v3@4 as v3, v4@5 as v4, CAST(v0@0 AS Float64) as CAST(t1.v0 AS Float64)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(v0@0, v0@0), (v1@1, v1@1)], projection=[v0@0, v1@1, v0@2, v2@4, v3@5, v4@6]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[0]
+09)--------------DataSourceExec: partitions=1, partition_sizes=[0]
+10)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+
+
+statement ok
+drop table t5;
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t0;
+
+# Test decorrelate query with the uppercase table name and column name
+statement ok
+create table "T1"("C1" int, "C2" int);
+
+statement ok
+create table "T2"("C1" int, "C3" int);
+
+statement ok
+select "C1" from "T1" where not exists (select 1 from "T2" where "T1"."C1" = "T2"."C1")
+
+statement ok
+create table t1(c1 int, c2 int);
+
+statement ok
+create table t2(c1 int, c3 int);
+
+statement ok
+select "C1" from (select c1 as "C1", c2 as "C2" from t1) as "T1" where not exists (select 1 from (select c1 as "C1", c3 as "C3" from t2) as "T2" where "T1"."C1" = "T2"."C1")
+
+statement ok
+drop table "T1";
+
+statement ok
+drop table "T2";
+
+statement ok
+drop table t1;
+
+statement ok
+drop table t2;
+
+# Test SQLancer issue: https://github.com/apache/datafusion/issues/12337
+statement ok
+create table t1(v1 int) as values(100);
+
+## Query with Ambiguous column reference
+query error DataFusion error: Schema error: Schema contains duplicate qualified field name t1\.v1
+select count(*)
+from t1
+right outer join t1
+on t1.v1 > 0;
+
+query error DataFusion error: Schema error: Schema contains duplicate qualified field name t1\.v1
+select t1.v1 from t1 join t1 using(v1) cross join (select struct('foo' as v1) as t1);
+
+statement ok
+drop table t1;
+
+
+statement ok
+CREATE TABLE t1(a INTEGER, b INTEGER, c INTEGER, d INTEGER, e INTEGER);
+
+statement ok
+INSERT INTO t1(e,c,b,d,a) VALUES(103,102,100,101,104);
+
+statement ok
+INSERT INTO t1(a,c,d,e,b) VALUES(107,106,108,109,105);
+
+statement ok
+INSERT INTO t1(d,c,e,a,b) VALUES(116,119,117,115,118);
+
+statement ok
+INSERT INTO t1(c,d,b,e,a) VALUES(123,122,124,120,121);
+
+statement ok
+INSERT INTO t1(b,a,e,d,c) VALUES(145,149,146,148,147);
+
+statement ok
+INSERT INTO t1(b,c,a,d,e) VALUES(151,150,153,154,152);
+
+statement ok
+INSERT INTO t1(c,b,a,d,e) VALUES(161,160,163,164,162);
+
+statement ok
+INSERT INTO t1(b,d,a,e,c) VALUES(167,169,168,165,166);
+
+statement ok
+INSERT INTO t1(d,b,c,e,a) VALUES(171,170,172,173,174);
+
+statement ok
+INSERT INTO t1(e,c,a,d,b) VALUES(177,176,179,178,175);
+
+statement ok
+INSERT INTO t1(b,e,a,d,c) VALUES(181,180,182,183,184);
+
+statement ok
+INSERT INTO t1(c,e,a,b,d) VALUES(208,209,205,206,207);
+
+statement ok
+INSERT INTO t1(c,e,a,d,b) VALUES(214,210,213,212,211);
+
+statement ok
+INSERT INTO t1(b,c,a,d,e) VALUES(218,215,216,217,219);
+
+statement ok
+INSERT INTO t1(e,c,b,a,d) VALUES(242,244,240,243,241);
+
+statement ok
+INSERT INTO t1(e,d,c,b,a) VALUES(246,248,247,249,245);
+
+# Regression test for https://github.com/apache/datafusion/issues/13425
+query IIIIII
+SELECT a+b*2,
+       a+b*2+c*3+d*4,
+       CASE WHEN a<b-3 THEN 111 WHEN a<=b THEN 222
+        WHEN a<b+3 THEN 333 ELSE 444 END,
+       b,
+       c-d,
+       a+b*2+c*3+d*4+e*5
+  FROM t1
+ WHERE (e>c OR e<d)
+    OR EXISTS(SELECT 1 FROM t1 AS x WHERE x.b<t1.b)
+ ORDER BY 3,5,2,1,4,6;
+----
+743 2476 111 249 -1 3706
+652 2165 222 218 -2 3260
+369 1226 222 124 1 1826
+617 2069 222 206 1 3114
+351 1172 222 118 3 1757
+455 1521 333 151 -4 2281
+502 1676 333 167 -3 2501
+317 1067 333 105 -2 1612
+544 1828 333 181 1 2728
+635 2125 333 211 2 3175
+483 1622 444 160 -3 2432
+529 1769 444 175 -2 2654
+439 1472 444 145 -1 2202
+304 1014 444 100 1 1529
+514 1714 444 170 1 2579
+723 2419 444 240 3 3629
+
+statement ok
+drop table t1;
+
+# Test that equivalent classes are projected correctly.
+
+statement ok
+create table pairs(x int, y int) as values (1,1), (2,2), (3,3);
+
+statement ok
+create table f(a int) as values (1), (2), (3);
+
+statement ok
+create table s(b int) as values (1), (2), (3);
+
+statement ok
+set datafusion.optimizer.repartition_joins = true;
+
+statement ok
+set datafusion.execution.target_partitions = 16;
+
+# After the filter applying (x = y) we can join by both x and y,
+# partitioning only once.
+
+query TT
+explain
+SELECT * FROM
+(SELECT x+1 AS col0, y+1 AS col1 FROM PAIRS WHERE x == y)
+JOIN f
+ON col0 = f.a
+JOIN s
+ON col1 = s.b
+----
+logical_plan
+01)Inner Join: col1 = CAST(s.b AS Int64)
+02)--Inner Join: col0 = CAST(f.a AS Int64)
+03)----Projection: CAST(pairs.x AS Int64) + Int64(1) AS col0, CAST(pairs.y AS Int64) + Int64(1) AS col1
+04)------Filter: pairs.y = pairs.x
+05)--------TableScan: pairs projection=[x, y]
+06)----TableScan: f projection=[a]
+07)--TableScan: s projection=[b]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--HashJoinExec: mode=Partitioned, join_type=Inner, on=[(col1@1, CAST(s.b AS Int64)@1)], projection=[col0@0, col1@1, a@2, b@3]
+03)----ProjectionExec: expr=[col0@1 as col0, col1@2 as col1, a@0 as a]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(CAST(f.a AS Int64)@1, col0@0)], projection=[a@0, col0@2, col1@3]
+06)----------CoalesceBatchesExec: target_batch_size=8192
+07)------------RepartitionExec: partitioning=Hash([CAST(f.a AS Int64)@1], 16), input_partitions=1
+08)--------------ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Int64) as CAST(f.a AS Int64)]
+09)----------------DataSourceExec: partitions=1, partition_sizes=[1]
+10)----------CoalesceBatchesExec: target_batch_size=8192
+11)------------RepartitionExec: partitioning=Hash([col0@0], 16), input_partitions=16
+12)--------------ProjectionExec: expr=[CAST(x@0 AS Int64) + 1 as col0, CAST(y@1 AS Int64) + 1 as col1]
+13)----------------RepartitionExec: partitioning=RoundRobinBatch(16), input_partitions=1
+14)------------------CoalesceBatchesExec: target_batch_size=8192
+15)--------------------FilterExec: y@1 = x@0
+16)----------------------DataSourceExec: partitions=1, partition_sizes=[1]
+17)----CoalesceBatchesExec: target_batch_size=8192
+18)------RepartitionExec: partitioning=Hash([CAST(s.b AS Int64)@1], 16), input_partitions=1
+19)--------ProjectionExec: expr=[b@0 as b, CAST(b@0 AS Int64) as CAST(s.b AS Int64)]
+20)----------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table pairs;
+
+statement ok
+drop table f;
+
+statement ok
+drop table s;
+
+# Reset the configs to old values.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+set datafusion.optimizer.repartition_joins = false;

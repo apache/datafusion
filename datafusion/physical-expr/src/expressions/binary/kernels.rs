@@ -27,7 +27,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::plan_err;
 use datafusion_common::{Result, ScalarValue};
 
-use arrow_schema::ArrowError;
+use arrow::error::ArrowError;
 use std::sync::Arc;
 
 /// Downcasts $LEFT and $RIGHT to $ARRAY_TYPE and then calls $KERNEL($LEFT, $RIGHT)

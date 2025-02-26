@@ -67,6 +67,62 @@ statement ok
 CREATE TABLE test (c1 BIGINT,c2 BIGINT) as values
 (0,null), (1,1), (null,1), (3,2), (3,2)
 
+statement ok
+CREATE TABLE group_median_table_non_nullable (
+    col_group STRING NOT NULL,
+    col_i8 TINYINT NOT NULL,
+    col_i16 SMALLINT NOT NULL,
+    col_i32 INT NOT NULL,
+    col_i64 BIGINT NOT NULL,
+    col_u8 TINYINT UNSIGNED NOT NULL,
+    col_u16 SMALLINT UNSIGNED NOT NULL,
+    col_u32 INT UNSIGNED NOT NULL,
+    col_u64 BIGINT UNSIGNED NOT NULL,
+    col_f32 FLOAT NOT NULL,
+    col_f64 DOUBLE NOT NULL,
+    col_f64_nan DOUBLE NOT NULL,
+    col_decimal128 DECIMAL(10, 4) NOT NULL,
+    col_decimal256 NUMERIC(10, 4) NOT NULL
+) as VALUES
+( 'group0', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   1.1, 1.1, 1.1,                         0.0001, 0.0001 ),
+( 'group0', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   4.4, 4.4, 1.1,                         0.0002, 0.0002 ),
+( 'group0', 100,  100,    100,         arrow_cast(100,'Int64'),                  100, 100,   100,        arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64'), 0.0003, 0.0003 ),
+( 'group0', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255, 65535, 4294967295, 18446744073709551615,     2.2, 2.2, arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
+( 'group1', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   1.1, 1.1, 1.1,                         0.0001, 0.0001 ),
+( 'group1', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,   0,     0,          arrow_cast(0,'UInt64'),   4.4, 4.4, arrow_cast('NAN','Float64'), 0.0002, 0.0002 ),
+( 'group1', 100,  100,    100,         arrow_cast(100,'Int64'),                  101, 100,   100,        arrow_cast(100,'UInt64'), 3.3, 3.3, arrow_cast('NAN','Float64'), 0.0003, 0.0003 ),
+( 'group1', 125,  32766,  2147483646,  arrow_cast(9223372036854775806,'Int64'),  100, 101,   4294967294, arrow_cast(100,'UInt64'), 3.2, 5.5, arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
+( 'group1', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255, 65535, 4294967295, 18446744073709551615,     2.2, 2.2, arrow_cast('NAN','Float64'), 0.0005, 0.0005 )
+
+statement ok
+CREATE TABLE group_median_table_nullable (
+    col_group STRING NOT NULL,
+    col_i8 TINYINT,
+    col_i16 SMALLINT,
+    col_i32 INT,
+    col_i64 BIGINT,
+    col_u8 TINYINT UNSIGNED,
+    col_u16 SMALLINT UNSIGNED,
+    col_u32 INT UNSIGNED,
+    col_u64 BIGINT UNSIGNED,
+    col_f32 FLOAT,
+    col_f64 DOUBLE,
+    col_f64_nan DOUBLE,
+    col_decimal128 DECIMAL(10, 4),
+    col_decimal256 NUMERIC(10, 4)
+) as VALUES
+( 'group0', NULL, NULL,   NULL,        NULL,                                     NULL, NULL,  NULL,       NULL,                     NULL, NULL, NULL,                         NULL,   NULL   ),
+( 'group0', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,    0,     0,          arrow_cast(0,'UInt64'),   1.1,  1.1,  1.1,                          0.0001, 0.0001 ),
+( 'group0', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,    0,     0,          arrow_cast(0,'UInt64'),   4.4,  4.4,   1.1,                         0.0002, 0.0002 ),
+( 'group0', 100,  100,    100,         arrow_cast(100,'Int64'),                  100,  100,   100,        arrow_cast(100,'UInt64'), 3.3,  3.3,   arrow_cast('NAN','Float64'), 0.0003, 0.0003 ),
+( 'group0', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255,  65535, 4294967295, 18446744073709551615,     2.2,  2.2,   arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
+( 'group1', NULL, NULL,   NULL,        NULL,                                     NULL, NULL,  NULL,       NULL,                     NULL, NULL, NULL,                         NULL,   NULL   ),
+( 'group1', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,    0,     0,          arrow_cast(0,'UInt64'),   1.1,  1.1,   1.1,                         0.0001, 0.0001 ),
+( 'group1', -128, -32768, -2147483648, arrow_cast(-9223372036854775808,'Int64'), 0,    0,     0,          arrow_cast(0,'UInt64'),   4.4,  4.4,   arrow_cast('NAN','Float64'), 0.0002, 0.0002 ),
+( 'group1', 100,  100,    100,         arrow_cast(100,'Int64'),                  101,  100,   100,        arrow_cast(100,'UInt64'), 3.3,  3.3,   arrow_cast('NAN','Float64'), 0.0003, 0.0003 ),
+( 'group1', 125,  32766,  2147483646,  arrow_cast(9223372036854775806,'Int64'),  100,  101,   4294967294, arrow_cast(100,'UInt64'), 3.2,  5.5,   arrow_cast('NAN','Float64'), 0.0004, 0.0004 ),
+( 'group1', 127,  32767,  2147483647,  arrow_cast(9223372036854775807,'Int64'),  255,  65535, 4294967295, 18446744073709551615,     2.2,  2.2,   arrow_cast('NAN','Float64'), 0.0005, 0.0005 )
+
 #######
 # Error tests
 #######
@@ -76,26 +132,26 @@ statement error DataFusion error: Schema error: Schema contains duplicate unqual
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_weight
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont_with_weight function: coercion from \[Utf8, Int8, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from \[Utf8, Int8, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont_with_weight function: coercion from \[Int16, Utf8, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from \[Int16, Utf8, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont_with_weight function: coercion from \[Int16, Int8, Utf8\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from \[Int16, Int8, Utf8\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
 
 # csv_query_approx_percentile_cont_with_histogram_bins
-statement error DataFusion error: External error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
+statement error DataFusion error: This feature is not implemented: Tdigest max_size value for 'APPROX_PERCENTILE_CONT' must be UInt > 0 literal \(got data type Int64\)\.
 SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont function: coercion from \[Int16, Float64, Utf8\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Int16, Float64, Utf8\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont function: coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c3, 0.95, 111.1) FROM aggregate_test_100
 
-statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to approx_percentile_cont function: coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
+statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Float64, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
 SELECT approx_percentile_cont(c12, 0.95, 111.1) FROM aggregate_test_100
 
 statement error DataFusion error: This feature is not implemented: Percentile value for 'APPROX_PERCENTILE_CONT' must be a literal
@@ -148,7 +204,7 @@ physical_plan
 03)----AggregateExec: mode=Partial, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
 04)------SortExec: expr=[c2@1 DESC, c3@2 ASC NULLS LAST], preserve_partitioning=[true]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
 
 # test array_agg_order with list data type
 statement ok
@@ -1002,7 +1058,7 @@ physical_plan
 07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=4
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
-10)------------------MemoryExec: partitions=1, partition_sizes=[1]
+10)------------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
 drop table t;
@@ -4976,18 +5032,17 @@ logical_plan
 03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[min(aggregate_test_100.c1)]]
 04)------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
-01)GlobalLimitExec: skip=0, fetch=5
-02)--CoalescePartitionsExec
-03)----AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-04)------CoalesceBatchesExec: target_batch_size=8192
-05)--------RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
-06)----------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
-07)------------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
-08)--------------CoalesceBatchesExec: target_batch_size=8192
-09)----------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
-10)------------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-12)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
+01)CoalescePartitionsExec: fetch=5
+02)--AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+03)----CoalesceBatchesExec: target_batch_size=8192
+04)------RepartitionExec: partitioning=Hash([c3@0, min(aggregate_test_100.c1)@1], 4), input_partitions=4
+05)--------AggregateExec: mode=Partial, gby=[c3@0 as c3, min(aggregate_test_100.c1)@1 as min(aggregate_test_100.c1)], aggr=[], lim=[5]
+06)----------AggregateExec: mode=FinalPartitioned, gby=[c3@0 as c3], aggr=[min(aggregate_test_100.c1)]
+07)------------CoalesceBatchesExec: target_batch_size=8192
+08)--------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
+09)----------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
+10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], file_type=csv, has_header=true
 
 
 #
@@ -5012,7 +5067,7 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], file_type=csv, has_header=true
 
 query I
 SELECT DISTINCT c3 FROM aggregate_test_100 group by c3 limit 5;
@@ -5036,7 +5091,7 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5 offset 4;
@@ -5071,7 +5126,7 @@ physical_plan
 10)------------------CoalesceBatchesExec: target_batch_size=8192
 11)--------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
 12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-13)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+13)------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query I
 SELECT DISTINCT c3 FROM aggregate_test_100 WHERE c3 between 10 and 20 group by c2, c3 limit 4;
@@ -5097,7 +5152,7 @@ physical_plan
 04)------CoalescePartitionsExec
 05)--------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[max(aggregate_test_100.c1)]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], file_type=csv, has_header=true
 
 # TODO(msirek): Extend checking in LimitedDistinctAggregation equal groupings to ignore the order of columns
 # in the group-by column lists, so the limit could be pushed to the lowest AggregateExec in this case
@@ -5121,7 +5176,7 @@ physical_plan
 08)--------------CoalescePartitionsExec
 09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
 10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-11)--------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+11)--------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
 SELECT DISTINCT c3, c2 FROM aggregate_test_100 group by c2, c3 limit 3 offset 10;
@@ -5145,7 +5200,7 @@ physical_plan
 04)------CoalescePartitionsExec
 05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], file_type=csv, has_header=true
 
 query II
 SELECT c2, c3 FROM aggregate_test_100 group by rollup(c2, c3) limit 3;
@@ -5172,7 +5227,7 @@ physical_plan
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], file_type=csv, has_header=true
 
 statement ok
 set datafusion.optimizer.enable_distinct_aggregation_soft_limit = true;
@@ -5957,7 +6012,7 @@ physical_plan
 02)--CoalescePartitionsExec
 03)----AggregateExec: mode=Partial, gby=[], aggr=[last_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c3 ASC NULLS LAST]]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c3], output_orderings=[[c1@0 ASC NULLS LAST], [c3@1 ASC NULLS LAST]], has_header=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c3], output_orderings=[[c1@0 ASC NULLS LAST], [c3@1 ASC NULLS LAST]], file_type=csv, has_header=true
 
 # test last to first
 query TT
@@ -5971,7 +6026,7 @@ physical_plan
 02)--CoalescePartitionsExec
 03)----AggregateExec: mode=Partial, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 DESC NULLS FIRST]]
 04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c2], output_orderings=[[c1@0 ASC NULLS LAST], [c2@1 DESC]], has_header=true
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c2], output_orderings=[[c1@0 ASC NULLS LAST], [c2@1 DESC]], file_type=csv, has_header=true
 
 # test building plan with aggreagte sum
 
@@ -6044,7 +6099,7 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 07)------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
-08)--------------MemoryExec: partitions=1, partition_sizes=[1]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 query error
@@ -6203,3 +6258,245 @@ physical_plan
 14)--------------PlaceholderRowExec
 15)------------ProjectionExec: expr=[1 as id, 2 as foo]
 16)--------------PlaceholderRowExec
+
+# SortExec is removed if it is coming after one-row producing AggregateExec's having an empty group by expression
+query TT
+EXPLAIN SELECT COUNT(c5) as count_c5 FROM aggregate_test_100 ORDER BY count_c5;
+----
+logical_plan
+01)Sort: count_c5 ASC NULLS LAST
+02)--Projection: count(aggregate_test_100.c5) AS count_c5
+03)----Aggregate: groupBy=[[]], aggr=[[count(aggregate_test_100.c5)]]
+04)------TableScan: aggregate_test_100 projection=[c5]
+physical_plan
+01)ProjectionExec: expr=[count(aggregate_test_100.c5)@0 as count_c5]
+02)--AggregateExec: mode=Final, gby=[], aggr=[count(aggregate_test_100.c5)]
+03)----CoalescePartitionsExec
+04)------AggregateExec: mode=Partial, gby=[], aggr=[count(aggregate_test_100.c5)]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], file_type=csv, has_header=true
+
+# test count(null) case (null with type)
+
+statement count 0
+create table t(a int, b int) as values (1, 3), (2, 4), (3, 5);
+
+query I
+select count(null::bigint) from t;
+----
+0
+
+query TT
+explain select count(null::bigint) from t;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[count(Int64(NULL)) AS count(NULL)]]
+02)--TableScan: t projection=[]
+physical_plan
+01)AggregateExec: mode=Single, gby=[], aggr=[count(NULL)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+#######
+# Group median test
+#######
+
+# group median i8 non-nullable
+query TI rowsort
+SELECT col_group, median(col_i8) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 -14
+group1 100
+
+# group median i16 non-nullable
+query TI
+SELECT col_group, median(col_i16) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 -16334
+group1 100
+
+# group median i32 non-nullable
+query TI
+SELECT col_group, median(col_i32) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 -1073741774
+group1 100
+
+# group median i64 non-nullable
+query TI
+SELECT col_group, median(col_i64) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 -4611686018427387854
+group1 100
+
+# group median u8 non-nullable
+query TI rowsort
+SELECT col_group, median(col_u8) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u16 non-nullable
+query TI
+SELECT col_group, median(col_u16) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u32 non-nullable
+query TI
+SELECT col_group, median(col_u32) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u64 non-nullable
+query TI
+SELECT col_group, median(col_u64) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median f32 non-nullable
+query TR
+SELECT col_group, median(col_f32) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 2.75
+group1 3.2
+
+# group median f64 non-nullable
+query TR
+SELECT col_group, median(col_f64) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 2.75
+group1 3.3
+
+# group median f64_nan non-nullable
+query TR
+SELECT col_group, median(col_f64_nan) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 NaN
+group1 NaN
+
+# group median decimal128 non-nullable
+query TR
+SELECT col_group, median(col_decimal128) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 0.0002
+group1 0.0003
+
+# group median decimal256 non-nullable
+query TR
+SELECT col_group, median(col_decimal256) FROM group_median_table_non_nullable GROUP BY col_group
+----
+group0 0.0002
+group1 0.0003
+
+# group median i8 nullable
+query TI rowsort
+SELECT col_group, median(col_i8) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 -14
+group1 100
+
+# group median i16 nullable
+query TI rowsort
+SELECT col_group, median(col_i16) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 -16334
+group1 100
+
+# group median i32 nullable
+query TI rowsort
+SELECT col_group, median(col_i32) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 -1073741774
+group1 100
+
+# group median i64 nullable
+query TI rowsort
+SELECT col_group, median(col_i64) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 -4611686018427387854
+group1 100
+
+# group median u8 nullable
+query TI rowsort
+SELECT col_group, median(col_u8) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u16 nullable
+query TI rowsort
+SELECT col_group, median(col_u16) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u32 nullable
+query TI rowsort
+SELECT col_group, median(col_u32) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median u64 nullable
+query TI rowsort
+SELECT col_group, median(col_u64) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 50
+group1 100
+
+# group median f32 nullable
+query TR rowsort
+SELECT col_group, median(col_f32) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 2.75
+group1 3.2
+
+# group median f64 nullable
+query TR rowsort
+SELECT col_group, median(col_f64) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 2.75
+group1 3.3
+
+# group median f64_nan nullable
+query TR rowsort
+SELECT col_group, median(col_f64_nan) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 NaN
+group1 NaN
+
+# group median decimal128 nullable
+query TR rowsort
+SELECT col_group, median(col_decimal128) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 0.0002
+group1 0.0003
+
+# group median decimal256 nullable
+query TR rowsort
+SELECT col_group, median(col_decimal256) FROM group_median_table_nullable GROUP BY col_group
+----
+group0 0.0002
+group1 0.0003
+
+# median with all nulls
+statement ok
+create table group_median_all_nulls(
+  a STRING NOT NULL, 
+  b INT
+) AS VALUES
+( 'group0', NULL),
+( 'group0', NULL),
+( 'group0', NULL),
+( 'group1', NULL),
+( 'group1', NULL),
+( 'group1', NULL)
+
+query TIT rowsort
+SELECT a, median(b), arrow_typeof(median(b)) FROM group_median_all_nulls GROUP BY a
+----
+group0 NULL Int32
+group1 NULL Int32

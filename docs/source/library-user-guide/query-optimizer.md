@@ -35,34 +35,34 @@ and applying it to a logical plan to produce an optimized logical plan.
 
 ```rust
 
+use std::sync::Arc;
+use datafusion::logical_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
+use datafusion::optimizer::{OptimizerRule, OptimizerContext, Optimizer};
+
 // We need a logical plan as the starting point. There are many ways to build a logical plan:
 //
 // The `datafusion-expr` crate provides a LogicalPlanBuilder
 // The `datafusion-sql` crate provides a SQL query planner that can create a LogicalPlan from SQL
 // The `datafusion` crate provides a DataFrame API that can create a LogicalPlan
-let logical_plan = ...
 
-let mut config = OptimizerContext::default();
-let optimizer = Optimizer::new(&config);
-let optimized_plan = optimizer.optimize(&logical_plan, &config, observe)?;
+let initial_logical_plan = LogicalPlanBuilder::empty(false).build().unwrap();
 
-fn observe(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
+// use builtin rules or customized rules
+let rules: Vec<Arc<dyn OptimizerRule + Send + Sync>> = vec![];
+
+let optimizer = Optimizer::with_rules(rules);
+
+let config = OptimizerContext::new().with_max_passes(16);
+
+let optimized_plan = optimizer.optimize(initial_logical_plan.clone(), &config, observer);
+
+fn observer(plan: &LogicalPlan, rule: &dyn OptimizerRule) {
     println!(
         "After applying rule '{}':\n{}",
         rule.name(),
         plan.display_indent()
     )
 }
-```
-
-## Providing Custom Rules
-
-The optimizer can be created with a custom set of rules.
-
-```rust
-let optimizer = Optimizer::with_rules(vec![
-    Arc::new(MyRule {})
-]);
 ```
 
 ## Writing Optimization Rules
@@ -72,24 +72,69 @@ Please refer to the
 example to learn more about the general approach to writing optimizer rules and
 then move onto studying the existing rules.
 
+`OptimizerRule` transforms one ['LogicalPlan'] into another which
+computes the same results, but in a potentially more efficient
+way. If there are no suitable transformations for the input plan,
+the optimizer can simply return it as is.
+
 All rules must implement the `OptimizerRule` trait.
 
 ```rust
-/// `OptimizerRule` transforms one ['LogicalPlan'] into another which
-/// computes the same results, but in a potentially more efficient
-/// way. If there are no suitable transformations for the input plan,
-/// the optimizer can simply return it as is.
-pub trait OptimizerRule {
-    /// Rewrite `plan` to an optimized form
-    fn optimize(
-        &self,
-        plan: &LogicalPlan,
-        config: &dyn OptimizerConfig,
-    ) -> Result<LogicalPlan>;
+# use datafusion::common::tree_node::Transformed;
+# use datafusion::common::Result;
+# use datafusion::logical_expr::LogicalPlan;
+# use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
+#
 
-    /// A human readable name for this optimizer rule
-    fn name(&self) -> &str;
+#[derive(Default, Debug)]
+struct MyOptimizerRule {}
+
+impl OptimizerRule for MyOptimizerRule {
+    fn name(&self) -> &str {
+        "my_optimizer_rule"
+    }
+
+    fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        _config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        unimplemented!()
+    }
 }
+```
+
+## Providing Custom Rules
+
+The optimizer can be created with a custom set of rules.
+
+```rust
+# use std::sync::Arc;
+# use datafusion::logical_expr::{col, lit, LogicalPlan, LogicalPlanBuilder};
+# use datafusion::optimizer::{OptimizerRule, OptimizerConfig, OptimizerContext, Optimizer};
+# use datafusion::common::tree_node::Transformed;
+# use datafusion::common::Result;
+#
+# #[derive(Default, Debug)]
+# struct MyOptimizerRule {}
+#
+# impl OptimizerRule for MyOptimizerRule {
+#     fn name(&self) -> &str {
+#         "my_optimizer_rule"
+#     }
+#
+#     fn rewrite(
+#         &self,
+#         plan: LogicalPlan,
+#         _config: &dyn OptimizerConfig,
+#     ) -> Result<Transformed<LogicalPlan>> {
+#         unimplemented!()
+#     }
+# }
+
+let optimizer = Optimizer::with_rules(vec![
+    Arc::new(MyOptimizerRule {})
+]);
 ```
 
 ### General Guidelines
@@ -168,16 +213,19 @@ and [#3555](https://github.com/apache/datafusion/issues/3555) occur where the ex
 There are currently two ways to create a name for an expression in the logical plan.
 
 ```rust
+# use datafusion::common::Result;
+# struct Expr;
+
 impl Expr {
     /// Returns the name of this expression as it should appear in a schema. This name
     /// will not include any CAST expressions.
     pub fn display_name(&self) -> Result<String> {
-        create_name(self)
+        Ok("display_name".to_string())
     }
 
     /// Returns a full and complete string representation of this expression.
     pub fn canonical_name(&self) -> String {
-        format!("{}", self)
+        "canonical_name".to_string()
     }
 }
 ```
@@ -187,93 +235,99 @@ name to be used in a schema, `display_name` should be used.
 
 ### Utilities
 
-There are a number of utility methods provided that take care of some common tasks.
+There are a number of [utility methods][util] provided that take care of some common tasks.
 
-### ExprVisitor
+[util]: https://github.com/apache/datafusion/blob/main/datafusion/expr/src/utils.rs
 
-The `ExprVisitor` and `ExprVisitable` traits provide a mechanism for applying a visitor pattern to an expression tree.
+### Recursively walk an expression tree
 
-Here is an example that demonstrates this.
+The [TreeNode API] provides a convenient way to recursively walk an expression or plan tree.
+
+For example, to find all subquery references in a logical plan, the following code can be used:
 
 ```rust
-fn extract_subquery_filters(expression: &Expr, extracted: &mut Vec<Expr>) -> Result<()> {
-    struct InSubqueryVisitor<'a> {
-        accum: &'a mut Vec<Expr>,
-    }
-
-    impl ExpressionVisitor for InSubqueryVisitor<'_> {
-        fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
+# use datafusion::prelude::*;
+# use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
+// Return all subquery references in an expression
+fn extract_subquery_filters(expression: &Expr) -> Result<Vec<&Expr>> {
+    let mut extracted = vec![];
+    expression.apply(|expr| {
             if let Expr::InSubquery(_) = expr {
-                self.accum.push(expr.to_owned());
+                extracted.push(expr);
             }
-            Ok(Recursion::Continue(self))
-        }
-    }
-
-    expression.accept(InSubqueryVisitor { accum: extracted })?;
-    Ok(())
+            Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(extracted)
 }
 ```
 
-### Rewriting Expressions
-
-The `MyExprRewriter` trait can be implemented to provide a way to rewrite expressions. This rule can then be applied
-to an expression by calling `Expr::rewrite` (from the `ExprRewritable` trait).
-
-The `rewrite` method will perform a depth first walk of the expression and its children to rewrite an expression,
-consuming `self` producing a new expression.
+Likewise you can use the [TreeNode API] to rewrite a `LogicalPlan` or `ExecutionPlan`
 
 ```rust
-let mut expr_rewriter = MyExprRewriter {};
-let expr = expr.rewrite(&mut expr_rewriter)?;
+# use datafusion::prelude::*;
+# use datafusion::logical_expr::{LogicalPlan, Join};
+# use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
+// Return all joins in a logical plan
+fn find_joins(overall_plan: &LogicalPlan) -> Result<Vec<&Join>> {
+    let mut extracted = vec![];
+    overall_plan.apply(|plan| {
+            if let LogicalPlan::Join(join) = plan {
+                extracted.push(join);
+            }
+            Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(extracted)
+}
 ```
 
-Here is an example implementation which will rewrite `expr BETWEEN a AND b` as `expr >= a AND expr <= b`. Note that the
-implementation does not need to perform any recursion since this is handled by the `rewrite` method.
+### Rewriting expressions
+
+The [TreeNode API] also provides a convenient way to rewrite expressions and
+plans as well. For example to rewrite all expressions like
+
+```sql
+col BETWEEN x AND y
+```
+
+into
+
+```sql
+col >= x AND col <= y
+```
+
+you can use the following code:
 
 ```rust
-struct MyExprRewriter {}
-
-impl ExprRewriter for MyExprRewriter {
-    fn mutate(&mut self, expr: Expr) -> Result<Expr> {
-        match expr {
-            Expr::Between {
+# use datafusion::prelude::*;
+# use datafusion::logical_expr::{Between};
+# use datafusion::logical_expr::expr_fn::*;
+# use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+# use datafusion::common::Result;
+// Recursively rewrite all BETWEEN expressions
+// returns Transformed::yes if any changes were made
+fn rewrite_between(expr: Expr) -> Result<Transformed<Expr>> {
+    // transform_up does a bottom up rewrite
+    expr.transform_up(|expr| {
+        // only handle BETWEEN expressions
+        let Expr::Between(Between {
                 negated,
                 expr,
                 low,
                 high,
-            } => {
-                let expr: Expr = expr.as_ref().clone();
-                let low: Expr = low.as_ref().clone();
-                let high: Expr = high.as_ref().clone();
-                if negated {
-                    Ok(expr.clone().lt(low).or(expr.clone().gt(high)))
-                } else {
-                    Ok(expr.clone().gt_eq(low).and(expr.clone().lt_eq(high)))
-                }
-            }
-            _ => Ok(expr.clone()),
-        }
-    }
-}
-```
-
-### optimize_children
-
-Typically a rule is applied recursively to all operators within a query plan. Rather than duplicate
-that logic in each rule, an `optimize_children` method is provided. This recursively invokes the `optimize` method on
-the plan's children and then returns a node of the same type.
-
-```rust
-fn optimize(
-    &self,
-    plan: &LogicalPlan,
-    _config: &mut OptimizerConfig,
-) -> Result<LogicalPlan> {
-    // recurse down and optimize children first
-    let plan = utils::optimize_children(self, plan, _config)?;
-
-    ...
+        }) = expr else {
+            return Ok(Transformed::no(expr))
+        };
+        let rewritten_expr = if negated {
+            // don't rewrite NOT BETWEEN
+            Expr::Between(Between::new(expr, negated, low, high))
+        } else {
+            // rewrite to (expr >= low) AND (expr <= high)
+            expr.clone().gt_eq(*low).and(expr.lt_eq(*high))
+        };
+        Ok(Transformed::yes(rewritten_expr))
+    })
 }
 ```
 

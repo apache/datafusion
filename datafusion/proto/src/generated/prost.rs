@@ -409,8 +409,8 @@ pub struct DmlNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, optional, tag = "3")]
     pub table_name: ::core::option::Option<TableReference>,
-    #[prost(message, optional, tag = "4")]
-    pub schema: ::core::option::Option<super::datafusion_common::DfSchema>,
+    #[prost(message, optional, boxed, tag = "5")]
+    pub target: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
 }
 /// Nested message and enum types in `DmlNode`.
 pub mod dml_node {
@@ -1517,6 +1517,10 @@ pub struct ParquetScanExecNode {
     pub base_conf: ::core::option::Option<FileScanExecConf>,
     #[prost(message, optional, tag = "3")]
     pub predicate: ::core::option::Option<PhysicalExprNode>,
+    #[prost(message, optional, tag = "4")]
+    pub parquet_options: ::core::option::Option<
+        super::datafusion_common::TableParquetOptions,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CsvScanExecNode {

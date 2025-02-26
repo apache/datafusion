@@ -32,7 +32,8 @@ use crate::{
     PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow::compute::SortOptions;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     internal_err, plan_err, Constraint, Constraints, HashMap, JoinSide, JoinType, Result,
@@ -99,7 +100,7 @@ use itertools::Itertools;
 /// # Code Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::{Schema, Field, DataType, SchemaRef};
+/// # use arrow::datatypes::{Schema, Field, DataType, SchemaRef};
 /// # use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 /// # use datafusion_physical_expr::expressions::col;
 /// use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -639,7 +640,7 @@ impl EquivalenceProperties {
                         req.expr.eq(&existing.expr)
                             && req
                                 .options
-                                .map_or(true, |req_opts| req_opts == existing.options)
+                                .is_none_or(|req_opts| req_opts == existing.options)
                     },
                 )
         })
@@ -1046,7 +1047,7 @@ impl EquivalenceProperties {
             if self.is_expr_constant(source)
                 && !const_exprs_contains(&projected_constants, target)
             {
-                if self.is_expr_constant_accross_partitions(source) {
+                if self.is_expr_constant_across_partitions(source) {
                     projected_constants.push(
                         ConstExpr::from(target)
                             .with_across_partitions(self.get_expr_constant_value(source)),
@@ -1221,8 +1222,31 @@ impl EquivalenceProperties {
     /// # Returns
     ///
     /// Returns `true` if the expression is constant across all partitions according
-    /// to equivalence group, `false` otherwise.
+    /// to equivalence group, `false` otherwise
+    #[deprecated(
+        since = "45.0.0",
+        note = "Use [`is_expr_constant_across_partitions`] instead"
+    )]
     pub fn is_expr_constant_accross_partitions(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        self.is_expr_constant_across_partitions(expr)
+    }
+
+    /// This function determines whether the provided expression is constant
+    /// across partitions based on the known constants.
+    ///
+    /// # Parameters
+    ///
+    /// - `expr`: A reference to a `Arc<dyn PhysicalExpr>` representing the
+    ///   expression to be checked.
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the expression is constant across all partitions according
+    /// to equivalence group, `false` otherwise.
+    pub fn is_expr_constant_across_partitions(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> bool {
@@ -2235,7 +2259,7 @@ impl UnionEquivalentOrderingBuilder {
     ) -> AddedOrdering {
         if ordering.is_empty() {
             AddedOrdering::Yes
-        } else if constants.is_empty() && properties.ordering_satisfy(ordering.as_ref()) {
+        } else if properties.ordering_satisfy(ordering.as_ref()) {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);
@@ -2380,8 +2404,7 @@ mod tests {
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::ScalarFunctionExpr;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{Fields, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
     use datafusion_common::{Constraint, ScalarValue};
     use datafusion_expr::Operator;
 

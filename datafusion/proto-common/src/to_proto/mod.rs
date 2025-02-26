@@ -97,8 +97,6 @@ impl TryFrom<&Field> for protobuf::Field {
             nullable: field.is_nullable(),
             children: Vec::new(),
             metadata: field.metadata().clone(),
-            #[allow(deprecated)]
-            dict_id: field.dict_id().unwrap_or(0),
             dict_ordered: field.dict_is_ordered().unwrap_or(false),
         })
     }
@@ -749,6 +747,7 @@ impl From<&ColumnStatistics> for protobuf::ColumnStats {
         protobuf::ColumnStats {
             min_value: Some(protobuf::Precision::from(&s.min_value)),
             max_value: Some(protobuf::Precision::from(&s.max_value)),
+            sum_value: Some(protobuf::Precision::from(&s.sum_value)),
             null_count: Some(protobuf::Precision::from(&s.null_count)),
             distinct_count: Some(protobuf::Precision::from(&s.distinct_count)),
         }
@@ -819,10 +818,12 @@ impl TryFrom<&ParquetOptions> for protobuf::ParquetOptions {
             dictionary_enabled_opt: value.dictionary_enabled.map(protobuf::parquet_options::DictionaryEnabledOpt::DictionaryEnabled),
             dictionary_page_size_limit: value.dictionary_page_size_limit as u64,
             statistics_enabled_opt: value.statistics_enabled.clone().map(protobuf::parquet_options::StatisticsEnabledOpt::StatisticsEnabled),
+            #[allow(deprecated)]
             max_statistics_size_opt: value.max_statistics_size.map(|v| protobuf::parquet_options::MaxStatisticsSizeOpt::MaxStatisticsSize(v as u64)),
             max_row_group_size: value.max_row_group_size as u64,
             created_by: value.created_by.clone(),
             column_index_truncate_length_opt: value.column_index_truncate_length.map(|v| protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v as u64)),
+            statistics_truncate_length_opt: value.statistics_truncate_length.map(|v| protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v as u64)),
             data_page_row_count_limit: value.data_page_row_count_limit as u64,
             encoding_opt: value.encoding.clone().map(protobuf::parquet_options::EncodingOpt::Encoding),
             bloom_filter_on_read: value.bloom_filter_on_read,
@@ -857,6 +858,7 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
                 .statistics_enabled
                 .clone()
                 .map(protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled),
+            #[allow(deprecated)]
             max_statistics_size_opt: value.max_statistics_size.map(|v| {
                 protobuf::parquet_column_options::MaxStatisticsSizeOpt::MaxStatisticsSize(
                     v as u32,

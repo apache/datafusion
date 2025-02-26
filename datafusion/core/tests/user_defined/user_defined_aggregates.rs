@@ -25,11 +25,10 @@ use std::sync::{
     Arc,
 };
 
-use arrow::{array::AsArray, datatypes::Fields};
-use arrow_array::{
-    types::UInt64Type, Int32Array, PrimitiveArray, StringArray, StructArray,
+use arrow::array::{
+    types::UInt64Type, AsArray, Int32Array, PrimitiveArray, StringArray, StructArray,
 };
-use arrow_schema::Schema;
+use arrow::datatypes::{Fields, Schema};
 
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
@@ -834,7 +833,7 @@ impl GroupsAccumulator for TestGroupsAccumulator {
         &mut self,
         _values: &[ArrayRef],
         _group_indices: &[usize],
-        _opt_filter: Option<&arrow_array::BooleanArray>,
+        _opt_filter: Option<&arrow::array::BooleanArray>,
         _total_num_groups: usize,
     ) -> Result<()> {
         Ok(())
@@ -858,7 +857,7 @@ impl GroupsAccumulator for TestGroupsAccumulator {
         &mut self,
         _values: &[ArrayRef],
         _group_indices: &[usize],
-        _opt_filter: Option<&arrow_array::BooleanArray>,
+        _opt_filter: Option<&arrow::array::BooleanArray>,
         _total_num_groups: usize,
     ) -> Result<()> {
         Ok(())

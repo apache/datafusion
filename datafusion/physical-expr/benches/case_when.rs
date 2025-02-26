@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{Field, Schema};
+use arrow::array::builder::{Int32Builder, StringBuilder};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow_array::builder::{Int32Builder, StringBuilder};
-use arrow_schema::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;

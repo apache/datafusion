@@ -18,12 +18,12 @@
 //! [`ScalarUDFImpl`] definitions for array_except function.
 
 use crate::utils::{check_datatypes, make_scalar_function};
+use arrow::array::{cast::AsArray, Array, ArrayRef, GenericListArray, OffsetSizeTrait};
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{DataType, FieldRef};
 use arrow::row::{RowConverter, SortField};
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::OffsetBuffer;
-use arrow_schema::{DataType, FieldRef};
-use datafusion_common::{exec_err, internal_err, HashSet, Result};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{internal_err, HashSet, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -106,12 +106,11 @@ impl ScalarUDFImpl for ArrayExcept {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_except_inner)(args)
+        make_scalar_function(array_except_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -125,12 +124,7 @@ impl ScalarUDFImpl for ArrayExcept {
 
 /// Array_except SQL function
 pub fn array_except_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_except needs two arguments");
-    }
-
-    let array1 = &args[0];
-    let array2 = &args[1];
+    let [array1, array2] = take_function_args("array_except", args)?;
 
     match (array1.data_type(), array2.data_type()) {
         (DataType::Null, _) | (_, DataType::Null) => Ok(array1.to_owned()),

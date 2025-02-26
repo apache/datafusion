@@ -22,25 +22,26 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray, LargeStringArray,
-    StringArray, TimestampNanosecondArray,
+    Array, ArrayRef, BinaryArray, Float64Array, Int32Array, LargeBinaryArray,
+    LargeStringArray, StringArray, TimestampNanosecondArray, UnionArray,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::buffer::ScalarBuffer;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit, UnionFields};
 use arrow::record_batch::RecordBatch;
+use datafusion::catalog::{
+    CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, Session,
+};
+use datafusion::common::DataFusionError;
 use datafusion::logical_expr::{create_udf, ColumnarValue, Expr, ScalarUDF, Volatility};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionConfig;
+use datafusion::prelude::*;
 use datafusion::{
-    catalog::CatalogProvider,
-    catalog_common::{memory::MemoryCatalogProvider, memory::MemorySchemaProvider},
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
-use datafusion_common::cast::as_float64_array;
-use datafusion_common::DataFusionError;
 
 use async_trait::async_trait;
-use datafusion::catalog::Session;
+use datafusion::common::cast::as_float64_array;
 use log::info;
 use tempfile::TempDir;
 
@@ -112,6 +113,10 @@ impl TestContext {
             "metadata.slt" => {
                 info!("Registering metadata table tables");
                 register_metadata_tables(test_ctx.session_ctx()).await;
+            }
+            "union_function.slt" => {
+                info!("Registering table with union column");
+                register_union_table(test_ctx.session_ctx())
             }
             _ => {
                 info!("Using default SessionContext");
@@ -401,4 +406,25 @@ fn create_example_udf() -> ScalarUDF {
         Volatility::Immutable,
         adder,
     )
+}
+
+fn register_union_table(ctx: &SessionContext) {
+    let union = UnionArray::try_new(
+        UnionFields::new(vec![3], vec![Field::new("int", DataType::Int32, false)]),
+        ScalarBuffer::from(vec![3, 3]),
+        None,
+        vec![Arc::new(Int32Array::from(vec![1, 2]))],
+    )
+    .unwrap();
+
+    let schema = Schema::new(vec![Field::new(
+        "union_column",
+        union.data_type().clone(),
+        false,
+    )]);
+
+    let batch =
+        RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(union)]).unwrap();
+
+    ctx.register_batch("union_table", batch).unwrap();
 }

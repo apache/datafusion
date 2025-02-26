@@ -19,6 +19,12 @@
 
 # HOWTOs
 
+## How to update the version of Rust used in CI tests
+
+- Make a PR to update the [rust-toolchain] file in the root of the repository:
+
+[rust-toolchain]: https://github.com/apache/datafusion/blob/main/rust-toolchain.toml
+
 ## How to add a new scalar function
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
@@ -146,3 +152,15 @@ valid installation of [protoc] (see [installation instructions] for details).
 
 [protoc]: https://github.com/protocolbuffers/protobuf#protocol-compiler-installation
 [installation instructions]: https://datafusion.apache.org/contributor-guide/getting_started.html#protoc-installation
+
+## How to add/edit documentation for UDFs
+
+Documentations for the UDF documentations are generated from code (related [github issue]). To generate markdown run `./update_function_docs.sh`.
+
+This is necessary after adding new UDF implementation or modifying existing implementation which requires to update documentation.
+
+```bash
+./dev/update_function_docs.sh
+```
+
+[github issue]: https://github.com/apache/datafusion/issues/12740

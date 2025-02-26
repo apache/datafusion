@@ -20,10 +20,11 @@ use arrow::datatypes::DataType::Timestamp;
 use arrow::datatypes::TimeUnit::Nanosecond;
 use std::any::Any;
 
-use datafusion_common::{internal_err, ExprSchema, Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    ColumnarValue, Documentation, Expr, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, Documentation, Expr, ReturnInfo, ReturnTypeArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -76,14 +77,20 @@ impl ScalarUDFImpl for NowFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(Timestamp(Nanosecond, Some("+00:00".into())))
+    fn return_type_from_args(&self, _args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        Ok(ReturnInfo::new_non_nullable(Timestamp(
+            Nanosecond,
+            Some("+00:00".into()),
+        )))
     }
 
-    fn invoke_batch(
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_type_from_args should be called instead")
+    }
+
+    fn invoke_with_args(
         &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
+        _args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         internal_err!("invoke should not be called on a simplified now() function")
     }
@@ -104,10 +111,6 @@ impl ScalarUDFImpl for NowFunc {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
-    }
-
-    fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
-        false
     }
 
     fn documentation(&self) -> Option<&Documentation> {

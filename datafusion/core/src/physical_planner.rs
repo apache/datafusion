@@ -24,7 +24,7 @@ use std::sync::Arc;
 use crate::datasource::file_format::file_type_to_format;
 use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
-use crate::datasource::source_as_provider;
+use crate::datasource::{source_as_provider, DefaultTableSource};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -38,7 +38,6 @@ use crate::logical_expr::{
 use crate::physical_expr::{create_physical_expr, create_physical_exprs};
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode, PhysicalGroupBy};
 use crate::physical_plan::analyze::AnalyzeExec;
-use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::filter::FilterExec;
@@ -47,9 +46,7 @@ use crate::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::projection::ProjectionExec;
-use crate::physical_plan::recursive_query::RecursiveQueryExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::union::UnionExec;
@@ -59,19 +56,23 @@ use crate::physical_plan::{
     displayable, windows, ExecutionPlan, ExecutionPlanProperties, InputOrderMode,
     Partitioning, PhysicalExpr, WindowExpr,
 };
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 
+use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow_array::builder::StringBuilder;
-use arrow_array::RecordBatch;
 use datafusion_common::display::ToStringifiedPlan;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema,
     ScalarValue,
 };
+use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr::{
-    physical_name, AggregateFunction, Alias, GroupingSet, WindowFunction,
+    physical_name, AggregateFunction, AggregateFunctionParams, Alias, GroupingSet,
+    WindowFunction, WindowFunctionParams,
 };
 use datafusion_expr::expr_rewriter::unnormalize_cols;
 use datafusion_expr::logical_plan::builder::wrap_projection_for_join_if_necessary;
@@ -82,12 +83,13 @@ use datafusion_expr::{
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
+use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
-use datafusion_sql::utils::window_expr_common_partition_keys;
 
+use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
@@ -465,9 +467,8 @@ impl DefaultPhysicalPlanner {
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let value_exec =
-                    MemoryExec::try_new_as_values(SchemaRef::new(exec_schema), exprs)?;
-                Arc::new(value_exec)
+                MemorySourceConfig::try_new_as_values(SchemaRef::new(exec_schema), exprs)?
+                    as _
             }
             LogicalPlan::EmptyRelation(EmptyRelation {
                 produce_one_row: false,
@@ -508,7 +509,7 @@ impl DefaultPhysicalPlanner {
                 // the column name rather than column name + explicit data type.
                 let table_partition_cols = partition_by
                     .iter()
-                    .map(|s| (s.to_string(), arrow_schema::DataType::Null))
+                    .map(|s| (s.to_string(), arrow::datatypes::DataType::Null))
                     .collect::<Vec<_>>();
 
                 let keep_partition_by_columns = match source_option_tuples
@@ -541,61 +542,51 @@ impl DefaultPhysicalPlanner {
                     .await?
             }
             LogicalPlan::Dml(DmlStatement {
-                table_name,
+                target,
                 op: WriteOp::Insert(insert_op),
                 ..
             }) => {
-                let name = table_name.table();
-                let schema = session_state.schema_for_ref(table_name.clone())?;
-                if let Some(provider) = schema.table(name).await? {
+                if let Some(provider) =
+                    target.as_any().downcast_ref::<DefaultTableSource>()
+                {
                     let input_exec = children.one()?;
                     provider
+                        .table_provider
                         .insert_into(session_state, input_exec, *insert_op)
                         .await?
                 } else {
-                    return exec_err!("Table '{table_name}' does not exist");
+                    return exec_err!(
+                        "Table source can't be downcasted to DefaultTableSource"
+                    );
                 }
             }
-            LogicalPlan::Window(Window {
-                input, window_expr, ..
-            }) => {
+            LogicalPlan::Window(Window { window_expr, .. }) => {
                 if window_expr.is_empty() {
                     return internal_err!("Impossibly got empty window expression");
                 }
 
                 let input_exec = children.one()?;
 
-                // at this moment we are guaranteed by the logical planner
-                // to have all the window_expr to have equal sort key
-                let partition_keys = window_expr_common_partition_keys(window_expr)?;
-
-                let can_repartition = !partition_keys.is_empty()
-                    && session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_window_functions();
-
-                let physical_partition_keys = if can_repartition {
-                    partition_keys
-                        .iter()
-                        .map(|e| {
-                            self.create_physical_expr(e, input.schema(), session_state)
-                        })
-                        .collect::<Result<Vec<Arc<dyn PhysicalExpr>>>>()?
-                } else {
-                    vec![]
-                };
-
                 let get_sort_keys = |expr: &Expr| match expr {
                     Expr::WindowFunction(WindowFunction {
-                        ref partition_by,
-                        ref order_by,
+                        params:
+                            WindowFunctionParams {
+                                ref partition_by,
+                                ref order_by,
+                                ..
+                            },
                         ..
                     }) => generate_sort_key(partition_by, order_by),
                     Expr::Alias(Alias { expr, .. }) => {
                         // Convert &Box<T> to &T
                         match &**expr {
                             Expr::WindowFunction(WindowFunction {
-                                ref partition_by,
-                                ref order_by,
+                                params:
+                                    WindowFunctionParams {
+                                        ref partition_by,
+                                        ref order_by,
+                                        ..
+                                    },
                                 ..
                             }) => generate_sort_key(partition_by, order_by),
                             _ => unreachable!(),
@@ -625,6 +616,9 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
+                let can_repartition = session_state.config().target_partitions() > 1
+                    && session_state.config().repartition_window_functions();
+
                 let uses_bounded_memory =
                     window_expr.iter().all(|e| e.uses_bounded_memory());
                 // If all window expressions can run with bounded memory,
@@ -633,14 +627,14 @@ impl DefaultPhysicalPlanner {
                     Arc::new(BoundedWindowAggExec::try_new(
                         window_expr,
                         input_exec,
-                        physical_partition_keys,
                         InputOrderMode::Sorted,
+                        can_repartition,
                     )?)
                 } else {
                     Arc::new(WindowAggExec::try_new(
                         window_expr,
                         input_exec,
-                        physical_partition_keys,
+                        can_repartition,
                     )?)
                 }
             }
@@ -658,7 +652,10 @@ impl DefaultPhysicalPlanner {
                 let physical_input_schema_from_logical = logical_input_schema.inner();
 
                 if !options.execution.skip_physical_aggregate_schema_check
-                    && &physical_input_schema != physical_input_schema_from_logical
+                    && !schema_satisfied_by(
+                        physical_input_schema_from_logical,
+                        &physical_input_schema,
+                    )
                 {
                     let mut differences = Vec::new();
                     if physical_input_schema.fields().len()
@@ -687,7 +684,7 @@ impl DefaultPhysicalPlanner {
                         if physical_field.data_type() != logical_field.data_type() {
                             differences.push(format!("field data type at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.data_type(), logical_field.data_type()));
                         }
-                        if physical_field.is_nullable() != logical_field.is_nullable() {
+                        if physical_field.is_nullable() && !logical_field.is_nullable() {
                             differences.push(format!("field nullability at index {} [{}]: (physical) {} vs (logical) {}", i, physical_field.name(), physical_field.is_nullable(), logical_field.is_nullable()));
                         }
                     }
@@ -1090,7 +1087,7 @@ impl DefaultPhysicalPlanner {
                         Some(join_utils::JoinFilter::new(
                             filter_expr,
                             column_indices,
-                            filter_schema,
+                            Arc::new(filter_schema),
                         ))
                     }
                     _ => None,
@@ -1520,11 +1517,14 @@ pub fn create_window_expr_with_name(
     match e {
         Expr::WindowFunction(WindowFunction {
             fun,
-            args,
-            partition_by,
-            order_by,
-            window_frame,
-            null_treatment,
+            params:
+                WindowFunctionParams {
+                    args,
+                    partition_by,
+                    order_by,
+                    window_frame,
+                    null_treatment,
+                },
         }) => {
             let physical_args =
                 create_physical_exprs(args, logical_schema, execution_props)?;
@@ -1591,11 +1591,14 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
     match e {
         Expr::AggregateFunction(AggregateFunction {
             func,
-            distinct,
-            args,
-            filter,
-            order_by,
-            null_treatment,
+            params:
+                AggregateFunctionParams {
+                    args,
+                    distinct,
+                    filter,
+                    order_by,
+                    null_treatment,
+                },
         }) => {
             let name = if let Some(name) = name {
                 name
@@ -1874,7 +1877,11 @@ impl DefaultPhysicalPlanner {
             displayable(plan.as_ref()).indent(true)
         );
 
-        let mut new_plan = plan;
+        // This runs once before any optimization,
+        // to verify that the plan fulfills the base requirements.
+        InvariantChecker(InvariantLevel::Always).check(&plan)?;
+
+        let mut new_plan = Arc::clone(&plan);
         for optimizer in optimizers {
             let before_schema = new_plan.schema();
             new_plan = optimizer
@@ -1882,18 +1889,11 @@ impl DefaultPhysicalPlanner {
                 .map_err(|e| {
                     DataFusionError::Context(optimizer.name().to_string(), Box::new(e))
                 })?;
-            if optimizer.schema_check() && new_plan.schema() != before_schema {
-                let e = DataFusionError::Internal(format!(
-                    "PhysicalOptimizer rule '{}' failed, due to generate a different schema, original schema: {:?}, new schema: {:?}",
-                    optimizer.name(),
-                    before_schema,
-                    new_plan.schema()
-                ));
-                return Err(DataFusionError::Context(
-                    optimizer.name().to_string(),
-                    Box::new(e),
-                ));
-            }
+
+            // This only checks the schema in release build, and performs additional checks in debug mode.
+            OptimizationInvariantChecker::new(optimizer)
+                .check(&new_plan, before_schema)?;
+
             trace!(
                 "Optimized physical plan by {}:\n{}\n",
                 optimizer.name(),
@@ -1901,6 +1901,11 @@ impl DefaultPhysicalPlanner {
             );
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
+
+        // This runs once after all optimizer runs are complete,
+        // to verify that the plan is executable.
+        InvariantChecker(InvariantLevel::Executable).check(&new_plan)?;
+
         debug!(
             "Optimized physical plan:\n{}\n",
             displayable(new_plan.as_ref()).indent(false)
@@ -1942,8 +1947,8 @@ impl DefaultPhysicalPlanner {
         let schema = record_batch.schema();
         let partitions = vec![vec![record_batch]];
         let projection = None;
-        let mem_exec = MemoryExec::try_new(&partitions, schema, projection)?;
-        Ok(Arc::new(mem_exec))
+        let mem_exec = MemorySourceConfig::try_new_exec(&partitions, schema, projection)?;
+        Ok(mem_exec)
     }
 
     fn create_project_physical_exec(
@@ -2008,6 +2013,83 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
     }
 }
 
+struct OptimizationInvariantChecker<'a> {
+    rule: &'a Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+}
+
+impl<'a> OptimizationInvariantChecker<'a> {
+    /// Create an [`OptimizationInvariantChecker`] that performs checking per tule.
+    pub fn new(rule: &'a Arc<dyn PhysicalOptimizerRule + Send + Sync>) -> Self {
+        Self { rule }
+    }
+
+    /// Checks that the plan change is permitted, returning an Error if not.
+    ///
+    /// Conditionally performs schema checks per [PhysicalOptimizerRule::schema_check].
+    /// In debug mode, this recursively walks the entire physical plan
+    /// and performs [`ExecutionPlan::check_invariants`].
+    pub fn check(
+        &mut self,
+        plan: &Arc<dyn ExecutionPlan>,
+        previous_schema: Arc<Schema>,
+    ) -> Result<()> {
+        // if the rule is not permitted to change the schema, confirm that it did not change.
+        if self.rule.schema_check() && plan.schema() != previous_schema {
+            internal_err!("PhysicalOptimizer rule '{}' failed. Schema mismatch. Expected original schema: {:?}, got new schema: {:?}",
+                self.rule.name(),
+                previous_schema,
+                plan.schema()
+            )?
+        }
+
+        // check invariants per each ExecutionPlan node
+        #[cfg(debug_assertions)]
+        plan.visit(self)?;
+
+        Ok(())
+    }
+}
+
+impl<'n> TreeNodeVisitor<'n> for OptimizationInvariantChecker<'_> {
+    type Node = Arc<dyn ExecutionPlan>;
+
+    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+        // Checks for the more permissive `InvariantLevel::Always`.
+        // Plans are not guarenteed to be executable after each physical optimizer run.
+        node.check_invariants(InvariantLevel::Always).map_err(|e|
+            e.context(format!("Invariant for ExecutionPlan node '{}' failed for PhysicalOptimizer rule '{}'", node.name(), self.rule.name()))
+        )?;
+        Ok(TreeNodeRecursion::Continue)
+    }
+}
+
+/// Check [`ExecutionPlan`] invariants per [`InvariantLevel`].
+struct InvariantChecker(InvariantLevel);
+
+impl InvariantChecker {
+    /// Checks that the plan is executable, returning an Error if not.
+    pub fn check(&mut self, plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
+        // check invariants per each ExecutionPlan node
+        plan.visit(self)?;
+
+        Ok(())
+    }
+}
+
+impl<'n> TreeNodeVisitor<'n> for InvariantChecker {
+    type Node = Arc<dyn ExecutionPlan>;
+
+    fn f_down(&mut self, node: &'n Self::Node) -> Result<TreeNodeRecursion> {
+        node.check_invariants(self.0).map_err(|e| {
+            e.context(format!(
+                "Invariant for ExecutionPlan node '{}' failed",
+                node.name()
+            ))
+        })?;
+        Ok(TreeNodeRecursion::Continue)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::any::Any;
@@ -2028,6 +2110,7 @@ mod tests {
     use crate::execution::session_state::SessionStateBuilder;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::{DataType, Field, Int32Type};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{assert_contains, DFSchemaRef, TableReference};
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::TaskContext;
@@ -2781,5 +2864,240 @@ digraph {
         );
 
         assert_contains!(generated_graph, expected_tooltip);
+    }
+
+    /// Extension Node which passes invariant checks
+    #[derive(Debug)]
+    struct OkExtensionNode(Vec<Arc<dyn ExecutionPlan>>);
+    impl ExecutionPlan for OkExtensionNode {
+        fn name(&self) -> &str {
+            "always ok"
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(Arc::new(Self(children)))
+        }
+        fn schema(&self) -> SchemaRef {
+            Arc::new(Schema::empty())
+        }
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            self.0.iter().collect::<Vec<_>>()
+        }
+        fn properties(&self) -> &PlanProperties {
+            unimplemented!()
+        }
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+    }
+    impl DisplayAs for OkExtensionNode {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}", self.name())
+        }
+    }
+
+    /// Extension Node which fails the [`OptimizationInvariantChecker`].
+    #[derive(Debug)]
+    struct InvariantFailsExtensionNode;
+    impl ExecutionPlan for InvariantFailsExtensionNode {
+        fn name(&self) -> &str {
+            "InvariantFailsExtensionNode"
+        }
+        fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+            match check {
+                InvariantLevel::Always => plan_err!("extension node failed it's user-defined always-invariant check"),
+                InvariantLevel::Executable => panic!("the OptimizationInvariantChecker should not be checking for executableness"),
+            }
+        }
+        fn schema(&self) -> SchemaRef {
+            Arc::new(Schema::empty())
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+        fn properties(&self) -> &PlanProperties {
+            unimplemented!()
+        }
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+    }
+    impl DisplayAs for InvariantFailsExtensionNode {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}", self.name())
+        }
+    }
+
+    /// Extension Optimizer rule that requires the schema check
+    #[derive(Debug)]
+    struct OptimizerRuleWithSchemaCheck;
+    impl PhysicalOptimizerRule for OptimizerRuleWithSchemaCheck {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(plan)
+        }
+        fn name(&self) -> &str {
+            "OptimizerRuleWithSchemaCheck"
+        }
+        fn schema_check(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn test_optimization_invariant_checker() -> Result<()> {
+        let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(OptimizerRuleWithSchemaCheck);
+
+        // ok plan
+        let ok_node: Arc<dyn ExecutionPlan> = Arc::new(OkExtensionNode(vec![]));
+        let child = Arc::clone(&ok_node);
+        let ok_plan = Arc::clone(&ok_node).with_new_children(vec![
+            Arc::clone(&child).with_new_children(vec![Arc::clone(&child)])?,
+            Arc::clone(&child),
+        ])?;
+
+        // Test: check should pass with same schema
+        let equal_schema = ok_plan.schema();
+        OptimizationInvariantChecker::new(&rule).check(&ok_plan, equal_schema)?;
+
+        // Test: should fail with schema changed
+        let different_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
+        let expected_err = OptimizationInvariantChecker::new(&rule)
+            .check(&ok_plan, different_schema)
+            .unwrap_err();
+        assert!(expected_err.to_string().contains("PhysicalOptimizer rule 'OptimizerRuleWithSchemaCheck' failed. Schema mismatch. Expected original schema"));
+
+        // Test: should fail when extension node fails it's own invariant check
+        let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
+        let expected_err = OptimizationInvariantChecker::new(&rule)
+            .check(&failing_node, ok_plan.schema())
+            .unwrap_err();
+        assert!(expected_err
+            .to_string()
+            .contains("extension node failed it's user-defined always-invariant check"));
+
+        // Test: should fail when descendent extension node fails
+        let failing_node: Arc<dyn ExecutionPlan> = Arc::new(InvariantFailsExtensionNode);
+        let invalid_plan = ok_node.with_new_children(vec![
+            Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
+            Arc::clone(&child),
+        ])?;
+        let expected_err = OptimizationInvariantChecker::new(&rule)
+            .check(&invalid_plan, ok_plan.schema())
+            .unwrap_err();
+        assert!(expected_err
+            .to_string()
+            .contains("extension node failed it's user-defined always-invariant check"));
+
+        Ok(())
+    }
+
+    /// Extension Node which fails the [`InvariantChecker`]
+    /// if, and only if, [`InvariantLevel::Executable`]
+    #[derive(Debug)]
+    struct ExecutableInvariantFails;
+    impl ExecutionPlan for ExecutableInvariantFails {
+        fn name(&self) -> &str {
+            "ExecutableInvariantFails"
+        }
+        fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+            match check {
+                InvariantLevel::Always => Ok(()),
+                InvariantLevel::Executable => plan_err!(
+                    "extension node failed it's user-defined executable-invariant check"
+                ),
+            }
+        }
+        fn schema(&self) -> SchemaRef {
+            Arc::new(Schema::empty())
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            _children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            unimplemented!()
+        }
+        fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![]
+        }
+        fn properties(&self) -> &PlanProperties {
+            unimplemented!()
+        }
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            unimplemented!()
+        }
+    }
+    impl DisplayAs for ExecutableInvariantFails {
+        fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{}", self.name())
+        }
+    }
+
+    #[test]
+    fn test_invariant_checker_levels() -> Result<()> {
+        // plan that passes the always-invariant, but fails the executable check
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ExecutableInvariantFails);
+
+        // Test: check should pass with less stringent Always check
+        InvariantChecker(InvariantLevel::Always).check(&plan)?;
+
+        // Test: should fail the executable check
+        let expected_err = InvariantChecker(InvariantLevel::Executable)
+            .check(&plan)
+            .unwrap_err();
+        assert!(expected_err.to_string().contains(
+            "extension node failed it's user-defined executable-invariant check"
+        ));
+
+        // Test: should fail when descendent extension node fails
+        let failing_node: Arc<dyn ExecutionPlan> = Arc::new(ExecutableInvariantFails);
+        let ok_node: Arc<dyn ExecutionPlan> = Arc::new(OkExtensionNode(vec![]));
+        let child = Arc::clone(&ok_node);
+        let plan = ok_node.with_new_children(vec![
+            Arc::clone(&child).with_new_children(vec![Arc::clone(&failing_node)])?,
+            Arc::clone(&child),
+        ])?;
+        let expected_err = InvariantChecker(InvariantLevel::Executable)
+            .check(&plan)
+            .unwrap_err();
+        assert!(expected_err.to_string().contains(
+            "extension node failed it's user-defined executable-invariant check"
+        ));
+
+        Ok(())
     }
 }

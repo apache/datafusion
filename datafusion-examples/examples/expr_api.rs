@@ -22,20 +22,21 @@ use arrow::array::{BooleanArray, Int32Array, Int8Array};
 use arrow::record_batch::RecordBatch;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::common::DFSchema;
+use datafusion::common::stats::Precision;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{ColumnStatistics, DFSchema};
+use datafusion::common::{ScalarValue, ToDFSchema};
 use datafusion::error::Result;
 use datafusion::functions_aggregate::first_last::first_value_udaf;
+use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::expr::BinaryExpr;
+use datafusion::logical_expr::interval_arithmetic::Interval;
+use datafusion::logical_expr::simplify::SimplifyContext;
+use datafusion::logical_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
+use datafusion::optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_expr::{analyze, AnalysisContext, ExprBoundaries};
 use datafusion::prelude::*;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{ScalarValue, ToDFSchema};
-use datafusion_expr::execution_props::ExecutionProps;
-use datafusion_expr::expr::BinaryExpr;
-use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::{ColumnarValue, ExprFunctionExt, ExprSchemable, Operator};
-use datafusion_optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 
 /// This example demonstrates the DataFusion [`Expr`] API.
 ///
@@ -79,6 +80,9 @@ async fn main() -> Result<()> {
 
     // See how to analyze ranges in expressions
     range_analysis_demo()?;
+
+    // See how to analyze boundaries in different kinds of expressions.
+    boundary_analysis_and_selectivity_demo()?;
 
     // See how to determine the data types of expressions
     expression_type_demo()?;
@@ -270,7 +274,75 @@ fn range_analysis_demo() -> Result<()> {
     // In this case, we can see that, as expected, `analyze` has figured out
     // that in this case,  `date` must be in the range `['2020-09-01', '2020-10-01']`
     let expected_range = Interval::try_new(september_1, october_1)?;
-    assert_eq!(analysis_result.boundaries[0].interval, expected_range);
+    assert_eq!(analysis_result.boundaries[0].interval, Some(expected_range));
+
+    Ok(())
+}
+
+// DataFusion's analysis can infer boundary statistics and selectivity in
+// various situations which can be helpful in building more efficient
+// query plans.
+fn boundary_analysis_and_selectivity_demo() -> Result<()> {
+    // Consider the example where we want all rows with an `id` greater than
+    // 5000.
+    let id_greater_5000 = col("id").gt_eq(lit(5000i64));
+
+    // As in most examples we must tell DaataFusion the type of the column.
+    let schema = Arc::new(Schema::new(vec![make_field("id", DataType::Int64)]));
+
+    // DataFusion is able to do cardinality estimation on various column types
+    // these estimates represented by the `ColumnStatistics` type describe
+    // properties such as the maximum and minimum value, the number of distinct
+    // values and the number of null values.
+    let column_stats = ColumnStatistics {
+        null_count: Precision::Exact(0),
+        max_value: Precision::Exact(ScalarValue::Int64(Some(10000))),
+        min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+        sum_value: Precision::Absent,
+        distinct_count: Precision::Absent,
+    };
+
+    // We can then build our expression boundaries from the column statistics
+    // allowing the analysis to be more precise.
+    let initial_boundaries =
+        vec![ExprBoundaries::try_from_column(&schema, &column_stats, 0)?];
+
+    // With the above we can perform the boundary analysis similar to the previous
+    // example.
+    let df_schema = DFSchema::try_from(schema.clone())?;
+
+    // Analysis case id >= 5000
+    let physical_expr1 =
+        SessionContext::new().create_physical_expr(id_greater_5000, &df_schema)?;
+    let analysis = analyze(
+        &physical_expr1,
+        AnalysisContext::new(initial_boundaries.clone()),
+        df_schema.as_ref(),
+    )?;
+
+    // The analysis will return better bounds thanks to the column statistics.
+    assert_eq!(
+        analysis.boundaries.first().map(|boundary| boundary
+            .interval
+            .clone()
+            .unwrap()
+            .into_bounds()),
+        Some((
+            ScalarValue::Int64(Some(5000)),
+            ScalarValue::Int64(Some(10000))
+        ))
+    );
+
+    // We can also infer selectivity from the column statistics by assuming
+    // that the column is uniformly distributed and using the following
+    // estimation formula:
+    // Assuming the original range is [a, b] and the new range: [a', b']
+    //
+    // (a' - b' + 1) / (a - b)
+    // (10000 - 5000 + 1) / (10000 - 1)
+    assert!(analysis
+        .selectivity
+        .is_some_and(|selectivity| (0.5..=0.6).contains(&selectivity)));
 
     Ok(())
 }
@@ -357,7 +429,7 @@ fn type_coercion_demo() -> Result<()> {
     // Evaluation with an expression that has not been type coerced cannot succeed.
     let props = ExecutionProps::default();
     let physical_expr =
-        datafusion_physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
+        datafusion::physical_expr::create_physical_expr(&expr, &df_schema, &props)?;
     let e = physical_expr.evaluate(&batch).unwrap_err();
     assert!(e
         .find_root()
@@ -373,7 +445,7 @@ fn type_coercion_demo() -> Result<()> {
     let context = SimplifyContext::new(&props).with_schema(Arc::new(df_schema.clone()));
     let simplifier = ExprSimplifier::new(context);
     let coerced_expr = simplifier.coerce(expr.clone(), &df_schema)?;
-    let physical_expr = datafusion_physical_expr::create_physical_expr(
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
         &coerced_expr,
         &df_schema,
         &props,
@@ -385,7 +457,7 @@ fn type_coercion_demo() -> Result<()> {
         .clone()
         .rewrite(&mut TypeCoercionRewriter::new(&df_schema))?
         .data;
-    let physical_expr = datafusion_physical_expr::create_physical_expr(
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
         &coerced_expr,
         &df_schema,
         &props,
@@ -413,7 +485,7 @@ fn type_coercion_demo() -> Result<()> {
             }
         })?
         .data;
-    let physical_expr = datafusion_physical_expr::create_physical_expr(
+    let physical_expr = datafusion::physical_expr::create_physical_expr(
         &coerced_expr,
         &df_schema,
         &props,

@@ -44,15 +44,14 @@ use datafusion_expr::{
 };
 use datafusion_physical_expr::{create_physical_expr, execution_props::ExecutionProps};
 
+use super::inlist_simplifier::ShortenInListSimplifier;
+use super::utils::*;
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::simplify_expressions::guarantees::GuaranteeRewriter;
 use crate::simplify_expressions::regex::simplify_regex_expr;
 use crate::simplify_expressions::SimplifyInfo;
 use indexmap::IndexSet;
 use regex::Regex;
-
-use super::inlist_simplifier::ShortenInListSimplifier;
-use super::utils::*;
 
 /// This structure handles API for expression simplification
 ///
@@ -515,30 +514,27 @@ impl TreeNodeRewriter for ConstEvaluator<'_> {
 
         // NB: do not short circuit recursion even if we find a non
         // evaluatable node (so we can fold other children, args to
-        // functions, etc)
+        // functions, etc.)
         Ok(Transformed::no(expr))
     }
 
     fn f_up(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
         match self.can_evaluate.pop() {
-            // Certain expressions such as `CASE` and `COALESCE` are short circuiting
-            // and may not evaluate all their sub expressions. Thus if
-            // if any error is countered during simplification, return the original
+            // Certain expressions such as `CASE` and `COALESCE` are short-circuiting
+            // and may not evaluate all their sub expressions. Thus, if
+            // any error is countered during simplification, return the original
             // so that normal evaluation can occur
-            Some(true) => {
-                let result = self.evaluate_to_scalar(expr);
-                match result {
-                    ConstSimplifyResult::Simplified(s) => {
-                        Ok(Transformed::yes(Expr::Literal(s)))
-                    }
-                    ConstSimplifyResult::NotSimplified(s) => {
-                        Ok(Transformed::no(Expr::Literal(s)))
-                    }
-                    ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
-                        Ok(Transformed::yes(expr))
-                    }
+            Some(true) => match self.evaluate_to_scalar(expr) {
+                ConstSimplifyResult::Simplified(s) => {
+                    Ok(Transformed::yes(Expr::Literal(s)))
                 }
-            }
+                ConstSimplifyResult::NotSimplified(s) => {
+                    Ok(Transformed::no(Expr::Literal(s)))
+                }
+                ConstSimplifyResult::SimplifyRuntimeError(_, expr) => {
+                    Ok(Transformed::yes(expr))
+                }
+            },
             Some(false) => Ok(Transformed::no(expr)),
             _ => internal_err!("Failed to pop can_evaluate"),
         }
@@ -586,9 +582,7 @@ impl<'a> ConstEvaluator<'a> {
         // added they can be checked for their ability to be evaluated
         // at plan time
         match expr {
-            // Has no runtime cost, but needed during planning
-            Expr::Alias(..)
-            | Expr::AggregateFunction { .. }
+            Expr::AggregateFunction { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::OuterReferenceColumn(_, _)
@@ -603,6 +597,7 @@ impl<'a> ConstEvaluator<'a> {
                 Self::volatility_ok(func.signature().volatility)
             }
             Expr::Literal(_)
+            | Expr::Alias(..)
             | Expr::Unnest(_)
             | Expr::BinaryExpr { .. }
             | Expr::Not(_)
@@ -1385,29 +1380,26 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 when_then_expr,
                 else_expr,
             }) if !when_then_expr.is_empty()
-                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && when_then_expr.len() < 3 // The rewrite is O(n²) so limit to small number
                 && info.is_boolean_type(&when_then_expr[0].1)? =>
             {
-                // The disjunction of all the when predicates encountered so far
+                // String disjunction of all the when predicates encountered so far. Not nullable.
                 let mut filter_expr = lit(false);
                 // The disjunction of all the cases
                 let mut out_expr = lit(false);
 
                 for (when, then) in when_then_expr {
-                    let case_expr = when
-                        .as_ref()
-                        .clone()
-                        .and(filter_expr.clone().not())
-                        .and(*then);
+                    let when = is_exactly_true(*when, info)?;
+                    let case_expr =
+                        when.clone().and(filter_expr.clone().not()).and(*then);
 
                     out_expr = out_expr.or(case_expr);
-                    filter_expr = filter_expr.or(*when);
+                    filter_expr = filter_expr.or(when);
                 }
 
-                if let Some(else_expr) = else_expr {
-                    let case_expr = filter_expr.not().and(*else_expr);
-                    out_expr = out_expr.or(case_expr);
-                }
+                let else_expr = else_expr.map(|b| *b).unwrap_or_else(lit_bool_null);
+                let case_expr = filter_expr.not().and(else_expr);
+                out_expr = out_expr.or(case_expr);
 
                 // Do a first pass at simplification
                 out_expr.rewrite(self)?
@@ -1879,6 +1871,19 @@ fn inlist_except(mut l1: InList, l2: &InList) -> Result<Expr> {
         return Ok(lit(false));
     }
     Ok(Expr::InList(l1))
+}
+
+/// Returns expression testing a boolean `expr` for being exactly `true` (not `false` or NULL).
+fn is_exactly_true(expr: Expr, info: &impl SimplifyInfo) -> Result<Expr> {
+    if !info.nullable(&expr)? {
+        Ok(expr)
+    } else {
+        Ok(Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(expr),
+            op: Operator::IsNotDistinctFrom,
+            right: Box::new(lit(true)),
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -3272,12 +3277,12 @@ mod tests {
             simplify(Expr::Case(Case::new(
                 None,
                 vec![(
-                    Box::new(col("c2").not_eq(lit(false))),
+                    Box::new(col("c2_non_null").not_eq(lit(false))),
                     Box::new(lit("ok").eq(lit("not_ok"))),
                 )],
-                Some(Box::new(col("c2").eq(lit(true)))),
+                Some(Box::new(col("c2_non_null").eq(lit(true)))),
             ))),
-            col("c2").not().and(col("c2")) // #1716
+            lit(false) // #1716
         );
 
         // CASE WHEN c2 != false THEN "ok" == "ok" ELSE c2
@@ -3292,12 +3297,12 @@ mod tests {
             simplify(simplify(Expr::Case(Case::new(
                 None,
                 vec![(
-                    Box::new(col("c2").not_eq(lit(false))),
+                    Box::new(col("c2_non_null").not_eq(lit(false))),
                     Box::new(lit("ok").eq(lit("ok"))),
                 )],
-                Some(Box::new(col("c2").eq(lit(true)))),
+                Some(Box::new(col("c2_non_null").eq(lit(true)))),
             )))),
-            col("c2")
+            col("c2_non_null")
         );
 
         // CASE WHEN ISNULL(c2) THEN true ELSE c2
@@ -3328,12 +3333,12 @@ mod tests {
             simplify(simplify(Expr::Case(Case::new(
                 None,
                 vec![
-                    (Box::new(col("c1")), Box::new(lit(true)),),
-                    (Box::new(col("c2")), Box::new(lit(false)),),
+                    (Box::new(col("c1_non_null")), Box::new(lit(true)),),
+                    (Box::new(col("c2_non_null")), Box::new(lit(false)),),
                 ],
                 Some(Box::new(lit(true))),
             )))),
-            col("c1").or(col("c1").not().and(col("c2").not()))
+            col("c1_non_null").or(col("c1_non_null").not().and(col("c2_non_null").not()))
         );
 
         // CASE WHEN c1 then true WHEN c2 then true ELSE false
@@ -3347,13 +3352,53 @@ mod tests {
             simplify(simplify(Expr::Case(Case::new(
                 None,
                 vec![
-                    (Box::new(col("c1")), Box::new(lit(true)),),
-                    (Box::new(col("c2")), Box::new(lit(false)),),
+                    (Box::new(col("c1_non_null")), Box::new(lit(true)),),
+                    (Box::new(col("c2_non_null")), Box::new(lit(false)),),
                 ],
                 Some(Box::new(lit(true))),
             )))),
-            col("c1").or(col("c1").not().and(col("c2").not()))
+            col("c1_non_null").or(col("c1_non_null").not().and(col("c2_non_null").not()))
         );
+
+        // CASE WHEN c > 0 THEN true END AS c1
+        assert_eq!(
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c3").gt(lit(0_i64))), Box::new(lit(true)))],
+                None,
+            )))),
+            not_distinct_from(col("c3").gt(lit(0_i64)), lit(true)).or(distinct_from(
+                col("c3").gt(lit(0_i64)),
+                lit(true)
+            )
+            .and(lit_bool_null()))
+        );
+
+        // CASE WHEN c > 0 THEN true ELSE false END AS c1
+        assert_eq!(
+            simplify(simplify(Expr::Case(Case::new(
+                None,
+                vec![(Box::new(col("c3").gt(lit(0_i64))), Box::new(lit(true)))],
+                Some(Box::new(lit(false))),
+            )))),
+            not_distinct_from(col("c3").gt(lit(0_i64)), lit(true))
+        );
+    }
+
+    fn distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left.into()),
+            op: Operator::IsDistinctFrom,
+            right: Box::new(right.into()),
+        })
+    }
+
+    fn not_distinct_from(left: impl Into<Expr>, right: impl Into<Expr>) -> Expr {
+        Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(left.into()),
+            op: Operator::IsNotDistinctFrom,
+            right: Box::new(right.into()),
+        })
     }
 
     #[test]

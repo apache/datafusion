@@ -15,42 +15,41 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::str;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
+use crate::fuzz_cases::aggregation_fuzzer::{
+    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
+};
+
+use arrow::array::{types::Int64Type, Array, ArrayRef, AsArray, Int64Array, RecordBatch};
 use arrow::compute::{concat_batches, SortOptions};
-use arrow::datatypes::DataType;
-use arrow::record_batch::RecordBatch;
-use arrow::util::pretty::pretty_format_batches;
-use arrow_array::types::Int64Type;
-use arrow_schema::{
-    IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+use arrow::datatypes::{
+    DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
+use arrow::util::pretty::pretty_format_batches;
 use datafusion::common::Result;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::MemTable;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
 use datafusion::prelude::{DataFrame, SessionConfig, SessionContext};
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
+use datafusion_common::HashMap;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::PhysicalSortExpr;
+use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
-use crate::fuzz_cases::aggregation_fuzzer::{
-    AggregationFuzzerBuilder, ColumnDescr, DatasetGeneratorConfig, QueryBuilder,
-};
-use datafusion_common::HashMap;
-use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, SeedableRng};
-use std::str;
 use tokio::task::JoinSet;
 
 // ========================================================================
@@ -139,6 +138,26 @@ async fn test_count() {
         .with_distinct_aggregate_function("count")
         // count work for all arguments
         .with_aggregate_arguments(data_gen_config.all_columns())
+        .set_group_by_columns(data_gen_config.all_columns());
+
+    AggregationFuzzerBuilder::from(data_gen_config)
+        .add_query_builder(query_builder)
+        .build()
+        .run()
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_median() {
+    let data_gen_config = baseline_config();
+
+    // Queries like SELECT median(a), median(distinct) FROM fuzz_table GROUP BY b
+    let query_builder = QueryBuilder::new()
+        .with_table_name("fuzz_table")
+        .with_aggregate_function("median")
+        .with_distinct_aggregate_function("median")
+        // median only works on numeric columns
+        .with_aggregate_arguments(data_gen_config.numeric_columns())
         .set_group_by_columns(data_gen_config.all_columns());
 
     AggregationFuzzerBuilder::from(data_gen_config)
@@ -301,16 +320,20 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     }
 
     let concat_input_record = concat_batches(&schema, &input1).unwrap();
-    let usual_source = Arc::new(
-        MemoryExec::try_new(&[vec![concat_input_record]], schema.clone(), None).unwrap(),
-    );
 
-    let running_source = Arc::new(
-        MemoryExec::try_new(&[input1.clone()], schema.clone(), None)
+    let usual_source = MemorySourceConfig::try_new_exec(
+        &[vec![concat_input_record]],
+        schema.clone(),
+        None,
+    )
+    .unwrap();
+
+    let running_source = Arc::new(DataSourceExec::new(Arc::new(
+        MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)
             .unwrap()
             .try_with_sort_information(vec![sort_keys])
             .unwrap(),
-    );
+    )));
 
     let aggregate_expr =
         vec![

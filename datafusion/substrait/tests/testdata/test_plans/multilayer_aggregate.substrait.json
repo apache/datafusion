@@ -1,0 +1,213 @@
+{
+  "extensionUris": [{
+    "extensionUriAnchor": 1,
+    "uri": "/functions_aggregate_generic.yaml"
+  }, {
+    "extensionUriAnchor": 2,
+    "uri": "/functions_arithmetic.yaml"
+  }, {
+    "extensionUriAnchor": 3,
+    "uri": "/functions_string.yaml"
+  }],
+  "extensions": [{
+    "extensionFunction": {
+      "extensionUriReference": 1,
+      "functionAnchor": 0,
+      "name": "count:any"
+    }
+  }, {
+    "extensionFunction": {
+      "extensionUriReference": 2,
+      "functionAnchor": 1,
+      "name": "sum:i64"
+    }
+  }, {
+    "extensionFunction": {
+      "extensionUriReference": 3,
+      "functionAnchor": 2,
+      "name": "lower:str"
+    }
+  }],
+  "relations": [{
+    "root": {
+      "input": {
+        "project": {
+          "common": {
+            "emit": {
+              "outputMapping": [2, 3]
+            }
+          },
+          "input": {
+            "aggregate": {
+              "common": {
+                "direct": {
+                }
+              },
+              "input": {
+                "aggregate": {
+                  "common": {
+                    "direct": {
+                    }
+                  },
+                  "input": {
+                    "read": {
+                      "common": {
+                        "direct": {}
+                      },
+                      "baseSchema": {
+                        "names": [
+                          "product"
+                        ],
+                        "struct": {
+                          "types": [
+                            {
+                              "string": {
+                                "nullability": "NULLABILITY_REQUIRED"
+                              }
+                            }
+                          ],
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      "namedTable": {
+                        "names": [
+                          "sales"
+                        ]
+                      }
+                    }
+                  },
+                  "groupings": [{
+                    "groupingExpressions": [{
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 0
+                          }
+                        },
+                        "rootReference": {
+                        }
+                      }
+                    }],
+                    "expressionReferences": []
+                  }],
+                  "measures": [{
+                    "measure": {
+                      "functionReference": 0,
+                      "args": [],
+                      "sorts": [],
+                      "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
+                      "outputType": {
+                        "i64": {
+                          "typeVariationReference": 0,
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      "invocation": "AGGREGATION_INVOCATION_ALL",
+                      "arguments": [{
+                        "value": {
+                          "selection": {
+                            "directReference": {
+                              "structField": {
+                                "field": 0
+                              }
+                            },
+                            "rootReference": {
+                            }
+                          }
+                        }
+                      }],
+                      "options": []
+                    }
+                  }],
+                  "groupingExpressions": []
+                }
+              },
+              "groupings": [{
+                "groupingExpressions": [{
+                  "selection": {
+                    "directReference": {
+                      "structField": {
+                        "field": 0
+                      }
+                    },
+                    "rootReference": {
+                    }
+                  }
+                }],
+                "expressionReferences": []
+              }],
+              "measures": [{
+                "measure": {
+                  "functionReference": 1,
+                  "args": [],
+                  "sorts": [],
+                  "phase": "AGGREGATION_PHASE_INITIAL_TO_RESULT",
+                  "outputType": {
+                    "i64": {
+                      "typeVariationReference": 0,
+                      "nullability": "NULLABILITY_NULLABLE"
+                    }
+                  },
+                  "invocation": "AGGREGATION_INVOCATION_ALL",
+                  "arguments": [{
+                    "value": {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1
+                          }
+                        },
+                        "rootReference": {
+                        }
+                      }
+                    }
+                  }],
+                  "options": []
+                }
+              }],
+              "groupingExpressions": []
+            }
+          },
+          "expressions": [{
+            "scalarFunction": {
+              "functionReference": 2,
+              "args": [],
+              "outputType": {
+                "string": {
+                  "typeVariationReference": 0,
+                  "nullability": "NULLABILITY_NULLABLE"
+                }
+              },
+              "arguments": [{
+                "value": {
+                  "selection": {
+                    "directReference": {
+                      "structField": {
+                        "field": 0
+                      }
+                    },
+                    "rootReference": {
+                    }
+                  }
+                }
+              }],
+              "options": []
+            }
+          }, {
+            "selection": {
+              "directReference": {
+                "structField": {
+                  "field": 1
+                }
+              },
+              "rootReference": {
+              }
+            }
+          }]
+        }
+      },
+      "names": ["lower(product)", "product_count"]
+    }
+  }],
+  "expectedTypeUrls": []
+}

@@ -22,17 +22,15 @@ pub mod memory;
 pub mod proxy;
 pub mod string_utils;
 
-use crate::error::{_internal_datafusion_err, _internal_err};
+use crate::error::{_exec_datafusion_err, _internal_datafusion_err, _internal_err};
 use crate::{DataFusionError, Result, ScalarValue};
-use arrow::array::ArrayRef;
+use arrow::array::{
+    cast::AsArray, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray,
+    OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::{partition, SortColumn, SortOptions};
-use arrow::datatypes::{Field, SchemaRef};
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    Array, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
-};
-use arrow_schema::DataType;
+use arrow::datatypes::{DataType, Field, SchemaRef};
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -329,8 +327,8 @@ pub fn longest_consecutive_prefix<T: Borrow<usize>>(
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_array::{Array, ListArray};
-/// # use arrow_array::types::Int64Type;
+/// # use arrow::array::{Array, ListArray};
+/// # use arrow::array::types::Int64Type;
 /// # use datafusion_common::utils::SingleRowListArrayBuilder;
 /// // Array is [1, 2, 3]
 /// let arr = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
@@ -592,6 +590,13 @@ pub fn base_type(data_type: &DataType) -> DataType {
     }
 }
 
+/// Information about how to coerce lists.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+pub enum ListCoercion {
+    /// [`DataType::FixedSizeList`] should be coerced to [`DataType::List`].
+    FixedSizedListToList,
+}
+
 /// A helper function to coerce base type in List.
 ///
 /// Example
@@ -602,16 +607,22 @@ pub fn base_type(data_type: &DataType) -> DataType {
 ///
 /// let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// let base_type = DataType::Float64;
-/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type);
+/// let coerced_type = coerced_type_with_base_type_only(&data_type, &base_type, None);
 /// assert_eq!(coerced_type, DataType::List(Arc::new(Field::new_list_field(DataType::Float64, true))));
 pub fn coerced_type_with_base_type_only(
     data_type: &DataType,
     base_type: &DataType,
+    array_coercion: Option<&ListCoercion>,
 ) -> DataType {
-    match data_type {
-        DataType::List(field) | DataType::FixedSizeList(field, _) => {
-            let field_type =
-                coerced_type_with_base_type_only(field.data_type(), base_type);
+    match (data_type, array_coercion) {
+        (DataType::List(field), _)
+        | (DataType::FixedSizeList(field, _), Some(ListCoercion::FixedSizedListToList)) =>
+        {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
 
             DataType::List(Arc::new(Field::new(
                 field.name(),
@@ -619,9 +630,24 @@ pub fn coerced_type_with_base_type_only(
                 field.is_nullable(),
             )))
         }
-        DataType::LargeList(field) => {
-            let field_type =
-                coerced_type_with_base_type_only(field.data_type(), base_type);
+        (DataType::FixedSizeList(field, len), _) => {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
+
+            DataType::FixedSizeList(
+                Arc::new(Field::new(field.name(), field_type, field.is_nullable())),
+                *len,
+            )
+        }
+        (DataType::LargeList(field), _) => {
+            let field_type = coerced_type_with_base_type_only(
+                field.data_type(),
+                base_type,
+                array_coercion,
+            );
 
             DataType::LargeList(Arc::new(Field::new(
                 field.name(),
@@ -736,6 +762,27 @@ pub mod datafusion_strsim {
     pub fn levenshtein(a: &str, b: &str) -> usize {
         generic_levenshtein(&StringWrapper(a), &StringWrapper(b))
     }
+
+    /// Calculates the normalized Levenshtein distance between two strings.
+    /// The normalized distance is a value between 0.0 and 1.0, where 1.0 indicates
+    /// that the strings are identical and 0.0 indicates no similarity.
+    ///
+    /// ```
+    /// use datafusion_common::utils::datafusion_strsim::normalized_levenshtein;
+    ///
+    /// assert!((normalized_levenshtein("kitten", "sitting") - 0.57142).abs() < 0.00001);
+    ///
+    /// assert!(normalized_levenshtein("", "second").abs() < 0.00001);
+    ///
+    /// assert!((normalized_levenshtein("kitten", "sitten") - 0.833).abs() < 0.001);
+    /// ```
+    pub fn normalized_levenshtein(a: &str, b: &str) -> f64 {
+        if a.is_empty() && b.is_empty() {
+            return 1.0;
+        }
+        1.0 - (levenshtein(a, b) as f64)
+            / (a.chars().count().max(b.chars().count()) as f64)
+    }
 }
 
 /// Merges collections `first` and `second`, removes duplicates and sorts the
@@ -770,6 +817,7 @@ pub fn set_difference<T: Borrow<usize>, S: Borrow<usize>>(
 }
 
 /// Checks whether the given index sequence is monotonically non-decreasing.
+#[deprecated(since = "45.0.0", note = "Use std::Iterator::is_sorted instead")]
 pub fn is_sorted<T: Borrow<usize>>(sequence: impl IntoIterator<Item = T>) -> bool {
     // TODO: Remove this function when `is_sorted` graduates from Rust nightly.
     let mut previous = 0;
@@ -883,6 +931,45 @@ pub fn get_available_parallelism() -> usize {
     available_parallelism()
         .unwrap_or(NonZero::new(1).expect("literal value `1` shouldn't be zero"))
         .get()
+}
+
+/// Converts a collection of function arguments into an fixed-size array of length N
+/// producing a reasonable error message in case of unexpected number of arguments.
+///
+/// # Example
+/// ```
+/// # use datafusion_common::Result;
+/// # use datafusion_common::utils::take_function_args;
+/// # use datafusion_common::ScalarValue;
+/// fn my_function(args: &[ScalarValue]) -> Result<()> {
+///   // function expects 2 args, so create a 2-element array
+///   let [arg1, arg2] = take_function_args("my_function", args)?;
+///   // ... do stuff..
+///   Ok(())
+/// }
+///
+/// // Calling the function with 1 argument produces an error:
+/// let args = vec![ScalarValue::Int32(Some(10))];
+/// let err = my_function(&args).unwrap_err();
+/// assert_eq!(err.to_string(), "Execution error: my_function function requires 2 arguments, got 1");
+/// // Calling the function with 2 arguments works great
+/// let args = vec![ScalarValue::Int32(Some(10)), ScalarValue::Int32(Some(20))];
+/// my_function(&args).unwrap();
+/// ```
+pub fn take_function_args<const N: usize, T>(
+    function_name: &str,
+    args: impl IntoIterator<Item = T>,
+) -> Result<[T; N]> {
+    let args = args.into_iter().collect::<Vec<_>>();
+    args.try_into().map_err(|v: Vec<T>| {
+        _exec_datafusion_err!(
+            "{} function requires {} {}, got {}",
+            function_name,
+            N,
+            if N == 1 { "argument" } else { "arguments" },
+            v.len()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1172,6 +1259,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(deprecated)]
     fn test_is_sorted() {
         assert!(is_sorted::<usize>([]));
         assert!(is_sorted([0]));

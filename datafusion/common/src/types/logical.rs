@@ -17,7 +17,7 @@
 
 use super::NativeType;
 use crate::error::Result;
-use arrow_schema::DataType;
+use arrow::datatypes::DataType;
 use core::fmt;
 use std::{cmp::Ordering, hash::Hash, sync::Arc};
 

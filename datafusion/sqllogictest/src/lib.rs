@@ -15,14 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+
 //! DataFusion sqllogictest driver
 
 mod engines;
 
+pub use engines::convert_batches;
+pub use engines::convert_schema_to_types;
+pub use engines::DFColumnType;
+pub use engines::DFOutput;
+pub use engines::DFSqlLogicTestError;
 pub use engines::DataFusion;
 
 #[cfg(feature = "postgres")]
 pub use engines::Postgres;
 
 mod test_context;
+mod util;
+
 pub use test_context::TestContext;
+pub use util::*;

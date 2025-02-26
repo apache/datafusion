@@ -20,28 +20,27 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::as_string_array;
-use arrow::compute::kernels::numeric::add;
-use arrow_array::builder::BooleanBuilder;
-use arrow_array::cast::AsArray;
-use arrow_array::{
-    Array, ArrayRef, Float32Array, Float64Array, Int32Array, RecordBatch, StringArray,
+use arrow::array::{
+    builder::BooleanBuilder, cast::AsArray, Array, ArrayRef, Float32Array, Float64Array,
+    Int32Array, RecordBatch, StringArray,
 };
-use arrow_schema::{DataType, Field, Schema};
+use arrow::compute::kernels::numeric::add;
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::{as_float64_array, as_int32_array};
 use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, internal_err,
-    not_impl_err, plan_err, DFSchema, DataFusionError, ExprSchema, HashMap, Result,
-    ScalarValue,
+    assert_batches_eq, assert_batches_sorted_eq, assert_contains, exec_err, not_impl_err,
+    plan_err, DFSchema, DataFusionError, HashMap, Result, ScalarValue,
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
 use datafusion_expr::{
-    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, ExprSchemable,
-    LogicalPlanBuilder, OperateFunctionArg, ScalarUDF, ScalarUDFImpl, Signature,
-    Volatility,
+    Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
+    OperateFunctionArg, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
@@ -209,11 +208,7 @@ impl ScalarUDFImpl for Simple0ArgsScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(100))))
     }
 }
@@ -520,16 +515,13 @@ impl ScalarUDFImpl for AddIndexToStringVolatileScalarUDF {
         Ok(self.return_type.clone())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let answer = match &args[0] {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [arg] = take_function_args(self.name(), &args.args)?;
+        let answer = match arg {
             // When called with static arguments, the result is returned as an array.
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(value))) => {
                 let mut answer = vec![];
-                for index in 1..=number_rows {
+                for index in 1..=args.number_rows {
                     // When calling a function with immutable arguments, the result is returned with ")".
                     // Example: SELECT add_index_to_string('const_value') FROM table;
                     answer.push(index.to_string() + ") " + value);
@@ -715,14 +707,6 @@ impl ScalarUDFImpl for CastToI64UDF {
         // return the newly written argument to DataFusion
         Ok(ExprSimplifyResult::Simplified(new_expr))
     }
-
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        unimplemented!("Function should have been simplified prior to evaluation")
-    }
 }
 
 #[tokio::test]
@@ -819,45 +803,47 @@ impl ScalarUDFImpl for TakeUDF {
     ///
     /// 1. If the third argument is '0', return the type of the first argument
     /// 2. If the third argument is '1', return the type of the second argument
-    fn return_type_from_exprs(
-        &self,
-        arg_exprs: &[Expr],
-        schema: &dyn ExprSchema,
-        _arg_data_types: &[DataType],
-    ) -> Result<DataType> {
-        if arg_exprs.len() != 3 {
-            return plan_err!("Expected 3 arguments, got {}.", arg_exprs.len());
+    fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
+        if args.arg_types.len() != 3 {
+            return plan_err!("Expected 3 arguments, got {}.", args.arg_types.len());
         }
 
-        let take_idx = if let Some(Expr::Literal(ScalarValue::Int64(Some(idx)))) =
-            arg_exprs.get(2)
-        {
-            if *idx == 0 || *idx == 1 {
-                *idx as usize
+        let take_idx = if let Some(take_idx) = args.scalar_arguments.get(2) {
+            // This is for test only, safe to unwrap
+            let take_idx = take_idx
+                .unwrap()
+                .try_as_str()
+                .unwrap()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap();
+
+            if take_idx == 0 || take_idx == 1 {
+                take_idx
             } else {
-                return plan_err!("The third argument must be 0 or 1, got: {idx}");
+                return plan_err!("The third argument must be 0 or 1, got: {take_idx}");
             }
         } else {
             return plan_err!(
                 "The third argument must be a literal of type int64, but got {:?}",
-                arg_exprs.get(2)
+                args.scalar_arguments.get(2)
             );
         };
 
-        arg_exprs.get(take_idx).unwrap().get_type(schema)
+        Ok(ReturnInfo::new_nullable(
+            args.arg_types[take_idx].to_owned(),
+        ))
     }
 
     // The actual implementation
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        let take_idx = match &args[2] {
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(v))) if v < &2 => *v as usize,
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [_arg0, _arg1, arg2] = take_function_args(self.name(), &args.args)?;
+        let take_idx = match arg2 {
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "0" => 0,
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) if v == "1" => 1,
             _ => unreachable!(),
         };
-        match &args[take_idx] {
+        match &args.args[take_idx] {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(array.clone())),
             ColumnarValue::Scalar(_) => unimplemented!(),
         }
@@ -874,9 +860,9 @@ async fn verify_udf_return_type() -> Result<()> {
     //   take(smallint_col, double_col, 1) as take1
     // FROM alltypes_plain;
     let exprs = vec![
-        take.call(vec![col("smallint_col"), col("double_col"), lit(0_i64)])
+        take.call(vec![col("smallint_col"), col("double_col"), lit("0")])
             .alias("take0"),
-        take.call(vec![col("smallint_col"), col("double_col"), lit(1_i64)])
+        take.call(vec![col("smallint_col"), col("double_col"), lit("1")])
             .alias("take1"),
     ];
 
@@ -958,14 +944,6 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
-    }
-
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        internal_err!("This function should not get invoked!")
     }
 
     fn simplify(

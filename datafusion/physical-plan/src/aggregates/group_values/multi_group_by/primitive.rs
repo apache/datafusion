@@ -17,10 +17,9 @@
 
 use crate::aggregates::group_values::multi_group_by::{nulls_equal_to, GroupColumn};
 use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
+use arrow::array::{cast::AsArray, Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow::buffer::ScalarBuffer;
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_schema::DataType;
+use arrow::datatypes::DataType;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use itertools::izip;
 use std::iter;
@@ -212,10 +211,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::aggregates::group_values::multi_group_by::primitive::PrimitiveGroupValueBuilder;
-    use arrow::datatypes::Int64Type;
-    use arrow_array::{ArrayRef, Int64Array};
-    use arrow_buffer::{BooleanBufferBuilder, NullBuffer};
-    use arrow_schema::DataType;
+    use arrow::array::{ArrayRef, Int64Array, NullBufferBuilder};
+    use arrow::datatypes::{DataType, Int64Type};
 
     use super::GroupColumn;
 
@@ -304,16 +301,15 @@ mod tests {
             Int64Array::from(vec![Some(1), Some(2), None, None, Some(1), Some(3)])
                 .into_parts();
 
-        // explicitly build a boolean buffer where one of the null values also happens to match
-        let mut boolean_buffer_builder = BooleanBufferBuilder::new(6);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(false); // this sets Some(2) to null above
-        boolean_buffer_builder.append(false);
-        boolean_buffer_builder.append(false);
-        boolean_buffer_builder.append(true);
-        boolean_buffer_builder.append(true);
-        let nulls = NullBuffer::new(boolean_buffer_builder.finish());
-        let input_array = Arc::new(Int64Array::new(values, Some(nulls))) as ArrayRef;
+        // explicitly build a null buffer where one of the null values also happens to match
+        let mut nulls = NullBufferBuilder::new(6);
+        nulls.append_non_null();
+        nulls.append_null(); // this sets Some(2) to null above
+        nulls.append_null();
+        nulls.append_null();
+        nulls.append_non_null();
+        nulls.append_non_null();
+        let input_array = Arc::new(Int64Array::new(values, nulls.finish())) as ArrayRef;
 
         // Check
         let mut equal_to_results = vec![true; builder.len()];

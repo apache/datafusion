@@ -16,70 +16,84 @@
 // under the License.
 
 extern crate criterion;
+mod helper;
 
-use arrow::array::OffsetSizeTrait;
-use arrow::util::bench_util::{
-    create_string_array_with_len, create_string_view_array_with_len,
-};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::ColumnarValue;
-use datafusion_functions::unicode;
-use std::sync::Arc;
-
-fn create_args<O: OffsetSizeTrait>(
-    size: usize,
-    str_len: usize,
-    force_view_types: bool,
-) -> Vec<ColumnarValue> {
-    if force_view_types {
-        let string_array =
-            Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false));
-
-        vec![ColumnarValue::Array(string_array)]
-    } else {
-        let string_array =
-            Arc::new(create_string_array_with_len::<O>(size, 0.1, str_len));
-
-        vec![ColumnarValue::Array(string_array)]
-    }
-}
+use helper::gen_string_array;
 
 fn criterion_benchmark(c: &mut Criterion) {
-    let reverse = unicode::reverse();
-    for size in [1024, 4096] {
-        let str_len = 8;
+    // All benches are single batch run with 8192 rows
+    let reverse = datafusion_functions::unicode::reverse();
 
-        let args = create_args::<i32>(size, str_len, true);
+    const N_ROWS: usize = 8192;
+    const NULL_DENSITY: f32 = 0.1;
+    const UTF8_DENSITY_OF_ALL_ASCII: f32 = 0.0;
+    const NORMAL_UTF8_DENSITY: f32 = 0.8;
+    for str_len in [8, 32, 128, 4096] {
+        // StringArray ASCII only
+        let args_string_ascii = gen_string_array(
+            N_ROWS,
+            str_len,
+            NULL_DENSITY,
+            UTF8_DENSITY_OF_ALL_ASCII,
+            false,
+        );
         c.bench_function(
-            format!("reverse_string_view [size={}, str_len={}]", size, str_len).as_str(),
+            &format!("reverse_StringArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
                     // TODO use invoke_with_args
-                    black_box(reverse.invoke_batch(&args, str_len))
+                    black_box(reverse.invoke_batch(&args_string_ascii, N_ROWS))
                 })
             },
         );
 
-        let str_len = 32;
-
-        let args = create_args::<i32>(size, str_len, true);
+        // StringArray UTF8
+        let args_string_utf8 =
+            gen_string_array(N_ROWS, str_len, NULL_DENSITY, NORMAL_UTF8_DENSITY, false);
         c.bench_function(
-            format!("reverse_string_view [size={}, str_len={}]", size, str_len).as_str(),
+            &format!(
+                "reverse_StringArray_utf8_density_{}_str_len_{}",
+                NORMAL_UTF8_DENSITY, str_len
+            ),
             |b| {
                 b.iter(|| {
                     // TODO use invoke_with_args
-                    black_box(reverse.invoke_batch(&args, str_len))
+                    black_box(reverse.invoke_batch(&args_string_utf8, N_ROWS))
                 })
             },
         );
 
-        let args = create_args::<i32>(size, str_len, false);
+        // StringViewArray ASCII only
+        let args_string_view_ascii = gen_string_array(
+            N_ROWS,
+            str_len,
+            NULL_DENSITY,
+            UTF8_DENSITY_OF_ALL_ASCII,
+            true,
+        );
         c.bench_function(
-            format!("reverse_string [size={}, str_len={}]", size, str_len).as_str(),
+            &format!("reverse_StringViewArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
                     // TODO use invoke_with_args
-                    black_box(reverse.invoke_batch(&args, str_len))
+                    black_box(reverse.invoke_batch(&args_string_view_ascii, N_ROWS))
+                })
+            },
+        );
+
+        // StringViewArray UTF8
+        let args_string_view_utf8 =
+            gen_string_array(N_ROWS, str_len, NULL_DENSITY, NORMAL_UTF8_DENSITY, true);
+        c.bench_function(
+            &format!(
+                "reverse_StringViewArray_utf8_density_{}_str_len_{}",
+                NORMAL_UTF8_DENSITY, str_len
+            ),
+            |b| {
+                b.iter(|| {
+                    // TODO use invoke_with_args
+                    black_box(reverse.invoke_batch(&args_string_view_utf8, N_ROWS))
                 })
             },
         );

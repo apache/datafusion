@@ -21,7 +21,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::session::Session;
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, Constraints, Statistics};
@@ -33,18 +33,19 @@ use datafusion_expr::{
 };
 use datafusion_physical_plan::ExecutionPlan;
 
-/// A named table which can be queried.
+/// A table which can be queried and modified.
 ///
 /// Please see [`CatalogProvider`] for details of implementing a custom catalog.
 ///
 /// [`TableProvider`] represents a source of data which can provide data as
-/// Apache Arrow `RecordBatch`es. Implementations of this trait provide
+/// Apache Arrow [`RecordBatch`]es. Implementations of this trait provide
 /// important information for planning such as:
 ///
 /// 1. [`Self::schema`]: The schema (columns and their types) of the table
 /// 2. [`Self::supports_filters_pushdown`]: Should filters be pushed into this scan
 /// 2. [`Self::scan`]: An [`ExecutionPlan`] that can read data
 ///
+/// [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/record_batch/struct.RecordBatch.html
 /// [`CatalogProvider`]: super::CatalogProvider
 #[async_trait]
 pub trait TableProvider: Debug + Sync + Send {
@@ -202,7 +203,7 @@ pub trait TableProvider: Debug + Sync + Send {
     /// ```rust
     /// # use std::any::Any;
     /// # use std::sync::Arc;
-    /// # use arrow_schema::SchemaRef;
+    /// # use arrow::datatypes::SchemaRef;
     /// # use async_trait::async_trait;
     /// # use datafusion_catalog::{TableProvider, Session};
     /// # use datafusion_common::Result;

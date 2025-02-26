@@ -16,16 +16,16 @@
 // under the License.
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-use arrow_schema::DataType;
-use datafusion::prelude::SessionContext;
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{assert_batches_eq, Result, ScalarValue};
-use datafusion_expr::{
-    BinaryExpr, ColumnarValue, Expr, LogicalPlan, Operator, ScalarUDF, ScalarUDFImpl,
-    Signature, Volatility,
+use arrow::datatypes::DataType;
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{assert_batches_eq, Result, ScalarValue};
+use datafusion::logical_expr::{
+    BinaryExpr, ColumnarValue, Expr, LogicalPlan, Operator, ScalarFunctionArgs,
+    ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
-use datafusion_optimizer::optimizer::ApplyOrder;
-use datafusion_optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion::optimizer::ApplyOrder;
+use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
+use datafusion::prelude::SessionContext;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -205,11 +205,7 @@ impl ScalarUDFImpl for MyEq {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_batch(
-        &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // this example simply returns "true" which is not what a real
         // implementation would do.
         Ok(ColumnarValue::Scalar(ScalarValue::from(true)))

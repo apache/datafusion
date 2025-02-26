@@ -26,11 +26,11 @@ use arrow::array::{
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{LargeUtf8, Utf8, Utf8View};
 use datafusion_common::cast::as_int64_array;
-use datafusion_common::types::{logical_int64, logical_string};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::types::{logical_int64, logical_string, NativeType};
+use datafusion_common::{exec_err, DataFusionError, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
-use datafusion_expr_common::signature::TypeSignatureClass;
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -67,8 +67,13 @@ impl RepeatFunc {
         Self {
             signature: Signature::coercible(
                 vec![
-                    TypeSignatureClass::Native(logical_string()),
-                    TypeSignatureClass::Native(logical_int64()),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    // Accept all integer types but cast them to i64
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_int64()),
+                        vec![TypeSignatureClass::Integer],
+                        NativeType::Int64,
+                    ),
                 ],
                 Volatility::Immutable,
             ),
@@ -93,12 +98,8 @@ impl ScalarUDFImpl for RepeatFunc {
         utf8_to_str_type(&arg_types[0], "repeat")
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        make_scalar_function(repeat, vec![])(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        make_scalar_function(repeat, vec![])(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -113,15 +114,27 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         Utf8View => {
             let string_view_array = args[0].as_string_view();
-            repeat_impl::<i32, &StringViewArray>(string_view_array, number_array)
+            repeat_impl::<i32, &StringViewArray>(
+                string_view_array,
+                number_array,
+                i32::MAX as usize,
+            )
         }
         Utf8 => {
             let string_array = args[0].as_string::<i32>();
-            repeat_impl::<i32, &GenericStringArray<i32>>(string_array, number_array)
+            repeat_impl::<i32, &GenericStringArray<i32>>(
+                string_array,
+                number_array,
+                i32::MAX as usize,
+            )
         }
         LargeUtf8 => {
             let string_array = args[0].as_string::<i64>();
-            repeat_impl::<i64, &GenericStringArray<i64>>(string_array, number_array)
+            repeat_impl::<i64, &GenericStringArray<i64>>(
+                string_array,
+                number_array,
+                i64::MAX as usize,
+            )
         }
         other => exec_err!(
             "Unsupported data type {other:?} for function repeat. \
@@ -130,22 +143,51 @@ fn repeat(args: &[ArrayRef]) -> Result<ArrayRef> {
     }
 }
 
-fn repeat_impl<'a, T, S>(string_array: S, number_array: &Int64Array) -> Result<ArrayRef>
+fn repeat_impl<'a, T, S>(
+    string_array: S,
+    number_array: &Int64Array,
+    max_str_len: usize,
+) -> Result<ArrayRef>
 where
     T: OffsetSizeTrait,
     S: StringArrayType<'a>,
 {
-    let mut builder: GenericStringBuilder<T> = GenericStringBuilder::new();
-    string_array
-        .iter()
-        .zip(number_array.iter())
-        .for_each(|(string, number)| match (string, number) {
-            (Some(string), Some(number)) if number >= 0 => {
-                builder.append_value(string.repeat(number as usize))
+    let mut total_capacity = 0;
+    string_array.iter().zip(number_array.iter()).try_for_each(
+        |(string, number)| -> Result<(), DataFusionError> {
+            match (string, number) {
+                (Some(string), Some(number)) if number >= 0 => {
+                    let item_capacity = string.len() * number as usize;
+                    if item_capacity > max_str_len {
+                        return exec_err!(
+                            "string size overflow on repeat, max size is {}, but got {}",
+                            max_str_len,
+                            number as usize * string.len()
+                        );
+                    }
+                    total_capacity += item_capacity;
+                }
+                _ => (),
             }
-            (Some(_), Some(_)) => builder.append_value(""),
-            _ => builder.append_null(),
-        });
+            Ok(())
+        },
+    )?;
+
+    let mut builder =
+        GenericStringBuilder::<T>::with_capacity(string_array.len(), total_capacity);
+
+    string_array.iter().zip(number_array.iter()).try_for_each(
+        |(string, number)| -> Result<(), DataFusionError> {
+            match (string, number) {
+                (Some(string), Some(number)) if number >= 0 => {
+                    builder.append_value(string.repeat(number as usize));
+                }
+                (Some(_), Some(_)) => builder.append_value(""),
+                _ => builder.append_null(),
+            }
+            Ok(())
+        },
+    )?;
     let array = builder.finish();
 
     Ok(Arc::new(array) as ArrayRef)
@@ -156,8 +198,8 @@ mod tests {
     use arrow::array::{Array, StringArray};
     use arrow::datatypes::DataType::Utf8;
 
-    use datafusion_common::Result;
     use datafusion_common::ScalarValue;
+    use datafusion_common::{exec_err, Result};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
     use crate::string::repeat::RepeatFunc;
@@ -228,6 +270,21 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Int64(None)),
             ],
             Ok(None),
+            &str,
+            Utf8,
+            StringArray
+        );
+        test_function!(
+            RepeatFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(String::from("Pg")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(1073741824))),
+            ],
+            exec_err!(
+                "string size overflow on repeat, max size is {}, but got {}",
+                i32::MAX,
+                2usize * 1073741824
+            ),
             &str,
             Utf8,
             StringArray

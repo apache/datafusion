@@ -71,11 +71,6 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "GlobalLimitExec: skip=0, fetch=3, ",
-        "metrics=[output_rows=3, elapsed_compute="
-    );
-    assert_metrics!(
-        &formatted,
         "ProjectionExec: expr=[count(*)",
         "metrics=[output_rows=1, elapsed_compute="
     );
@@ -101,9 +96,7 @@ async fn explain_analyze_baseline_metrics() {
 
         plan.as_any().downcast_ref::<sorts::sort::SortExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::aggregates::AggregateExec>().is_some()
-            // CoalescePartitionsExec doesn't do any work so is not included
             || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
-            || plan.as_any().downcast_ref::<physical_plan::limit::GlobalLimitExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::limit::LocalLimitExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::projection::ProjectionExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::coalesce_batches::CoalesceBatchesExec>().is_some()
@@ -617,7 +610,7 @@ async fn test_physical_plan_display_indent() {
         "              CoalesceBatchesExec: target_batch_size=4096",
         "                FilterExec: c12@1 < 10",
         "                  RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-        "                    CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], has_header=true",
+        "                    DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1, c12], file_type=csv, has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -657,12 +650,12 @@ async fn test_physical_plan_display_indent_multi_children() {
     	"    CoalesceBatchesExec: target_batch_size=4096",
     	"      RepartitionExec: partitioning=Hash([c1@0], 9000), input_partitions=9000",
     	"        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
-    	"          CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
+    	"          DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true",
     	"    CoalesceBatchesExec: target_batch_size=4096",
     	"      RepartitionExec: partitioning=Hash([c2@0], 9000), input_partitions=9000",
     	"        RepartitionExec: partitioning=RoundRobinBatch(9000), input_partitions=1",
     	"          ProjectionExec: expr=[c1@0 as c2]",
-    	"            CsvExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true",
+    	"            DataSourceExec: file_groups={1 group: [[ARROW_TEST_DATA/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true",
     ];
 
     let normalizer = ExplainNormalizer::new();
@@ -787,7 +780,7 @@ async fn explain_logical_plan_only() {
     let expected = vec![
         vec![
             "logical_plan",
-            "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
+            "Aggregate: groupBy=[[]], aggr=[[count(*)]]\
             \n  SubqueryAlias: t\
             \n    Projection: \
             \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"

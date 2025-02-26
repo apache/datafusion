@@ -28,7 +28,7 @@ use datafusion::datasource::file_format::parquet::fetch_parquet_metadata;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    FileMeta, FileScanConfig, ParquetExec, ParquetFileMetrics, ParquetFileReaderFactory,
+    FileMeta, FileScanConfig, ParquetFileMetrics, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::physical_plan::collect;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
@@ -75,23 +75,26 @@ async fn route_data_access_ops_to_parquet_file_reader_factory() {
         })
         .collect();
 
-    // prepare the scan
-    let parquet_exec = ParquetExec::builder(
-        FileScanConfig::new(
-            // just any url that doesn't point to in memory object store
-            ObjectStoreUrl::local_filesystem(),
-            file_schema,
-        )
-        .with_file_group(file_group),
+    let source = Arc::new(
+        ParquetSource::default()
+            // prepare the scan
+            .with_parquet_file_reader_factory(Arc::new(
+                InMemoryParquetFileReaderFactory(Arc::clone(&in_memory_object_store)),
+            )),
+    );
+    let base_config = FileScanConfig::new(
+        // just any url that doesn't point to in memory object store
+        ObjectStoreUrl::local_filesystem(),
+        file_schema,
+        source,
     )
-    .build()
-    .with_parquet_file_reader_factory(Arc::new(InMemoryParquetFileReaderFactory(
-        Arc::clone(&in_memory_object_store),
-    )));
+    .with_file_group(file_group);
+
+    let parquet_exec = base_config.build();
 
     let session_ctx = SessionContext::new();
     let task_ctx = session_ctx.task_ctx();
-    let read = collect(Arc::new(parquet_exec), task_ctx).await.unwrap();
+    let read = collect(parquet_exec, task_ctx).await.unwrap();
 
     let expected = [
         "+-----+----+----+",

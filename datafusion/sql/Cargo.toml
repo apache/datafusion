@@ -28,12 +28,14 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
 [lib]
 name = "datafusion_sql"
-path = "src/lib.rs"
 
 [features]
 default = ["unicode_expressions", "unparser"]
@@ -43,8 +45,6 @@ recursive_protection = ["dep:recursive"]
 
 [dependencies]
 arrow = { workspace = true }
-arrow-array = { workspace = true }
-arrow-schema = { workspace = true }
 bigdecimal = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-expr = { workspace = true }

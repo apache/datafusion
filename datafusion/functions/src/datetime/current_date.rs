@@ -81,10 +81,9 @@ impl ScalarUDFImpl for CurrentDateFunc {
         Ok(Date32)
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        _args: &[ColumnarValue],
-        _number_rows: usize,
+        _args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         internal_err!(
             "invoke should not be called on a simplified current_date() function"
