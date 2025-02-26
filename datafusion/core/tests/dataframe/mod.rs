@@ -2455,7 +2455,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select b,count(*) from t1 group by b order by count(*)")
+        .sql("select b,count(1) from t1 group by b order by count(1)")
         .await?
         .explain(false, false)?
         .collect()
@@ -2481,7 +2481,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
 async fn test_count_wildcard_on_where_in() -> Result<()> {
     let ctx = create_join_context()?;
     let sql_results = ctx
-        .sql("SELECT a,b FROM t1 WHERE a in (SELECT count(*) FROM t2)")
+        .sql("SELECT a,b FROM t1 WHERE a in (SELECT count(1) FROM t2)")
         .await?
         .explain(false, false)?
         .collect()
@@ -2522,7 +2522,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
 async fn test_count_wildcard_on_where_exist() -> Result<()> {
     let ctx = create_join_context()?;
     let sql_results = ctx
-        .sql("SELECT a, b FROM t1 WHERE EXISTS (SELECT count(*) FROM t2)")
+        .sql("SELECT a, b FROM t1 WHERE EXISTS (SELECT count(1) FROM t2)")
         .await?
         .explain(false, false)?
         .collect()
@@ -2559,7 +2559,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select count(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
+        .sql("select count(1) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
         .await?
         .explain(false, false)?
         .collect()
@@ -2598,7 +2598,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     register_alltypes_tiny_pages_parquet(&ctx).await?;
 
     let sql_results = ctx
-        .sql("select count(*) from t1")
+        .sql("select count(1) from t1")
         .await?
         .explain(false, false)?
         .collect()
@@ -2628,7 +2628,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select a,b from t1 where (select count(*) from t2 where t1.a = t2.a)>0;")
+        .sql("select a,b from t1 where (select count(1) from t2 where t1.a = t2.a)>0;")
         .await?
         .explain(false, false)?
         .collect()
