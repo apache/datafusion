@@ -52,14 +52,71 @@ DataFusion 46 has a major change to how the built in DataSources are organized. 
 ### Cookbook: Changes to `ParquetExecBuilder`
 
 #### Old pattern:
-```test
-TODO
-```
+```rust
+        let mut exec_plan_builder = ParquetExecBuilder::new(
+            FileScanConfig::new(self.log_store.object_store_url(), file_schema)
+                .with_file_groups(
+                    // If all files were filtered out, we still need to emit at least one partition to
+                    // pass datafusion sanity checks.
+                    //
+                    // See https://github.com/apache/datafusion/issues/11322
+                    if file_groups.is_empty() {
+                        vec![vec![]]
+                    } else {
+                        file_groups.into_values().collect()
+                    },
+                )
+                .with_statistics(stats)
+                .with_projection(self.projection.cloned())
+                .with_limit(self.limit)
+                .with_table_partition_cols(table_partition_cols),
+        )
+        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))
+        .with_table_parquet_options(parquet_options);
+
+        // Sometimes (i.e Merge) we want to prune files that don't make the
+        // filter and read the entire contents for files that do match the
+        // filter
+        if let Some(predicate) = logical_filter {
+            if config.enable_parquet_pushdown {
+                exec_plan_builder = exec_plan_builder.with_predicate(predicate);
+            }
+        };```
 
 #### New Pattern
 
 
-```test
-TODO
-```
+```rust
+        let mut file_source = ParquetSource::new(parquet_options)
+            .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}));
+
+        // Sometimes (i.e Merge) we want to prune files that don't make the
+        // filter and read the entire contents for files that do match the
+        // filter
+        if let Some(predicate) = logical_filter {
+            if config.enable_parquet_pushdown {
+                file_source = file_source.with_predicate(Arc::clone(&file_schema), predicate);
+            }
+        };
+
+        let file_scan_config = FileScanConfig::new(
+            self.log_store.object_store_url(),
+            file_schema,
+            Arc::new(file_source),
+        )
+        .with_file_groups(
+            // If all files were filtered out, we still need to emit at least one partition to
+            // pass datafusion sanity checks.
+            //
+            // See https://github.com/apache/datafusion/issues/11322
+            if file_groups.is_empty() {
+                vec![vec![]]
+            } else {
+                file_groups.into_values().collect()
+            },
+        )
+        .with_statistics(stats)
+        .with_projection(self.projection.cloned())
+        .with_limit(self.limit)
+        .with_table_partition_cols(table_partition_cols);```
 
