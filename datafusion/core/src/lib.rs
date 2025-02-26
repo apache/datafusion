@@ -1097,3 +1097,9 @@ doc_comment::doctest!(
     "../../../docs/source/library-user-guide/working-with-exprs.md",
     library_user_guide_working_with_exprs
 );
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/upgrading.md",
+    library_user_guide_upgrading
+);

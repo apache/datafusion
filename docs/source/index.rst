@@ -133,7 +133,9 @@ To get started, see
    library-user-guide/profiling
    library-user-guide/query-optimizer
    library-user-guide/api-health
-.. _toc.contributor-guide:
+   library-user-guide/upgrading
+
+.. .. _toc.contributor-guide:
 
 .. toctree::
    :maxdepth: 1
