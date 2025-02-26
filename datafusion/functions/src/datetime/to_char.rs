@@ -206,20 +206,18 @@ fn _to_char_scalar(
     expression: ColumnarValue,
     format: Option<&str>,
 ) -> Result<ColumnarValue> {
-    let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
     // it's possible that the expression is a scalar however because
     // of the implementation in arrow-rs we need to convert it to an array
     let data_type = &expression.data_type();
+    let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
     let array = expression.into_array(1)?;
     // Added: If the input date/time is null, return a null Utf8 result.
     if array.is_null(0) {
-        return if is_scalar_expression {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
-        } else {
-            Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())))
-        };
+        return Ok(match is_scalar_expression {
+            true => ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+            false => ColumnarValue::Array(new_null_array(&Utf8, array.len())),
+        });
     }
-
     if format.is_none() {
         if is_scalar_expression {
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
@@ -260,7 +258,7 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let data_type = arrays[0].data_type();
 
     for idx in 0..arrays[0].len() {
-        // Added: If the date/time value is null, push None.
+        // If the date/time value is null, push None.
         if arrays[0].is_null(idx) {
             results.push(None);
             continue;
