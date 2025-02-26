@@ -23,6 +23,7 @@ use crate::utils::{
     check_columns_satisfy_exprs, extract_aliases, rebase_expr, resolve_aliases_to_exprs,
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
 };
+use datafusion_expr::utils::exprlist_to_fields;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{not_impl_err, plan_err, Column, Result};
@@ -208,7 +209,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         };
         let missing_cols =
-            Self::calc_missing_columns(&select_exprs_post_aggr, &order_by_rex)?;
+            Self::calc_missing_columns(&select_exprs_post_aggr, &plan, &order_by_rex)?;
 
         // do ambiguous_distinct_check if select in distinct case
         if !missing_cols.is_empty() && select.distinct.is_some() {
@@ -313,11 +314,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn calc_missing_columns(
         exprs: &[Expr],
+        plan: &LogicalPlan,
         order_by: &[datafusion_expr::expr::Sort],
     ) -> Result<IndexSet<Column>> {
         let mut expr_columns: IndexSet<&Column> = IndexSet::new();
-        exprs.iter().for_each(|expr| {
-            expr_columns.extend(expr.column_refs());
+        // `exprlist_to_fields` to handle Expr::Wildcard case
+        let wildcard_fields = exprlist_to_fields(exprs, plan)?;
+        let mut columns: Vec<Column> = Vec::with_capacity(wildcard_fields.len());
+        wildcard_fields.into_iter().for_each(|field| {
+            let column = Column::new(field.0, field.1.name());
+            columns.push(column);
+        });
+        columns.iter().for_each(|column| {
+            expr_columns.insert(column);
         });
 
         let mut missing_cols: IndexSet<Column> = IndexSet::new();
