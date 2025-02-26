@@ -22,7 +22,9 @@ use std::slice::Iter;
 use std::sync::Arc;
 use std::{fmt, mem};
 
-use crate::equivalence::class::{const_exprs_contains, AcrossPartitions};
+use crate::equivalence::class::{
+    const_exprs_contains, uniform_const_exprs_contains, AcrossPartitions,
+};
 use crate::equivalence::{
     EquivalenceClass, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
@@ -203,8 +205,9 @@ impl EquivalenceProperties {
         let constants = self.constants();
         let mut output_ordering = self.oeq_class().output_ordering().unwrap_or_default();
         // Prune out constant expressions
-        output_ordering
-            .retain(|sort_expr| !const_exprs_contains(constants, &sort_expr.expr));
+        output_ordering.retain(|sort_expr| {
+            !uniform_const_exprs_contains(constants, &sort_expr.expr)
+        });
         (!output_ordering.is_empty()).then_some(output_ordering)
     }
 
@@ -438,7 +441,7 @@ impl EquivalenceProperties {
         let filtered_exprs = LexOrdering::new(
             sort_exprs
                 .into_iter()
-                .filter(|expr| !self.is_expr_constant(&expr.expr))
+                .filter(|expr| !self.is_expr_constant_across_partitions(&expr.expr))
                 .collect(),
         );
 
@@ -4091,7 +4094,9 @@ mod tests {
         // Setup constant columns
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
-        eq_properties = eq_properties.with_constants([ConstExpr::from(&col_a)]);
+        let const_val = AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(1))));
+        eq_properties = eq_properties
+            .with_constants([ConstExpr::from(&col_a).with_across_partitions(const_val)]);
 
         let sort_exprs = LexOrdering::new(vec![
             PhysicalSortExpr {
@@ -4272,7 +4277,9 @@ mod tests {
         let asc = SortOptions::default();
 
         // Constants: c is constant
-        eq_properties = eq_properties.with_constants([ConstExpr::from(&col_c)]);
+        let const_val = AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(1))));
+        eq_properties = eq_properties
+            .with_constants([ConstExpr::from(&col_c).with_across_partitions(const_val)]);
 
         // Equality: b = d
         eq_properties.add_equal_conditions(&col_b, &col_d)?;
