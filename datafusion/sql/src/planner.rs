@@ -62,6 +62,43 @@ impl Default for ParserOptions {
     }
 }
 
+impl ParserOptions {
+    /// Create a new ParserOptions with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set wheter to parse float literals as Decimal
+    pub fn with_parse_float_as_decimal(mut self, value: bool) -> Self {
+        self.parse_float_as_decimal = value;
+        self
+    }
+
+    /// Set wheter to normalize identifiers
+    pub fn with_enable_ident_normalization(mut self, value: bool) -> Self {
+        self.enable_ident_normalization = value;
+        self
+    }
+
+    /// Set wheter to support VARCHAR with length specifier
+    pub fn with_support_varchar_with_length(mut self, value: bool) -> Self {
+        self.support_varchar_with_length = value;
+        self
+    }
+
+    /// Set wheter to normalize option values
+    pub fn with_enable_options_value_normalization(mut self, value: bool) -> Self {
+        self.enable_options_value_normalization = value;
+        self
+    }
+
+    /// Seet wheter to collect source spans
+    pub fn with_collect_spans(mut self, value: bool) -> Self {
+        self.collect_spans = value;
+        self
+    }
+}
+
 /// Ident Normalizer
 #[derive(Debug)]
 pub struct IdentNormalizer {
