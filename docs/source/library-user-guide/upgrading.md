@@ -50,8 +50,37 @@ See more information
 DataFusion 46 has a major change to how the built in DataSources are organized. The 
 
 ### Cookbook: Changes to `ParquetExecBuilder`
+#### Old pattern:
+
+When writing optimizer passes, some code treats ParquetExec specially like this:
+
+```rust
+            if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
+                // Do something with ParquetExec here
+            }
+        }
+```
+
+#### New Pattern
+With the new DataSource exec, most information is now on `FileScanConfig` and `ParquetSource` 
+
+```rust
+
+if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+  if let Some(scan_config) = datasource_exec.source().as_any().downcast_ref::<FileScanConfig>() {
+    // FileGroups, and other information is on the FileScanConfig
+    // parquet 
+    if let Some(parquet_source) = scan_config.source.as_any().downcast_ref::<ParquetSource>()
+    {
+      // Information on PruningPredicates and parquet options are here
+    }
+}
+```
+
+### Cookbook: Changes to `ParquetExecBuilder`
 
 #### Old pattern:
+
 ```rust
         let mut exec_plan_builder = ParquetExecBuilder::new(
             FileScanConfig::new(self.log_store.object_store_url(), file_schema)
@@ -124,3 +153,4 @@ DataFusion 46 has a major change to how the built in DataSources are organized. 
 parquet_scan: file_scan_config.build(),
 
 ```
+
