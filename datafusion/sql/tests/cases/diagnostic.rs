@@ -282,7 +282,7 @@ fn test_invalid_function() -> Result<()> {
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_eq!(diag.message, "Invalid function 'concat_not_exist'");
-    assert_eq!(diag.notes[0].message, "possible function concat");
+    assert_eq!(diag.notes[0].message, "Possible function 'concat'");
     assert_eq!(diag.span, Some(spans["whole"]));
     Ok(())
 }
