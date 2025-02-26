@@ -537,16 +537,15 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.push(sort_expr);
     }
 
-    Ok(
-        FileScanConfig::new(object_store_url, file_schema, file_source)
-            .with_file_groups(file_groups)
-            .with_constraints(constraints)
-            .with_statistics(statistics)
-            .with_projection(projection)
-            .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
-            .with_table_partition_cols(table_partition_cols)
-            .with_output_ordering(output_ordering),
-    )
+    let config = FileScanConfig::new(object_store_url, file_schema, file_source)
+        .with_file_groups(file_groups)
+        .with_constraints(constraints)
+        .with_statistics(statistics)
+        .with_projection(projection)
+        .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
+        .with_table_partition_cols(table_partition_cols)
+        .with_output_ordering(output_ordering);
+    Ok(config)
 }
 
 impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
