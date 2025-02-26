@@ -15,18 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-/*!
- *
- * Use statistics to optimize physical planning.
- *
- * Currently, this module houses code to sort file groups if they are non-overlapping with
- * respect to the required sort order. See [`MinMaxStatistics`]
- *
-*/
+//! Use statistics to optimize physical planning.
+//!
+//! Currently, this module houses code to sort file groups if they are non-overlapping with
+//! respect to the required sort order. See [`MinMaxStatistics`]
 
 use std::sync::Arc;
 
-use crate::datasource::listing::PartitionedFile;
+use crate::PartitionedFile;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;

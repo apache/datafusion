@@ -952,6 +952,12 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                     protobuf::parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(v) => Some(*v as usize),
                 })
                 .unwrap_or(None),
+            statistics_truncate_length: value
+                .statistics_truncate_length_opt.as_ref()
+                .map(|opt| match opt {
+                    protobuf::parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(v) => Some(*v as usize),
+                })
+                .unwrap_or(None),
             data_page_row_count_limit: value.data_page_row_count_limit as usize,
             encoding: value
                 .encoding_opt.clone()

@@ -32,9 +32,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::{
-    parquet::source::ParquetSource, DisplayAs, FileScanConfig,
-};
+use crate::datasource::physical_plan::{parquet::source::ParquetSource, DisplayAs};
 use crate::datasource::schema_adapter::SchemaAdapterFactory;
 use crate::{
     config::TableParquetOptions,
@@ -50,6 +48,7 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Constraints;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_optimizer::pruning::PruningPredicate;
