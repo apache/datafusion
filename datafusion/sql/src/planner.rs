@@ -43,10 +43,15 @@ pub use datafusion_expr::planner::ContextProvider;
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
 pub struct ParserOptions {
+    /// Whether to parse float as decimal.
     pub parse_float_as_decimal: bool,
+    /// Whether to normalize identifiers.
     pub enable_ident_normalization: bool,
+    /// Whether to support varchar with length.
     pub support_varchar_with_length: bool,
+    /// Whether to normalize options value.
     pub enable_options_value_normalization: bool,
+    /// Whether to collect spans
     pub collect_spans: bool,
 }
 
