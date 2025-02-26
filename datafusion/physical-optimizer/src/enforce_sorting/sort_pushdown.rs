@@ -121,6 +121,7 @@ fn pushdown_sorts_helper(
             // remove current sort (which will be the new ordering to pushdown)
             let new_reqs = current_plan_reqs;
             sort_push_down = sort_push_down.children.swap_remove(0);
+            sort_push_down = sort_push_down.update_plan_from_children()?; // changed plan
 
             // add back sort exec matching parent
             sort_push_down =
@@ -148,7 +149,7 @@ fn pushdown_sorts_helper(
 
             // remove current sort, and get the sort's child
             sort_push_down = sort_push_down.children.swap_remove(0);
-            sort_push_down = sort_push_down.update_plan_from_children()?;
+            sort_push_down = sort_push_down.update_plan_from_children()?; // changed plan
 
             // set the stricter fetch
             sort_push_down.data.fetch = min_fetch(current_sort_fetch, parent_req_fetch);
@@ -198,7 +199,6 @@ fn pushdown_sorts_helper(
         assign_initial_requirements(&mut sort_push_down);
     }
 
-    sort_push_down = sort_push_down.update_plan_from_children()?;
     Ok(Transformed::yes(sort_push_down))
 }
 
