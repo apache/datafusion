@@ -232,6 +232,8 @@ pub trait JoinHashMapType {
                 }
                 Vacant(vacant_entry) => {
                     vacant_entry.insert((hash_value, (row + 1) as u64));
+                    // chained list at `row` is already initialized with 0
+                    // meaning end of list
                 }
             }
         }
