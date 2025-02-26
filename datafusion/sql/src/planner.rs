@@ -43,15 +43,30 @@ pub use datafusion_expr::planner::ContextProvider;
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
 pub struct ParserOptions {
+    /// Whether to parse float as decimal.
     pub parse_float_as_decimal: bool,
+    /// Whether to normalize identifiers.
     pub enable_ident_normalization: bool,
+    /// Whether to support varchar with length.
     pub support_varchar_with_length: bool,
+    /// Whether to normalize options value.
     pub enable_options_value_normalization: bool,
+    /// Whether to collect spans
     pub collect_spans: bool,
 }
 
-impl Default for ParserOptions {
-    fn default() -> Self {
+impl ParserOptions {
+    /// Creates a new `ParserOptions` instance with default values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_sql::planner::ParserOptions;
+    /// let opts = ParserOptions::new();
+    /// assert_eq!(opts.parse_float_as_decimal, false);
+    /// assert_eq!(opts.enable_ident_normalization, true);
+    /// ```
+    pub fn new() -> Self {
         Self {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
@@ -59,6 +74,58 @@ impl Default for ParserOptions {
             enable_options_value_normalization: false,
             collect_spans: false,
         }
+    }
+
+    /// Sets the `parse_float_as_decimal` option.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_sql::planner::ParserOptions;
+    /// let opts = ParserOptions::new().with_parse_float_as_decimal(true);
+    /// assert_eq!(opts.parse_float_as_decimal, true);
+    /// ```
+    pub fn with_parse_float_as_decimal(mut self, value: bool) -> Self {
+        self.parse_float_as_decimal = value;
+        self
+    }
+
+    /// Sets the `enable_ident_normalization` option.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_sql::planner::ParserOptions;
+    /// let opts = ParserOptions::new().with_enable_ident_normalization(false);
+    /// assert_eq!(opts.enable_ident_normalization, false);
+    /// ```
+    pub fn with_enable_ident_normalization(mut self, value: bool) -> Self {
+        self.enable_ident_normalization = value;
+        self
+    }
+
+    /// Sets the `support_varchar_with_length` option.
+    pub fn with_support_varchar_with_length(mut self, value: bool) -> Self {
+        self.support_varchar_with_length = value;
+        self
+    }
+
+    /// Sets the `enable_options_value_normalization` option.
+    pub fn with_enable_options_value_normalization(mut self, value: bool) -> Self {
+        self.enable_options_value_normalization = value;
+        self
+    }
+
+    /// Sets the `collect_spans` option.
+    pub fn with_collect_spans(mut self, value: bool) -> Self {
+        self.collect_spans = value;
+        self
+    }
+}
+
+impl Default for ParserOptions {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
