@@ -59,11 +59,8 @@ impl SHA256Func {
         Self {
             signature: Signature::new(
                 TypeSignature::Coercible(vec![Coercion::new_implicit(
-                    TypeSignatureClass::Native(logical_binary()),
-                    vec![
-                        TypeSignatureClass::Native(logical_string()),
-                        TypeSignatureClass::Native(logical_binary()),
-                    ],
+                    TypeSignatureClass::Native(logical_string()),
+                    vec![TypeSignatureClass::Native(logical_binary())],
                     NativeType::Binary,
                 )]),
                 Volatility::Immutable,

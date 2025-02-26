@@ -19,7 +19,7 @@
 use super::basic::{digest, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    types::{logical_binary, logical_string, NativeType},
+    types::{logical_binary, logical_string},
     Result,
 };
 use datafusion_expr::{
