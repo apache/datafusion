@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow::datatypes::*;
+use datafusion_common::config::SqlParserOptions;
 use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
@@ -126,6 +127,19 @@ impl ParserOptions {
 impl Default for ParserOptions {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl From<&SqlParserOptions> for ParserOptions {
+    fn from(options: &SqlParserOptions) -> Self {
+        Self {
+            parse_float_as_decimal: options.parse_float_as_decimal,
+            enable_ident_normalization: options.enable_ident_normalization,
+            support_varchar_with_length: options.support_varchar_with_length,
+            enable_options_value_normalization: options
+                .enable_options_value_normalization,
+            collect_spans: options.collect_spans,
+        }
     }
 }
 
@@ -316,12 +330,18 @@ pub struct SqlToRel<'a, S: ContextProvider> {
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    /// Create a new query planner
+    /// Create a new query planner.
+    ///
+    /// The query planner derives the parser options from the context provider.
     pub fn new(context_provider: &'a S) -> Self {
-        Self::new_with_options(context_provider, ParserOptions::default())
+        let parser_options = ParserOptions::from(&context_provider.options().sql_parser);
+        Self::new_with_options(context_provider, parser_options)
     }
 
-    /// Create a new query planner
+    /// Create a new query planner with the given parser options.
+    ///
+    /// The query planner ignores the parser options from the context provider
+    /// and uses the given parser options instead.
     pub fn new_with_options(context_provider: &'a S, options: ParserOptions) -> Self {
         let ident_normalize = options.enable_ident_normalization;
 
