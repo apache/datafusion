@@ -20,7 +20,7 @@
 
 
 statement ok
-set datafusion.explain.format = "pretty";
+set datafusion.explain.format = "tree";
 
 ########  Setup Data Files #######
 

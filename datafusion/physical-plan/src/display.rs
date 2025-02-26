@@ -50,7 +50,7 @@ impl FromStr for DisplayFormatType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "indent" => Ok(Self::Default),
-            "pretty" => Ok(Self::TreeRender),
+            "tree" => Ok(Self::TreeRender),
             _ => Err(DataFusionError::Configuration(format!(
                 "Invalid explain format: {}",
                 s
@@ -492,13 +492,14 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
     }
 }
 
+// This code is based on the DuckDB’s implementation:
+// https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/tree_renderer/text_tree_renderer.hpp
 struct TreeRenderVisitor<'a, 'b> {
     /// Write to this formatter
     f: &'a mut Formatter<'b>,
 }
 
 impl TreeRenderVisitor<'_, '_> {
-    // TODO: Make these variables configurable.
     const LTCORNER: &'static str = "┌";
     const RTCORNER: &'static str = "┐";
     const LDCORNER: &'static str = "└";
@@ -511,6 +512,7 @@ impl TreeRenderVisitor<'_, '_> {
     const VERTICAL: &'static str = "│";
     const HORIZONTAL: &'static str = "─";
 
+    // TODO: Make these variables configurable.
     const MAXIMUM_RENDER_WIDTH: usize = 240;
     const NODE_RENDER_WIDTH: usize = 29;
     const MAX_EXTRA_LINES: usize = 30;

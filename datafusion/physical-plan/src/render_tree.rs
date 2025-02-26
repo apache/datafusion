@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// This code is based on the DuckDB’s implementation:
+// https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/render_tree.hpp
+
 use std::cmp;
 use std::collections::HashMap;
 use std::sync::Arc;
