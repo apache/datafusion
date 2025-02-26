@@ -243,6 +243,14 @@ export RUST_MIN_STACK=30485760;
 PG_COMPAT=true INCLUDE_SQLITE=true cargo test --features=postgres --test sqllogictests
 ```
 
+To update the sqllite expected answers use the `datafusion/sqllogictest/regenerate_sqlite_files.sh` script.
+
+Note this must be run with an empty postgres instance. For example
+
+```shell
+PG_URI=postgresql://postgres@localhost:5432/postgres bash datafusion/sqllogictest/regenerate_sqlite_files.sh
+```
+
 ## Updating tests: Completion Mode
 
 In test script completion mode, `sqllogictests` reads a prototype script and runs the statements and queries against the
