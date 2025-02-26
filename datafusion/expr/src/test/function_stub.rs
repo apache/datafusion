@@ -25,7 +25,9 @@ use arrow::datatypes::{
     DataType, Field, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 
-use datafusion_common::{exec_err, not_impl_err, utils::take_function_args, Result};
+use datafusion_common::{
+    exec_err, not_impl_err, utils::take_function_args_with_span, Result,
+};
 
 use crate::type_coercion::aggregates::{avg_return_type, coerce_avg_type, NUMERICS};
 use crate::Volatility::Immutable;
@@ -125,7 +127,7 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [array] = take_function_args(self.name(), arg_types)?;
+        let [array] = take_function_args_with_span(self.name(), arg_types, None)?;
 
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
         // smallint, int, bigint, real, double precision, decimal, or interval.

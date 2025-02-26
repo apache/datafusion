@@ -33,8 +33,9 @@ use arrow::datatypes::{
     DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
 };
 use arrow::{array::ArrayRef, datatypes::Field};
+use datafusion_common::Spans;
 use datafusion_common::{
-    exec_err, not_impl_err, utils::take_function_args, Result, ScalarValue,
+    exec_err, not_impl_err, utils::take_function_args_with_span, Result, ScalarValue,
 };
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::function::StateFieldsArgs;
@@ -97,13 +98,27 @@ macro_rules! downcast_sum {
 #[derive(Debug)]
 pub struct Sum {
     signature: Signature,
+
+    /// Original source code location, if known
+    pub spans: Spans,
 }
 
 impl Sum {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            spans: Spans::new(),
         }
+    }
+
+    pub fn spans(&self) -> &Spans {
+        &self.spans
+    }
+
+    /// Returns a mutable reference to the set of locations in the SQL query
+    /// where this column appears, if known.
+    pub fn spans_mut(&mut self) -> &mut Spans {
+        &mut self.spans
     }
 }
 
@@ -127,7 +142,8 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let [args] = take_function_args(self.name(), arg_types)?;
+        let [args] =
+            take_function_args_with_span(self.name(), arg_types, self.spans().first())?;
 
         // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
         // smallint, int, bigint, real, double precision, decimal, or interval.
