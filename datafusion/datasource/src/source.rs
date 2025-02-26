@@ -35,6 +35,8 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Common behaviors in Data Sources for both from Files and Memory.
 /// See `DataSourceExec` for physical plan implementation
+///
+/// Requires `Debug` to assist debugging
 pub trait DataSource: Send + Sync + Debug {
     fn open(
         &self,
