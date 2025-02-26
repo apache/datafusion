@@ -206,11 +206,19 @@ fn _to_char_scalar(
     expression: ColumnarValue,
     format: Option<&str>,
 ) -> Result<ColumnarValue> {
+    let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
     // it's possible that the expression is a scalar however because
     // of the implementation in arrow-rs we need to convert it to an array
     let data_type = &expression.data_type();
-    let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
     let array = expression.into_array(1)?;
+    // Added: If the input date/time is null, return a null Utf8 result.
+    if array.is_null(0) {
+        return if is_scalar_expression {
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)))
+        } else {
+            Ok(ColumnarValue::Array(new_null_array(&Utf8, array.len())))
+        };
+    }
 
     if format.is_none() {
         if is_scalar_expression {
@@ -252,6 +260,11 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let data_type = arrays[0].data_type();
 
     for idx in 0..arrays[0].len() {
+        // Added: If the date/time value is null, push None.
+        if arrays[0].is_null(idx) {
+            results.push(None);
+            continue;
+        }
         let format = if format_array.is_null(idx) {
             None
         } else {
@@ -662,5 +675,53 @@ mod tests {
             result.err().unwrap().strip_backtrace(),
             "Execution error: Format for `to_char` must be non-null Utf8, received Timestamp(Nanosecond, None)"
         );
+    }
+
+    // Added tests for null inputs.
+    #[test]
+    fn test_to_char_input_none_scalar() {
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Scalar(ScalarValue::Date32(None)),
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string()))),
+            ],
+            number_rows: 1,
+            return_type: &DataType::Utf8,
+        };
+        let result = ToCharFunc::new()
+            .invoke_with_args(args)
+            .expect("Expected no error");
+        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
+            assert!(date.is_none());
+        } else {
+            panic!("Expected a scalar value");
+        }
+    }
+
+    #[test]
+    fn test_to_char_input_none_array() {
+        let date_array = Arc::new(Date32Array::from(vec![Some(18506), None])) as ArrayRef;
+        let format_array =
+            StringArray::from(vec!["%Y-%m-%d".to_string(), "%Y-%m-%d".to_string()]);
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(date_array),
+                ColumnarValue::Array(Arc::new(format_array) as ArrayRef),
+            ],
+            number_rows: 2,
+            return_type: &DataType::Utf8,
+        };
+        let result = ToCharFunc::new()
+            .invoke_with_args(args)
+            .expect("Expected no error");
+        if let ColumnarValue::Array(result) = result {
+            let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+            assert_eq!(result.len(), 2);
+            // The first element is valid, second is null.
+            assert!(!result.is_null(0));
+            assert!(result.is_null(1));
+        } else {
+            panic!("Expected an array value");
+        }
     }
 }
