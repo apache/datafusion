@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::vec;
 
 use arrow::datatypes::*;
+use datafusion_common::config::SqlParserOptions;
 use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{
     field_not_found, internal_err, plan_datafusion_err, DFSchemaRef, Diagnostic,
@@ -43,21 +44,101 @@ pub use datafusion_expr::planner::ContextProvider;
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
 pub struct ParserOptions {
+    /// Whether to parse float as decimal.
     pub parse_float_as_decimal: bool,
+    /// Whether to normalize identifiers.
     pub enable_ident_normalization: bool,
+    /// Whether to support varchar with length.
     pub support_varchar_with_length: bool,
+    /// Whether to normalize options value.
     pub enable_options_value_normalization: bool,
+    /// Whether to collect spans
     pub collect_spans: bool,
 }
 
-impl Default for ParserOptions {
-    fn default() -> Self {
+impl ParserOptions {
+    /// Creates a new `ParserOptions` instance with default values.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_sql::planner::ParserOptions;
+    /// let opts = ParserOptions::new();
+    /// assert_eq!(opts.parse_float_as_decimal, false);
+    /// assert_eq!(opts.enable_ident_normalization, true);
+    /// ```
+    pub fn new() -> Self {
         Self {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
             enable_options_value_normalization: false,
             collect_spans: false,
+        }
+    }
+
+    /// Sets the `parse_float_as_decimal` option.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_sql::planner::ParserOptions;
+    /// let opts = ParserOptions::new().with_parse_float_as_decimal(true);
+    /// assert_eq!(opts.parse_float_as_decimal, true);
+    /// ```
+    pub fn with_parse_float_as_decimal(mut self, value: bool) -> Self {
+        self.parse_float_as_decimal = value;
+        self
+    }
+
+    /// Sets the `enable_ident_normalization` option.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datafusion_sql::planner::ParserOptions;
+    /// let opts = ParserOptions::new().with_enable_ident_normalization(false);
+    /// assert_eq!(opts.enable_ident_normalization, false);
+    /// ```
+    pub fn with_enable_ident_normalization(mut self, value: bool) -> Self {
+        self.enable_ident_normalization = value;
+        self
+    }
+
+    /// Sets the `support_varchar_with_length` option.
+    pub fn with_support_varchar_with_length(mut self, value: bool) -> Self {
+        self.support_varchar_with_length = value;
+        self
+    }
+
+    /// Sets the `enable_options_value_normalization` option.
+    pub fn with_enable_options_value_normalization(mut self, value: bool) -> Self {
+        self.enable_options_value_normalization = value;
+        self
+    }
+
+    /// Sets the `collect_spans` option.
+    pub fn with_collect_spans(mut self, value: bool) -> Self {
+        self.collect_spans = value;
+        self
+    }
+}
+
+impl Default for ParserOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl From<&SqlParserOptions> for ParserOptions {
+    fn from(options: &SqlParserOptions) -> Self {
+        Self {
+            parse_float_as_decimal: options.parse_float_as_decimal,
+            enable_ident_normalization: options.enable_ident_normalization,
+            support_varchar_with_length: options.support_varchar_with_length,
+            enable_options_value_normalization: options
+                .enable_options_value_normalization,
+            collect_spans: options.collect_spans,
         }
     }
 }
@@ -249,12 +330,18 @@ pub struct SqlToRel<'a, S: ContextProvider> {
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
-    /// Create a new query planner
+    /// Create a new query planner.
+    ///
+    /// The query planner derives the parser options from the context provider.
     pub fn new(context_provider: &'a S) -> Self {
-        Self::new_with_options(context_provider, ParserOptions::default())
+        let parser_options = ParserOptions::from(&context_provider.options().sql_parser);
+        Self::new_with_options(context_provider, parser_options)
     }
 
-    /// Create a new query planner
+    /// Create a new query planner with the given parser options.
+    ///
+    /// The query planner ignores the parser options from the context provider
+    /// and uses the given parser options instead.
     pub fn new_with_options(context_provider: &'a S, options: ParserOptions) -> Self {
         let ident_normalize = options.enable_ident_normalization;
 

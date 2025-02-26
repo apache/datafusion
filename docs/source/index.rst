@@ -141,7 +141,7 @@ To get started, see
 
    contributor-guide/index
    contributor-guide/communication
-   contributor-guide/getting_started
+   contributor-guide/development_environment
    contributor-guide/architecture
    contributor-guide/testing
    contributor-guide/howtos

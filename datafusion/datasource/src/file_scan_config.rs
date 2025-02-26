@@ -609,11 +609,13 @@ impl FileScanConfig {
 
 impl Debug for FileScanConfig {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
+        write!(f, "FileScanConfig {{")?;
         write!(f, "object_store_url={:?}, ", self.object_store_url)?;
 
         write!(f, "statistics={:?}, ", self.statistics)?;
 
-        DisplayAs::fmt_as(self, DisplayFormatType::Verbose, f)
+        DisplayAs::fmt_as(self, DisplayFormatType::Verbose, f)?;
+        write!(f, "}}")
     }
 }
 
