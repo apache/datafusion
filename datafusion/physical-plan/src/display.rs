@@ -492,31 +492,58 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
     }
 }
 
-// This code is based on the DuckDB’s implementation:
-// https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/tree_renderer/text_tree_renderer.hpp
+/// This module implements a tree-like art renderer for execution plans,
+/// based on DuckDB's implementation:
+/// https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/tree_renderer/text_tree_renderer.hpp
+///
+/// The rendered output looks like this:
+/// ```text
+/// ┌───────────────────────────┐
+/// │    CoalesceBatchesExec    │
+/// └─────────────┬─────────────┘
+/// ┌─────────────┴─────────────┐
+/// │        HashJoinExec       ├──────────────┐
+/// └─────────────┬─────────────┘              │
+/// ┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+/// │       DataSourceExec      ││       DataSourceExec      │
+/// └───────────────────────────┘└───────────────────────────┘
+/// ```
+///
+/// The renderer uses a three-layer approach for each node:
+/// 1. Top layer: renders the top borders and connections
+/// 2. Content layer: renders the node content and vertical connections
+/// 3. Bottom layer: renders the bottom borders and connections
+///
+/// Each node is rendered in a box of fixed width (NODE_RENDER_WIDTH).
 struct TreeRenderVisitor<'a, 'b> {
     /// Write to this formatter
     f: &'a mut Formatter<'b>,
 }
 
 impl TreeRenderVisitor<'_, '_> {
-    const LTCORNER: &'static str = "┌";
-    const RTCORNER: &'static str = "┐";
-    const LDCORNER: &'static str = "└";
-    const RDCORNER: &'static str = "┘";
+    // Unicode box-drawing characters for creating borders and connections.
+    const LTCORNER: &'static str = "┌"; // Left top corner
+    const RTCORNER: &'static str = "┐"; // Right top corner
+    const LDCORNER: &'static str = "└"; // Left bottom corner
+    const RDCORNER: &'static str = "┘"; // Right bottom corner
 
-    const TMIDDLE: &'static str = "┬";
-    const LMIDDLE: &'static str = "├";
-    const DMIDDLE: &'static str = "┴";
+    const TMIDDLE: &'static str = "┬"; // Top T-junction (connects down)
+    const LMIDDLE: &'static str = "├"; // Left T-junction (connects right)
+    const DMIDDLE: &'static str = "┴"; // Bottom T-junction (connects up)
 
-    const VERTICAL: &'static str = "│";
-    const HORIZONTAL: &'static str = "─";
+    const VERTICAL: &'static str = "│"; // Vertical line
+    const HORIZONTAL: &'static str = "─"; // Horizontal line
 
     // TODO: Make these variables configurable.
-    const MAXIMUM_RENDER_WIDTH: usize = 240;
-    const NODE_RENDER_WIDTH: usize = 29;
-    const MAX_EXTRA_LINES: usize = 30;
+    const MAXIMUM_RENDER_WIDTH: usize = 240; // Maximum total width of the rendered tree
+    const NODE_RENDER_WIDTH: usize = 29; // Width of each node's box
+    const MAX_EXTRA_LINES: usize = 30; // Maximum number of extra info lines per node
 
+    /// Main entry point for rendering an execution plan as a tree.
+    /// The rendering process happens in three stages for each level of the tree:
+    /// 1. Render top borders and connections
+    /// 2. Render node content and vertical connections
+    /// 3. Render bottom borders and connections
     pub fn visit(&mut self, plan: &dyn ExecutionPlan) -> Result<(), fmt::Error> {
         let root = RenderTree::create_tree(plan);
 
@@ -532,6 +559,11 @@ impl TreeRenderVisitor<'_, '_> {
         Ok(())
     }
 
+    /// Renders the top layer of boxes at the given y-level of the tree.
+    /// This includes:
+    /// - Top corners (┌─┐) for nodes
+    /// - Horizontal connections between nodes
+    /// - Vertical connections to parent nodes
     fn render_top_layer(
         &mut self,
         root: &RenderTree,
@@ -577,6 +609,12 @@ impl TreeRenderVisitor<'_, '_> {
         Ok(())
     }
 
+    /// Renders the content layer of boxes at the given y-level of the tree.
+    /// This includes:
+    /// - Node names and extra information
+    /// - Vertical borders (│) for boxes
+    /// - Vertical connections between nodes
+    /// The content is center-aligned within each box.
     fn render_box_content(
         &mut self,
         root: &RenderTree,
@@ -710,6 +748,11 @@ impl TreeRenderVisitor<'_, '_> {
         Ok(())
     }
 
+    /// Renders the bottom layer of boxes at the given y-level of the tree.
+    /// This includes:
+    /// - Bottom corners (└─┘) for nodes
+    /// - Horizontal connections between nodes
+    /// - Vertical connections to child nodes
     fn render_bottom_layer(
         &mut self,
         root: &RenderTree,
@@ -825,6 +868,10 @@ impl TreeRenderVisitor<'_, '_> {
         }
     }
 
+    /// Adjusts text to fit within the specified width by:
+    /// 1. Truncating with ellipsis if too long
+    /// 2. Center-aligning within the available space if shorter
+    /// This ensures consistent box widths in the rendered tree.
     fn adjust_text_for_rendering(source: &str, max_render_width: usize) -> String {
         let render_width = source.chars().count();
         if render_width > max_render_width {
@@ -843,6 +890,11 @@ impl TreeRenderVisitor<'_, '_> {
         }
     }
 
+    /// Determines if whitespace should be rendered at a given position.
+    /// This is important for:
+    /// 1. Maintaining proper spacing between sibling nodes
+    /// 2. Ensuring correct alignment of connections between parents and children
+    /// 3. Preserving the tree structure's visual clarity
     fn should_render_whitespace(root: &RenderTree, x: usize, y: usize) -> bool {
         let mut found_children = 0;
 

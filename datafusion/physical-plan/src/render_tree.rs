@@ -18,6 +18,9 @@
 // This code is based on the DuckDB’s implementation:
 // https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/render_tree.hpp
 
+//! This module provides functionality for rendering an execution plan as a tree structure.
+//! It helps in visualizing how different operations in a query are connected and organized.
+
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -26,9 +29,13 @@ use std::{cmp, fmt};
 use crate::{DisplayFormatType, ExecutionPlan};
 
 // TODO: It's never used.
+/// Represents a 2D coordinate in the rendered tree.
+/// Used to track positions of nodes and their connections.
 #[allow(dead_code)]
 pub struct Coordinate {
+    /// Horizontal position in the tree
     pub x: usize,
+    /// Vertical position in the tree
     pub y: usize,
 }
 
@@ -38,13 +45,14 @@ impl Coordinate {
     }
 }
 
-/// `RenderTreeNode` stores display info for `ExecutionPlan`.
+/// Represents a node in the render tree, containing information about an execution plan operator
+/// and its relationships to other operators.
 pub struct RenderTreeNode {
     /// The name of physical `ExecutionPlan`.
     pub name: String,
     /// Execution info collected from `ExecutionPlan`.
     pub extra_text: HashMap<String, String>,
-    /// Current `ExecutionPlan`'s children position.
+    /// Positions of child nodes in the rendered tree.
     pub child_positions: Vec<Coordinate>,
 }
 
@@ -62,14 +70,19 @@ impl RenderTreeNode {
     }
 }
 
+/// Main structure for rendering an execution plan as a tree.
+/// Manages a 2D grid of nodes and their layout information.
 pub struct RenderTree {
+    /// Storage for tree nodes in a flattened 2D grid
     pub nodes: Vec<Option<Arc<RenderTreeNode>>>,
+    /// Total width of the rendered tree
     pub width: usize,
+    /// Total height of the rendered tree
     pub height: usize,
 }
 
 impl RenderTree {
-    /// Create a render tree based on the root of physical plan node.
+    /// Creates a new render tree from an execution plan.
     pub fn create_tree(plan: &dyn ExecutionPlan) -> Self {
         let (width, height) = get_tree_width_height(plan);
 
@@ -118,9 +131,18 @@ impl RenderTree {
     }
 }
 
+/// Calculates the required dimensions of the tree.
+/// This ensures we allocate enough space for the entire tree structure.
+///
+/// # Arguments
+/// * `plan` - The execution plan to measure
+///
+/// # Returns
+/// * A tuple of (width, height) representing the dimensions needed for the tree
 fn get_tree_width_height(plan: &dyn ExecutionPlan) -> (usize, usize) {
     let children = plan.children();
 
+    // Leaf nodes take up 1x1 space
     if children.is_empty() {
         return (1, 1);
     }
@@ -154,6 +176,18 @@ fn fmt_display(plan: &dyn ExecutionPlan) -> impl fmt::Display + '_ {
     Wrapper { plan }
 }
 
+/// Recursively builds the render tree structure.
+/// Traverses the execution plan and creates corresponding render nodes while
+/// maintaining proper positioning and parent-child relationships.
+///
+/// # Arguments
+/// * `result` - The render tree being constructed
+/// * `plan` - Current execution plan node being processed
+/// * `x` - Horizontal position in the tree
+/// * `y` - Vertical position in the tree
+///
+/// # Returns
+/// * The width of the subtree rooted at the current node
 fn create_tree_recursive(
     result: &mut RenderTree,
     plan: &dyn ExecutionPlan,
