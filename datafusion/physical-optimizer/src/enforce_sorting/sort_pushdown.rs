@@ -101,17 +101,17 @@ fn pushdown_sorts_helper(
         let current_sort_fetch = plan.fetch();
         let parent_req_fetch = sort_push_down.data.fetch;
 
-        let child_reqs = plan
+        let current_plan_reqs = plan
             .output_ordering()
             .cloned()
             .map(LexRequirement::from)
             .unwrap_or_default();
         let parent_is_stricter = plan
             .equivalence_properties()
-            .requirements_compatible(&parent_reqs, &child_reqs);
+            .requirements_compatible(&parent_reqs, &current_plan_reqs);
         let child_is_stricter = plan
             .equivalence_properties()
-            .requirements_compatible(&child_reqs, &parent_reqs);
+            .requirements_compatible(&current_plan_reqs, &parent_reqs);
 
         if !satisfy_parent && !parent_is_stricter {
             // This new sort has different requirements than the ordering being pushed down.
@@ -119,7 +119,7 @@ fn pushdown_sorts_helper(
             // 2. continue sort pushdown, but with the new ordering of the new sort.
 
             // remove current sort (which will be the new ordering to pushdown)
-            let new_reqs = child_reqs;
+            let new_reqs = current_plan_reqs;
             sort_push_down = sort_push_down.children.swap_remove(0);
 
             // add back sort exec matching parent
@@ -155,7 +155,7 @@ fn pushdown_sorts_helper(
 
             // set the stricter ordering
             if child_is_stricter {
-                sort_push_down.data.ordering_requirement = Some(child_reqs);
+                sort_push_down.data.ordering_requirement = Some(current_plan_reqs);
             } else {
                 sort_push_down.data.ordering_requirement = Some(parent_reqs);
             }
