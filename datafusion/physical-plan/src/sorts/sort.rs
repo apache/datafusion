@@ -24,7 +24,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::common::{spawn_buffered, IPCWriter};
+use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
@@ -504,27 +504,18 @@ impl ExternalSorter {
         // `self.in_mem_batches` is already taken away by the sort_stream, now it is empty.
         // We'll gradually collect the sorted stream into self.in_mem_batches, or directly
         // write sorted batches to disk when the memory is insufficient.
-        let mut spill_writer: Option<IPCWriter> = None;
         while let Some(batch) = sorted_stream.next().await {
             let batch = batch?;
-            match &mut spill_writer {
-                None => {
-                    let sorted_size = get_reserved_byte_for_record_batch(&batch);
-                    if self.reservation.try_grow(sorted_size).is_err() {
-                        // Although the reservation is not enough, the batch is
-                        // already in memory, so it's okay to combine it with previously
-                        // sorted batches, and spill together.
-                        self.in_mem_batches.push(batch);
-                        self.spill().await?;
-                        self.reservation.free();
-                    } else {
-                        self.in_mem_batches.push(batch);
-                        self.in_mem_batches_sorted = true;
-                    }
-                }
-                Some(writer) => {
-                    writer.write(&batch)?;
-                }
+            let sorted_size = get_reserved_byte_for_record_batch(&batch);
+            if self.reservation.try_grow(sorted_size).is_err() {
+                // Although the reservation is not enough, the batch is
+                // already in memory, so it's okay to combine it with previously
+                // sorted batches, and spill together.
+                self.in_mem_batches.push(batch);
+                self.spill().await?; // reservation is freed in spill()
+            } else {
+                self.in_mem_batches.push(batch);
+                self.in_mem_batches_sorted = true;
             }
         }
 
@@ -532,17 +523,10 @@ impl ExternalSorter {
         // upcoming `self.reserve_memory_for_merge()` may fail due to insufficient memory.
         drop(sorted_stream);
 
-        if let Some(writer) = &mut spill_writer {
-            writer.finish()?;
-            self.metrics.spill_count.add(1);
-            self.metrics.spilled_rows.add(writer.num_rows);
-            self.metrics.spilled_bytes.add(writer.num_bytes);
-        }
-
         // Sorting may free up some memory especially when fetch is `Some`. If we have
         // not freed more than 50% of the memory, then we have to spill to free up more
         // memory for inserting more batches.
-        if spill_writer.is_none() && self.reservation.size() > before / 2 {
+        if self.reservation.size() > before / 2 {
             // We have not freed more than 50% of the memory, so we have to spill to
             // free up more memory
             self.spill().await?;
@@ -1478,9 +1462,13 @@ mod tests {
         let spill_count = metrics.spill_count().unwrap();
         let spilled_rows = metrics.spilled_rows().unwrap();
         let spilled_bytes = metrics.spilled_bytes().unwrap();
-        // Processing 840 KB of data using 400 KB of memory requires at least 2 spills
-        // It will spill roughly 18000 rows and 800 KBytes.
-        // We leave a little wiggle room for the actual numbers.
+
+        // This test case is processing 840KB of data using 400KB of memory. Note
+        // that buffered batches can't be dropped until all sorted batches are
+        // generated, so we can only buffer `sort_spill_reservation_bytes` of sorted
+        // batches.
+        // The number of spills is roughly calculated as:
+        //  `number_of_batches / (sort_spill_reservation_bytes / batch_size)`
         assert!((12..=18).contains(&spill_count));
         assert!((15000..=20000).contains(&spilled_rows));
         assert!((700000..=900000).contains(&spilled_bytes));
