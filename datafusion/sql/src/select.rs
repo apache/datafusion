@@ -211,7 +211,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let missing_cols =
             Self::calc_missing_columns(&select_exprs_post_aggr, &plan, &order_by_rex)?;
 
-        // do ambiguous_distinct_check if select in distinct case
         if !missing_cols.is_empty() && select.distinct.is_some() {
             let missing_col_names = missing_cols
                 .iter()
