@@ -43,15 +43,10 @@ pub use datafusion_expr::planner::ContextProvider;
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
 pub struct ParserOptions {
-    /// If true, parse float as decimal
     pub parse_float_as_decimal: bool,
-    /// If true, normalize identifiers
     pub enable_ident_normalization: bool,
-    /// If true, support varchar with length
     pub support_varchar_with_length: bool,
-    /// If true, normalize option values
     pub enable_options_value_normalization: bool,
-    /// If true, collect spans during parsing
     pub collect_spans: bool,
 }
 
@@ -61,7 +56,7 @@ impl ParserOptions {
     /// # Examples
     ///
     /// ```
-    /// use datafusion::sql::planner::ParserOptions;
+    /// use datafusion_sql::planner::ParserOptions;
     /// let opts = ParserOptions::new();
     /// assert_eq!(opts.parse_float_as_decimal(), false);
     /// assert_eq!(opts.enable_ident_normalization(), true);
@@ -81,7 +76,7 @@ impl ParserOptions {
     /// # Examples
     ///
     /// ```
-    /// use datafusion::sql::planner::ParserOptions;
+    /// use datafusion_sql::planner::ParserOptions;
     /// let opts = ParserOptions::new().with_parse_float_as_decimal(true);
     /// assert_eq!(opts.parse_float_as_decimal(), true);
     /// ```
@@ -95,7 +90,7 @@ impl ParserOptions {
     /// # Examples
     ///
     /// ```
-    /// use datafusion::sql::planner::ParserOptions;
+    /// use datafusion_sql::planner::ParserOptions;
     /// let opts = ParserOptions::new().with_enable_ident_normalization(false);
     /// assert_eq!(opts.enable_ident_normalization(), false);
     /// ```
@@ -145,6 +140,12 @@ impl ParserOptions {
     /// Returns the value of `collect_spans`.
     pub fn collect_spans(&self) -> bool {
         self.collect_spans
+    }
+}
+
+impl Default for ParserOptions {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -337,7 +338,7 @@ pub struct SqlToRel<'a, S: ContextProvider> {
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Create a new query planner
     pub fn new(context_provider: &'a S) -> Self {
-        Self::new_with_options(context_provider, ParserOptions::new())
+        Self::new_with_options(context_provider, ParserOptions::default())
     }
 
     /// Create a new query planner

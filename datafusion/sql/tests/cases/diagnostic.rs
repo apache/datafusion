@@ -33,7 +33,7 @@ fn do_query(sql: &'static str) -> Diagnostic {
         .expect("unable to parse query");
     let options = ParserOptions {
         collect_spans: true,
-        ..ParserOptions::new()
+        ..ParserOptions::default()
     };
 
     let state = MockSessionState::default();

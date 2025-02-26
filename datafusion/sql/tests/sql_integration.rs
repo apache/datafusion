@@ -1434,7 +1434,7 @@ fn recursive_ctes_disabled() {
     state.config_options.execution.enable_recursive_ctes = false;
     let context = MockContextProvider { state };
 
-    let planner = SqlToRel::new_with_options(&context, ParserOptions::new());
+    let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
     let result = DFParser::parse_sql_with_dialect(sql, &GenericDialect {});
     let mut ast = result.unwrap();
 
@@ -2593,7 +2593,7 @@ fn select_groupby_orderby() {
 }
 
 fn logical_plan(sql: &str) -> Result<LogicalPlan> {
-    logical_plan_with_options(sql, ParserOptions::new())
+    logical_plan_with_options(sql, ParserOptions::default())
 }
 
 fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<LogicalPlan> {
@@ -2702,7 +2702,7 @@ impl ScalarUDFImpl for DummyUDF {
 
 /// Create logical plan, write with formatter, compare to expected output
 fn quick_test(sql: &str, expected: &str) {
-    quick_test_with_options(sql, expected, ParserOptions::new())
+    quick_test_with_options(sql, expected, ParserOptions::default())
 }
 
 fn quick_test_with_options(sql: &str, expected: &str, options: ParserOptions) {
@@ -4453,7 +4453,7 @@ fn test_parse_escaped_string_literal_value() {
 fn plan_create_index() {
     let sql =
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_name ON test USING btree (name, age DESC)";
-    let plan = logical_plan_with_options(sql, ParserOptions::new()).unwrap();
+    let plan = logical_plan_with_options(sql, ParserOptions::default()).unwrap();
     match plan {
         LogicalPlan::Ddl(DdlStatement::CreateIndex(CreateIndex {
             name,
@@ -4513,7 +4513,7 @@ fn init() {
 fn test_no_functions_registered() {
     let sql = "SELECT foo()";
 
-    let options = ParserOptions::new();
+    let options = ParserOptions::default();
     let dialect = &GenericDialect {};
     let state = MockSessionState::default();
     let context = MockContextProvider { state };
@@ -4534,7 +4534,7 @@ fn test_custom_type_plan() -> Result<()> {
     let sql = "SELECT DATETIME '2001-01-01 18:00:00'";
 
     // test the default behavior
-    let options = ParserOptions::new();
+    let options = ParserOptions::default();
     let dialect = &GenericDialect {};
     let state = MockSessionState::default();
     let context = MockContextProvider { state };
@@ -4548,7 +4548,7 @@ fn test_custom_type_plan() -> Result<()> {
     );
 
     fn plan_sql(sql: &str) -> LogicalPlan {
-        let options = ParserOptions::new();
+        let options = ParserOptions::default();
         let dialect = &GenericDialect {};
         let state = MockSessionState::default()
             .with_scalar_function(make_array_udf())
