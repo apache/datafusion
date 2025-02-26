@@ -766,7 +766,7 @@ impl TreeRenderVisitor<'_, '_> {
         s.trim().to_string()
     }
 
-    fn split_up_extra_info(
+    pub fn split_up_extra_info(
         extra_info: &HashMap<String, String>,
         result: &mut Vec<String>,
         max_lines: usize,
@@ -873,10 +873,6 @@ pub trait DisplayAs {
     ///
     /// Should not include a newline
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
-
-    fn collect_info(&self) -> HashMap<String, String> {
-        HashMap::new()
-    }
 }
 
 /// A new type wrapper to display `T` implementing`DisplayAs` using the `Default` mode

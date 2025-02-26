@@ -18,12 +18,14 @@
 // This code is based on the DuckDB’s implementation:
 // https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/render_tree.hpp
 
-use std::cmp;
 use std::collections::HashMap;
+use std::fmt::Formatter;
 use std::sync::Arc;
+use std::{cmp, fmt};
 
-use crate::ExecutionPlan;
+use crate::{DisplayFormatType, ExecutionPlan};
 
+// TODO: It's never used.
 #[allow(dead_code)]
 pub struct Coordinate {
     pub x: usize,
@@ -36,9 +38,13 @@ impl Coordinate {
     }
 }
 
+/// `RenderTreeNode` stores display info for `ExecutionPlan`.
 pub struct RenderTreeNode {
+    /// The name of physical `ExecutionPlan`.
     pub name: String,
+    /// Execution info collected from `ExecutionPlan`.
     pub extra_text: HashMap<String, String>,
+    /// Current `ExecutionPlan`'s children position.
     pub child_positions: Vec<Coordinate>,
 }
 
@@ -63,6 +69,7 @@ pub struct RenderTree {
 }
 
 impl RenderTree {
+    /// Create a render tree based on the root of physical plan node.
     pub fn create_tree(plan: &dyn ExecutionPlan) -> Self {
         let (width, height) = get_tree_width_height(plan);
 
@@ -132,13 +139,38 @@ fn get_tree_width_height(plan: &dyn ExecutionPlan) -> (usize, usize) {
     (width, height)
 }
 
+fn fmt_display(plan: &dyn ExecutionPlan) -> impl fmt::Display + '_ {
+    struct Wrapper<'a> {
+        plan: &'a dyn ExecutionPlan,
+    }
+
+    impl fmt::Display for Wrapper<'_> {
+        fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+            self.plan.fmt_as(DisplayFormatType::TreeRender, f)?;
+            Ok(())
+        }
+    }
+
+    Wrapper { plan }
+}
+
 fn create_tree_recursive(
     result: &mut RenderTree,
     plan: &dyn ExecutionPlan,
     x: usize,
     y: usize,
 ) -> usize {
-    let mut node = RenderTreeNode::new(plan.name().to_string(), plan.collect_info());
+    let display_info = fmt_display(plan).to_string();
+    let mut extra_info = HashMap::new();
+
+    // Parse the key-value pairs from the formatted string.
+    for line in display_info.lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            extra_info.insert(key.to_string(), value.to_string());
+        }
+    }
+
+    let mut node = RenderTreeNode::new(plan.name().to_string(), extra_info);
 
     let children = plan.children();
 

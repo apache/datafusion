@@ -216,11 +216,6 @@ impl DataSource for FileScanConfig {
         self.fmt_file_source(t, f)
     }
 
-    fn collect_info(&self) -> HashMap<String, String> {
-        // TODO: collect explain info
-        HashMap::new()
-    }
-
     /// If supported by the underlying [`FileSource`], redistribute files across partitions according to their size.
     fn repartitioned(
         &self,
