@@ -945,9 +945,7 @@ impl SortExec {
 impl DisplayAs for SortExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         match t {
-            DisplayFormatType::Default
-            | DisplayFormatType::Verbose
-            | DisplayFormatType::TreeRender => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let preserve_partitioning = self.preserve_partitioning;
                 match self.fetch {
                     Some(fetch) => {
@@ -955,6 +953,10 @@ impl DisplayAs for SortExec {
                     }
                     None => write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr),
                 }
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -1172,9 +1174,13 @@ mod tests {
     impl DisplayAs for SortedUnboundedExec {
         fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
             match t {
-                DisplayFormatType::Default
-                | DisplayFormatType::Verbose
-                | DisplayFormatType::TreeRender => write!(f, "UnboundableExec",).unwrap(),
+                DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                    write!(f, "UnboundableExec",).unwrap()
+                }
+                DisplayFormatType::TreeRender => {
+                    // TODO: collect info
+                    write!(f, "").unwrap()
+                }
             }
             Ok(())
         }

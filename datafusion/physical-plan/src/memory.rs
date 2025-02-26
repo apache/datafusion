@@ -180,9 +180,7 @@ impl fmt::Debug for LazyMemoryExec {
 impl DisplayAs for LazyMemoryExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
-            DisplayFormatType::Default
-            | DisplayFormatType::Verbose
-            | DisplayFormatType::TreeRender => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "LazyMemoryExec: partitions={}, batch_generators=[{}]",
@@ -193,6 +191,10 @@ impl DisplayAs for LazyMemoryExec {
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

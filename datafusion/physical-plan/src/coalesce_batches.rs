@@ -110,9 +110,7 @@ impl DisplayAs for CoalesceBatchesExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default
-            | DisplayFormatType::Verbose
-            | DisplayFormatType::TreeRender => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "CoalesceBatchesExec: target_batch_size={}",
@@ -123,6 +121,10 @@ impl DisplayAs for CoalesceBatchesExec {
                 };
 
                 Ok(())
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

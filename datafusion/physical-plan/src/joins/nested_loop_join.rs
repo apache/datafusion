@@ -395,9 +395,7 @@ impl NestedLoopJoinExec {
 impl DisplayAs for NestedLoopJoinExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default
-            | DisplayFormatType::Verbose
-            | DisplayFormatType::TreeRender => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let display_filter = self.filter.as_ref().map_or_else(
                     || "".to_string(),
                     |f| format!(", filter={}", f.expression()),
@@ -425,6 +423,10 @@ impl DisplayAs for NestedLoopJoinExec {
                     "NestedLoopJoinExec: join_type={:?}{}{}",
                     self.join_type, display_filter, display_projections
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

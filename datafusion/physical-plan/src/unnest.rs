@@ -134,10 +134,11 @@ impl DisplayAs for UnnestExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default
-            | DisplayFormatType::Verbose
-            | DisplayFormatType::TreeRender => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "UnnestExec")
+            }
+            DisplayFormatType::TreeRender => {
+                write!(f, "")
             }
         }
     }

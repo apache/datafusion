@@ -614,7 +614,6 @@ impl TreeRenderVisitor<'_, '_> {
     /// - Node names and extra information
     /// - Vertical borders (│) for boxes
     /// - Vertical connections between nodes
-    /// The content is center-aligned within each box.
     fn render_box_content(
         &mut self,
         root: &RenderTree,
@@ -871,7 +870,6 @@ impl TreeRenderVisitor<'_, '_> {
     /// Adjusts text to fit within the specified width by:
     /// 1. Truncating with ellipsis if too long
     /// 2. Center-aligning within the available space if shorter
-    /// This ensures consistent box widths in the rendered tree.
     fn adjust_text_for_rendering(source: &str, max_render_width: usize) -> String {
         let render_width = source.chars().count();
         if render_width > max_render_width {

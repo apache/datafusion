@@ -151,9 +151,7 @@ impl DisplayAs for ProjectionExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default
-            | DisplayFormatType::Verbose
-            | DisplayFormatType::TreeRender => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let expr: Vec<String> = self
                     .expr
                     .iter()
@@ -168,6 +166,10 @@ impl DisplayAs for ProjectionExec {
                     .collect();
 
                 write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

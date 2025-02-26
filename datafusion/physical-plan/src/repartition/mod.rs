@@ -488,9 +488,7 @@ impl DisplayAs for RepartitionExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default
-            | DisplayFormatType::Verbose
-            | DisplayFormatType::TreeRender => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(
                     f,
                     "{}: partitioning={}, input_partitions={}",
@@ -507,6 +505,10 @@ impl DisplayAs for RepartitionExec {
                     write!(f, ", sort_exprs={}", sort_exprs.clone())?;
                 }
                 Ok(())
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

@@ -165,9 +165,7 @@ impl DisplayAs for WindowAggExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default
-            | DisplayFormatType::Verbose
-            | DisplayFormatType::TreeRender => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "WindowAggExec: ")?;
                 let g: Vec<String> = self
                     .window_expr
@@ -182,6 +180,10 @@ impl DisplayAs for WindowAggExec {
                     })
                     .collect();
                 write!(f, "wdw=[{}]", g.join(", "))?;
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")?;
             }
         }
         Ok(())
