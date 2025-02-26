@@ -36,6 +36,7 @@ DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
+PREFER_ROUND_ROBIN=${PREFER_ROUND_ROBIN:-true}
 VIRTUAL_ENV=${VIRTUAL_ENV:-$SCRIPT_DIR/venv}
 
 usage() {
@@ -94,6 +95,7 @@ CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
 PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
+PREFER_ROUND_ROBIN  Prefer round robin partitioning (default true)
 VENV_PATH           Python venv to use for compare and venv commands (default ./venv, override by <your-venv>/bin/activate)
 "
     exit 1
@@ -164,6 +166,9 @@ main() {
                 tpch10)
                     data_tpch "10"
                     ;;
+                tpch50)
+                    data_tpch "50"
+                    ;;
                 tpch_mem10)
                     # same data as for tpch10
                     data_tpch "10"
@@ -221,6 +226,7 @@ main() {
             echo "RESULTS_DIR: ${RESULTS_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
             echo "PREFER_HASH_JOIN: ${PREFER_HASH_JOIN}"
+            echo "PREFER_ROUND_ROBIN: ${PREFER_ROUND_ROBIN}"
             echo "***************************"
 
             # navigate to the appropriate directory
@@ -253,6 +259,9 @@ main() {
                     ;;
                 tpch10)
                     run_tpch "10"
+                    ;;
+                tpch50)
+                    run_tpch "50"
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"
@@ -383,7 +392,7 @@ run_tpch() {
     RESULTS_FILE="${RESULTS_DIR}/tpch_sf${SCALE_FACTOR}.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch benchmark..."
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}"
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --prefer_round_robin "${PREFER_ROUND_ROBIN}" --format parquet -o "${RESULTS_FILE}"
 }
 
 # Runs the tpch in memory
@@ -399,7 +408,7 @@ run_tpch_mem() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpch_mem benchmark..."
     # -m means in memory
-    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --format parquet -o "${RESULTS_FILE}"
+    $CARGO_COMMAND --bin tpch -- benchmark datafusion --iterations 5 --path "${TPCH_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" -m --prefer_round_robin "${PREFER_ROUND_ROBIN}" --format parquet -o "${RESULTS_FILE}"
 }
 
 # Runs the cancellation benchmark
@@ -485,7 +494,7 @@ run_clickbench_partitioned() {
     RESULTS_FILE="${RESULTS_DIR}/clickbench_partitioned.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running clickbench (partitioned, 100 files) benchmark..."
-    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o "${RESULTS_FILE}"
+    $CARGO_COMMAND --bin dfbench -- clickbench  --iterations 5 --path "${DATA_DIR}/hits_partitioned" --prefer_round_robin "${PREFER_ROUND_ROBIN}" --queries-path "${SCRIPT_DIR}/queries/clickbench/queries.sql" -o "${RESULTS_FILE}"
 }
 
 # Runs the clickbench "extended" benchmark with a single large parquet file
