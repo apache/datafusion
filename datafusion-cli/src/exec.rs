@@ -222,7 +222,7 @@ pub(super) async fn exec_and_print(
         plan_datafusion_err!(
             "Unsupported SQL dialect: {dialect}. Available dialects: \
                  Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                 MsSQL, ClickHouse, BigQuery, Ansi."
+                 MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
         )
     })?;
 
@@ -520,7 +520,7 @@ mod tests {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                  Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                 MsSQL, ClickHouse, BigQuery, Ansi."
+                 MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
         for location in locations {
