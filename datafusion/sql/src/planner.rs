@@ -63,8 +63,8 @@ impl ParserOptions {
     /// ```
     /// use datafusion_sql::planner::ParserOptions;
     /// let opts = ParserOptions::new();
-    /// assert_eq!(opts.parse_float_as_decimal(), false);
-    /// assert_eq!(opts.enable_ident_normalization(), true);
+    /// assert_eq!(opts.parse_float_as_decimal, false);
+    /// assert_eq!(opts.enable_ident_normalization, true);
     /// ```
     pub fn new() -> Self {
         Self {
@@ -83,7 +83,7 @@ impl ParserOptions {
     /// ```
     /// use datafusion_sql::planner::ParserOptions;
     /// let opts = ParserOptions::new().with_parse_float_as_decimal(true);
-    /// assert_eq!(opts.parse_float_as_decimal(), true);
+    /// assert_eq!(opts.parse_float_as_decimal, true);
     /// ```
     pub fn with_parse_float_as_decimal(mut self, value: bool) -> Self {
         self.parse_float_as_decimal = value;
@@ -97,7 +97,7 @@ impl ParserOptions {
     /// ```
     /// use datafusion_sql::planner::ParserOptions;
     /// let opts = ParserOptions::new().with_enable_ident_normalization(false);
-    /// assert_eq!(opts.enable_ident_normalization(), false);
+    /// assert_eq!(opts.enable_ident_normalization, false);
     /// ```
     pub fn with_enable_ident_normalization(mut self, value: bool) -> Self {
         self.enable_ident_normalization = value;
@@ -120,31 +120,6 @@ impl ParserOptions {
     pub fn with_collect_spans(mut self, value: bool) -> Self {
         self.collect_spans = value;
         self
-    }
-
-    /// Returns the value of `parse_float_as_decimal`.
-    pub fn parse_float_as_decimal(&self) -> bool {
-        self.parse_float_as_decimal
-    }
-
-    /// Returns the value of `enable_ident_normalization`.
-    pub fn enable_ident_normalization(&self) -> bool {
-        self.enable_ident_normalization
-    }
-
-    /// Returns the value of `support_varchar_with_length`.
-    pub fn support_varchar_with_length(&self) -> bool {
-        self.support_varchar_with_length
-    }
-
-    /// Returns the value of `enable_options_value_normalization`.
-    pub fn enable_options_value_normalization(&self) -> bool {
-        self.enable_options_value_normalization
-    }
-
-    /// Returns the value of `collect_spans`.
-    pub fn collect_spans(&self) -> bool {
-        self.collect_spans
     }
 }
 
