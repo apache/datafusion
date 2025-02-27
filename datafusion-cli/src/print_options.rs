@@ -126,6 +126,7 @@ impl PrintOptions {
 
         while let Some(batch) = stream.next().await {
             let batch = batch?;
+            println!("batch: {:?}", batch);
             let batch_rows = batch.num_rows();
 
             if !max_rows_reached && total_count < max_rows {
@@ -190,13 +191,19 @@ impl PrintOptions {
                 let widths = print_options
                     .format
                     .compute_column_widths(&preview_batches, schema.clone())?;
-                precomputed_widths = Some(widths);
+                precomputed_widths = Some(widths.clone());
                 if !header_printed {
                     print_options.format.print_header(
                         &schema,
                         precomputed_widths.as_ref().unwrap(),
                         writer,
                     )?;
+                    header_printed = true;
+                }
+                for preview_batch in preview_batches.drain(..) {
+                    print_options
+                        .format
+                        .print_batch_with_widths(&preview_batch, precomputed_widths.as_ref().unwrap(), writer)?;
                 }
             }
             if let Some(ref widths) = precomputed_widths {
