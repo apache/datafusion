@@ -45,6 +45,8 @@ pub trait DataSource: Send + Sync + Debug {
     ) -> datafusion_common::Result<SendableRecordBatchStream>;
     fn as_any(&self) -> &dyn Any;
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
+
+    /// Return a copy of this DataSource with a new partitioning scheme
     fn repartitioned(
         &self,
         _target_partitions: usize,
@@ -57,6 +59,7 @@ pub trait DataSource: Send + Sync + Debug {
     fn output_partitioning(&self) -> Partitioning;
     fn eq_properties(&self) -> EquivalenceProperties;
     fn statistics(&self) -> datafusion_common::Result<Statistics>;
+    /// Return a copy of this DataSource with a new fetch limit
     fn with_fetch(&self, _limit: Option<usize>) -> Option<Arc<dyn DataSource>>;
     fn fetch(&self) -> Option<usize>;
     fn metrics(&self) -> ExecutionPlanMetricsSet {
@@ -71,14 +74,14 @@ pub trait DataSource: Send + Sync + Debug {
 /// Unified data source for file formats like JSON, CSV, AVRO, ARROW, PARQUET
 #[derive(Clone, Debug)]
 pub struct DataSourceExec {
-    source: Arc<dyn DataSource>,
+    data_source: Arc<dyn DataSource>,
     cache: PlanProperties,
 }
 
 impl DisplayAs for DataSourceExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
         write!(f, "DataSourceExec: ")?;
-        self.source.fmt_as(t, f)
+        self.data_source.fmt_as(t, f)
     }
 }
 
@@ -111,17 +114,17 @@ impl ExecutionPlan for DataSourceExec {
         target_partitions: usize,
         config: &ConfigOptions,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        let source = self.source.repartitioned(
+        let data_source = self.data_source.repartitioned(
             target_partitions,
             config.optimizer.repartition_file_min_size,
             self.properties().eq_properties.output_ordering(),
         )?;
 
-        if let Some(source) = source {
+        if let Some(source) = data_source {
             let output_partitioning = source.output_partitioning();
             let plan = self
                 .clone()
-                .with_source(source)
+                .with_data_source(source)
                 // Changing source partitioning may invalidate output partitioning. Update it also
                 .with_partitioning(output_partitioning);
             Ok(Some(Arc::new(plan)))
@@ -135,51 +138,50 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> datafusion_common::Result<SendableRecordBatchStream> {
-        self.source.open(partition, context)
+        self.data_source.open(partition, context)
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.source.metrics().clone_inner())
+        Some(self.data_source.metrics().clone_inner())
     }
 
     fn statistics(&self) -> datafusion_common::Result<Statistics> {
-        self.source.statistics()
+        self.data_source.statistics()
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        let mut source = Arc::clone(&self.source);
-        source = source.with_fetch(limit)?;
+        let data_source = self.data_source.with_fetch(limit)?;
         let cache = self.cache.clone();
 
-        Some(Arc::new(Self { source, cache }))
+        Some(Arc::new(Self { data_source, cache }))
     }
 
     fn fetch(&self) -> Option<usize> {
-        self.source.fetch()
+        self.data_source.fetch()
     }
 
     fn try_swapping_with_projection(
         &self,
         projection: &ProjectionExec,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        self.source.try_swapping_with_projection(projection)
+        self.data_source.try_swapping_with_projection(projection)
     }
 }
 
 impl DataSourceExec {
-    pub fn new(source: Arc<dyn DataSource>) -> Self {
-        let cache = Self::compute_properties(Arc::clone(&source));
-        Self { source, cache }
+    pub fn new(data_source: Arc<dyn DataSource>) -> Self {
+        let cache = Self::compute_properties(Arc::clone(&data_source));
+        Self { data_source, cache }
     }
 
     /// Return the source object
-    pub fn source(&self) -> &Arc<dyn DataSource> {
-        &self.source
+    pub fn data_source(&self) -> &Arc<dyn DataSource> {
+        &self.data_source
     }
 
-    pub fn with_source(mut self, source: Arc<dyn DataSource>) -> Self {
-        self.cache = Self::compute_properties(Arc::clone(&source));
-        self.source = source;
+    pub fn with_data_source(mut self, data_source: Arc<dyn DataSource>) -> Self {
+        self.cache = Self::compute_properties(Arc::clone(&data_source));
+        self.data_source = data_source;
         self
     }
 
@@ -195,10 +197,10 @@ impl DataSourceExec {
         self
     }
 
-    fn compute_properties(source: Arc<dyn DataSource>) -> PlanProperties {
+    fn compute_properties(data_source: Arc<dyn DataSource>) -> PlanProperties {
         PlanProperties::new(
-            source.eq_properties(),
-            source.output_partitioning(),
+            data_source.eq_properties(),
+            data_source.output_partitioning(),
             EmissionType::Incremental,
             Boundedness::Bounded,
         )

@@ -166,7 +166,7 @@ pub struct FileScanConfig {
     /// Are new lines in values supported for CSVOptions
     pub new_lines_in_values: bool,
     /// File source such as `ParquetSource`, `CsvSource`, `JsonSource`, etc.
-    pub source: Arc<dyn FileSource>,
+    pub file_source: Arc<dyn FileSource>,
 }
 
 impl DataSource for FileScanConfig {
@@ -178,7 +178,7 @@ impl DataSource for FileScanConfig {
         let object_store = context.runtime_env().object_store(&self.object_store_url)?;
 
         let source = self
-            .source
+            .file_source
             .with_batch_size(context.session_config().batch_size())
             .with_schema(Arc::clone(&self.file_schema))
             .with_projection(self);
@@ -223,7 +223,7 @@ impl DataSource for FileScanConfig {
         repartition_file_min_size: usize,
         output_ordering: Option<LexOrdering>,
     ) -> Result<Option<Arc<dyn DataSource>>> {
-        let source = self.source.repartitioned(
+        let source = self.file_source.repartitioned(
             target_partitions,
             repartition_file_min_size,
             output_ordering,
@@ -244,7 +244,7 @@ impl DataSource for FileScanConfig {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.source.statistics()
+        self.file_source.statistics()
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
@@ -257,7 +257,7 @@ impl DataSource for FileScanConfig {
     }
 
     fn metrics(&self) -> ExecutionPlanMetricsSet {
-        self.source.metrics().clone()
+        self.file_source.metrics().clone()
     }
 
     fn try_swapping_with_projection(
@@ -268,7 +268,7 @@ impl DataSource for FileScanConfig {
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
         Ok(all_alias_free_columns(projection.expr()).then(|| {
             let file_scan = self.clone();
-            let source = Arc::clone(&file_scan.source);
+            let source = Arc::clone(&file_scan.file_source);
             let new_projections = new_projections_for_columns(
                 projection,
                 &file_scan
@@ -315,7 +315,7 @@ impl FileScanConfig {
             output_ordering: vec![],
             file_compression_type: FileCompressionType::UNCOMPRESSED,
             new_lines_in_values: false,
-            source: Arc::clone(&file_source),
+            file_source: Arc::clone(&file_source),
         };
 
         config = config.with_source(Arc::clone(&file_source));
@@ -323,14 +323,14 @@ impl FileScanConfig {
     }
 
     /// Set the file source
-    pub fn with_source(mut self, source: Arc<dyn FileSource>) -> Self {
+    pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
         let (
             _projected_schema,
             _constraints,
             projected_statistics,
             _projected_output_ordering,
         ) = self.project();
-        self.source = source.with_statistics(projected_statistics);
+        self.file_source = file_source.with_statistics(projected_statistics);
         self
     }
 
@@ -597,13 +597,13 @@ impl FileScanConfig {
 
     /// Write the data_type based on file_source
     fn fmt_file_source(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        write!(f, ", file_type={}", self.source.file_type())?;
-        self.source.fmt_extra(t, f)
+        write!(f, ", file_type={}", self.file_source.file_type())?;
+        self.file_source.fmt_extra(t, f)
     }
 
     /// Returns the file_source
     pub fn file_source(&self) -> &Arc<dyn FileSource> {
-        &self.source
+        &self.file_source
     }
 }
 

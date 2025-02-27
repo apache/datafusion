@@ -247,7 +247,7 @@ impl MemoryExec {
 
     fn memory_source_config(&self) -> MemorySourceConfig {
         self.inner
-            .source()
+            .data_source()
             .as_any()
             .downcast_ref::<MemorySourceConfig>()
             .unwrap()
