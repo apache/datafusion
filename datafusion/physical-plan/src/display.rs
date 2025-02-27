@@ -494,7 +494,7 @@ impl ExecutionPlanVisitor for GraphvizVisitor<'_, '_> {
 
 /// This module implements a tree-like art renderer for execution plans,
 /// based on DuckDB's implementation:
-/// https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/tree_renderer/text_tree_renderer.hpp
+/// <https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/tree_renderer/text_tree_renderer.hpp>
 ///
 /// The rendered output looks like this:
 /// ```text

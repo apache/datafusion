@@ -16,7 +16,7 @@
 // under the License.
 
 // This code is based on the DuckDB’s implementation:
-// https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/render_tree.hpp
+// <https://github.com/duckdb/duckdb/blob/main/src/include/duckdb/common/render_tree.hpp>
 
 //! This module provides functionality for rendering an execution plan as a tree structure.
 //! It helps in visualizing how different operations in a query are connected and organized.
