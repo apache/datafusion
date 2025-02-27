@@ -150,25 +150,20 @@ fn is_coalesce_to_remove(
     node: &Arc<dyn ExecutionPlan>,
     parent: &Arc<dyn ExecutionPlan>,
 ) -> bool {
-    node.as_any()
-        .downcast_ref::<CoalescePartitionsExec>()
-        .map(|_coalesce| {
-            // Note that the `Partitioning::satisfy()` (parent vs. coalesce.child) cannot be used for cases of:
-            //   * Repartition -> Coalesce -> Repartition
+    let parent_req_single_partition = matches!(
+        parent.required_input_distribution()[0],
+        Distribution::SinglePartition
+    );
 
-            let parent_req_single_partition = matches!(
-                parent.required_input_distribution()[0],
-                Distribution::SinglePartition
-            );
-
+    is_coalesce_partitions(node)
+        && (
             // node above does not require single distribution
             !parent_req_single_partition
-            // it doesn't immediately repartition
-            || is_repartition(parent)
-            // any adjacent Coalesce->Sort can be replaced
-            || is_sort(parent)
-        })
-        .unwrap_or(false)
+        // it doesn't immediately repartition
+        || is_repartition(parent)
+        // any adjacent Coalesce->Sort can be replaced
+        || is_sort(parent)
+        )
 }
 
 /// Discovers the linked Coalesce->Sort cascades.
