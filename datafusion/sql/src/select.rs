@@ -320,21 +320,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         order_by: &[datafusion_expr::expr::Sort],
     ) -> Result<IndexSet<Column>> {
         let mut expr_columns: IndexSet<&Column> = IndexSet::new();
-        // `exprlist_to_fields` to handle Expr::Wildcard case
-        let wildcard_fields = exprlist_to_fields(exprs, plan)?;
-        let mut columns: Vec<Column> = Vec::with_capacity(wildcard_fields.len());
-        wildcard_fields.into_iter().for_each(|field| {
-            let column = Column::new(field.0, field.1.name());
-            columns.push(column);
-        });
-        columns.iter().for_each(|column| {
+        let mut wildcard_columns: Vec<Column> = vec![];
+        for expr in exprs {
+            if let Expr::Wildcard { .. } = expr {
+                // `exprlist_to_fields` to handle Expr::Wildcard case
+                let wildcard_fields = exprlist_to_fields([expr], plan)?;
+                wildcard_fields.into_iter().for_each(|field| {
+                    let column = Column::new(field.0, field.1.name());
+                    wildcard_columns.push(column);
+                });
+            } else {
+                expr_columns.extend(expr.column_refs())
+            }
+        }
+        wildcard_columns.iter().for_each(|column| {
             expr_columns.insert(column);
         });
 
         let mut missing_cols: IndexSet<Column> = IndexSet::new();
         order_by.iter().try_for_each::<_, Result<()>>(|sort| {
             let columns = sort.expr.column_refs();
-
             missing_cols.extend(
                 columns
                     .clone()
