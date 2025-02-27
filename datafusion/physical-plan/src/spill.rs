@@ -303,7 +303,7 @@ mod tests {
         ]));
 
         let batch1 = RecordBatch::try_new(
-            dict_schema.clone(),
+            Arc::clone(&dict_schema),
             batch1
                 .columns()
                 .iter()
@@ -312,7 +312,7 @@ mod tests {
         )?;
 
         let batch2 = RecordBatch::try_new(
-            dict_schema.clone(),
+            Arc::clone(&dict_schema),
             batch2
                 .columns()
                 .iter()
@@ -327,7 +327,7 @@ mod tests {
         let (spilled_rows, _) = spill_record_batches(
             &[batch1, batch2],
             spill_file.path().into(),
-            dict_schema.clone(),
+            Arc::clone(&dict_schema),
         )?;
         assert_eq!(spilled_rows, num_rows);
 
