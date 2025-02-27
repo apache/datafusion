@@ -400,6 +400,10 @@ impl FileFormat for CsvFormat {
         Ok(Arc::new(merged_schema))
     }
 
+    async fn transform_schema(&self, schema: SchemaRef) -> Result<SchemaRef> {
+        Ok(schema)
+    }
+
     async fn infer_stats(
         &self,
         _state: &dyn Session,

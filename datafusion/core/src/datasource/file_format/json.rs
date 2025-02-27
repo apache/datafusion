@@ -246,6 +246,13 @@ impl FileFormat for JsonFormat {
         Ok(Statistics::new_unknown(&table_schema))
     }
 
+    async fn transform_schema(
+        &self,
+        schema: SchemaRef,
+    ) -> Result<SchemaRef> {
+        Ok(schema)
+    }
+
     async fn create_physical_plan(
         &self,
         _state: &dyn Session,

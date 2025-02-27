@@ -365,6 +365,27 @@ impl FileFormat for ParquetFormat {
         Ok(Arc::new(schema))
     }
 
+    async fn transform_schema(
+        &self,
+        schema: SchemaRef
+    ) -> Result<SchemaRef> {
+        println!("transform_schema schema {:?}", schema);
+        let schema = if self.binary_as_string() {
+            Arc::new(transform_binary_to_string(schema.as_ref()))
+        } else {
+            schema
+        };
+
+        let schema = if self.force_view_types() {
+            Arc::new(transform_schema_to_view(&schema))
+        } else {
+            schema
+        };
+
+        println!("Done schema {:?}", schema);
+        Ok(schema)
+    }
+
     async fn infer_stats(
         &self,
         _state: &dyn Session,

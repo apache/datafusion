@@ -32,9 +32,6 @@ use datafusion_common::{arrow_datafusion_err, plan_err, DataFusionError, ToDFSch
 use datafusion_common::{config_datafusion_err, Result};
 use datafusion_expr::CreateExternalTable;
 
-use crate::datasource::file_format::parquet::{
-    transform_binary_to_string, transform_schema_to_view, ParquetFormat,
-};
 use async_trait::async_trait;
 use datafusion_catalog::Session;
 
@@ -149,21 +146,7 @@ impl TableProviderFactory for ListingTableFactory {
             Some(s) => s,
         };
 
-        if let Some(parquetFmt) = options.format.as_any().downcast_ref::<ParquetFormat>()
-        {
-            resolved_schema = if parquetFmt.binary_as_string() {
-                transform_binary_to_string(resolved_schema.as_ref()).into()
-            } else {
-                resolved_schema
-            };
-
-            resolved_schema = if parquetFmt.force_view_types() {
-                println!("force view type schema: {:?}", resolved_schema);
-                transform_schema_to_view(&resolved_schema.as_ref()).into()
-            } else {
-                resolved_schema
-            };
-        }
+        resolved_schema = options.format.transform_schema(resolved_schema).await?;
 
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options.with_file_sort_order(cmd.order_exprs.clone()))
