@@ -30,7 +30,7 @@ pub(crate) extern "C" fn create_ffi_abs_func() -> FFI_ScalarUDF {
     udf.into()
 }
 
-pub(crate) extern "C" fn create_ffi_avg_func() -> FFI_AggregateUDF {
+pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Sum::new().into());
 
     udaf.into()
