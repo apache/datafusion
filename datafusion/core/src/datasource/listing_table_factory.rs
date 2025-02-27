@@ -34,6 +34,9 @@ use datafusion_expr::CreateExternalTable;
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use crate::datasource::file_format::{transform_binary_to_string, transform_schema_to_view};
+use crate::datasource::file_format::parquet::ParquetFormat;
+use crate::datasource::physical_plan::ParquetSource;
 
 /// A `TableProviderFactory` capable of creating new `ListingTable`s
 #[derive(Debug, Default)]
@@ -120,7 +123,7 @@ impl TableProviderFactory for ListingTableFactory {
             .validate_partitions(session_state, &table_path)
             .await?;
 
-        let resolved_schema = match provided_schema {
+        let mut resolved_schema = match provided_schema {
             // We will need to check the table columns against the schema
             // this is done so that we can do an ORDER BY for external table creation
             // specifically for parquet file format.
@@ -145,6 +148,24 @@ impl TableProviderFactory for ListingTableFactory {
             }
             Some(s) => s,
         };
+
+
+        if let Some(parquetFmt) = options.format.as_any().downcast_ref::<ParquetFormat>() {
+            resolved_schema = if parquetFmt.binary_as_string() {
+                transform_binary_to_string(resolved_schema.as_ref()).into()
+            } else {
+                resolved_schema
+            };
+
+            resolved_schema = if parquetFmt.force_view_types() {
+                println!("force view type schema: {:?}", resolved_schema);
+                transform_schema_to_view(&resolved_schema.as_ref()).into()
+            } else {
+                resolved_schema
+            };
+        }
+
+
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options.with_file_sort_order(cmd.order_exprs.clone()))
             .with_schema(resolved_schema);

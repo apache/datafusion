@@ -362,18 +362,6 @@ impl FileFormat for ParquetFormat {
             Schema::try_merge(schemas)
         }?;
 
-        let schema = if self.binary_as_string() {
-            transform_binary_to_string(&schema)
-        } else {
-            schema
-        };
-
-        let schema = if self.force_view_types() {
-            transform_schema_to_view(&schema)
-        } else {
-            schema
-        };
-
         Ok(Arc::new(schema))
     }
 
