@@ -211,7 +211,9 @@ fn _to_char_scalar(
     let data_type = &expression.data_type();
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
     let array = expression.into_array(1)?;
-    // Added: If the input date/time is null, return a null Utf8 result.
+
+    // fix https://github.com/apache/datafusion/issues/14884
+    // If the input date/time is null, return a null Utf8 result.
     if array.is_null(0) {
         return Ok(match is_scalar_expression {
             true => ColumnarValue::Scalar(ScalarValue::Utf8(None)),
@@ -258,11 +260,13 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let data_type = arrays[0].data_type();
 
     for idx in 0..arrays[0].len() {
+        // fix https://github.com/apache/datafusion/issues/14884
         // If the date/time value is null, push None.
         if arrays[0].is_null(idx) {
             results.push(None);
             continue;
         }
+
         let format = if format_array.is_null(idx) {
             None
         } else {
@@ -675,7 +679,6 @@ mod tests {
         );
     }
 
-    // Added tests for null inputs.
     #[test]
     fn test_to_char_input_none_scalar() {
         let args = datafusion_expr::ScalarFunctionArgs {
