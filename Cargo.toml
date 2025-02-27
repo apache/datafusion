@@ -191,3 +191,21 @@ large_futures = "warn"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
+
+
+## Temporary arrow-rs patch until 52.1.0 is released
+
+[patch.crates-io]
+arrow = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+arrow-array = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+arrow-buffer = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+arrow-cast = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+arrow-data = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+arrow-ipc = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+arrow-schema = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+arrow-select = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+arrow-string = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+arrow-ord = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+parquet = { git = "https://github.com/apache/arrow-rs.git", tag = "54.2.1" }
+
