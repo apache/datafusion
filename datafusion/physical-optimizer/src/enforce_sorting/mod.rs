@@ -56,7 +56,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::plan_err;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
-use datafusion_physical_expr::Distribution;
+use datafusion_physical_expr::{Distribution, Partitioning};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
@@ -145,27 +145,6 @@ fn update_sort_ctx_children_data(
 /// children previously.
 pub type PlanWithCorrespondingCoalescePartitions = PlanContext<bool>;
 
-/// Determines if the coalesce may be safely removed.
-fn is_coalesce_to_remove(
-    node: &Arc<dyn ExecutionPlan>,
-    parent: &Arc<dyn ExecutionPlan>,
-) -> bool {
-    let parent_req_single_partition = matches!(
-        parent.required_input_distribution()[0],
-        Distribution::SinglePartition
-    );
-
-    is_coalesce_partitions(node)
-        && (
-            // node above does not require single distribution
-            !parent_req_single_partition
-        // it doesn't immediately repartition
-        || is_repartition(parent)
-        // any adjacent Coalesce->Sort can be replaced
-        || is_sort(parent)
-        )
-}
-
 /// Discovers the linked Coalesce->Sort cascades.
 ///
 /// This linkage is used in [`remove_bottleneck_in_subplan`] to selectively
@@ -191,29 +170,24 @@ fn is_coalesce_to_remove(
 fn update_coalesce_ctx_children(
     coalesce_context: &mut PlanWithCorrespondingCoalescePartitions,
 ) {
-    // perform lookahead(1) during bottom up traversal
-    // since we are checking distribution requirements after the coalesce occurs
-    let parent = &coalesce_context.plan;
-
-    for child_context in coalesce_context.children.iter_mut() {
-        // determine if child, or it's descendents, are a coalesce to be removed
-        child_context.data = if child_context.children.is_empty() {
-            // Plan has no children, it cannot be a `CoalescePartitionsExec`.
-            false
-        } else if is_coalesce_to_remove(&child_context.plan, parent) {
-            // Initiate a connection:
-            true
-        } else if is_sort(&child_context.plan) {
-            // halt coalesce removals at the sort
-            false
-        } else {
-            // propagate
-            child_context
-                .children
-                .iter()
-                .any(|grandchild| grandchild.data)
-        };
-    }
+    let children = &coalesce_context.children;
+    coalesce_context.data = if children.is_empty() {
+        // Plan has no children, it cannot be a `CoalescePartitionsExec`.
+        false
+    } else if is_coalesce_partitions(&coalesce_context.plan) {
+        // Initiate a connection:
+        true
+    } else {
+        children.iter().enumerate().any(|(idx, node)| {
+            // Only consider operators that don't require a single partition,
+            // and connected to some `CoalescePartitionsExec`:
+            node.data
+                && !matches!(
+                    coalesce_context.plan.required_input_distribution()[idx],
+                    Distribution::SinglePartition
+                )
+        })
+    };
 }
 
 /// Performs optimizations based upon a series of subrules.
@@ -387,17 +361,7 @@ fn replace_with_partial_sort(
 pub fn parallelize_sorts(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<Transformed<PlanWithCorrespondingCoalescePartitions>> {
-    requirements = requirements.update_plan_from_children()?;
     update_coalesce_ctx_children(&mut requirements);
-    let coalesce_can_be_removed = requirements.children.iter().any(|child| child.data);
-
-    let should_parallelize_sort = (is_sort(&requirements.plan)
-        || is_sort_preserving_merge(&requirements.plan))
-        && requirements.plan.output_partitioning().partition_count() <= 1
-        && coalesce_can_be_removed;
-
-    // Repartition -> Coalesce -> Repartition
-    let unneeded_coalesce = is_repartition(&requirements.plan) && coalesce_can_be_removed;
 
     if requirements.children.is_empty() || !requirements.children[0].data {
         // We only take an action when the plan is either a `SortExec`, a
@@ -405,7 +369,10 @@ pub fn parallelize_sorts(
         // all have a single child. Therefore, if the first child has no
         // connection, we can return immediately.
         Ok(Transformed::no(requirements))
-    } else if should_parallelize_sort {
+    } else if (is_sort(&requirements.plan)
+        || is_sort_preserving_merge(&requirements.plan))
+        && requirements.plan.output_partitioning().partition_count() <= 1
+    {
         // Take the initial sort expressions and requirements
         let (sort_exprs, fetch) = get_sort_exprs(&requirements.plan)?;
         let sort_reqs = LexRequirement::from(sort_exprs.clone());
@@ -420,11 +387,8 @@ pub fn parallelize_sorts(
         // We also need to remove the self node since `remove_corresponding_coalesce_in_sub_plan`
         // deals with the children and their children and so on.
         requirements = requirements.children.swap_remove(0);
-        // sync the requirements.plan.children with the mutated requirements.children
-        requirements = requirements.update_plan_from_children()?;
 
         requirements = add_sort_above_with_check(requirements, sort_reqs, fetch);
-        requirements = requirements.update_plan_from_children()?;
 
         let spm =
             SortPreservingMergeExec::new(sort_exprs, Arc::clone(&requirements.plan));
@@ -435,11 +399,20 @@ pub fn parallelize_sorts(
                 vec![requirements],
             ),
         ))
-    } else if unneeded_coalesce {
+    } else if is_coalesce_partitions(&requirements.plan) {
+        // There is an unnecessary `CoalescePartitionsExec` in the plan.
+        // This will handle the recursive `CoalescePartitionsExec` plans.
         requirements = remove_bottleneck_in_subplan(requirements)?;
-        requirements = requirements.update_plan_from_children()?;
+        // For the removal of self node which is also a `CoalescePartitionsExec`.
+        requirements = requirements.children.swap_remove(0);
 
-        Ok(Transformed::yes(requirements))
+        Ok(Transformed::yes(
+            PlanWithCorrespondingCoalescePartitions::new(
+                Arc::new(CoalescePartitionsExec::new(Arc::clone(&requirements.plan))),
+                false,
+                vec![requirements],
+            ),
+        ))
     } else {
         Ok(Transformed::yes(requirements))
     }
@@ -674,7 +647,19 @@ fn remove_bottleneck_in_subplan(
             })
             .collect::<Result<_>>()?;
     }
-    let new_reqs = requirements.update_plan_from_children()?;
+    let mut new_reqs = requirements.update_plan_from_children()?;
+    if let Some(repartition) = new_reqs.plan.as_any().downcast_ref::<RepartitionExec>() {
+        let input_partitioning = repartition.input().output_partitioning();
+        // We can remove this repartitioning operator if it is now a no-op:
+        let mut can_remove = input_partitioning.eq(repartition.partitioning());
+        // We can also remove it if we ended up with an ineffective RR:
+        if let Partitioning::RoundRobinBatch(n_out) = repartition.partitioning() {
+            can_remove |= *n_out == input_partitioning.partition_count();
+        }
+        if can_remove {
+            new_reqs = new_reqs.children.swap_remove(0)
+        }
+    }
     Ok(new_reqs)
 }
 
