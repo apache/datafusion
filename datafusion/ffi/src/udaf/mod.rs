@@ -528,25 +528,6 @@ impl AggregateUDFImpl for ForeignAggregateUDF {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_round_trip_udaf() -> Result<()> {
-        let original_udaf = datafusion::functions_aggregate::sum::Sum::new();
-        let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
-
-        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
-
-        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
-
-        assert!(original_udaf.name() == foreign_udaf.name());
-
-        Ok(())
-    }
-}
-
 #[repr(C)]
 #[derive(Debug, StableAbi)]
 #[allow(non_camel_case_types)]
@@ -573,5 +554,154 @@ impl From<AggregateOrderSensitivity> for FFI_AggregateOrderSensitivity {
             AggregateOrderSensitivity::HardRequirement => Self::HardRequirement,
             AggregateOrderSensitivity::Beneficial => Self::Beneficial,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::Schema;
+    use datafusion::{
+        common::create_array,
+        functions_aggregate::sum::Sum,
+        physical_expr::{LexOrdering, PhysicalSortExpr},
+        physical_plan::expressions::col,
+        scalar::ScalarValue,
+    };
+
+    use super::*;
+
+    fn create_test_foreign_udaf(
+        original_udaf: impl AggregateUDFImpl + 'static,
+    ) -> Result<AggregateUDF> {
+        let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
+
+        let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+
+        let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
+        Ok(foreign_udaf.into())
+    }
+
+    #[test]
+    fn test_round_trip_udaf() -> Result<()> {
+        let original_udaf = Sum::new();
+        let original_name = original_udaf.name().to_owned();
+
+        let foreign_udaf = create_test_foreign_udaf(original_udaf)?;
+        // let original_udaf = Arc::new(AggregateUDF::from(original_udaf));
+
+        // let local_udaf: FFI_AggregateUDF = Arc::clone(&original_udaf).into();
+
+        // let foreign_udaf: ForeignAggregateUDF = (&local_udaf).try_into()?;
+        // let foreign_udaf: AggregateUDF = foreign_udaf.into();
+
+        assert_eq!(original_name, foreign_udaf.name());
+        Ok(())
+    }
+
+    #[test]
+    fn test_foreign_udaf_aliases() -> Result<()> {
+        let foreign_udaf =
+            create_test_foreign_udaf(Sum::new())?.with_aliases(["my_function"]);
+
+        let return_type = foreign_udaf.return_type(&[DataType::Float64])?;
+        assert_eq!(return_type, DataType::Float64);
+        Ok(())
+    }
+
+    #[test]
+    fn test_foreign_udaf_accumulator() -> Result<()> {
+        let foreign_udaf = create_test_foreign_udaf(Sum::new())?;
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
+        let acc_args = AccumulatorArgs {
+            return_type: &DataType::Float64,
+            schema: &schema,
+            ignore_nulls: true,
+            ordering_req: &LexOrdering::new(vec![PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: Default::default(),
+            }]),
+            is_reversed: false,
+            name: "round_trip",
+            is_distinct: true,
+            exprs: &[col("a", &schema)?],
+        };
+        let mut accumulator = foreign_udaf.accumulator(acc_args)?;
+        let values = create_array!(Float64, vec![10., 20., 30., 40., 50.]);
+        accumulator.update_batch(&[values])?;
+        let resultant_value = accumulator.evaluate()?;
+        assert_eq!(resultant_value, ScalarValue::Float64(Some(150.)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_beneficial_ordering() -> Result<()> {
+        let foreign_udaf = create_test_foreign_udaf(
+            datafusion::functions_aggregate::first_last::FirstValue::new(),
+        )?;
+
+        let foreign_udaf = foreign_udaf.with_beneficial_ordering(true)?.unwrap();
+
+        assert_eq!(
+            foreign_udaf.order_sensitivity(),
+            AggregateOrderSensitivity::Beneficial
+        );
+
+        let a_field = Field::new("a", DataType::Float64, true);
+        let state_fields = foreign_udaf.state_fields(StateFieldsArgs {
+            name: "a",
+            input_types: &[DataType::Float64],
+            return_type: &DataType::Float64,
+            ordering_fields: &[a_field.clone()],
+            is_distinct: false,
+        })?;
+
+        println!("{:#?}", state_fields);
+        assert_eq!(state_fields.len(), 3);
+        assert_eq!(state_fields[1], a_field);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sliding_accumulator() -> Result<()> {
+        let foreign_udaf = create_test_foreign_udaf(Sum::new())?;
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
+        let acc_args = AccumulatorArgs {
+            return_type: &DataType::Float64,
+            schema: &schema,
+            ignore_nulls: true,
+            ordering_req: &LexOrdering::new(vec![PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: Default::default(),
+            }]),
+            is_reversed: false,
+            name: "round_trip",
+            is_distinct: true,
+            exprs: &[col("a", &schema)?],
+        };
+
+        let mut accumulator = foreign_udaf.create_sliding_accumulator(acc_args)?;
+        let values = create_array!(Float64, vec![10., 20., 30., 40., 50.]);
+        accumulator.update_batch(&[values])?;
+        let resultant_value = accumulator.evaluate()?;
+        assert_eq!(resultant_value, ScalarValue::Float64(Some(150.)));
+
+        Ok(())
+    }
+
+    fn test_round_trip_order_sensitivity(sensitivity: AggregateOrderSensitivity) {
+        let ffi_sensitivity: FFI_AggregateOrderSensitivity = sensitivity.into();
+        let round_trip_sensitivity: AggregateOrderSensitivity = ffi_sensitivity.into();
+
+        assert_eq!(sensitivity, round_trip_sensitivity);
+    }
+
+    #[test]
+    fn test_round_trip_all_order_sensitivities() {
+        test_round_trip_order_sensitivity(AggregateOrderSensitivity::Insensitive);
+        test_round_trip_order_sensitivity(AggregateOrderSensitivity::HardRequirement);
+        test_round_trip_order_sensitivity(AggregateOrderSensitivity::Beneficial);
     }
 }
