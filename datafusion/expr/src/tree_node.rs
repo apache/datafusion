@@ -87,13 +87,8 @@ impl TreeNode for Expr {
                           }) => (expr, low, high).apply_ref_elements(f),
             Expr::Case(Case { expr, when_then_expr, else_expr }) =>
                 (expr, when_then_expr, else_expr).apply_ref_elements(f),
-            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, within_group, .. }) => {
-                if within_group.is_some() {
-                    (args, filter, within_group).apply_ref_elements(f)
-                } else {
-                    (args, filter, order_by).apply_ref_elements(f)
-                }
-            }
+            Expr::AggregateFunction(AggregateFunction { args, filter, order_by, .. }) =>
+                (args, filter, order_by).apply_ref_elements(f),
             Expr::WindowFunction(WindowFunction {
                                      args,
                                      partition_by,
@@ -252,38 +247,18 @@ impl TreeNode for Expr {
                 filter,
                 order_by,
                 null_treatment,
-                within_group,
-            }) => {
-                if within_group.is_some() {
-                    (args, filter, within_group).map_elements(f)?.map_data(
-                        |(new_args, new_filter, new_within_group)| {
-                            Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                func,
-                                new_args,
-                                distinct,
-                                new_filter,
-                                order_by,
-                                null_treatment,
-                                new_within_group,
-                            )))
-                        },
-                    )?
-                } else {
-                    (args, filter, order_by).map_elements(f)?.map_data(
-                        |(new_args, new_filter, new_order_by)| {
-                            Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                                func,
-                                new_args,
-                                distinct,
-                                new_filter,
-                                new_order_by,
-                                null_treatment,
-                                within_group,
-                            )))
-                        },
-                    )?
-                }
-            }
+            }) => (args, filter, order_by).map_elements(f)?.map_data(
+                |(new_args, new_filter, new_order_by)| {
+                    Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
+                       func,
+                       new_args,
+                       distinct,
+                       new_filter,
+                       new_order_by,
+                       null_treatment,
+                   )))
+                },
+            )?,
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::Rollup(exprs) => exprs
                     .map_elements(f)?

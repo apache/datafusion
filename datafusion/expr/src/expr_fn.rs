@@ -769,8 +769,6 @@ pub trait ExprFunctionExt {
     fn partition_by(self, partition_by: Vec<Expr>) -> ExprFuncBuilder;
     /// Add appropriate window frame conditions
     fn window_frame(self, window_frame: WindowFrame) -> ExprFuncBuilder;
-    /// Add `WITHIN GROUP <within_group>`
-    fn within_group(self, within_group: Vec<Sort>) -> ExprFuncBuilder;
 }
 
 #[derive(Debug, Clone)]
@@ -791,7 +789,6 @@ pub struct ExprFuncBuilder {
     null_treatment: Option<NullTreatment>,
     partition_by: Option<Vec<Expr>>,
     window_frame: Option<WindowFrame>,
-    within_group: Option<Vec<Sort>>,
 }
 
 impl ExprFuncBuilder {
@@ -805,7 +802,6 @@ impl ExprFuncBuilder {
             null_treatment: None,
             partition_by: None,
             window_frame: None,
-            within_group: None,
         }
     }
 
@@ -824,7 +820,6 @@ impl ExprFuncBuilder {
             null_treatment,
             partition_by,
             window_frame,
-            within_group,
         } = self;
 
         let Some(fun) = fun else {
@@ -839,7 +834,6 @@ impl ExprFuncBuilder {
                 udaf.filter = filter.map(Box::new);
                 udaf.distinct = distinct;
                 udaf.null_treatment = null_treatment;
-                udaf.within_group = within_group;
                 Expr::AggregateFunction(udaf)
             }
             ExprFuncKind::Window(mut udwf) => {
@@ -892,11 +886,6 @@ impl ExprFunctionExt for ExprFuncBuilder {
 
     fn window_frame(mut self, window_frame: WindowFrame) -> ExprFuncBuilder {
         self.window_frame = Some(window_frame);
-        self
-    }
-
-    fn within_group(mut self, within_group: Vec<Sort>) -> ExprFuncBuilder {
-        self.within_group = Some(within_group);
         self
     }
 }
@@ -978,19 +967,6 @@ impl ExprFunctionExt for Expr {
             }
             _ => ExprFuncBuilder::new(None),
         }
-    }
-
-    fn within_group(self, within_group: Vec<Sort>) -> ExprFuncBuilder {
-        let mut builder = match self {
-            Expr::AggregateFunction(udaf) => {
-                ExprFuncBuilder::new(Some(ExprFuncKind::Aggregate(udaf)))
-            }
-            _ => ExprFuncBuilder::new(None),
-        };
-        if builder.fun.is_some() {
-            builder.within_group = Some(within_group);
-        }
-        builder
     }
 }
 

@@ -4020,7 +4020,6 @@ mod tests {
                 None,
                 None,
                 None,
-                None,
             ));
 
         let expected = col("result_column");
@@ -4032,7 +4031,6 @@ mod tests {
                 udaf.into(),
                 vec![],
                 false,
-                None,
                 None,
                 None,
                 None,

@@ -1597,7 +1597,6 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             filter,
             order_by,
             null_treatment,
-            within_group,
         }) => {
             let name = if let Some(name) = name {
                 name
@@ -1620,20 +1619,13 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 == NullTreatment::IgnoreNulls;
 
             let (agg_expr, filter, order_by) = {
-                let physical_sort_exprs = match within_group {
-                    Some(within_group) => Some(create_physical_sort_exprs(
-                        within_group,
+                let physical_sort_exprs = match order_by {
+                    Some(exprs) => Some(create_physical_sort_exprs(
+                        exprs,
                         logical_input_schema,
                         execution_props,
                     )?),
-                    None => match order_by {
-                        Some(order_by) => Some(create_physical_sort_exprs(
-                            order_by,
-                            logical_input_schema,
-                            execution_props,
-                        )?),
-                        None => None,
-                    },
+                    None => None,
                 };
 
                 let ordering_reqs: LexOrdering =

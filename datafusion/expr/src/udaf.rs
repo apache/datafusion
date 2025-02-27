@@ -152,7 +152,6 @@ impl AggregateUDF {
             None,
             None,
             None,
-            None,
         ))
     }
 

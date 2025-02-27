@@ -1213,19 +1213,13 @@ pub fn from_aggregate_function(
         filter,
         order_by,
         null_treatment: _null_treatment,
-        within_group,
     } = agg_fn;
 
-    let sorts = match (within_group, order_by) {
-        (Some(within_group), _) => within_group
-            .iter()
-            .map(|expr| to_substrait_sort_field(producer, expr, schema))
-            .collect::<Result<Vec<_>>>()?,
-        (None, Some(order_by)) => order_by
-            .iter()
-            .map(|expr| to_substrait_sort_field(producer, expr, schema))
-            .collect::<Result<Vec<_>>>()?,
-        (None, None) => vec![],
+    let sorts = if let Some(order_by) = order_by {
+        order_by
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        vec![]
     };
 
     let mut arguments: Vec<FunctionArgument> = vec![];

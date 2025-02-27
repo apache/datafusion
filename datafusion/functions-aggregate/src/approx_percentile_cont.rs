@@ -76,7 +76,6 @@ pub fn approx_percentile_cont(
         None,
         None,
         None,
-        within_group,
     ))
 }
 

@@ -402,7 +402,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     filter,
                     order_by,
                     null_treatment,
-                    within_group,
                 )));
             }
         }

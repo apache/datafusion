@@ -2242,7 +2242,6 @@ fn roundtrip_aggregate_udf() {
         Some(Box::new(lit(true))),
         None,
         None,
-        None,
     ));
 
     let ctx = SessionContext::new();

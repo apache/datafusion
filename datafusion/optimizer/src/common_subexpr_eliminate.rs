@@ -891,7 +891,6 @@ mod test {
                 None,
                 None,
                 None,
-                None,
             ))
         };
 
