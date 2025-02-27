@@ -158,6 +158,7 @@ impl PruningJoinHashMap {
     pub(crate) fn size(&self) -> usize {
         let fixed_size = size_of::<PruningJoinHashMap>();
 
+        // TODO: switch to using [HashTable::allocation_size] when available after upgrading hashbrown to 0.15
         estimate_memory_size::<(u64, u64)>(self.map.capacity(), fixed_size).unwrap()
             + self.next.capacity() * size_of::<u64>()
     }
