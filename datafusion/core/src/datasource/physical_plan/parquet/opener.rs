@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::datasource::file_format::{
+use crate::datasource::file_format::parquet::{
     coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
 };
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;

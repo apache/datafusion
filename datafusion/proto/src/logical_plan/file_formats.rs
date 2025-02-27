@@ -394,6 +394,9 @@ impl TableParquetOptionsProto {
                 column_index_truncate_length_opt: global_options.global.column_index_truncate_length.map(|length| {
                     parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length as u64)
                 }),
+                statistics_truncate_length_opt: global_options.global.statistics_truncate_length.map(|length| {
+                    parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length as u64)
+                }),
                 data_page_row_count_limit: global_options.global.data_page_row_count_limit as u64,
                 encoding_opt: global_options.global.encoding.map(|encoding| {
                     parquet_options::EncodingOpt::Encoding(encoding)
@@ -486,6 +489,9 @@ impl From<&ParquetOptionsProto> for ParquetOptions {
             created_by: proto.created_by.clone(),
             column_index_truncate_length: proto.column_index_truncate_length_opt.as_ref().map(|opt| match opt {
                 parquet_options::ColumnIndexTruncateLengthOpt::ColumnIndexTruncateLength(length) => *length as usize,
+            }),
+            statistics_truncate_length: proto.statistics_truncate_length_opt.as_ref().map(|opt| match opt {
+                parquet_options::StatisticsTruncateLengthOpt::StatisticsTruncateLength(length) => *length as usize,
             }),
             data_page_row_count_limit: proto.data_page_row_count_limit as usize,
             encoding: proto.encoding_opt.as_ref().map(|opt| match opt {

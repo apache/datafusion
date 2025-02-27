@@ -100,6 +100,7 @@ impl fmt::Display for AggregateUDF {
 }
 
 /// Arguments passed to [`AggregateUDFImpl::value_from_stats`]
+#[derive(Debug)]
 pub struct StatisticsArgs<'a> {
     /// The statistics of the aggregate input
     pub statistics: &'a Statistics,
@@ -338,7 +339,7 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use std::sync::OnceLock;
+/// # use std::sync::LazyLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr, Documentation};
@@ -360,14 +361,14 @@ where
 ///   }
 /// }
 ///
-/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-///
-/// fn get_doc() -> &'static Documentation {
-///     DOCUMENTATION.get_or_init(|| {
+/// static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
 ///         Documentation::builder(DOC_SECTION_AGGREGATE, "calculates a geometric mean", "geo_mean(2.0)")
 ///             .with_argument("arg1", "The Float64 number for the geometric mean")
 ///             .build()
-///     })
+///     });
+///
+/// fn get_doc() -> &'static Documentation {
+///     &DOCUMENTATION
 /// }
 ///    
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf

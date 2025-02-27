@@ -2455,7 +2455,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select b,count(*) from t1 group by b order by count(*)")
+        .sql("select b,count(1) from t1 group by b order by count(1)")
         .await?
         .explain(false, false)?
         .collect()
@@ -2481,7 +2481,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
 async fn test_count_wildcard_on_where_in() -> Result<()> {
     let ctx = create_join_context()?;
     let sql_results = ctx
-        .sql("SELECT a,b FROM t1 WHERE a in (SELECT count(*) FROM t2)")
+        .sql("SELECT a,b FROM t1 WHERE a in (SELECT count(1) FROM t2)")
         .await?
         .explain(false, false)?
         .collect()
@@ -2522,7 +2522,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
 async fn test_count_wildcard_on_where_exist() -> Result<()> {
     let ctx = create_join_context()?;
     let sql_results = ctx
-        .sql("SELECT a, b FROM t1 WHERE EXISTS (SELECT count(*) FROM t2)")
+        .sql("SELECT a, b FROM t1 WHERE EXISTS (SELECT count(1) FROM t2)")
         .await?
         .explain(false, false)?
         .collect()
@@ -2559,7 +2559,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select count(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
+        .sql("select count(1) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
         .await?
         .explain(false, false)?
         .collect()
@@ -2598,7 +2598,7 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
     register_alltypes_tiny_pages_parquet(&ctx).await?;
 
     let sql_results = ctx
-        .sql("select count(*) from t1")
+        .sql("select count(1) from t1")
         .await?
         .explain(false, false)?
         .collect()
@@ -2628,7 +2628,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select a,b from t1 where (select count(*) from t2 where t1.a = t2.a)>0;")
+        .sql("select a,b from t1 where (select count(1) from t2 where t1.a = t2.a)>0;")
         .await?
         .explain(false, false)?
         .collect()
@@ -5340,5 +5340,99 @@ async fn test_insert_into_checking() -> Result<()> {
 
     assert_contains!(e.to_string(), "Inserting query schema mismatch: Expected table field 'a' with type Int64, but got 'column1' with type Utf8");
 
+    Ok(())
+}
+
+async fn create_null_table() -> Result<DataFrame> {
+    // create a DataFrame with null values
+    //    "+---+----+",
+    //    "| a | b |",
+    //    "+---+---+",
+    //    "| 1 | x |",
+    //    "|   |   |",
+    //    "| 3 | z |",
+    //    "+---+---+",
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Utf8, true),
+    ]));
+    let a_values = Int32Array::from(vec![Some(1), None, Some(3)]);
+    let b_values = StringArray::from(vec![Some("x"), None, Some("z")]);
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(a_values), Arc::new(b_values)],
+    )?;
+
+    let ctx = SessionContext::new();
+    let table = MemTable::try_new(schema.clone(), vec![vec![batch]])?;
+    ctx.register_table("t_null", Arc::new(table))?;
+    let df = ctx.table("t_null").await?;
+    Ok(df)
+}
+
+#[tokio::test]
+async fn test_fill_null() -> Result<()> {
+    let df = create_null_table().await?;
+
+    // Use fill_null to replace nulls on each column.
+    let df_filled = df
+        .fill_null(ScalarValue::Int32(Some(0)), vec!["a".to_string()])?
+        .fill_null(
+            ScalarValue::Utf8(Some("default".to_string())),
+            vec!["b".to_string()],
+        )?;
+
+    let results = df_filled.collect().await?;
+    let expected = [
+        "+---+---------+",
+        "| a | b       |",
+        "+---+---------+",
+        "| 1 | x       |",
+        "| 0 | default |",
+        "| 3 | z       |",
+        "+---+---------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fill_null_all_columns() -> Result<()> {
+    let df = create_null_table().await?;
+
+    // Use fill_null to replace nulls on all columns.
+    // Only column "b" will be replaced since ScalarValue::Utf8(Some("default".to_string()))
+    // can be cast to Utf8.
+    let df_filled =
+        df.fill_null(ScalarValue::Utf8(Some("default".to_string())), vec![])?;
+
+    let results = df_filled.clone().collect().await?;
+
+    let expected = [
+        "+---+---------+",
+        "| a | b       |",
+        "+---+---------+",
+        "| 1 | x       |",
+        "|   | default |",
+        "| 3 | z       |",
+        "+---+---------+",
+    ];
+
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Fill column "a" null values with a value that cannot be cast to Int32.
+    let df_filled = df_filled.fill_null(ScalarValue::Int32(Some(0)), vec![])?;
+
+    let results = df_filled.collect().await?;
+    let expected = [
+        "+---+---------+",
+        "| a | b       |",
+        "+---+---------+",
+        "| 1 | x       |",
+        "| 0 | default |",
+        "| 3 | z       |",
+        "+---+---------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
     Ok(())
 }
