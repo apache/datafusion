@@ -79,6 +79,11 @@ pub fn count_distinct(expr: Expr) -> Expr {
     ))
 }
 
+/// Creates aggregation to count all rows, equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`
+pub fn count_all() -> Expr {
+    count(Expr::Literal(COUNT_STAR_EXPANSION))
+}
+
 #[user_doc(
     doc_section(label = "General Functions"),
     description = "Returns the number of non-null values in the specified column. To include null values in the total count, use `count(*)`.",

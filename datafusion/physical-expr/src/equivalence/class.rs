@@ -456,17 +456,19 @@ impl EquivalenceGroup {
     /// The expression is replaced with the first expression in the equivalence
     /// class it matches with (if any).
     pub fn normalize_expr(&self, expr: Arc<dyn PhysicalExpr>) -> Arc<dyn PhysicalExpr> {
-        Arc::clone(&expr)
-            .transform(|expr| {
-                for cls in self.iter() {
-                    if cls.contains(&expr) {
-                        return Ok(Transformed::yes(cls.canonical_expr().unwrap()));
-                    }
+        expr.transform(|expr| {
+            for cls in self.iter() {
+                if cls.contains(&expr) {
+                    // The unwrap below is safe because the guard above ensures
+                    // that the class is not empty.
+                    return Ok(Transformed::yes(cls.canonical_expr().unwrap()));
                 }
-                Ok(Transformed::no(expr))
-            })
-            .data()
-            .unwrap_or(expr)
+            }
+            Ok(Transformed::no(expr))
+        })
+        .data()
+        .unwrap()
+        // The unwrap above is safe because the closure always returns `Ok`.
     }
 
     /// Normalizes the given sort expression according to this group.
@@ -585,20 +587,21 @@ impl EquivalenceGroup {
             (new_class.len() > 1).then_some(EquivalenceClass::new(new_class))
         });
 
-        // the key is the source expression and the value is the EquivalenceClass that contains the target expression of the source expression.
-        let mut new_classes: IndexMap<Arc<dyn PhysicalExpr>, EquivalenceClass> =
-            IndexMap::new();
-        mapping.iter().for_each(|(source, target)| {
-            // We need to find equivalent projected expressions.
-            // e.g. table with columns [a,b,c] and a == b, projection: [a+c, b+c].
-            // To conclude that a + c == b + c we firsty normalize all source expressions
-            // in the mapping, then merge all equivalent expressions into the classes.
+        // The key is the source expression, and the value is the equivalence
+        // class that contains the corresponding target expression.
+        let mut new_classes: IndexMap<_, _> = IndexMap::new();
+        for (source, target) in mapping.iter() {
+            // We need to find equivalent projected expressions. For example,
+            // consider a table with columns `[a, b, c]` with `a` == `b`, and
+            // projection `[a + c, b + c]`. To conclude that `a + c == b + c`,
+            // we first normalize all source expressions in the mapping, then
+            // merge all equivalent expressions into the classes.
             let normalized_expr = self.normalize_expr(Arc::clone(source));
             new_classes
                 .entry(normalized_expr)
                 .or_insert_with(EquivalenceClass::new_empty)
                 .push(Arc::clone(target));
-        });
+        }
         // Only add equivalence classes with at least two members as singleton
         // equivalence classes are meaningless.
         let new_classes = new_classes
@@ -642,7 +645,7 @@ impl EquivalenceGroup {
                 // are equal in the resulting table.
                 if join_type == &JoinType::Inner {
                     for (lhs, rhs) in on.iter() {
-                        let new_lhs = Arc::clone(lhs) as _;
+                        let new_lhs = Arc::clone(lhs);
                         // Rewrite rhs to point to the right side of the join:
                         let new_rhs = Arc::clone(rhs)
                             .transform(|expr| {

@@ -26,14 +26,13 @@ use object_store::path::Path;
 use object_store::ObjectMeta;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::datasource::data_source::FileSource;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::json::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{FileRange, ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig};
+use datafusion::datasource::physical_plan::{FileScanConfig, FileSinkConfig, FileSource};
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::WindowFunctionDefinition;
 use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, ScalarFunctionExpr};
@@ -480,7 +479,7 @@ pub fn parse_protobuf_file_scan_config(
     proto: &protobuf::FileScanExecConf,
     registry: &dyn FunctionRegistry,
     codec: &dyn PhysicalExtensionCodec,
-    source: Arc<dyn FileSource>,
+    file_source: Arc<dyn FileSource>,
 ) -> Result<FileScanConfig> {
     let schema: Arc<Schema> = parse_protobuf_file_scan_schema(proto)?;
     let projection = proto
@@ -538,14 +537,15 @@ pub fn parse_protobuf_file_scan_config(
         output_ordering.push(sort_expr);
     }
 
-    Ok(FileScanConfig::new(object_store_url, file_schema, source)
+    let config = FileScanConfig::new(object_store_url, file_schema, file_source)
         .with_file_groups(file_groups)
         .with_constraints(constraints)
         .with_statistics(statistics)
         .with_projection(projection)
         .with_limit(proto.limit.as_ref().map(|sl| sl.limit as usize))
         .with_table_partition_cols(table_partition_cols)
-        .with_output_ordering(output_ordering))
+        .with_output_ordering(output_ordering);
+    Ok(config)
 }
 
 impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {

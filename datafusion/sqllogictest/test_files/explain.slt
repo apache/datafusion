@@ -178,7 +178,6 @@ logical_plan after inline_table_scan SAME TEXT AS ABOVE
 logical_plan after expand_wildcard_rule SAME TEXT AS ABOVE
 logical_plan after resolve_grouping_function SAME TEXT AS ABOVE
 logical_plan after type_coercion SAME TEXT AS ABOVE
-logical_plan after count_wildcard_rule SAME TEXT AS ABOVE
 analyzed_logical_plan SAME TEXT AS ABOVE
 logical_plan after eliminate_nested_union SAME TEXT AS ABOVE
 logical_plan after simplify_expressions SAME TEXT AS ABOVE
@@ -427,7 +426,7 @@ logical_plan
 02)--TableScan: t1 projection=[a]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: 
-05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]
+05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 06)--------TableScan: t2 projection=[]
 physical_plan
 01)NestedLoopJoinExec: join_type=LeftSemi

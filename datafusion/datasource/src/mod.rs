@@ -15,15 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
+pub mod display;
+pub mod file;
 pub mod file_compression_type;
+pub mod file_format;
 pub mod file_groups;
 pub mod file_meta;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
+pub mod memory;
+pub mod source;
+mod statistics;
+#[cfg(test)]
+mod test_util;
 pub mod url;
 pub mod write;
 use chrono::TimeZone;
@@ -179,12 +193,50 @@ impl From<ObjectMeta> for PartitionedFile {
 #[cfg(test)]
 mod tests {
     use super::ListingTableUrl;
+    use arrow::{
+        array::{ArrayRef, Int32Array, RecordBatch},
+        datatypes::{DataType, Field, Schema, SchemaRef},
+    };
     use datafusion_execution::object_store::{
         DefaultObjectStoreRegistry, ObjectStoreRegistry,
     };
     use object_store::{local::LocalFileSystem, path::Path};
-    use std::{ops::Not, sync::Arc};
+    use std::{collections::HashMap, ops::Not, sync::Arc};
     use url::Url;
+
+    /// Return a RecordBatch with a single Int32 array with values (0..sz) in a field named "i"
+    pub fn make_partition(sz: i32) -> RecordBatch {
+        let seq_start = 0;
+        let seq_end = sz;
+        let values = (seq_start..seq_end).collect::<Vec<_>>();
+        let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+        let arr = Arc::new(Int32Array::from(values));
+
+        RecordBatch::try_new(schema, vec![arr as ArrayRef]).unwrap()
+    }
+
+    /// Get the schema for the aggregate_test_* csv files
+    pub fn aggr_test_schema() -> SchemaRef {
+        let mut f1 = Field::new("c1", DataType::Utf8, false);
+        f1.set_metadata(HashMap::from_iter(vec![("testing".into(), "test".into())]));
+        let schema = Schema::new(vec![
+            f1,
+            Field::new("c2", DataType::UInt32, false),
+            Field::new("c3", DataType::Int8, false),
+            Field::new("c4", DataType::Int16, false),
+            Field::new("c5", DataType::Int32, false),
+            Field::new("c6", DataType::Int64, false),
+            Field::new("c7", DataType::UInt8, false),
+            Field::new("c8", DataType::UInt16, false),
+            Field::new("c9", DataType::UInt32, false),
+            Field::new("c10", DataType::UInt64, false),
+            Field::new("c11", DataType::Float32, false),
+            Field::new("c12", DataType::Float64, false),
+            Field::new("c13", DataType::Utf8, false),
+        ]);
+
+        Arc::new(schema)
+    }
 
     #[test]
     fn test_object_store_listing_url() {

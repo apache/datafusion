@@ -28,7 +28,7 @@ use std::{error::Error, path::PathBuf};
 ///
 /// Expects to be called about like this:
 ///
-/// `assert_batch_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
+/// `assert_batches_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
 ///
 /// # Example
 /// ```

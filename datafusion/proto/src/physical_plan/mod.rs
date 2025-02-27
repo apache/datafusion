@@ -32,6 +32,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::{AvroSource, CsvSource, FileScanConfig};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
@@ -57,7 +58,6 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
@@ -1630,9 +1630,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             });
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_csv) = source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(maybe_csv) = data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
                 let source = maybe_csv.file_source();
                 if let Some(csv_config) = source.as_any().downcast_ref::<CsvSource>() {
                     return Ok(protobuf::PhysicalPlanNode {
@@ -1677,8 +1678,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         #[cfg(feature = "parquet")]
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_parquet) = source.as_any().downcast_ref::<FileScanConfig>()
+            let data_source_exec = exec.data_source();
+            if let Some(maybe_parquet) =
+                data_source_exec.as_any().downcast_ref::<FileScanConfig>()
             {
                 let source = maybe_parquet.file_source();
                 if let Some(conf) = source.as_any().downcast_ref::<ParquetSource>() {
@@ -1704,9 +1706,11 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_avro) = source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(maybe_avro) =
+                data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
                 let source = maybe_avro.file_source();
                 if source.as_any().downcast_ref::<AvroSource>().is_some() {
                     return Ok(protobuf::PhysicalPlanNode {

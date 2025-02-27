@@ -32,9 +32,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::{
-    parquet::source::ParquetSource, DisplayAs, FileScanConfig,
-};
+use crate::datasource::physical_plan::{parquet::source::ParquetSource, DisplayAs};
 use crate::datasource::schema_adapter::SchemaAdapterFactory;
 use crate::{
     config::TableParquetOptions,
@@ -50,10 +48,11 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Constraints;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::source::DataSourceExec;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
@@ -293,8 +292,8 @@ impl ParquetExec {
         }
     }
     fn file_scan_config(&self) -> FileScanConfig {
-        let source = self.inner.source();
-        source
+        self.inner
+            .data_source()
             .as_any()
             .downcast_ref::<FileScanConfig>()
             .unwrap()
@@ -302,8 +301,7 @@ impl ParquetExec {
     }
 
     fn parquet_source(&self) -> ParquetSource {
-        let source = self.file_scan_config();
-        source
+        self.file_scan_config()
             .file_source()
             .as_any()
             .downcast_ref::<ParquetSource>()
@@ -344,7 +342,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
         self
     }
@@ -367,7 +365,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.schema_adapter_factory = Some(schema_adapter_factory);
         self
     }
@@ -381,7 +379,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.table_parquet_options.global.pushdown_filters = pushdown_filters;
         self
     }
@@ -405,7 +403,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.table_parquet_options.global.reorder_filters = reorder_filters;
         self
     }
@@ -464,7 +462,7 @@ impl ParquetExec {
     ) -> Self {
         let mut config = self.file_scan_config();
         config.file_groups = file_groups;
-        self.inner = self.inner.with_source(Arc::new(config));
+        self.inner = self.inner.with_data_source(Arc::new(config));
         self
     }
 }
@@ -579,10 +577,10 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_datasource::source::DataSourceExec;
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-    use datafusion_physical_plan::source::DataSourceExec;
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use crate::datasource::physical_plan::parquet::source::ParquetSource;
@@ -1470,7 +1468,7 @@ mod tests {
             ])
             .build();
         let partition_count = parquet_exec
-            .source()
+            .data_source()
             .output_partitioning()
             .partition_count();
         assert_eq!(partition_count, 1);

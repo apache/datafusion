@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Logical plans need to provide stable semantics, as downstream projects
+//! create them and depend on them. Test executable semantics of logical plans.
+
 use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field};
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -29,9 +32,6 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::sync::Arc;
-
-///! Logical plans need to provide stable semantics, as downstream projects
-///! create them and depend on them. Test executable semantics of logical plans.
 
 #[tokio::test]
 async fn count_only_nulls() -> Result<()> {
