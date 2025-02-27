@@ -94,7 +94,7 @@ select 10000000000000000000.01, -10000000000000000000.01
 query TT
 select arrow_typeof(10000000000000000000.01), arrow_typeof(-10000000000000000000.01)
 ----
-Decimal128(22, 2)  Decimal128(22, 2)
+Decimal128(22, 2) Decimal128(22, 2)
 
 # select 0, i64::MIN, i64::MIN-1, i64::MAX, i64::MAX + 1, u64::MAX, u64::MAX + 1
 query IIRIIIR
