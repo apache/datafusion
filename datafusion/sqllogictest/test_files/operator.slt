@@ -202,7 +202,7 @@ select
     arrow_typeof(decimal * 2.0)
 from numeric_types;
 ----
-Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64 Float64
+Decimal128(6, 1) Decimal128(8, 1) Decimal128(13, 1) Decimal128(23, 1) Decimal128(6, 1) Decimal128(8, 1) Decimal128(13, 1) Decimal128(23, 1) Float32 Float64 Decimal128(8, 3)
 
 ############### Division ###############
 
