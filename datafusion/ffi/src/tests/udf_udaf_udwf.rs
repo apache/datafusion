@@ -44,7 +44,8 @@ pub(crate) extern "C" fn create_ffi_table_func() -> FFI_TableFunction {
     FFI_TableFunction::new(udtf, None)
 }
 
-pub(crate) extern "C" fn create_ffi_avg_func() -> FFI_AggregateUDF {
+
+pub(crate) extern "C" fn create_ffi_sum_func() -> FFI_AggregateUDF {
     let udaf: Arc<AggregateUDF> = Arc::new(Sum::new().into());
 
     udaf.into()
