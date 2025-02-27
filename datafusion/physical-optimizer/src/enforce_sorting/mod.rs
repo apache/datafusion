@@ -153,10 +153,8 @@ fn is_coalesce_to_remove(
     node.as_any()
         .downcast_ref::<CoalescePartitionsExec>()
         .map(|_coalesce| {
-            // TODO(wiedld): find a more generalized approach that does not rely on
-            // pattern matching the structure of the DAG
             // Note that the `Partitioning::satisfy()` (parent vs. coalesce.child) cannot be used for cases of:
-            //      * Repartition -> Coalesce -> Repartition
+            //   * Repartition -> Coalesce -> Repartition
 
             let parent_req_single_partition = matches!(
                 parent.required_input_distribution()[0],
@@ -173,6 +171,28 @@ fn is_coalesce_to_remove(
         .unwrap_or(false)
 }
 
+/// Discovers the linked Coalesce->Sort cascades.
+///
+/// This linkage is used in [`remove_bottleneck_in_subplan`] to selectively
+/// remove the linked coalesces in the subplan. Then afterwards, an SPM is added
+/// at the root of the subplan (just after the sort) in order to parallelize sorts.
+/// Refer to the [`parallelize_sorts`] for more details on sort parallelization.
+///
+/// Example of linked Coalesce->Sort:
+/// ```text
+/// SortExec ctx.data=false, to halt remove_bottleneck_in_subplan)
+///   ...nodes...   ctx.data=true (e.g. are linked in cascade)
+///     Coalesce  ctx.data=true (e.g. is a coalesce)
+/// ```
+///
+/// The link should not be continued (and the coalesce not removed) if the distribution
+/// is changed between the Coalesce->Sort cascade. Example:
+/// ```text
+/// SortExec ctx.data=false, to halt remove_bottleneck_in_subplan)
+///   AggregateExec  ctx.data=false, to stop the link
+///     ...nodes...   ctx.data=true (e.g. are linked in cascade)
+///       Coalesce  ctx.data=true (e.g. is a coalesce)
+/// ```
 fn update_coalesce_ctx_children(
     coalesce_context: &mut PlanWithCorrespondingCoalescePartitions,
 ) {
