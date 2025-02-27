@@ -54,7 +54,6 @@ impl Display for MockCsvType {
 pub(crate) struct MockSessionState {
     scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
-    ordered_set_aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     type_planner: Option<Arc<dyn TypePlanner>>,
     window_functions: HashMap<String, Arc<WindowUDF>>,
@@ -235,13 +234,6 @@ impl ContextProvider for MockContextProvider {
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.state.aggregate_functions.get(name).cloned()
-    }
-
-    fn get_ordered_set_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
-        self.state
-            .ordered_set_aggregate_functions
-            .get(name)
-            .cloned()
     }
 
     fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
