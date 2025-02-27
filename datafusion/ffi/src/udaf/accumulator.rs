@@ -307,7 +307,11 @@ mod tests {
 
     #[test]
     fn test_foreign_avg_accumulator() -> Result<()> {
-        let boxed_accum: Box<dyn Accumulator> = Box::new(AvgAccumulator::default());
+        let original_accum = AvgAccumulator::default();
+        let original_size = original_accum.size();
+        let original_supports_retract = original_accum.supports_retract_batch();
+
+        let boxed_accum: Box<dyn Accumulator> = Box::new(original_accum);
         let ffi_accum: FFI_Accumulator = boxed_accum.into();
         let mut foreign_accum: ForeignAccumulator = ffi_accum.into();
 
@@ -340,6 +344,12 @@ mod tests {
         foreign_accum.retract_batch(&[values])?;
         let avg = foreign_accum.evaluate()?;
         assert_eq!(avg, ScalarValue::Float64(Some(30.0)));
+
+        assert_eq!(original_size, foreign_accum.size());
+        assert_eq!(
+            original_supports_retract,
+            foreign_accum.supports_retract_batch()
+        );
 
         Ok(())
     }
