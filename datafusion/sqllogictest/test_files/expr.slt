@@ -2059,18 +2059,14 @@ select 'A' where null between 2 and null;
 ----
 
 ### Demonstrate use of E literals for escaping
-# \n is not unescaped
-# should be on 1 line
+# should not have literal tab
 query T
-select 'foo\nbar';
+select 'foo\t\tbar';
 ----
-foo\nbar
+foo\t\tbar
 
-# \n is unescaped in an E literal
-# should be on 2 lines
+# should have literal tab
 query T
-select E'foo\nbar';
+select E'foo\t\tbar';
 ----
-
-01)foo
-02)bar
+foo		bar
