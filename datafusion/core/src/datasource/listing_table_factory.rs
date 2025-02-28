@@ -120,7 +120,7 @@ impl TableProviderFactory for ListingTableFactory {
             .validate_partitions(session_state, &table_path)
             .await?;
 
-        let mut resolved_schema = match provided_schema {
+        let resolved_schema = match provided_schema {
             // We will need to check the table columns against the schema
             // this is done so that we can do an ORDER BY for external table creation
             // specifically for parquet file format.

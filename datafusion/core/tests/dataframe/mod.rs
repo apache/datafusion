@@ -2400,7 +2400,8 @@ async fn write_json_with_order() -> Result<()> {
 #[tokio::test]
 async fn write_table_with_order() -> Result<()> {
     let tmp_dir = TempDir::new()?;
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new().with_parquet_force_view_metadata(false);
+    let ctx = SessionContext::new_with_config(config);
     let location = tmp_dir.path().join("test_table/");
 
     let mut write_df = ctx
