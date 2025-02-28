@@ -346,3 +346,110 @@ In the following example, the `type_coercion` and `simplify_expressions` passes 
 ```
 
 [df]: https://crates.io/crates/datafusion
+
+## Thinking about Query Optimization
+
+Query optimization in DataFusion uses a cost based model. The cost based model
+relies on table and column level statistics to estimate selectivity; selectivity
+estimates are an important piece in cost analysis for filters and projections
+as they allow estimating the cost of joins and filters.
+
+An important piece of building these estimates is _boundary analysis_ which uses
+interval arithmetic to take an expression such as `a > 2500 AND a <= 5000` and
+build an accurate selectivity estimate that can then be used to find more efficient
+plans.
+
+#### `AnalysisContext` API
+
+The `AnalysisContext` serves as a shared knowledge base during expression evaluation
+and boundary analysis. Think of it as a dynamic repository that maintains information about:
+
+1. Current known boundaries for columns and expressions
+2. Statistics that have been gathered or inferred
+3. A mutable state that can be updated as analysis progresses
+
+What makes `AnalysisContext` particularly powerful is its ability to propagate information
+through the expression tree. As each node in the expression tree is analyzed, it can both
+read from and write to this shared context, allowing for sophisticated boundary analysis and inference.
+
+#### `ColumnStatistics` for Cardinality Estimation
+
+Column statistics form the foundation of optimization decisions. Rather than just tracking
+simple metrics, DataFusion's `ColumnStatistics` provides a rich set of information including:
+
+- Null value counts
+- Maximum and minimum values
+- Value sums (for numeric columns)
+- Distinct value counts
+
+Each of these statistics is wrapped in a `Precision` type that indicates whether the value is
+exact or estimated, allowing the optimizer to make informed decisions about the reliability
+of its cardinality estimates.
+
+### Boundary Analaysis Flow
+
+The boundary analysis process flows through several stages, with each stage building
+upon the information gathered in previous stages. The `AnalysisContext` is continuously
+updated as the analysis progresses through the expression tree.
+
+#### Expression Boundary Analysis
+
+When analyzing expressions, DataFusion runs boundary analysis using interval arithmetic.
+Consider a simple predicate like age > 18 AND age <= 25. The analysis flows as follows:
+
+1. Context Initialization
+
+   - Begin with known column statistics
+   - Set up initial boundaries based on column constraints
+   - Initialize the shared analysis context
+
+2. Expression Tree Walk
+
+   - Analyze each node in the expression tree
+   - Propagate boundary information upward
+   - Allow child nodes to influence parent boundaries
+
+3. Boundary Updates
+   - Each expression can update the shared context
+   - Changes flow through the entire expression tree
+   - Final boundaries inform optimization decisions
+
+### Working with the analysis API
+
+The following example shows how you can run an analysis pass on a physical expression
+to infer the selectivity of the expression and the space of possible values it can
+take.
+
+```rust
+fn analyze_filter_example() -> Result<()> {
+    // Create a schema with an 'age' column
+    let age = Field::new("age", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![age]));
+
+    // Define column statistics
+    let column_stats = ColumnStatistics {
+        null_count: Precision::Exact(0),
+        max_value: Precision::Exact(ScalarValue::Int64(Some(79))),
+        min_value: Precision::Exact(ScalarValue::Int64(Some(14))),
+        distinct_count: Precision::Absent,
+        sum_value: Precision::Absent,
+    };
+
+    // Create expression: age > 18 AND age <= 25
+    let expr = col("age")
+        .gt(lit(18i64))
+        .and(col("age").lt_eq(lit(25i64)));
+
+    // Initialize analysis context
+    let initial_boundaries = vec![ExprBoundaries::try_from_column(
+        &schema, &column_stats, 0)?];
+    let context = AnalysisContext::new(initial_boundaries);
+
+    // Analyze expression
+    let df_schema = DFSchema::try_from(schema)?;
+    let physical_expr = SessionContext::new().create_physical_expr(expr, &df_schema)?;
+    let analysis = analyze(&physical_expr, context, df_schema.as_ref())?;
+
+    Ok(())
+}
+```

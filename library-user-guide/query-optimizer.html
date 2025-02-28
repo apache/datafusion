@@ -580,6 +580,50 @@
    </li>
   </ul>
  </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#thinking-about-query-optimization">
+   Thinking about Query Optimization
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#analysiscontext-api">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       AnalysisContext
+      </span>
+     </code>
+     API
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#columnstatistics-for-cardinality-estimation">
+     <code class="docutils literal notranslate">
+      <span class="pre">
+       ColumnStatistics
+      </span>
+     </code>
+     for Cardinality Estimation
+    </a>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#boundary-analaysis-flow">
+     Boundary Analaysis Flow
+    </a>
+    <ul class="nav section-nav flex-column">
+     <li class="toc-h4 nav-item toc-entry">
+      <a class="reference internal nav-link" href="#expression-boundary-analysis">
+       Expression Boundary Analysis
+      </a>
+     </li>
+    </ul>
+   </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#working-with-the-analysis-api">
+     Working with the analysis API
+    </a>
+   </li>
+  </ul>
+ </li>
 </ul>
 
 </nav>
@@ -914,6 +958,117 @@ in isolation (without any other rule being applied).</p>
 |                                                            |   PlaceholderRowExec                                                      |
 |                                                            |                                                                           |
 +------------------------------------------------------------+---------------------------------------------------------------------------+
+</pre></div>
+</div>
+</section>
+</section>
+<section id="thinking-about-query-optimization">
+<h2>Thinking about Query Optimization<a class="headerlink" href="#thinking-about-query-optimization" title="Link to this heading">¶</a></h2>
+<p>Query optimization in DataFusion uses a cost based model. The cost based model
+relies on table and column level statistics to estimate selectivity; selectivity
+estimates are an important piece in cost analysis for filters and projections
+as they allow estimating the cost of joins and filters.</p>
+<p>An important piece of building these estimates is <em>boundary analysis</em> which uses
+interval arithmetic to take an expression such as <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">&gt;</span> <span class="pre">2500</span> <span class="pre">AND</span> <span class="pre">a</span> <span class="pre">&lt;=</span> <span class="pre">5000</span></code> and
+build an accurate selectivity estimate that can then be used to find more efficient
+plans.</p>
+<section id="analysiscontext-api">
+<h3><code class="docutils literal notranslate"><span class="pre">AnalysisContext</span></code> API<a class="headerlink" href="#analysiscontext-api" title="Link to this heading">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">AnalysisContext</span></code> serves as a shared knowledge base during expression evaluation
+and boundary analysis. Think of it as a dynamic repository that maintains information about:</p>
+<ol class="arabic simple">
+<li><p>Current known boundaries for columns and expressions</p></li>
+<li><p>Statistics that have been gathered or inferred</p></li>
+<li><p>A mutable state that can be updated as analysis progresses</p></li>
+</ol>
+<p>What makes <code class="docutils literal notranslate"><span class="pre">AnalysisContext</span></code> particularly powerful is its ability to propagate information
+through the expression tree. As each node in the expression tree is analyzed, it can both
+read from and write to this shared context, allowing for sophisticated boundary analysis and inference.</p>
+</section>
+<section id="columnstatistics-for-cardinality-estimation">
+<h3><code class="docutils literal notranslate"><span class="pre">ColumnStatistics</span></code> for Cardinality Estimation<a class="headerlink" href="#columnstatistics-for-cardinality-estimation" title="Link to this heading">¶</a></h3>
+<p>Column statistics form the foundation of optimization decisions. Rather than just tracking
+simple metrics, DataFusion’s <code class="docutils literal notranslate"><span class="pre">ColumnStatistics</span></code> provides a rich set of information including:</p>
+<ul class="simple">
+<li><p>Null value counts</p></li>
+<li><p>Maximum and minimum values</p></li>
+<li><p>Value sums (for numeric columns)</p></li>
+<li><p>Distinct value counts</p></li>
+</ul>
+<p>Each of these statistics is wrapped in a <code class="docutils literal notranslate"><span class="pre">Precision</span></code> type that indicates whether the value is
+exact or estimated, allowing the optimizer to make informed decisions about the reliability
+of its cardinality estimates.</p>
+</section>
+<section id="boundary-analaysis-flow">
+<h3>Boundary Analaysis Flow<a class="headerlink" href="#boundary-analaysis-flow" title="Link to this heading">¶</a></h3>
+<p>The boundary analysis process flows through several stages, with each stage building
+upon the information gathered in previous stages. The <code class="docutils literal notranslate"><span class="pre">AnalysisContext</span></code> is continuously
+updated as the analysis progresses through the expression tree.</p>
+<section id="expression-boundary-analysis">
+<h4>Expression Boundary Analysis<a class="headerlink" href="#expression-boundary-analysis" title="Link to this heading">¶</a></h4>
+<p>When analyzing expressions, DataFusion runs boundary analysis using interval arithmetic.
+Consider a simple predicate like age &gt; 18 AND age &lt;= 25. The analysis flows as follows:</p>
+<ol class="arabic simple">
+<li><p>Context Initialization</p>
+<ul class="simple">
+<li><p>Begin with known column statistics</p></li>
+<li><p>Set up initial boundaries based on column constraints</p></li>
+<li><p>Initialize the shared analysis context</p></li>
+</ul>
+</li>
+<li><p>Expression Tree Walk</p>
+<ul class="simple">
+<li><p>Analyze each node in the expression tree</p></li>
+<li><p>Propagate boundary information upward</p></li>
+<li><p>Allow child nodes to influence parent boundaries</p></li>
+</ul>
+</li>
+<li><p>Boundary Updates</p>
+<ul class="simple">
+<li><p>Each expression can update the shared context</p></li>
+<li><p>Changes flow through the entire expression tree</p></li>
+<li><p>Final boundaries inform optimization decisions</p></li>
+</ul>
+</li>
+</ol>
+</section>
+</section>
+<section id="working-with-the-analysis-api">
+<h3>Working with the analysis API<a class="headerlink" href="#working-with-the-analysis-api" title="Link to this heading">¶</a></h3>
+<p>The following example shows how you can run an analysis pass on a physical expression
+to infer the selectivity of the expression and the space of possible values it can
+take.</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">analyze_filter_example</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Create a schema with an &#39;age&#39; column</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">age</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;age&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">);</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Schema</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="n">age</span><span class="p">]));</span>
+
+<span class="w">    </span><span class="c1">// Define column statistics</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">column_stats</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ColumnStatistics</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">null_count</span><span class="p">:</span><span class="w"> </span><span class="nc">Precision</span><span class="p">::</span><span class="n">Exact</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span>
+<span class="w">        </span><span class="n">max_value</span><span class="p">:</span><span class="w"> </span><span class="nc">Precision</span><span class="p">::</span><span class="n">Exact</span><span class="p">(</span><span class="n">ScalarValue</span><span class="p">::</span><span class="n">Int64</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="mi">79</span><span class="p">))),</span>
+<span class="w">        </span><span class="n">min_value</span><span class="p">:</span><span class="w"> </span><span class="nc">Precision</span><span class="p">::</span><span class="n">Exact</span><span class="p">(</span><span class="n">ScalarValue</span><span class="p">::</span><span class="n">Int64</span><span class="p">(</span><span class="nb">Some</span><span class="p">(</span><span class="mi">14</span><span class="p">))),</span>
+<span class="w">        </span><span class="n">distinct_count</span><span class="p">:</span><span class="w"> </span><span class="nc">Precision</span><span class="p">::</span><span class="n">Absent</span><span class="p">,</span>
+<span class="w">        </span><span class="n">sum_value</span><span class="p">:</span><span class="w"> </span><span class="nc">Precision</span><span class="p">::</span><span class="n">Absent</span><span class="p">,</span>
+<span class="w">    </span><span class="p">};</span>
+
+<span class="w">    </span><span class="c1">// Create expression: age &gt; 18 AND age &lt;= 25</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">col</span><span class="p">(</span><span class="s">&quot;age&quot;</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">gt</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">18</span><span class="k">i64</span><span class="p">))</span>
+<span class="w">        </span><span class="p">.</span><span class="n">and</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s">&quot;age&quot;</span><span class="p">).</span><span class="n">lt_eq</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">25</span><span class="k">i64</span><span class="p">)));</span>
+
+<span class="w">    </span><span class="c1">// Initialize analysis context</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">initial_boundaries</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="n">ExprBoundaries</span><span class="p">::</span><span class="n">try_from_column</span><span class="p">(</span>
+<span class="w">        </span><span class="o">&amp;</span><span class="n">schema</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">column_stats</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="o">?</span><span class="p">];</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">AnalysisContext</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">initial_boundaries</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// Analyze expression</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">df_schema</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DFSchema</span><span class="p">::</span><span class="n">try_from</span><span class="p">(</span><span class="n">schema</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">physical_expr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionContext</span><span class="p">::</span><span class="n">new</span><span class="p">().</span><span class="n">create_physical_expr</span><span class="p">(</span><span class="n">expr</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">df_schema</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">analysis</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">analyze</span><span class="p">(</span><span class="o">&amp;</span><span class="n">physical_expr</span><span class="p">,</span><span class="w"> </span><span class="n">context</span><span class="p">,</span><span class="w"> </span><span class="n">df_schema</span><span class="p">.</span><span class="n">as_ref</span><span class="p">())</span><span class="o">?</span><span class="p">;</span>
+
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 </section>
