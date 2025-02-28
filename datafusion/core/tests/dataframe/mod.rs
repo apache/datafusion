@@ -19,17 +19,9 @@
 mod dataframe_functions;
 mod describe;
 
-use arrow::array::{
-    record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
-    FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder,
-    Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
-    StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray,
-};
+use arrow::array::{record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray, FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder, Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, UnionBuilder};
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{
-    DataType, Field, Float32Type, Int32Type, Schema, SchemaRef, UInt64Type, UnionFields,
-    UnionMode,
-};
+use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type, Schema, SchemaRef, UInt64Type, UnionFields, UnionMode};
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
@@ -44,6 +36,7 @@ use sqlparser::ast::NullTreatment;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
+use futures::StreamExt;
 use tempfile::TempDir;
 use url::Url;
 
@@ -2843,6 +2836,53 @@ async fn sort_on_ambiguous_column() -> Result<()> {
 
     let expected = "Schema error: Ambiguous reference to unqualified field b";
     assert_eq!(err.strip_backtrace(), expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sort_on_union_with_logical_type() -> Result<()> {
+    let fields = [
+        (0, Arc::new(Field::new("A", DataType::Int32, false))),
+        (1, Arc::new(Field::new("B", DataType::Float64, false))),
+    ]
+        .into_iter()
+        .collect();
+    let schema = Schema::new(vec![Field::new(
+        "my_union",
+        DataType::Union(fields, UnionMode::Dense),
+        false,
+    )]);
+
+    let mut builder = UnionBuilder::new_dense();
+    builder.append::<Int32Type>("A", 1)?;
+    builder.append::<Float64Type>("B", 3.0)?;
+    builder.append::<Int32Type>("A", 1)?;
+    builder.append::<Float64Type>("B", 3.0)?;
+    let union = builder.build()?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table(
+        "test_table",
+        Arc::new(MemTable::try_new(
+            Arc::new(schema.clone()),
+            vec![vec![RecordBatch::try_new(
+                Arc::new(schema),
+                vec![Arc::new(union)],
+            )?]],
+        )?),
+    )?;
+
+    ctx.table("test_table")
+        .await?
+        .sort_by(vec![Expr::from(datafusion::common::Column::from(
+            "my_union",
+        ))])?
+        .execute_stream()
+        .await?
+        .next()
+        .await
+        .unwrap()?;
+
     Ok(())
 }
 
