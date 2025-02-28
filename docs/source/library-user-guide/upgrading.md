@@ -27,15 +27,14 @@ DataFusion is moving to a consistent API for invoking ScalarUDFs,
 [`ScalarUDFImpl::invoke_with_args()`], and deprecating
 [`ScalarUDFImpl::invoke()`], [`ScalarUDFImpl::invoke_batch()`], and [`ScalarUDFImpl::invoke_no_args()`]
 
-If you see errors such as the following it means the older APIs are being used
+If you see errors such as the following it means the older APIs are being used:
 
 ```text
 This feature is not implemented: Function concat does not implement invoke but called
 ```
 
-To fix this error, change your functions to use
-[`ScalarUDFImpl::invoke_with_args()`] instea, as shown below. See [PR 14876] for
-an example.
+To fix this error, use [`ScalarUDFImpl::invoke_with_args()`] instead, as shown
+below. See [PR 14876] for an example.
 
 Given existing code like this:
 
