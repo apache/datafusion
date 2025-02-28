@@ -946,6 +946,10 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>false</p></td>
 <td><p>When set to true, the source locations relative to the original SQL query (i.e. <a class="reference internal" href="#sqlparser::tokenizer::Span"><span class="xref myst"><code class="docutils literal notranslate"><span class="pre">Span</span></code></span></a>) will be collected and recorded in the logical plan nodes.</p></td>
 </tr>
+<tr class="row-odd"><td><p>datafusion.sql_parser.recursion_limit</p></td>
+<td><p>50</p></td>
+<td><p>Specifies the recursion depth limit when parsing complex SQL Queries</p></td>
+</tr>
 </tbody>
 </table>
 </section>
