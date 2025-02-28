@@ -86,20 +86,22 @@ use crate::{
 /// #  Field::new("c4", DataType::Int32, false),
 /// # ]));
 /// # // Note: crate mock ParquetSource, as ParquetSource is not in the datasource crate
-/// # struct ParquetSource {};
+/// # struct ParquetSource {
+/// #    projected_statistics: Option<Statistics>
+/// # };
 /// # impl FileSource for ParquetSource {
 /// #  fn create_file_opener(&self, _: Arc<dyn ObjectStore>, _: &FileScanConfig, _: usize) -> Arc<dyn FileOpener> { unimplemented!() }
 /// #  fn as_any(&self) -> &dyn Any { self  }
 /// #  fn with_batch_size(&self, _: usize) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn with_schema(&self, _: SchemaRef) -> Arc<dyn FileSource> { unimplemented!() }
 /// #  fn with_projection(&self, _: &FileScanConfig) -> Arc<dyn FileSource> { unimplemented!() }
-/// #  fn with_statistics(&self, _: Statistics) -> Arc<dyn FileSource> { Arc::new(Self::new()) }
+/// #  fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource> { Arc::new(Self {projected_statistics: Some(statistics)} ) }
 /// #  fn metrics(&self) -> &ExecutionPlanMetricsSet { unimplemented!() }
-/// #  fn statistics(&self) -> datafusion_common::Result<Statistics> { unimplemented!() }
+/// #  fn statistics(&self) -> datafusion_common::Result<Statistics> { Ok(self.projected_statistics.clone().expect("projected_statistics should be set")) }
 /// #  fn file_type(&self) -> &str { "parquet" }
 /// #  }
 /// # impl ParquetSource {
-/// #  fn new() -> Self { Self{} }
+/// #  fn new() -> Self { Self {projected_statistics: None} }
 /// # }
 /// // create FileScan config for reading parquet files from file://
 /// let object_store_url = ObjectStoreUrl::local_filesystem();
@@ -337,7 +339,7 @@ impl FileScanConfig {
     /// Set the statistics of the files
     pub fn with_statistics(mut self, statistics: Statistics) -> Self {
         self.statistics = statistics.clone();
-        self.file_source.with_statistics(statistics);
+        self.file_source = self.file_source.with_statistics(statistics);
         self
     }
 
@@ -355,6 +357,7 @@ impl FileScanConfig {
             .file_source
             .statistics()
             .unwrap_or(self.statistics.clone());
+
         let table_cols_stats = self
             .projection_indices()
             .into_iter()
@@ -1716,7 +1719,7 @@ mod tests {
         FileScanConfig::new(
             ObjectStoreUrl::parse("test:///").unwrap(),
             file_schema,
-            MockSource::default().with_statistics(statistics.clone()),
+            Arc::new(MockSource::default()),
         )
         .with_projection(projection)
         .with_statistics(statistics)
