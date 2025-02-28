@@ -145,7 +145,7 @@ let mut exec_plan_builder = ParquetExecBuilder::new(
 .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))
 .with_table_parquet_options(parquet_options);
 
-// Add filter 
+// Add filter
 if let Some(predicate) = logical_filter {
     if config.enable_parquet_pushdown {
         exec_plan_builder = exec_plan_builder.with_predicate(predicate);
@@ -161,7 +161,7 @@ New code should use `FileScanConfig` to build the appropriate `DataSourceExec`:
 let mut file_source = ParquetSource::new(parquet_options)
     .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}));
 
-// Add filter 
+// Add filter
 if let Some(predicate) = logical_filter {
     if config.enable_parquet_pushdown {
         file_source = file_source.with_predicate(Arc::clone(&file_schema), predicate);
