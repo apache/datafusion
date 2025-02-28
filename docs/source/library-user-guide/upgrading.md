@@ -38,7 +38,7 @@ below. See [PR 14876] for an example.
 
 Given existing code like this:
 
-````rust
+```rust
 # /*
 impl ScalarUDFImpl for SparkConcat {
 ...
@@ -52,8 +52,9 @@ impl ScalarUDFImpl for SparkConcat {
             ConcatFunc::new().invoke_batch(args, number_rows)
         }
     }
- # */
-}```
+}
+# */
+```
 
 To
 
@@ -74,7 +75,7 @@ impl ScalarUDFImpl for SparkConcat {
     }
 }
  # */
-````
+```
 
 [`scalarudfimpl::invoke()`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke
 [`scalarudfimpl::invoke_batch()`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke_batch
@@ -204,7 +205,7 @@ To escape `'` in SQL literals, use `''`:
 
 To include special characters (such as newlines via `\n`) you can use an `E` literal string. For example
 
-```
+```sql
 > select 'foo\nbar';
 +------------------+
 | Utf8("foo\nbar") |
