@@ -90,14 +90,14 @@ all use `DataSourceExec` and the format specific information is embodied in new
 traits `DataSource` and `FileSource`.
 
 Here is more information about
+
 - [Design Ticket]
 - Change PR [PR #14224]
 - Example of an Upgrade [PR in delta-rs]
 
-[Design Ticket]: https://github.com/apache/datafusion/issues/13838
-[PR #14224]: https://github.com/apache/datafusion/pull/14224
-[PR in delta-rs]: https://github.com/delta-io/delta-rs/pull/3261
-
+[design ticket]: https://github.com/apache/datafusion/issues/13838
+[pr #14224]: https://github.com/apache/datafusion/pull/14224
+[pr in delta-rs]: https://github.com/delta-io/delta-rs/pull/3261
 
 ### Cookbook: Changes to `ParquetExecBuilder`
 
