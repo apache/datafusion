@@ -1,0 +1,128 @@
+{
+  "columns": [
+    {
+      "name": "l_orderkey",
+      "arrowType": {
+        "INT64": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_partkey",
+      "arrowType": {
+        "INT64": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_suppkey",
+      "arrowType": {
+        "INT64": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_linenumber",
+      "arrowType": {
+        "INT64": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_quantity",
+      "arrowType": {
+        "DECIMAL": {
+          "precision": 15,
+          "scale": 2
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_extendedprice",
+      "arrowType": {
+        "DECIMAL": {
+          "precision": 15,
+          "scale": 2
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_discount",
+      "arrowType": {
+        "DECIMAL": {
+          "precision": 15,
+          "scale": 2
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_tax",
+      "arrowType": {
+        "DECIMAL": {
+          "precision": 15,
+          "scale": 2
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_returnflag",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_linestatus",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_shipdate",
+      "arrowType": {
+        "DATE32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_commitdate",
+      "arrowType": {
+        "DATE32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_receiptdate",
+      "arrowType": {
+        "DATE32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_shipinstruct",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_shipmode",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "l_comment",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    }
+  ]
+}
