@@ -82,7 +82,7 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(exec1.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
         exec1.statistics().unwrap().total_byte_size,
-        Precision::Exact(671)
+        Precision::Absent // todo: put Precision::Exact(671) when projected_stats supports total_byte_size calculation
     );
     assert_eq!(get_static_cache_size(&state1), 1);
 
@@ -93,7 +93,7 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(exec2.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
         exec2.statistics().unwrap().total_byte_size,
-        Precision::Exact(671)
+        Precision::Absent // todo: put Precision::Exact(671) when projected_stats supports total_byte_size calculation
     );
     assert_eq!(get_static_cache_size(&state2), 1);
 
@@ -104,7 +104,7 @@ async fn load_table_stats_with_session_level_cache() {
     assert_eq!(exec3.statistics().unwrap().num_rows, Precision::Exact(8));
     assert_eq!(
         exec3.statistics().unwrap().total_byte_size,
-        Precision::Exact(671)
+        Precision::Absent // todo: put Precision::Exact(671) when projected_stats supports total_byte_size calculation
     );
     // List same file no increase
     assert_eq!(get_static_cache_size(&state1), 1);

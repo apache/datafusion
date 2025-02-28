@@ -753,24 +753,16 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
     let source = Arc::new(ParquetSource::default());
-    let scan_config = FileScanConfig {
-        object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_groups: vec![vec![file_group]],
-        constraints: Constraints::empty(),
-        statistics: Statistics::new_unknown(&schema),
-        file_schema: schema,
-        projection: Some(vec![0, 1]),
-        limit: None,
-        table_partition_cols: vec![Field::new(
-            "part".to_string(),
-            wrap_partition_type_in_dict(DataType::Int16),
-            false,
-        )],
-        output_ordering: vec![],
-        file_compression_type: FileCompressionType::UNCOMPRESSED,
-        new_lines_in_values: false,
-        file_source: source,
-    };
+    let scan_config =
+        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
+            .with_projection(Some(vec![0, 1]))
+            .with_file_group(vec![file_group])
+            .with_table_partition_cols(vec![Field::new(
+                "part".to_string(),
+                wrap_partition_type_in_dict(DataType::Int16),
+                false,
+            )])
+            .with_newlines_in_values(false);
 
     roundtrip_test(scan_config.build())
 }
