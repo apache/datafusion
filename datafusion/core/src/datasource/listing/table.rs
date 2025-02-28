@@ -1239,6 +1239,7 @@ mod tests {
 
         let exec = table.scan(&state, None, &[], None).await?;
         assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
 
         Ok(())
