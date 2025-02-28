@@ -39,6 +39,10 @@ fn init() {
     ["--command", "select 1; select 2;", "--format", "json", "-q"],
     "[{\"Int64(1)\":1}]\n[{\"Int64(2)\":2}]\n"
 )]
+#[case::exec_backslash(
+    ["--file", "tests/data/backslash.txt", "--format", "json", "-q"],
+    "[{\"Utf8(\\\"\\\\\\\")\":\"\\\\\",\"Utf8(\\\"\\\\\\\\\\\")\":\"\\\\\\\\\",\"Utf8(\\\"\\\\\\\\\\\\\\\\\\\\\\\")\":\"\\\\\\\\\\\\\\\\\\\\\",\"Utf8(\\\"dsdsds\\\\\\\\\\\\\\\\\\\")\":\"dsdsds\\\\\\\\\\\\\\\\\",\"Utf8(\\\"\\\\t\\\")\":\"\\\\t\",\"Utf8(\\\"\\\\0\\\")\":\"\\\\0\",\"Utf8(\\\"\\\\n\\\")\":\"\\\\n\"}]\n"
+)]
 #[case::exec_from_files(
     ["--file", "tests/data/sql.txt", "--format", "json", "-q"],
     "[{\"Int64(1)\":1}]\n"
@@ -46,6 +50,12 @@ fn init() {
 #[case::set_batch_size(
     ["--command", "show datafusion.execution.batch_size", "--format", "json", "-q", "-b", "1"],
     "[{\"name\":\"datafusion.execution.batch_size\",\"value\":\"1\"}]\n"
+)]
+
+/// Add case fixed issue: https://github.com/apache/datafusion/issues/14920
+#[case::exec_from_commands(
+    ["--command", "SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC;", "--format", "table", "-q"],
+    "+----+\n| v1 |\n+----+\n| 5  |\n| 4  |\n| 3  |\n| 2  |\n| 1  |\n+----+\n"
 )]
 #[test]
 fn cli_quick_test<'a>(

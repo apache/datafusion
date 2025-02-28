@@ -150,9 +150,12 @@ async fn list_files_with_session_level_cache() {
     //Session 1 first time list files
     assert_eq!(get_list_file_cache_size(&state1), 0);
     let exec1 = table1.scan(&state1, None, &[], None).await.unwrap();
-    let data_source = exec1.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let source = data_source.source();
-    let parquet1 = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+    let data_source_exec = exec1.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source = data_source_exec.data_source();
+    let parquet1 = data_source
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet1.file_groups;
@@ -163,9 +166,12 @@ async fn list_files_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_list_file_cache_size(&state2), 0);
     let exec2 = table2.scan(&state2, None, &[], None).await.unwrap();
-    let data_source = exec2.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let source = data_source.source();
-    let parquet2 = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+    let data_source_exec = exec2.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source = data_source_exec.data_source();
+    let parquet2 = data_source
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap();
 
     assert_eq!(get_list_file_cache_size(&state2), 1);
     let fg2 = &parquet2.file_groups;
@@ -176,9 +182,12 @@ async fn list_files_with_session_level_cache() {
     //check session 1 cache result not show in session 2
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let exec3 = table1.scan(&state1, None, &[], None).await.unwrap();
-    let data_source = exec3.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let source = data_source.source();
-    let parquet3 = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+    let data_source_exec = exec3.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source = data_source_exec.data_source();
+    let parquet3 = data_source
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap();
 
     assert_eq!(get_list_file_cache_size(&state1), 1);
     let fg = &parquet3.file_groups;

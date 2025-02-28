@@ -247,7 +247,7 @@ impl MemoryExec {
 
     fn memory_source_config(&self) -> MemorySourceConfig {
         self.inner
-            .source()
+            .data_source()
             .as_any()
             .downcast_ref::<MemorySourceConfig>()
             .unwrap()
@@ -346,7 +346,7 @@ impl MemoryExec {
 }
 
 /// Data source configuration for reading in-memory batches of data
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemorySourceConfig {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,

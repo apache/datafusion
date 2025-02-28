@@ -87,7 +87,7 @@ use datafusion::physical_plan::windows::{
 use datafusion::physical_plan::{
     displayable, ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics,
 };
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
@@ -155,6 +155,31 @@ fn roundtrip_test_with_context(
     let codec = DefaultPhysicalExtensionCodec {};
     roundtrip_test_and_return(exec_plan, ctx, &codec)?;
     Ok(())
+}
+
+/// Perform a serde roundtrip for the specified sql query, and  assert that
+/// query results are identical.
+async fn roundtrip_test_sql_with_context(sql: &str, ctx: &SessionContext) -> Result<()> {
+    let codec = DefaultPhysicalExtensionCodec {};
+    let initial_plan = ctx.sql(sql).await?.create_physical_plan().await?;
+
+    roundtrip_test_and_return(initial_plan, ctx, &codec)?;
+    Ok(())
+}
+
+/// returns a SessionContext with `alltypes_plain` registered
+async fn all_types_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+
+    let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_plain",
+        &format!("{testdata}/alltypes_plain.parquet"),
+        ParquetReadOptions::default(),
+    )
+    .await?;
+
+    Ok(ctx)
 }
 
 #[test]
@@ -738,7 +763,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         output_ordering: vec![],
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
-        source,
+        file_source: source,
     };
 
     roundtrip_test(scan_config.build())
@@ -769,7 +794,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         output_ordering: vec![],
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
-        source,
+        file_source: source,
     };
 
     roundtrip_test(scan_config.build())
@@ -810,7 +835,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         output_ordering: vec![],
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
-        source,
+        file_source: source,
     };
 
     #[derive(Debug, Clone, Eq)]
@@ -1578,4 +1603,33 @@ async fn roundtrip_coalesce() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_parquet_select_star() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let sql = "select * from alltypes_plain";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_parquet_select_projection() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let sql = "select string_col, timestamp_col from alltypes_plain";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_parquet_select_star_predicate() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let sql = "select * from alltypes_plain where id > 4";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[ignore = "Test failing due to https://github.com/apache/datafusion/issues/14679"]
+#[tokio::test]
+async fn roundtrip_parquet_select_projection_predicate() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let sql = "select string_col, timestamp_col from alltypes_plain where id > 4";
+    roundtrip_test_sql_with_context(sql, &ctx).await
 }

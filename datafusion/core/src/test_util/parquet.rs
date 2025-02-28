@@ -200,9 +200,10 @@ impl TestParquetFile {
     /// Recursively searches for DataSourceExec and returns the metrics
     /// on the first one it finds
     pub fn parquet_metrics(plan: &Arc<dyn ExecutionPlan>) -> Option<MetricsSet> {
-        if let Some(maybe_file) = plan.as_any().downcast_ref::<DataSourceExec>() {
-            let source = maybe_file.source();
-            if let Some(maybe_parquet) = source.as_any().downcast_ref::<FileScanConfig>()
+        if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(maybe_parquet) =
+                data_source.as_any().downcast_ref::<FileScanConfig>()
             {
                 if maybe_parquet
                     .file_source()
@@ -210,7 +211,7 @@ impl TestParquetFile {
                     .downcast_ref::<ParquetSource>()
                     .is_some()
                 {
-                    return maybe_file.metrics();
+                    return data_source_exec.metrics();
                 }
             }
         }

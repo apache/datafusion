@@ -101,6 +101,7 @@ Here are some active projects using DataFusion:
 - [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [Dask SQL](https://github.com/dask-contrib/dask-sql) Distributed SQL query engine in Python
+- [datafusion-dft](https://github.com/datafusion-contrib/datafusion-dft) Batteries included CLI, TUI, and server implementations for DataFusion.
 - [delta-rs](https://github.com/delta-io/delta-rs) Native Rust implementation of Delta Lake
 - [Exon](https://github.com/wheretrue/exon) Analysis toolkit for life-science applications
 - [Funnel](https://funnel.io/) Data Platform powering Marketing Intelligence applications.
@@ -130,7 +131,6 @@ Here are some less active projects that used DataFusion:
 
 - [bdt](https://github.com/datafusion-contrib/bdt) Boring Data Tool
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
-- [datafusion-tui](https://github.com/datafusion-contrib/datafusion-tui) Text UI for DataFusion
 - [Flock](https://github.com/flock-lab/flock)
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
 

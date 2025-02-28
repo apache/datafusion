@@ -1660,7 +1660,7 @@ mod tests {
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{BinaryExpr, Literal};
     use datafusion_physical_expr::PhysicalExpr;
-    use hashbrown::raw::RawTable;
+    use hashbrown::HashTable;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -3299,7 +3299,7 @@ mod tests {
 
     #[test]
     fn join_with_hash_collision() -> Result<()> {
-        let mut hashmap_left = RawTable::with_capacity(2);
+        let mut hashmap_left = HashTable::with_capacity(2);
         let left = build_table_i32(
             ("a", &vec![10, 20]),
             ("x", &vec![100, 200]),
@@ -3315,8 +3315,8 @@ mod tests {
         )?;
 
         // Create hash collisions (same hashes)
-        hashmap_left.insert(hashes[0], (hashes[0], 1), |(h, _)| *h);
-        hashmap_left.insert(hashes[1], (hashes[1], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[0], (hashes[0], 1), |(h, _)| *h);
+        hashmap_left.insert_unique(hashes[1], (hashes[1], 1), |(h, _)| *h);
 
         let next = vec![2, 0];
 

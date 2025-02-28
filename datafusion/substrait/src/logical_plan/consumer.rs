@@ -1944,13 +1944,6 @@ pub async fn from_substrait_agg_func(
 
     let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
 
-    // deal with situation that count(*) got no arguments
-    let args = if udaf.name() == "count" && args.is_empty() {
-        vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
-    } else {
-        args
-    };
-
     Ok(Arc::new(Expr::AggregateFunction(
         expr::AggregateFunction::new_udf(udaf, args, distinct, filter, order_by, None),
     )))
@@ -3293,7 +3286,7 @@ mod test {
     use datafusion::execution::SessionState;
     use datafusion::prelude::{Expr, SessionContext};
     use datafusion::scalar::ScalarValue;
-    use std::sync::OnceLock;
+    use std::sync::LazyLock;
     use substrait::proto::expression::literal::{
         interval_day_to_second, IntervalCompound, IntervalDayToSecond,
         IntervalYearToMonth, LiteralType,
@@ -3301,11 +3294,12 @@ mod test {
     use substrait::proto::expression::window_function::BoundsType;
     use substrait::proto::expression::Literal;
 
-    static TEST_SESSION_STATE: OnceLock<SessionState> = OnceLock::new();
-    static TEST_EXTENSIONS: OnceLock<Extensions> = OnceLock::new();
+    static TEST_SESSION_STATE: LazyLock<SessionState> =
+        LazyLock::new(|| SessionContext::default().state());
+    static TEST_EXTENSIONS: LazyLock<Extensions> = LazyLock::new(Extensions::default);
     fn test_consumer() -> DefaultSubstraitConsumer<'static> {
-        let extensions = TEST_EXTENSIONS.get_or_init(Extensions::default);
-        let state = TEST_SESSION_STATE.get_or_init(|| SessionContext::default().state());
+        let extensions = &TEST_EXTENSIONS;
+        let state = &TEST_SESSION_STATE;
         DefaultSubstraitConsumer::new(extensions, state)
     }
 

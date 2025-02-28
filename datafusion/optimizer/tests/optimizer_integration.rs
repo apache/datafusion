@@ -198,7 +198,7 @@ fn between_date32_plus_interval() -> Result<()> {
     WHERE col_date32 between '1998-03-18' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Aggregate: groupBy=[[]], aggr=[[count(*)]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n  Projection: \
         \n    Filter: test.col_date32 >= Date32(\"1998-03-18\") AND test.col_date32 <= Date32(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date32]";
@@ -212,7 +212,7 @@ fn between_date64_plus_interval() -> Result<()> {
     WHERE col_date64 between '1998-03-18T00:00:00' AND cast('1998-03-18' as date) + INTERVAL '90 days'";
     let plan = test_sql(sql)?;
     let expected =
-        "Aggregate: groupBy=[[]], aggr=[[count(*)]]\
+        "Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n  Projection: \
         \n    Filter: test.col_date64 >= Date64(\"1998-03-18\") AND test.col_date64 <= Date64(\"1998-06-16\")\
         \n      TableScan: test projection=[col_date64]";
@@ -268,8 +268,8 @@ fn join_keys_in_subquery_alias_1() {
 fn push_down_filter_groupby_expr_contains_alias() {
     let sql = "SELECT * FROM (SELECT (col_int32 + col_uint32) AS c, count(*) FROM test GROUP BY 1) where c > 3";
     let plan = test_sql(sql).unwrap();
-    let expected = "Projection: test.col_int32 + test.col_uint32 AS c, count(*)\
-    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(*)]]\
+    let expected = "Projection: test.col_int32 + test.col_uint32 AS c, count(Int64(1)) AS count(*)\
+    \n  Aggregate: groupBy=[[test.col_int32 + CAST(test.col_uint32 AS Int32)]], aggr=[[count(Int64(1))]]\
     \n    Filter: test.col_int32 + CAST(test.col_uint32 AS Int32) > Int32(3)\
     \n      TableScan: test projection=[col_int32, col_uint32]";
     assert_eq!(expected, format!("{plan}"));
@@ -312,10 +312,9 @@ fn eliminate_redundant_null_check_on_count() {
         GROUP BY col_int32
         HAVING c IS NOT NULL";
     let plan = test_sql(sql).unwrap();
-    let expected = "\
-        Projection: test.col_int32, count(*) AS c\
-        \n  Aggregate: groupBy=[[test.col_int32]], aggr=[[count(*)]]\
-        \n    TableScan: test projection=[col_int32]";
+    let expected = "Projection: test.col_int32, count(Int64(1)) AS count(*) AS c\
+    \n  Aggregate: groupBy=[[test.col_int32]], aggr=[[count(Int64(1))]]\
+    \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan}"));
 }
 

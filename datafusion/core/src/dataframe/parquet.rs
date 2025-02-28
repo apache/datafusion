@@ -93,6 +93,7 @@ impl DataFrame {
         DataFrame {
             session_state: self.session_state,
             plan,
+            projection_requires_validation: self.projection_requires_validation,
         }
         .collect()
         .await

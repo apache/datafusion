@@ -56,8 +56,7 @@ fn run(column_count: u32, ctx: Arc<SessionContext>) {
 
             data_frame = data_frame
                 .with_column_renamed(field_name, new_field_name)
-                .unwrap();
-            data_frame = data_frame
+                .unwrap()
                 .with_column(new_field_name, btrim(vec![col(new_field_name)]))
                 .unwrap();
         }
@@ -68,8 +67,7 @@ fn run(column_count: u32, ctx: Arc<SessionContext>) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    // 500 takes far too long right now
-    for column_count in [10, 100, 200 /* 500 */] {
+    for column_count in [10, 100, 200, 500] {
         let ctx = create_context(column_count).unwrap();
 
         c.bench_function(&format!("with_column_{column_count}"), |b| {

@@ -242,7 +242,7 @@ config_namespace! {
         pub enable_options_value_normalization: bool, warn = "`enable_options_value_normalization` is deprecated and ignored", default = false
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
-        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
+        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
         pub dialect: String, default = "generic".to_string()
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
@@ -502,6 +502,10 @@ config_namespace! {
 
         /// (writing) Sets column index truncate length
         pub column_index_truncate_length: Option<usize>, default = Some(64)
+
+        /// (writing) Sets statictics truncate length. If NULL, uses
+        /// default parquet writer setting
+        pub statistics_truncate_length: Option<usize>, default = None
 
         /// (writing) Sets best effort maximum number of rows in data page
         pub data_page_row_count_limit: usize, default = 20_000
