@@ -48,7 +48,7 @@ use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-    FileSinkConfig, ParquetSource,
+    FileSinkConfig, FileSource, ParquetSource,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
@@ -778,24 +778,16 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
     let source = Arc::new(ParquetSource::default());
-    let scan_config = FileScanConfig {
-        object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_groups: vec![vec![file_group]],
-        constraints: Constraints::empty(),
-        statistics: Statistics::new_unknown(&schema),
-        file_schema: schema,
-        projection: Some(vec![0, 1]),
-        limit: None,
-        table_partition_cols: vec![Field::new(
-            "part".to_string(),
-            wrap_partition_type_in_dict(DataType::Int16),
-            false,
-        )],
-        output_ordering: vec![],
-        file_compression_type: FileCompressionType::UNCOMPRESSED,
-        new_lines_in_values: false,
-        file_source: source,
-    };
+    let scan_config =
+        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
+            .with_projection(Some(vec![0, 1]))
+            .with_file_group(vec![file_group])
+            .with_table_partition_cols(vec![Field::new(
+                "part".to_string(),
+                wrap_partition_type_in_dict(DataType::Int16),
+                false,
+            )])
+            .with_newlines_in_values(false);
 
     roundtrip_test(scan_config.build())
 }
@@ -1606,6 +1598,47 @@ async fn roundtrip_coalesce() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_projection_source() -> Result<()> {
+    let schema = Arc::new(Schema::new(Fields::from([
+        Arc::new(Field::new("a", DataType::Utf8, false)),
+        Arc::new(Field::new("b", DataType::Utf8, false)),
+        Arc::new(Field::new("c", DataType::Int32, false)),
+        Arc::new(Field::new("d", DataType::Int32, false)),
+    ])));
+
+    let statistics = Statistics::new_unknown(&schema);
+
+    let source = ParquetSource::default().with_statistics(statistics.clone());
+    let scan_config = FileScanConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_groups: vec![vec![PartitionedFile::new(
+            "/path/to/file.parquet".to_string(),
+            1024,
+        )]],
+        constraints: Constraints::empty(),
+        statistics,
+        file_schema: schema.clone(),
+        projection: Some(vec![0, 1, 2]),
+        limit: None,
+        table_partition_cols: vec![],
+        output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
+        file_source: source,
+    };
+
+    let filter = Arc::new(
+        FilterExec::try_new(
+            Arc::new(BinaryExpr::new(col("c", &schema)?, Operator::Eq, lit(1))),
+            scan_config.build(),
+        )?
+        .with_projection(Some(vec![0, 1]))?,
+    );
+
+    roundtrip_test(filter)
+}
+
+#[tokio::test]
 async fn roundtrip_parquet_select_star() -> Result<()> {
     let ctx = all_types_context().await?;
     let sql = "select * from alltypes_plain";
@@ -1626,7 +1659,6 @@ async fn roundtrip_parquet_select_star_predicate() -> Result<()> {
     roundtrip_test_sql_with_context(sql, &ctx).await
 }
 
-#[ignore = "Test failing due to https://github.com/apache/datafusion/issues/14679"]
 #[tokio::test]
 async fn roundtrip_parquet_select_projection_predicate() -> Result<()> {
     let ctx = all_types_context().await?;
