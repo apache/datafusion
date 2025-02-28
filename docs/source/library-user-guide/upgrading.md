@@ -21,35 +21,79 @@
 
 ## DataFusion `46.0.0`
 
+### Use `invoke_with_args` instead of `invoke()` and `invoke_batch()`
 
-### Changes to `invoke()` and `invoke_batch()` deprecated
+DataFusion is moving to a consistent API for invoking ScalarUDFs,
+[`ScalarUDFImpl::invoke_with_args()`], and deprecating
+[`ScalarUDFImpl::invoke()`], [`ScalarUDFImpl::invoke_batch()`], and [`ScalarUDFImpl::invoke_no_args()`]
 
-We are migrating away from `ScalarUDFImpl::invoke()` and
-`ScalarUDFImpl::invoke_batch()` in favor of `ScalarUDFImpl::invoke_with_args()`. (TODO get code links) 
+If you see errors such as the following it means the older APIs are being used
 
-If you see errors such as 
 ```text
-Example
+This feature is not implemented: Function concat does not implement invoke but called
 ```
 
-You can resolve them by replacing all .invoke() and .invoke_batch()calls with .invoke_with_args(). 
-```text
-TODO example
-```
+To fix this error, change your functions to use
+[`ScalarUDFImpl::invoke_with_args()`] instea, as shown below. See [PR 14876] for
+an example.
 
-Example of changes:
-- [PR XXXX] TODO
+Given existing code like this:
 
+````rust
+# /*
+impl ScalarUDFImpl for SparkConcat {
+...
+    fn invoke_batch(&self, args: &[ColumnarValue], number_rows: usize) -> Result<ColumnarValue> {
+        if args
+            .iter()
+            .any(|arg| matches!(arg.data_type(), DataType::List(_)))
+        {
+            ArrayConcat::new().invoke_batch(args, number_rows)
+        } else {
+            ConcatFunc::new().invoke_batch(args, number_rows)
+        }
+    }
+ # */
+}```
+
+To
+
+```rust
+# /* comment out so they don't run
+impl ScalarUDFImpl for SparkConcat {
+    ...
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        if args
+            .args
+            .iter()
+            .any(|arg| matches!(arg.data_type(), DataType::List(_)))
+        {
+            ArrayConcat::new().invoke_with_args(args)
+        } else {
+            ConcatFunc::new().invoke_with_args(args)
+        }
+    }
+}
+ # */
+````
+
+[`scalarudfimpl::invoke()`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke
+[`scalarudfimpl::invoke_batch()`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke_batch
+[`scalarudfimpl::invoke_no_args()`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke_no_args
+[`scalarudfimpl::invoke_with_args()`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/trait.ScalarUDFImpl.html#method.invoke_with_args
+[pr 14876]: https://github.com/apache/datafusion/pull/14876
 
 ### `ParquetExec`, `AvroExec`, `CsvExec`, `JsonExec` deprecated
 
 See more information
+
 - Change PR [PR #14224](https://github.com/apache/datafusion/pull/14224)
 - Example of an Upgrade [PR in delta-rs](https://github.com/delta-io/delta-rs/pull/3261)
 
-DataFusion 46 has a major change to how the built in DataSources are organized. The 
+DataFusion 46 has a major change to how the built in DataSources are organized. The
 
 ### Cookbook: Changes to `ParquetExecBuilder`
+
 #### Old pattern:
 
 When writing optimizer passes, some code treats ParquetExec specially like this:
@@ -62,14 +106,15 @@ When writing optimizer passes, some code treats ParquetExec specially like this:
 ```
 
 #### New Pattern
-With the new DataSource exec, most information is now on `FileScanConfig` and `ParquetSource` 
+
+With the new DataSource exec, most information is now on `FileScanConfig` and `ParquetSource`
 
 ```rust
 
 if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
   if let Some(scan_config) = datasource_exec.source().as_any().downcast_ref::<FileScanConfig>() {
     // FileGroups, and other information is on the FileScanConfig
-    // parquet 
+    // parquet
     if let Some(parquet_source) = scan_config.source.as_any().downcast_ref::<ParquetSource>()
     {
       // Information on PruningPredicates and parquet options are here
@@ -81,7 +126,7 @@ if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
 
 #### Old pattern:
 
-```rust
+````rust
         let mut exec_plan_builder = ParquetExecBuilder::new(
             FileScanConfig::new(self.log_store.object_store_url(), file_schema)
                 .with_file_groups(
@@ -152,8 +197,7 @@ if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
 // Build the actual scan like this
 parquet_scan: file_scan_config.build(),
 
-```
-
+````
 
 ### `datafusion-cli` no longer automatically unescapes strings
 
