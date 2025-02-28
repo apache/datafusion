@@ -1220,7 +1220,6 @@ pub async fn from_aggregate_rel(
                         _ if f.invocation == AggregationInvocation::All as i32 => false,
                         _ => false,
                     };
-
                     let order_by = if !f.sorts.is_empty() {
                         Some(
                             from_substrait_sorts(consumer, &f.sorts, input.schema())

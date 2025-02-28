@@ -61,7 +61,6 @@ pub trait FunctionRegistry {
     ) -> Result<Option<Arc<AggregateUDF>>> {
         not_impl_err!("Registering AggregateUDF")
     }
-
     /// Registers a new [`WindowUDF`], returning any previously registered
     /// implementation.
     ///

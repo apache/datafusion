@@ -1218,7 +1218,6 @@ pub fn from_aggregate_function(
                 null_treatment: _null_treatment,
             },
     } = agg_fn;
-
     let sorts = if let Some(order_by) = order_by {
         order_by
             .iter()
@@ -1227,7 +1226,6 @@ pub fn from_aggregate_function(
     } else {
         vec![]
     };
-
     let mut arguments: Vec<FunctionArgument> = vec![];
     for arg in args {
         arguments.push(FunctionArgument {
