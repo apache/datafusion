@@ -48,7 +48,9 @@ use datafusion_common::{
     downcast_value, internal_err, not_impl_err, Result, ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::{col, Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition};
+use datafusion_expr::{
+    col, Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition,
+};
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     Documentation, EmitTo, GroupsAccumulator, SetMonotonicity, Signature, Volatility,
@@ -99,7 +101,9 @@ pub fn count_all_window_column() -> Expr {
     col(Expr::WindowFunction(WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(count_udaf()),
         vec![Expr::Literal(COUNT_STAR_EXPANSION)],
-    )).schema_name().to_string())
+    ))
+    .schema_name()
+    .to_string())
 }
 
 /// Create count wildcard of Expr::Column
