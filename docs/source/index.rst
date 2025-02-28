@@ -132,7 +132,6 @@ To get started, see
    library-user-guide/extending-operators
    library-user-guide/profiling
    library-user-guide/query-optimizer
-   library-user-guide/api-health
    library-user-guide/upgrading
 
 .. .. _toc.contributor-guide:
@@ -146,6 +145,7 @@ To get started, see
    contributor-guide/development_environment
    contributor-guide/architecture
    contributor-guide/testing
+   contributor-guide/api-health
    contributor-guide/howtos
    contributor-guide/roadmap
    contributor-guide/governance
