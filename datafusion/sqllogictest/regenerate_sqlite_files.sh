@@ -164,14 +164,12 @@ echo "Updating the datafusion/sqllogictest/Cargo.toml file with an updated sqllo
 
 # update the sqllogictest Cargo.toml with the new repo for sqllogictest-rs (tied to a specific hash)
 cd "$DF_HOME" || exit;
-sd -f i '^sqllogictest.*' 'sqllogictest = { git = "https://github.com/Omega359/sqllogictest-rs.git", rev = "1cd933d" }' datafusion/sqllogictest/Cargo.toml
+sd -f i '^sqllogictest.*' 'sqllogictest = { git = "https://github.com/Omega359/sqllogictest-rs.git", rev = "73c47cf7" }' datafusion/sqllogictest/Cargo.toml
 
 echo "Replacing the datafusion/sqllogictest/bin/sqllogictests.rs file with a custom version required for running completion"
 
-# replace the sqllogictest.rs with a customized versions.
-cp datafusion/sqllogictest/regenerate/sqllogictests.rs                        datafusion/sqllogictest/bin/sqllogictests.rs
-cp datafusion/sqllogictest/regenerate/src/engines/postgres_engine/mod.rs      datafusion/sqllogictest/src/engines/postgres_engine/mod.rs
-cp datafusion/sqllogictest/regenerate/src/engines/datafusion_engine/runner.rs datafusion/sqllogictest/src/engines/datafusion_engine/runner.rs
+# replace the sqllogictest.rs with a customized version.
+cp datafusion/sqllogictest/regenerate/sqllogictests.rs datafusion/sqllogictest/bin/sqllogictests.rs
 
 echo "Running the sqllogictests with sqlite completion. This will take approximately an hour to run"
 
@@ -202,5 +200,6 @@ echo "Cleaning up source code changes and temporary files and directories"
 cd "$DF_HOME" || exit;
 find ./datafusion-testing/data/sqlite/ -type f -name "*.bak" -exec rm {} \;
 find ./datafusion/sqllogictest/test_files/pg_compat/ -type f -name "*.bak" -exec rm {} \;
-git checkout datafusion/sqllogictest
+git checkout datafusion/sqllogictest/Cargo.toml
+git checkout datafusion/sqllogictest/bin/sqllogictests.rs
 rm -rf /tmp/sqlitetesting

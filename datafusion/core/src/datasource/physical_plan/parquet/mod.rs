@@ -56,6 +56,7 @@ use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
+pub use row_filter::build_row_filter;
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use row_group_filter::RowGroupAccessPlanFilter;
 pub use writer::plan_to_parquet;
@@ -292,8 +293,8 @@ impl ParquetExec {
         }
     }
     fn file_scan_config(&self) -> FileScanConfig {
-        let source = self.inner.source();
-        source
+        self.inner
+            .data_source()
             .as_any()
             .downcast_ref::<FileScanConfig>()
             .unwrap()
@@ -301,8 +302,7 @@ impl ParquetExec {
     }
 
     fn parquet_source(&self) -> ParquetSource {
-        let source = self.file_scan_config();
-        source
+        self.file_scan_config()
             .file_source()
             .as_any()
             .downcast_ref::<ParquetSource>()
@@ -343,7 +343,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
         self
     }
@@ -366,7 +366,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.schema_adapter_factory = Some(schema_adapter_factory);
         self
     }
@@ -380,7 +380,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.table_parquet_options.global.pushdown_filters = pushdown_filters;
         self
     }
@@ -404,7 +404,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.table_parquet_options.global.reorder_filters = reorder_filters;
         self
     }
@@ -463,7 +463,7 @@ impl ParquetExec {
     ) -> Self {
         let mut config = self.file_scan_config();
         config.file_groups = file_groups;
-        self.inner = self.inner.with_source(Arc::new(config));
+        self.inner = self.inner.with_data_source(Arc::new(config));
         self
     }
 }
@@ -1469,7 +1469,7 @@ mod tests {
             ])
             .build();
         let partition_count = parquet_exec
-            .source()
+            .data_source()
             .output_partitioning()
             .partition_count();
         assert_eq!(partition_count, 1);
