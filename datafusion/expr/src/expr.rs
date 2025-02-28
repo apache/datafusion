@@ -290,11 +290,13 @@ pub enum Expr {
     /// Represents the call of a scalar function with a set of arguments.
     ScalarFunction(ScalarFunction),
     /// Calls an aggregate function with arguments, and optional
-    /// `ORDER BY`, `FILTER`, `DISTINCT`, `NULL TREATMENT`, and `WITHIN GROUP`.
+    /// `ORDER BY`, `FILTER`, `DISTINCT` and `NULL TREATMENT`.
     ///
     /// See also [`ExprFunctionExt`] to set these fields.
     ///
     /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
+    ///
+    /// cf. `WITHIN GROUP` is converted to `ORDER BY` internally in `datafusion/sql/src/expr/function.rs`
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),

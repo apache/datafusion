@@ -325,6 +325,10 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         Some(false)
     }
 
+    fn is_ordered_set_aggregate(&self) -> Option<bool> {
+        Some(true)
+    }
+
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }

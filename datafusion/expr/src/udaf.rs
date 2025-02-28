@@ -281,6 +281,11 @@ impl AggregateUDF {
         self.inner.supports_null_handling_clause()
     }
 
+    /// See [`AggregateUDFImpl::is_ordered_set_aggregate`] for more details.
+    pub fn is_ordered_set_aggregate(&self) -> Option<bool> {
+        self.inner.is_ordered_set_aggregate()
+    }
+
     /// Returns the documentation for this Aggregate UDF.
     ///
     /// Documentation can be accessed programmatically as well as
@@ -637,6 +642,12 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
     /// If the function does not, return false
     /// Otherwise return None (the default)
     fn supports_null_handling_clause(&self) -> Option<bool> {
+        None
+    }
+
+    /// If this function is ordered-set aggregate function, return true
+    /// If the function is not, return false
+    fn is_ordered_set_aggregate(&self) -> Option<bool> {
         None
     }
 

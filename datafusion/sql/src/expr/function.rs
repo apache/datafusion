@@ -92,7 +92,7 @@ struct FunctionArgs {
     null_treatment: Option<NullTreatment>,
     /// DISTINCT
     distinct: bool,
-    /// WITHIN_GROUP clause, if any
+    /// WITHIN GROUP clause, if any
     within_group: Vec<OrderByExpr>,
 }
 
@@ -344,12 +344,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
-                if let Some(fm) =
-                    self.context_provider.get_ordered_set_aggregate_meta(&name)
+                if fm.is_ordered_set_aggregate().unwrap_or(false)
+                    && within_group.is_empty()
                 {
-                    if within_group.is_empty() {
-                        return plan_err!("WITHIN GROUP clause is required when calling ordered set aggregate function({})", fm.name());
-                    }
+                    return plan_err!("WITHIN GROUP clause is required when calling ordered set aggregate function({})", fm.name());
                 }
 
                 if null_treatment.is_some()
@@ -361,35 +359,37 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     );
                 }
 
-                let order_by = self.order_by_to_sort_expr(
-                    order_by,
-                    schema,
-                    planner_context,
-                    true,
-                    None,
-                )?;
-                let order_by = (!order_by.is_empty()).then_some(order_by);
                 let mut args =
                     self.function_args_to_expr(args, schema, planner_context)?;
 
-                let within_group = self.order_by_to_sort_expr(
-                    within_group,
-                    schema,
-                    planner_context,
-                    false,
-                    None,
-                )?;
+                let order_by = if fm.is_ordered_set_aggregate().unwrap_or(false) {
+                    let within_group = self.order_by_to_sort_expr(
+                        within_group,
+                        schema,
+                        planner_context,
+                        false,
+                        None,
+                    )?;
 
-                // add target column expression in within group clause to function arguments
-                if !within_group.is_empty() {
-                    args = within_group
-                        .iter()
-                        .map(|sort| sort.expr.clone())
-                        .chain(args)
-                        .collect::<Vec<_>>();
-                }
-
-                let within_group = (!within_group.is_empty()).then_some(within_group);
+                    // add target column expression in within group clause to function arguments
+                    if !within_group.is_empty() {
+                        args = within_group
+                            .iter()
+                            .map(|sort| sort.expr.clone())
+                            .chain(args)
+                            .collect::<Vec<_>>();
+                    }
+                    (!within_group.is_empty()).then_some(within_group)
+                } else {
+                    let order_by = self.order_by_to_sort_expr(
+                        order_by,
+                        schema,
+                        planner_context,
+                        true,
+                        None,
+                    )?;
+                    (!order_by.is_empty()).then_some(order_by)
+                };
 
                 let filter: Option<Box<Expr>> = filter
                     .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))

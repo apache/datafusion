@@ -283,20 +283,22 @@ impl Unparser<'_> {
             }),
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func.name();
+                let within_group = if agg.func.is_ordered_set_aggregate() {
+                    agg.order_by
+                        .as_ref()
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .map(|sort_expr| self.sort_to_sql(sort_expr))
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    Vec::new()
+                };
 
                 let args = self.function_args_to_sql(&agg.args)?;
                 let filter = match &agg.filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
-
-                let within_group = agg
-                    .within_group
-                    .as_ref()
-                    .unwrap_or(&Vec::new())
-                    .iter()
-                    .map(|sort_expr| self.sort_to_sql(sort_expr))
-                    .collect::<Result<Vec<_>>>()?;
 
                 Ok(ast::Expr::Function(Function {
                     name: ObjectName(vec![Ident {
