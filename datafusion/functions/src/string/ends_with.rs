@@ -112,7 +112,7 @@ impl ScalarUDFImpl for EndsWithFunc {
 
 /// Returns true if string ends with suffix.
 /// ends_with('alphabet', 'abet') = 't'
-pub fn ends_with(args: &[ArrayRef]) -> Result<ArrayRef> {
+fn ends_with(args: &[ArrayRef]) -> Result<ArrayRef> {
     if let Some(coercion_data_type) =
         string_coercion(args[0].data_type(), args[1].data_type()).or_else(|| {
             binary_to_string_coercion(args[0].data_type(), args[1].data_type())

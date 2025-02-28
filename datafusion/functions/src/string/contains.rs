@@ -98,7 +98,7 @@ impl ScalarUDFImpl for ContainsFunc {
 }
 
 /// use `arrow::compute::contains` to do the calculation for contains
-pub fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
+fn contains(args: &[ArrayRef]) -> Result<ArrayRef, DataFusionError> {
     if let Some(coercion_data_type) =
         string_coercion(args[0].data_type(), args[1].data_type()).or_else(|| {
             binary_to_string_coercion(args[0].data_type(), args[1].data_type())
