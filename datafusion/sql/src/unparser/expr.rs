@@ -283,7 +283,7 @@ impl Unparser<'_> {
             }),
             Expr::AggregateFunction(agg) => {
                 let func_name = agg.func.name();
-                let within_group = if agg.func.is_ordered_set_aggregate() {
+                let within_group = if agg.func.is_ordered_set_aggregate().unwrap_or(false) {
                     agg.order_by
                         .as_ref()
                         .unwrap_or(&Vec::new())

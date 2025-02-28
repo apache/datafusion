@@ -1217,6 +1217,8 @@ pub fn from_aggregate_function(
 
     let sorts = if let Some(order_by) = order_by {
         order_by
+            .iter()
+            .map(|expr| to_substrait_sort_field(producer, expr, schema))
             .collect::<Result<Vec<_>>>()?
     } else {
         vec![]

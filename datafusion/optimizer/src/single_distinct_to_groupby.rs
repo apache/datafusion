@@ -576,7 +576,6 @@ mod tests {
             Some(Box::new(col("a").gt(lit(5)))),
             None,
             None,
-            None,
         ));
         let plan = LogicalPlanBuilder::from(table_scan)
             .aggregate(vec![col("c")], vec![expr, count_distinct(col("b"))])?
