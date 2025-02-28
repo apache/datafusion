@@ -322,15 +322,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut expr_columns: IndexSet<&Column> = IndexSet::new();
         let mut wildcard_columns: Vec<Column> = vec![];
         for expr in exprs {
-            if let Expr::Wildcard { .. } = expr {
-                // `exprlist_to_fields` to handle Expr::Wildcard case
-                let wildcard_fields = exprlist_to_fields([expr], plan)?;
-                wildcard_fields.into_iter().for_each(|field| {
-                    let column = Column::new(field.0, field.1.name());
+            match expr {
+                Expr::Wildcard { .. } => {
+                    // `exprlist_to_fields` to handle Expr::Wildcard case
+                    let wildcard_fields = exprlist_to_fields([expr], plan)?;
+                    wildcard_fields.into_iter().for_each(|field| {
+                        let column = Column::new(field.0, field.1.name());
+                        wildcard_columns.push(column);
+                    });
+                }
+                Expr::Alias(alias) => {
+                    let column = Column::new(alias.relation.clone(), alias.name.clone());
                     wildcard_columns.push(column);
-                });
-            } else {
-                expr_columns.extend(expr.column_refs())
+                }
+                _ => expr_columns.extend(expr.column_refs()),
             }
         }
         wildcard_columns.iter().for_each(|column| {
