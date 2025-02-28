@@ -31,9 +31,7 @@ use arrow::{
     buffer::Buffer,
     datatypes::{ArrowNativeType, DataType, Field, Schema, SchemaRef, UInt16Type},
 };
-use datafusion_common::{
-    exec_err, stats::Precision, ColumnStatistics, Constraints, Result, Statistics,
-};
+use datafusion_common::{exec_err, ColumnStatistics, Constraints, Result, Statistics};
 use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_execution::{
     object_store::ObjectStoreUrl, SendableRecordBatchStream, TaskContext,
@@ -373,8 +371,8 @@ impl FileScanConfig {
 
         Statistics {
             num_rows: statistics.num_rows,
-            // TODO correct byte size?
-            total_byte_size: Precision::Absent,
+            // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
+            total_byte_size: statistics.total_byte_size,
             column_statistics: table_cols_stats,
         }
     }
@@ -1068,6 +1066,7 @@ mod tests {
         compute::SortOptions,
     };
 
+    use datafusion_common::stats::Precision;
     use datafusion_common::{assert_batches_eq, DFSchema};
     use datafusion_expr::{execution_props::ExecutionProps, SortExpr};
     use datafusion_physical_expr::create_physical_expr;
