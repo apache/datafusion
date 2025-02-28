@@ -84,32 +84,38 @@ impl ScalarUDFImpl for SparkConcat {
 
 ### `ParquetExec`, `AvroExec`, `CsvExec`, `JsonExec` deprecated
 
-See more information
+DataFusion 46 has a major change to how the built in DataSources are organized.
+Instead of individual `ExecutionPlan`s for the different file formats they now
+all use `DataSourceExec` and the format specific information is embodied in new
+traits `DataSource` and `FileSource`.
 
-- Change PR [PR #14224](https://github.com/apache/datafusion/pull/14224)
-- Example of an Upgrade [PR in delta-rs](https://github.com/delta-io/delta-rs/pull/3261)
+Here is more information about
+- [Design Ticket]
+- Change PR [PR #14224]
+- Example of an Upgrade [PR in delta-rs]
 
-DataFusion 46 has a major change to how the built in DataSources are organized. The
+[Design Ticket]: https://github.com/apache/datafusion/issues/13838
+[PR #14224]: https://github.com/apache/datafusion/pull/14224
+[PR in delta-rs]: https://github.com/delta-io/delta-rs/pull/3261
+
 
 ### Cookbook: Changes to `ParquetExecBuilder`
 
-#### Old pattern:
-
-When writing optimizer passes, some code treats ParquetExec specially like this:
+Code that looks for `ParquetExec` like this will no longer work:
 
 ```rust
-            if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
-                // Do something with ParquetExec here
-            }
-        }
+# /* comment to avoid running
+    if let Some(parquet_exec) = plan.as_any().downcast_ref::<ParquetExec>() {
+        // Do something with ParquetExec here
+    }
+# */
 ```
 
-#### New Pattern
-
-With the new DataSource exec, most information is now on `FileScanConfig` and `ParquetSource`
+Instead, with `DataSourceExec`, the same information is now on `FileScanConfig` and
+`ParquetSource`. The equivalent code is
 
 ```rust
-
+# /* comment to avoid running
 if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
   if let Some(scan_config) = datasource_exec.source().as_any().downcast_ref::<FileScanConfig>() {
     // FileGroups, and other information is on the FileScanConfig
@@ -119,84 +125,66 @@ if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
       // Information on PruningPredicates and parquet options are here
     }
 }
+# */
 ```
 
 ### Cookbook: Changes to `ParquetExecBuilder`
 
-#### Old pattern:
-
-````rust
-        let mut exec_plan_builder = ParquetExecBuilder::new(
-            FileScanConfig::new(self.log_store.object_store_url(), file_schema)
-                .with_file_groups(
-                    // If all files were filtered out, we still need to emit at least one partition to
-                    // pass datafusion sanity checks.
-                    //
-                    // See https://github.com/apache/datafusion/issues/11322
-                    if file_groups.is_empty() {
-                        vec![vec![]]
-                    } else {
-                        file_groups.into_values().collect()
-                    },
-                )
-                .with_statistics(stats)
-                .with_projection(self.projection.cloned())
-                .with_limit(self.limit)
-                .with_table_partition_cols(table_partition_cols),
-        )
-        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))
-        .with_table_parquet_options(parquet_options);
-
-        // Sometimes (i.e Merge) we want to prune files that don't make the
-        // filter and read the entire contents for files that do match the
-        // filter
-        if let Some(predicate) = logical_filter {
-            if config.enable_parquet_pushdown {
-                exec_plan_builder = exec_plan_builder.with_predicate(predicate);
-            }
-        };```
-
-#### New Pattern
-
+Likewise code that builds `ParquetExec` using the `ParquetExecBuilder` such as
+the following must be changed:
 
 ```rust
-        let mut file_source = ParquetSource::new(parquet_options)
-            .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}));
-
-        // Sometimes (i.e Merge) we want to prune files that don't make the
-        // filter and read the entire contents for files that do match the
-        // filter
-        if let Some(predicate) = logical_filter {
-            if config.enable_parquet_pushdown {
-                file_source = file_source.with_predicate(Arc::clone(&file_schema), predicate);
-            }
-        };
-
-        let file_scan_config = FileScanConfig::new(
-            self.log_store.object_store_url(),
-            file_schema,
-            Arc::new(file_source),
-        )
-        .with_file_groups(
-            // If all files were filtered out, we still need to emit at least one partition to
-            // pass datafusion sanity checks.
-            //
-            // See https://github.com/apache/datafusion/issues/11322
-            if file_groups.is_empty() {
-                vec![vec![]]
-            } else {
-                file_groups.into_values().collect()
-            },
-        )
-        .with_statistics(stats)
+# /* comment to avoid running
+let mut exec_plan_builder = ParquetExecBuilder::new(
+    FileScanConfig::new(self.log_store.object_store_url(), file_schema)
         .with_projection(self.projection.cloned())
         .with_limit(self.limit)
-        .with_table_partition_cols(table_partition_cols);```
+        .with_table_partition_cols(table_partition_cols),
+)
+.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))
+.with_table_parquet_options(parquet_options);
+
+// Sometimes (i.e Merge) we want to prune files that don't make the
+// filter and read the entire contents for files that do match the
+// filter
+if let Some(predicate) = logical_filter {
+    if config.enable_parquet_pushdown {
+        exec_plan_builder = exec_plan_builder.with_predicate(predicate);
+    }
+};
+# */
+```
+
+New code should use `FileScanConfig` to build the appropriate `DataSourceExec`:
+
+```rust
+# /* comment to avoid running
+let mut file_source = ParquetSource::new(parquet_options)
+    .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}));
+
+// Sometimes (i.e Merge) we want to prune files that don't make the
+// filter and read the entire contents for files that do match the
+// filter
+if let Some(predicate) = logical_filter {
+    if config.enable_parquet_pushdown {
+        file_source = file_source.with_predicate(Arc::clone(&file_schema), predicate);
+    }
+};
+
+let file_scan_config = FileScanConfig::new(
+    self.log_store.object_store_url(),
+    file_schema,
+    Arc::new(file_source),
+)
+.with_statistics(stats)
+.with_projection(self.projection.cloned())
+.with_limit(self.limit)
+.with_table_partition_cols(table_partition_cols);
 
 // Build the actual scan like this
 parquet_scan: file_scan_config.build(),
-
-````
+# */
+```
 
 ### `datafusion-cli` no longer automatically unescapes strings
 
