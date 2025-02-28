@@ -151,7 +151,6 @@ impl PrintOptions {
                             print_options
                                 .format
                                 .print_header(&schema, &widths, writer)?;
-                            header_printed = true;
                         }
                         for preview_batch in preview_batches.drain(..) {
                             print_options.format.print_batch_with_widths(
@@ -194,6 +193,13 @@ impl PrintOptions {
                 if !header_printed {
                     print_options.format.print_header(
                         &schema,
+                        precomputed_widths.as_ref().unwrap(),
+                        writer,
+                    )?;
+                }
+                for preview_batch in preview_batches.drain(..) {
+                    print_options.format.print_batch_with_widths(
+                        &preview_batch,
                         precomputed_widths.as_ref().unwrap(),
                         writer,
                     )?;
