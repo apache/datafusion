@@ -32,8 +32,7 @@ use arrow::datatypes::{
 };
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion_expr::utils::COUNT_STAR_EXPANSION;
-use datafusion_functions_aggregate::count::{count_all, count_all_column, count_udaf};
+use datafusion_functions_aggregate::count::{count_all, count_all_column, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,
 };
@@ -2684,18 +2683,34 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     let ctx = create_join_context()?;
 
     let sql_results = ctx
-        .sql("select count(1) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)  from t1")
+        .sql("select count(*) OVER(ORDER BY a DESC RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING) from t1")
         .await?
         .explain(false, false)?
         .collect()
         .await?;
+
+    let actual_sql_result = "+---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+\
+\n| plan_type     | plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |\
+\n+---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+\
+\n| logical_plan  | Projection: count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS count(*) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING                                                                                                                                                                                                                                                                             |\
+\n|               |   WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]]                                                                                                                                                                                                                                                                                                                                                   |\
+\n|               |     TableScan: t1 projection=[a]                                                                                                                                                                                                                                                                                                                                                                                                                                          |\
+\n| physical_plan | ProjectionExec: expr=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@1 as count(*) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]                                                                                                                                                                                                                                                                |\
+\n|               |   BoundedWindowAggExec: wdw=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING: Ok(Field { name: \"count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(6)), end_bound: Following(UInt32(2)), is_causal: false }], mode=[Sorted] |\
+\n|               |     SortExec: expr=[a@0 DESC], preserve_partitioning=[false]                                                                                                                                                                                                                                                                                                                                                                                                              |\
+\n|               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                                                                                                                                                                                                   |\
+\n|               |                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |\
+\n+---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+";
+
+    assert_eq!(
+        actual_sql_result,
+        pretty_format_batches(&sql_results)?.to_string()
+    );
+
     let df_results = ctx
         .table("t1")
         .await?
-        .select(vec![Expr::WindowFunction(WindowFunction::new(
-            WindowFunctionDefinition::AggregateUDF(count_udaf()),
-            vec![Expr::Literal(COUNT_STAR_EXPANSION)],
-        ))
+        .select(vec![count_all_window()
         .order_by(vec![Sort::new(col("a"), false, true)])
         .window_frame(WindowFrame::new_bounds(
             WindowFrameUnits::Range,
@@ -2708,10 +2723,22 @@ async fn test_count_wildcard_on_window() -> Result<()> {
         .collect()
         .await?;
 
-    //make sure sql plan same with df plan
+    let actual_df_result = "+---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+\
+\n| plan_type     | plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |\
+\n+---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+\
+\n| logical_plan  | Projection: count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING                                                                                                                                                                                                                                                                                                                                                                    |\
+\n|               |   WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]]                                                                                                                                                                                                                                                                                                                                                   |\
+\n|               |     TableScan: t1 projection=[a]                                                                                                                                                                                                                                                                                                                                                                                                                                          |\
+\n| physical_plan | ProjectionExec: expr=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@1 as count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]                                                                                                                                                                                                                                                         |\
+\n|               |   BoundedWindowAggExec: wdw=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING: Ok(Field { name: \"count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(UInt32(6)), end_bound: Following(UInt32(2)), is_causal: false }], mode=[Sorted] |\
+\n|               |     SortExec: expr=[a@0 DESC], preserve_partitioning=[false]                                                                                                                                                                                                                                                                                                                                                                                                              |\
+\n|               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                                                                                                                                                                                                                                                                                                                                                                   |\
+\n|               |                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |\
+\n+---------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+";
+
     assert_eq!(
-        pretty_format_batches(&df_results)?.to_string(),
-        pretty_format_batches(&sql_results)?.to_string()
+        actual_df_result,
+        pretty_format_batches(&df_results)?.to_string()
     );
 
     Ok(())

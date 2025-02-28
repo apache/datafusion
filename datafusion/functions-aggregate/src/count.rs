@@ -17,6 +17,7 @@
 
 use ahash::RandomState;
 use datafusion_common::stats::Precision;
+use datafusion_expr::expr::WindowFunction;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
@@ -47,7 +48,7 @@ use datafusion_common::{
     downcast_value, internal_err, not_impl_err, Result, ScalarValue,
 };
 use datafusion_expr::function::StateFieldsArgs;
-use datafusion_expr::{col, Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
+use datafusion_expr::{col, Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition};
 use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     Documentation, EmitTo, GroupsAccumulator, SetMonotonicity, Signature, Volatility,
@@ -82,6 +83,14 @@ pub fn count_distinct(expr: Expr) -> Expr {
 /// Creates aggregation to count all rows, equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`
 pub fn count_all() -> Expr {
     count(Expr::Literal(COUNT_STAR_EXPANSION)).alias("count(*)")
+}
+
+/// Creates window aggregation to count all rows, equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`
+pub fn count_all_window() -> Expr {
+    Expr::WindowFunction(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(count_udaf()),
+        vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+    ))
 }
 
 /// Create count wildcard of Expr::Column
