@@ -582,7 +582,7 @@ To escape `'` in SQL literals, use `''`:
 
 Strings such as `foo\nbar` mean `\` followed by `n` (not newline):
 
-```
+```sql
 > select 'foo\nbar';
 +------------------+
 | Utf8("foo\nbar") |
