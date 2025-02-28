@@ -257,13 +257,13 @@ impl TreeNode for Expr {
             }) => (args, filter, order_by).map_elements(f)?.map_data(
                 |(new_args, new_filter, new_order_by)| {
                     Ok(Expr::AggregateFunction(AggregateFunction::new_udf(
-                       func,
-                       new_args,
-                       distinct,
-                       new_filter,
-                       new_order_by,
-                       null_treatment,
-                   )))
+                        func,
+                        new_args,
+                        distinct,
+                        new_filter,
+                        new_order_by,
+                        null_treatment,
+                    )))
                 },
             )?,
             Expr::GroupingSet(grouping_set) => match grouping_set {

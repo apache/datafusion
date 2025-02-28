@@ -1946,14 +1946,7 @@ pub async fn from_substrait_agg_func(
     let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
 
     Ok(Arc::new(Expr::AggregateFunction(
-        expr::AggregateFunction::new_udf(
-            udaf,
-            args,
-            distinct,
-            filter,
-            order_by,
-            None,
-        ),
+        expr::AggregateFunction::new_udf(udaf, args, distinct, filter, order_by, None),
     )))
 }
 
