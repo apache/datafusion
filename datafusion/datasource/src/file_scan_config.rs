@@ -244,7 +244,7 @@ impl DataSource for FileScanConfig {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        Ok(self.projected_stats())
+        Ok(self.projection_stats())
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
@@ -349,7 +349,7 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_stats(&self) -> Statistics {
+    fn projection_stats(&self) -> Statistics {
         let table_cols_stats = self
             .projection_indices()
             .into_iter()
@@ -371,7 +371,7 @@ impl FileScanConfig {
         }
     }
 
-    fn projected_schema(&self) -> Arc<Schema> {
+    fn projection_schema(&self) -> Arc<Schema> {
         let table_fields: Vec<_> = self
             .projection_indices()
             .into_iter()
@@ -391,7 +391,7 @@ impl FileScanConfig {
         ))
     }
 
-    fn projected_constraints(&self) -> Constraints {
+    fn projection_constraints(&self) -> Constraints {
         let indexes = self.projection_indices();
 
         self.constraints
@@ -486,9 +486,9 @@ impl FileScanConfig {
             );
         }
 
-        let schema = self.projected_schema();
-        let constraints = self.projected_constraints();
-        let stats = self.projected_stats();
+        let schema = self.projection_schema();
+        let constraints = self.projection_constraints();
+        let stats = self.projection_stats();
 
         let output_ordering = get_projected_output_ordering(self, &schema);
 
@@ -672,17 +672,17 @@ pub struct PartitionColumnProjector {
     /// insert the partition columns in the target record batch.
     projected_partition_indexes: Vec<(usize, usize)>,
     /// The schema of the table once the projection was applied.
-    projected_schema: SchemaRef,
+    projection_schema: SchemaRef,
 }
 
 impl PartitionColumnProjector {
     // Create a projector to insert the partitioning columns into batches read from files
-    // - `projected_schema`: the target schema with both file and partitioning columns
+    // - `projection_schema`: the target schema with both file and partitioning columns
     // - `table_partition_cols`: all the partitioning column names
-    pub fn new(projected_schema: SchemaRef, table_partition_cols: &[String]) -> Self {
+    pub fn new(projection_schema: SchemaRef, table_partition_cols: &[String]) -> Self {
         let mut idx_map = HashMap::new();
         for (partition_idx, partition_name) in table_partition_cols.iter().enumerate() {
-            if let Ok(schema_idx) = projected_schema.index_of(partition_name) {
+            if let Ok(schema_idx) = projection_schema.index_of(partition_name) {
                 idx_map.insert(partition_idx, schema_idx);
             }
         }
@@ -693,12 +693,12 @@ impl PartitionColumnProjector {
         Self {
             projected_partition_indexes,
             key_buffer_cache: Default::default(),
-            projected_schema,
+            projection_schema,
         }
     }
 
     // Transform the batch read from the file by inserting the partitioning columns
-    // to the right positions as deduced from `projected_schema`
+    // to the right positions as deduced from `projection_schema`
     // - `file_batch`: batch read from the file, with internal projection applied
     // - `partition_values`: the list of partition values, one for each partition column
     pub fn project(
@@ -706,8 +706,8 @@ impl PartitionColumnProjector {
         file_batch: RecordBatch,
         partition_values: &[ScalarValue],
     ) -> Result<RecordBatch> {
-        let expected_cols =
-            self.projected_schema.fields().len() - self.projected_partition_indexes.len();
+        let expected_cols = self.projection_schema.fields().len()
+            - self.projected_partition_indexes.len();
 
         if file_batch.columns().len() != expected_cols {
             return exec_err!(
@@ -729,7 +729,7 @@ impl PartitionColumnProjector {
             let mut partition_value = Cow::Borrowed(p_value);
 
             // check if user forgot to dict-encode the partition value
-            let field = self.projected_schema.field(sidx);
+            let field = self.projection_schema.field(sidx);
             let expected_data_type = field.data_type();
             let actual_data_type = partition_value.data_type();
             if let DataType::Dictionary(key_type, _) = expected_data_type {
@@ -753,7 +753,7 @@ impl PartitionColumnProjector {
         }
 
         RecordBatch::try_new_with_options(
-            Arc::clone(&self.projected_schema),
+            Arc::clone(&self.projection_schema),
             cols,
             &RecordBatchOptions::new().with_row_count(Some(file_batch.num_rows())),
         )
@@ -965,7 +965,7 @@ fn create_output_array(
 ///```
 fn get_projected_output_ordering(
     base_config: &FileScanConfig,
-    projected_schema: &SchemaRef,
+    projection_schema: &SchemaRef,
 ) -> Vec<LexOrdering> {
     let mut all_orderings = vec![];
     for output_ordering in &base_config.output_ordering {
@@ -973,7 +973,7 @@ fn get_projected_output_ordering(
         for PhysicalSortExpr { expr, options } in output_ordering.iter() {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
                 let name = col.name();
-                if let Some((idx, _)) = projected_schema.column_with_name(name) {
+                if let Some((idx, _)) = projection_schema.column_with_name(name) {
                     // Compute the new sort expression (with correct index) after projection:
                     new_ordering.push(PhysicalSortExpr {
                         expr: Arc::new(Column::new(name, idx)),
@@ -982,7 +982,7 @@ fn get_projected_output_ordering(
                     continue;
                 }
             }
-            // Cannot find expression in the projected_schema, stop iterating
+            // Cannot find expression in the projection_schema, stop iterating
             // since rest of the orderings are violated
             break;
         }
@@ -1002,7 +1002,7 @@ fn get_projected_output_ordering(
 
             let statistics = match MinMaxStatistics::new_from_files(
                 &new_ordering,
-                projected_schema,
+                projection_schema,
                 base_config.projection.as_deref(),
                 group,
             ) {
