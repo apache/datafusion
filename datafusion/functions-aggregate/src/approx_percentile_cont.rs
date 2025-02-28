@@ -74,7 +74,7 @@ pub fn approx_percentile_cont(
         args,
         false,
         None,
-        None,
+        within_group,
         None,
     ))
 }
