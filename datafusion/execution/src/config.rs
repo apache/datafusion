@@ -441,7 +441,10 @@ impl SessionConfig {
         self
     }
 
-    pub fn with_parquet_force_view_metadata(mut self, schema_force_view_types: bool) -> Self {
+    pub fn with_parquet_force_view_metadata(
+        mut self,
+        schema_force_view_types: bool,
+    ) -> Self {
         self.options.execution.parquet.schema_force_view_types = schema_force_view_types;
         self
     }
