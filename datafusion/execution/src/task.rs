@@ -19,8 +19,10 @@ use crate::{
     config::SessionConfig, memory_pool::MemoryPool, registry::FunctionRegistry,
     runtime_env::RuntimeEnv,
 };
+use datafusion_common::types::LogicalTypeRef;
 use datafusion_common::{plan_datafusion_err, DataFusionError, Result};
 use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::registry::{ExtensionTypeRegistry, MemoryExtensionTypeRegistry};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use std::collections::HashSet;
 use std::{collections::HashMap, sync::Arc};
@@ -46,6 +48,8 @@ pub struct TaskContext {
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions associated with this task context
     window_functions: HashMap<String, Arc<WindowUDF>>,
+    /// Extension types associated with this task context
+    extension_types: MemoryExtensionTypeRegistry,
     /// Runtime environment associated with this task context
     runtime: Arc<RuntimeEnv>,
 }
@@ -62,6 +66,7 @@ impl Default for TaskContext {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
+            extension_types: MemoryExtensionTypeRegistry::new(),
             runtime,
         }
     }
@@ -80,6 +85,7 @@ impl TaskContext {
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         window_functions: HashMap<String, Arc<WindowUDF>>,
+        extension_types: HashMap<String, LogicalTypeRef>,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         Self {
@@ -89,6 +95,7 @@ impl TaskContext {
             scalar_functions,
             aggregate_functions,
             window_functions,
+            extension_types: MemoryExtensionTypeRegistry::from(extension_types),
             runtime,
         }
     }
@@ -203,6 +210,23 @@ impl FunctionRegistry for TaskContext {
     }
 }
 
+impl ExtensionTypeRegistry for TaskContext {
+    fn get(&self, name: &str) -> Result<LogicalTypeRef> {
+        self.extension_types.get(name)
+    }
+
+    fn register_type(
+        &mut self,
+        logical_type: LogicalTypeRef,
+    ) -> Result<Option<LogicalTypeRef>> {
+        self.extension_types.register_type(logical_type)
+    }
+
+    fn deregister_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>> {
+        self.extension_types.deregister_type(name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,6 +264,7 @@ mod tests {
             HashMap::default(),
             HashMap::default(),
             HashMap::default(),
+            HashMap::default(),
             runtime,
         );
 
@@ -269,6 +294,7 @@ mod tests {
             Some("task_id".to_string()),
             "session_id".to_string(),
             session_config,
+            HashMap::default(),
             HashMap::default(),
             HashMap::default(),
             HashMap::default(),

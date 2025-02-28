@@ -27,13 +27,26 @@ pub enum TypeSignature<'a> {
     /// Represents a built-in native type.
     Native(&'a NativeType),
     /// Represents an arrow-compatible extension type.
-    /// (<https://arrow.apache.org/docs/format/Columnar.html#extension-types>)
+    Extension(ExtensionTypeSignature<'a>),
+}
+
+/// Represents an arrow-compatible extension type.
+/// (<https://arrow.apache.org/docs/format/Columnar.html#extension-types>)
+///
+/// The `name` should contain the same value as 'ARROW:extension:name'.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ExtensionTypeSignature<'a>  {
+    name: &'a str,
+    parameters: &'a [TypeParameter<'a>],
+}
+
+impl ExtensionTypeSignature<'_> {
+    /// Returns the name of the extension type.
     ///
     /// The `name` should contain the same value as 'ARROW:extension:name'.
-    Extension {
-        name: &'a str,
-        parameters: &'a [TypeParameter<'a>],
-    },
+    pub fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

@@ -80,6 +80,7 @@ use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
 use sqlparser::dialect::dialect_from_str;
 use url::Url;
 use uuid::Uuid;
+use datafusion_common::types::LogicalTypeRef;
 
 /// `SessionState` contains all the necessary state to plan and execute queries,
 /// such as configuration, functions, and runtime environment. Please see the
@@ -148,6 +149,8 @@ pub struct SessionState {
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Window functions registered in the context
     window_functions: HashMap<String, Arc<WindowUDF>>,
+    /// Extension types registered in the context
+    extension_types: HashMap<String, LogicalTypeRef>,
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Holds registered external FileFormat implementations
@@ -245,6 +248,10 @@ impl Session for SessionState {
 
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
         &self.window_functions
+    }
+
+    fn extension_types(&self) -> &HashMap<String, LogicalTypeRef> {
+        &self.extension_types
     }
 
     fn runtime_env(&self) -> &Arc<RuntimeEnv> {
@@ -1400,6 +1407,7 @@ impl SessionStateBuilder {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
+            extension_types: HashMap::new(),
             serializer_registry: serializer_registry
                 .unwrap_or(Arc::new(EmptySerializerRegistry)),
             file_formats: HashMap::new(),
@@ -1924,6 +1932,7 @@ impl From<&SessionState> for TaskContext {
             state.scalar_functions.clone(),
             state.aggregate_functions.clone(),
             state.window_functions.clone(),
+            state.extension_types.clone(),
             Arc::clone(&state.runtime_env),
         )
     }

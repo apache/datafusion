@@ -28,6 +28,7 @@ use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
+use datafusion_common::types::LogicalTypeRef;
 
 /// Interface for accessing [`SessionState`] from the catalog.
 ///
@@ -113,6 +114,9 @@ pub trait Session: Send + Sync {
     /// Return reference to window functions
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>>;
 
+    /// Return reference to extension types
+    fn extension_types(&self) -> &HashMap<String, LogicalTypeRef>;
+
     /// Return the runtime env
     fn runtime_env(&self) -> &Arc<RuntimeEnv>;
 
@@ -133,6 +137,7 @@ impl From<&dyn Session> for TaskContext {
             state.scalar_functions().clone(),
             state.aggregate_functions().clone(),
             state.window_functions().clone(),
+            state.extension_types().clone(),
             state.runtime_env().clone(),
         )
     }
