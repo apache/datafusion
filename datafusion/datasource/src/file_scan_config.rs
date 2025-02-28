@@ -1236,12 +1236,17 @@ mod tests {
         );
 
         let source_statistics = conf.file_source.statistics().unwrap();
+        let conf_stats = conf.statistics().unwrap();
 
-        // statistics should be preserved and passed into the source
-        assert_eq!(source_statistics.num_rows, Precision::Inexact(3));
+        // projection should be reflected in the file source statistics
+        assert_eq!(conf_stats.num_rows, Precision::Inexact(3));
 
         // 3 original statistics + 2 partition statistics
-        assert_eq!(source_statistics.column_statistics.len(), 5);
+        assert_eq!(conf_stats.column_statistics.len(), 5);
+
+        // file statics should not be modified
+        assert_eq!(source_statistics, statistics);
+        assert_eq!(source_statistics.column_statistics.len(), 3);
 
         let (proj_schema, ..) = conf.project();
         // created a projector for that projected schema
@@ -1706,7 +1711,7 @@ mod tests {
         FileScanConfig::new(
             ObjectStoreUrl::parse("test:///").unwrap(),
             file_schema,
-            Arc::new(MockSource::default()),
+            MockSource::default().with_statistics(statistics.clone()),
         )
         .with_projection(projection)
         .with_statistics(statistics)
