@@ -154,3 +154,34 @@ parquet_scan: file_scan_config.build(),
 
 ```
 
+
+### `datafusion-cli` no longer automatically unescapes strings
+
+`datafusion-cli` previously would incorrectly unescape string literals (see [ticket] for more details).
+
+To escape `'` in SQL literals, use `''`:
+
+```sql
+> select 'it''s escaped';
++----------------------+
+| Utf8("it's escaped") |
++----------------------+
+| it's escaped         |
++----------------------+
+1 row(s) fetched.
+```
+
+To include special characters (such as newlines via `\n`) you can use an `E` literal string. For example
+
+```
+> select 'foo\nbar';
++------------------+
+| Utf8("foo\nbar") |
++------------------+
+| foo\nbar         |
++------------------+
+1 row(s) fetched.
+Elapsed 0.005 seconds.
+```
+
+[ticket]: https://github.com/apache/datafusion/issues/13286
