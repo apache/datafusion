@@ -385,7 +385,7 @@ impl FileFormat for ParquetFormat {
         };
 
         let schema = if self.force_view_types() {
-            Arc::new(transform_schema_to_view(&schema))
+            Arc::new(transform_schema_to_view(schema.as_ref()))
         } else {
             schema
         };

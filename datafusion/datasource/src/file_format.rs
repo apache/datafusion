@@ -73,7 +73,10 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef>;
 
-    /// Transform the schema of the provided object. The cost and accuracy of the
+    /// Transform the schema of the provided object. For example for parquet files:
+    /// 1. Transform a schema so that any binary types are strings
+    /// 2. Transform a schema to use view types for Utf8 and Binary
+    /// Other file formats may have other transformations, but currently only for parquet
     async fn transform_schema(&self, schema: SchemaRef) -> Result<SchemaRef>;
 
     /// Infer the statistics for the provided object. The cost and accuracy of the
