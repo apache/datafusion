@@ -738,7 +738,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         output_ordering: vec![],
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
-        source,
+        file_source: source,
     };
 
     roundtrip_test(scan_config.build())
@@ -769,7 +769,7 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
         output_ordering: vec![],
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
-        source,
+        file_source: source,
     };
 
     roundtrip_test(scan_config.build())
@@ -810,7 +810,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         output_ordering: vec![],
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
-        source,
+        file_source: source,
     };
 
     #[derive(Debug, Clone, Eq)]

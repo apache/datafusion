@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use super::write::orchestration::spawn_writer_tasks_and_join;
 use super::{
-    Decoder, DecoderDeserializer, FileFormat, FileFormatFactory, FileScanConfig,
+    Decoder, DecoderDeserializer, FileFormat, FileFormatFactory,
     DEFAULT_SCHEMA_INFER_MAX_RECORD,
 };
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
@@ -52,6 +52,7 @@ use datafusion_common::{not_impl_err, GetExt, DEFAULT_JSON_EXTENSION};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
