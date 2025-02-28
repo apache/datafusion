@@ -177,6 +177,11 @@ pub enum SchemaError {
         field: Box<Column>,
         valid_fields: Vec<Column>,
     },
+    /// Schema contains a different number of fields and field qualifiers
+    UnmatchedFieldQualifiers {
+        field_count: usize,
+        qualifier_count: usize,
+    },
 }
 
 impl Display for SchemaError {
@@ -255,6 +260,16 @@ impl Display for SchemaError {
                         field.quoted_flat_name()
                     )
                 }
+            }
+            Self::UnmatchedFieldQualifiers {
+                field_count,
+                qualifier_count,
+            } => {
+                write!(
+                    f,
+                    "Schema contains a different number of fields ({}) and field qualifiers ({})",
+                    field_count, qualifier_count
+                )
             }
         }
     }
