@@ -212,6 +212,14 @@ fn _to_char_scalar(
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
     let array = expression.into_array(1)?;
 
+    // fix https://github.com/apache/datafusion/issues/14884
+    // If the input date/time is null, return a null Utf8 result.
+    if array.is_null(0) {
+        return Ok(match is_scalar_expression {
+            true => ColumnarValue::Scalar(ScalarValue::Utf8(None)),
+            false => ColumnarValue::Array(new_null_array(&Utf8, array.len())),
+        });
+    }
     if format.is_none() {
         if is_scalar_expression {
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
@@ -252,6 +260,13 @@ fn _to_char_array(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let data_type = arrays[0].data_type();
 
     for idx in 0..arrays[0].len() {
+        // fix https://github.com/apache/datafusion/issues/14884
+        // If the date/time value is null, push None.
+        if arrays[0].is_null(idx) {
+            results.push(None);
+            continue;
+        }
+
         let format = if format_array.is_null(idx) {
             None
         } else {
@@ -662,5 +677,32 @@ mod tests {
             result.err().unwrap().strip_backtrace(),
             "Execution error: Format for `to_char` must be non-null Utf8, received Timestamp(Nanosecond, None)"
         );
+    }
+
+    #[test]
+    fn test_to_char_input_none_array() {
+        let date_array = Arc::new(Date32Array::from(vec![Some(18506), None])) as ArrayRef;
+        let format_array =
+            StringArray::from(vec!["%Y-%m-%d".to_string(), "%Y-%m-%d".to_string()]);
+        let args = datafusion_expr::ScalarFunctionArgs {
+            args: vec![
+                ColumnarValue::Array(date_array),
+                ColumnarValue::Array(Arc::new(format_array) as ArrayRef),
+            ],
+            number_rows: 2,
+            return_type: &DataType::Utf8,
+        };
+        let result = ToCharFunc::new()
+            .invoke_with_args(args)
+            .expect("Expected no error");
+        if let ColumnarValue::Array(result) = result {
+            let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+            assert_eq!(result.len(), 2);
+            // The first element is valid, second is null.
+            assert!(!result.is_null(0));
+            assert!(result.is_null(1));
+        } else {
+            panic!("Expected an array value");
+        }
     }
 }
