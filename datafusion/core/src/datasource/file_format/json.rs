@@ -246,10 +246,7 @@ impl FileFormat for JsonFormat {
         Ok(Statistics::new_unknown(&table_schema))
     }
 
-    async fn transform_schema(
-        &self,
-        schema: SchemaRef,
-    ) -> Result<SchemaRef> {
+    async fn transform_schema(&self, schema: SchemaRef) -> Result<SchemaRef> {
         Ok(schema)
     }
 

@@ -143,10 +143,12 @@ impl TableProviderFactory for ListingTableFactory {
 
                 schema
             }
-            Some(s) => s,
+            Some(s) => {
+                // For provided schema, we also need to transform it,
+                // and which is also done for the infer schema if it is not provided
+                options.format.transform_schema(s).await?
+            }
         };
-
-        resolved_schema = options.format.transform_schema(resolved_schema).await?;
 
         let config = ListingTableConfig::new(table_path)
             .with_listing_options(options.with_file_sort_order(cmd.order_exprs.clone()))

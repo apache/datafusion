@@ -74,10 +74,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     ) -> Result<SchemaRef>;
 
     /// Transform the schema of the provided object. The cost and accuracy of the
-    async fn transform_schema(
-        &self,
-        schema: SchemaRef,
-    ) -> Result<SchemaRef>;
+    async fn transform_schema(&self, schema: SchemaRef) -> Result<SchemaRef>;
 
     /// Infer the statistics for the provided object. The cost and accuracy of the
     /// estimated statistics might vary greatly between file formats.

@@ -362,14 +362,22 @@ impl FileFormat for ParquetFormat {
             Schema::try_merge(schemas)
         }?;
 
+        let schema = if self.binary_as_string() {
+            transform_binary_to_string(&schema)
+        } else {
+            schema
+        };
+
+        let schema = if self.force_view_types() {
+            transform_schema_to_view(&schema)
+        } else {
+            schema
+        };
+
         Ok(Arc::new(schema))
     }
 
-    async fn transform_schema(
-        &self,
-        schema: SchemaRef
-    ) -> Result<SchemaRef> {
-        println!("transform_schema schema {:?}", schema);
+    async fn transform_schema(&self, schema: SchemaRef) -> Result<SchemaRef> {
         let schema = if self.binary_as_string() {
             Arc::new(transform_binary_to_string(schema.as_ref()))
         } else {
@@ -381,8 +389,6 @@ impl FileFormat for ParquetFormat {
         } else {
             schema
         };
-
-        println!("Done schema {:?}", schema);
         Ok(schema)
     }
 
