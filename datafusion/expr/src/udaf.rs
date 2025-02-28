@@ -453,8 +453,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         };
 
         if let Some(order_by) = order_by {
+            let clause = match self.is_ordered_set_aggregate().unwrap_or(false) {
+                true => "WITHIN GROUP",
+                false => "ORDER BY",
+            };
+
             schema_name.write_fmt(format_args!(
-                " ORDER BY [{}]",
+                " {} [{}]",
+                clause,
                 schema_name_from_sorts(order_by)?
             ))?;
         };
