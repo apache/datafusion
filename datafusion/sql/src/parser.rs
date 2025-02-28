@@ -333,8 +333,6 @@ impl<'a> DFParserBuilder<'a> {
     }
 
     /// Adjust the recursion limit of sql parsing.  Defaults to 50
-    ///
-    /// Defaults to
     pub fn with_recursion_limit(mut self, recursion_limit: usize) -> Self {
         self.recursion_limit = recursion_limit;
         self
