@@ -489,6 +489,7 @@ impl SessionState {
         let mut statements = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
             .with_recursion_limit(recursion_limit)
+            .build()?
             .parse_statements()?;
 
         if statements.len() > 1 {
@@ -534,6 +535,7 @@ impl SessionState {
         let expr = DFParserBuilder::new(sql)
             .with_dialect(dialect.as_ref())
             .with_recursion_limit(recursion_limit)
+            .build()?
             .parse_expr()?;
 
         Ok(expr)
