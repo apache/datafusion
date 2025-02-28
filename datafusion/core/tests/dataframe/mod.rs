@@ -2470,6 +2470,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
         .collect()
         .await?;
 
+    // TODO: Remove duplicated alias in Sort
     let expected_sql_result = "+---------------+------------------------------------------------------------------------------------------------------------+\
     \n| plan_type     | plan                                                                                                       |\
     \n+---------------+------------------------------------------------------------------------------------------------------------+\
@@ -2530,7 +2531,23 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
         .collect()
         .await?;
 
-    let expected_sql_result = "+---------------+------------------------------------------------------------------------------------------------------------------------+\n| plan_type     | plan                                                                                                                   |\n+---------------+------------------------------------------------------------------------------------------------------------------------+\n| logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1.count(*)                                                        |\n|               |   TableScan: t1 projection=[a, b]                                                                                      |\n|               |   SubqueryAlias: __correlated_sq_1                                                                                     |\n|               |     Projection: count(Int64(1)) AS count(*)                                                                            |\n|               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]                                                                |\n|               |         TableScan: t2 projection=[]                                                                                    |\n| physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                            |\n|               |   HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |\n|               |     ProjectionExec: expr=[4 as count(*)]                                                                               |\n|               |       PlaceholderRowExec                                                                                               |\n|               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |\n|               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                |\n|               |                                                                                                                        |\n+---------------+------------------------------------------------------------------------------------------------------------------------+";
+    let expected_sql_result = "+---------------+------------------------------------------------------------------------------------------------------------------------+\
+\n| plan_type     | plan                                                                                                                   |\
+\n+---------------+------------------------------------------------------------------------------------------------------------------------+\
+\n| logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1.count(*)                                                        |\
+\n|               |   TableScan: t1 projection=[a, b]                                                                                      |\
+\n|               |   SubqueryAlias: __correlated_sq_1                                                                                     |\
+\n|               |     Projection: count(Int64(1)) AS count(*)                                                                            |\
+\n|               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]                                                                |\
+\n|               |         TableScan: t2 projection=[]                                                                                    |\
+\n| physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                            |\
+\n|               |   HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |\
+\n|               |     ProjectionExec: expr=[4 as count(*)]                                                                               |\
+\n|               |       PlaceholderRowExec                                                                                               |\
+\n|               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |\
+\n|               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                |\
+\n|               |                                                                                                                        |\
+\n+---------------+------------------------------------------------------------------------------------------------------------------------+";
 
     assert_eq!(
         expected_sql_result,
@@ -2559,7 +2576,22 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
         .collect()
         .await?;
 
-    let actual_df_result= "+---------------+------------------------------------------------------------------------------------------------------------------------+\n| plan_type     | plan                                                                                                                   |\n+---------------+------------------------------------------------------------------------------------------------------------------------+\n| logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1.count(*)                                                        |\n|               |   TableScan: t1 projection=[a, b]                                                                                      |\n|               |   SubqueryAlias: __correlated_sq_1                                                                                     |\n|               |     Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]                                                      |\n|               |       TableScan: t2 projection=[]                                                                                      |\n| physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                            |\n|               |   HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |\n|               |     ProjectionExec: expr=[4 as count(*)]                                                                               |\n|               |       PlaceholderRowExec                                                                                               |\n|               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |\n|               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                |\n|               |                                                                                                                        |\n+---------------+------------------------------------------------------------------------------------------------------------------------+";
+    let actual_df_result= "+---------------+------------------------------------------------------------------------------------------------------------------------+\
+\n| plan_type     | plan                                                                                                                   |\
+\n+---------------+------------------------------------------------------------------------------------------------------------------------+\
+\n| logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1.count(*)                                                        |\
+\n|               |   TableScan: t1 projection=[a, b]                                                                                      |\
+\n|               |   SubqueryAlias: __correlated_sq_1                                                                                     |\
+\n|               |     Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]                                                      |\
+\n|               |       TableScan: t2 projection=[]                                                                                      |\
+\n| physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                            |\
+\n|               |   HashJoinExec: mode=Partitioned, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |\
+\n|               |     ProjectionExec: expr=[4 as count(*)]                                                                               |\
+\n|               |       PlaceholderRowExec                                                                                               |\
+\n|               |     ProjectionExec: expr=[a@0 as a, b@1 as b, CAST(a@0 AS Int64) as CAST(t1.a AS Int64)]                               |\
+\n|               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                |\
+\n|               |                                                                                                                        |\
+\n+---------------+------------------------------------------------------------------------------------------------------------------------+";
 
     // make sure sql plan same with df plan
     assert_eq!(
@@ -2580,7 +2612,25 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
         .collect()
         .await?;
 
-    let actual_sql_result = "+---------------+---------------------------------------------------------+\n| plan_type     | plan                                                    |\n+---------------+---------------------------------------------------------+\n| logical_plan  | LeftSemi Join:                                          |\n|               |   TableScan: t1 projection=[a, b]                       |\n|               |   SubqueryAlias: __correlated_sq_1                      |\n|               |     Projection:                                         |\n|               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] |\n|               |         TableScan: t2 projection=[]                     |\n| physical_plan | NestedLoopJoinExec: join_type=RightSemi                 |\n|               |   ProjectionExec: expr=[]                               |\n|               |     PlaceholderRowExec                                  |\n|               |   DataSourceExec: partitions=1, partition_sizes=[1]     |\n|               |                                                         |\n+---------------+---------------------------------------------------------+";
+    // TODO:
+    // 1) remove empty Projection
+    // 2) why count(*) alias is not shown
+    let actual_sql_result =
+        "+---------------+---------------------------------------------------------+\
+    \n| plan_type     | plan                                                    |\
+    \n+---------------+---------------------------------------------------------+\
+    \n| logical_plan  | LeftSemi Join:                                          |\
+    \n|               |   TableScan: t1 projection=[a, b]                       |\
+    \n|               |   SubqueryAlias: __correlated_sq_1                      |\
+    \n|               |     Projection:                                         |\
+    \n|               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] |\
+    \n|               |         TableScan: t2 projection=[]                     |\
+    \n| physical_plan | NestedLoopJoinExec: join_type=RightSemi                 |\
+    \n|               |   ProjectionExec: expr=[]                               |\
+    \n|               |     PlaceholderRowExec                                  |\
+    \n|               |   DataSourceExec: partitions=1, partition_sizes=[1]     |\
+    \n|               |                                                         |\
+    \n+---------------+---------------------------------------------------------+";
 
     assert_eq!(
         actual_sql_result,
@@ -2605,7 +2655,21 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
         .collect()
         .await?;
 
-    let actual_df_result = "+---------------+---------------------------------------------------------------------+\n| plan_type     | plan                                                                |\n+---------------+---------------------------------------------------------------------+\n| logical_plan  | LeftSemi Join:                                                      |\n|               |   TableScan: t1 projection=[a, b]                                   |\n|               |   SubqueryAlias: __correlated_sq_1                                  |\n|               |     Projection:                                                     |\n|               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] |\n|               |         TableScan: t2 projection=[]                                 |\n| physical_plan | NestedLoopJoinExec: join_type=RightSemi                             |\n|               |   ProjectionExec: expr=[]                                           |\n|               |     PlaceholderRowExec                                              |\n|               |   DataSourceExec: partitions=1, partition_sizes=[1]                 |\n|               |                                                                     |\n+---------------+---------------------------------------------------------------------+";
+    let actual_df_result = "+---------------+---------------------------------------------------------------------+\
+    \n| plan_type     | plan                                                                |\
+    \n+---------------+---------------------------------------------------------------------+\
+    \n| logical_plan  | LeftSemi Join:                                                      |\
+    \n|               |   TableScan: t1 projection=[a, b]                                   |\
+    \n|               |   SubqueryAlias: __correlated_sq_1                                  |\
+    \n|               |     Projection:                                                     |\
+    \n|               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] |\
+    \n|               |         TableScan: t2 projection=[]                                 |\
+    \n| physical_plan | NestedLoopJoinExec: join_type=RightSemi                             |\
+    \n|               |   ProjectionExec: expr=[]                                           |\
+    \n|               |     PlaceholderRowExec                                              |\
+    \n|               |   DataSourceExec: partitions=1, partition_sizes=[1]                 |\
+    \n|               |                                                                     |\
+    \n+---------------+---------------------------------------------------------------------+";
 
     assert_eq!(
         actual_df_result,
@@ -2665,7 +2729,17 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
         .collect()
         .await?;
 
-    let actual_sql_result =  "+---------------+-----------------------------------------------------+\n| plan_type     | plan                                                |\n+---------------+-----------------------------------------------------+\n| logical_plan  | Projection: count(Int64(1)) AS count(*)             |\n|               |   Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] |\n|               |     TableScan: t1 projection=[]                     |\n| physical_plan | ProjectionExec: expr=[4 as count(*)]                |\n|               |   PlaceholderRowExec                                |\n|               |                                                     |\n+---------------+-----------------------------------------------------+";
+    let actual_sql_result =
+        "+---------------+-----------------------------------------------------+\
+\n| plan_type     | plan                                                |\
+\n+---------------+-----------------------------------------------------+\
+\n| logical_plan  | Projection: count(Int64(1)) AS count(*)             |\
+\n|               |   Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] |\
+\n|               |     TableScan: t1 projection=[]                     |\
+\n| physical_plan | ProjectionExec: expr=[4 as count(*)]                |\
+\n|               |   PlaceholderRowExec                                |\
+\n|               |                                                     |\
+\n+---------------+-----------------------------------------------------+";
     assert_eq!(
         actual_sql_result,
         pretty_format_batches(&sql_results)?.to_string()
@@ -2681,7 +2755,15 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
         .collect()
         .await?;
 
-    let actual_df_result = "+---------------+---------------------------------------------------------------+\n| plan_type     | plan                                                          |\n+---------------+---------------------------------------------------------------+\n| logical_plan  | Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] |\n|               |   TableScan: t1 projection=[]                                 |\n| physical_plan | ProjectionExec: expr=[4 as count(*)]                          |\n|               |   PlaceholderRowExec                                          |\n|               |                                                               |\n+---------------+---------------------------------------------------------------+";
+    let actual_df_result = "+---------------+---------------------------------------------------------------+\
+\n| plan_type     | plan                                                          |\
+\n+---------------+---------------------------------------------------------------+\
+\n| logical_plan  | Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]] |\
+\n|               |   TableScan: t1 projection=[]                                 |\
+\n| physical_plan | ProjectionExec: expr=[4 as count(*)]                          |\
+\n|               |   PlaceholderRowExec                                          |\
+\n|               |                                                               |\
+\n+---------------+---------------------------------------------------------------+";
     assert_eq!(
         actual_df_result,
         pretty_format_batches(&df_results)?.to_string()
@@ -2707,7 +2789,34 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
         .collect()
         .await?;
 
-    let actual_sql_result = "+---------------+---------------------------------------------------------------------------------------------------------------------------+\n| plan_type     | plan                                                                                                                      |\n+---------------+---------------------------------------------------------------------------------------------------------------------------+\n| logical_plan  | Projection: t1.a, t1.b                                                                                                    |\n|               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)          |\n|               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                           |\n|               |       Left Join: t1.a = __scalar_sq_1.a                                                                                   |\n|               |         TableScan: t1 projection=[a, b]                                                                                   |\n|               |         SubqueryAlias: __scalar_sq_1                                                                                      |\n|               |           Projection: count(Int64(1)) AS count(*), t2.a, Boolean(true) AS __always_true                                   |\n|               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1))]]                                                         |\n|               |               TableScan: t2 projection=[a]                                                                                |\n| physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                               |\n|               |   FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |\n|               |     CoalesceBatchesExec: target_batch_size=8192                                                                           |\n|               |       HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |\n|               |         CoalesceBatchesExec: target_batch_size=8192                                                                       |\n|               |           RepartitionExec: partitioning=Hash([a@0], 12), input_partitions=1                                               |\n|               |             DataSourceExec: partitions=1, partition_sizes=[1]                                                             |\n|               |         ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                             |\n|               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                    |\n|               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |\n|               |               RepartitionExec: partitioning=Hash([a@0], 12), input_partitions=12                                          |\n|               |                 RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1                                     |\n|               |                   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                     |\n|               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |\n|               |                                                                                                                           |\n+---------------+---------------------------------------------------------------------------------------------------------------------------+";
+    let actual_sql_result = "+---------------+---------------------------------------------------------------------------------------------------------------------------+\
+\n| plan_type     | plan                                                                                                                      |\
+\n+---------------+---------------------------------------------------------------------------------------------------------------------------+\
+\n| logical_plan  | Projection: t1.a, t1.b                                                                                                    |\
+\n|               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)          |\
+\n|               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                           |\
+\n|               |       Left Join: t1.a = __scalar_sq_1.a                                                                                   |\
+\n|               |         TableScan: t1 projection=[a, b]                                                                                   |\
+\n|               |         SubqueryAlias: __scalar_sq_1                                                                                      |\
+\n|               |           Projection: count(Int64(1)) AS count(*), t2.a, Boolean(true) AS __always_true                                   |\
+\n|               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1))]]                                                         |\
+\n|               |               TableScan: t2 projection=[a]                                                                                |\
+\n| physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                               |\
+\n|               |   FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |\
+\n|               |     CoalesceBatchesExec: target_batch_size=8192                                                                           |\
+\n|               |       HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |\
+\n|               |         CoalesceBatchesExec: target_batch_size=8192                                                                       |\
+\n|               |           RepartitionExec: partitioning=Hash([a@0], 12), input_partitions=1                                               |\
+\n|               |             DataSourceExec: partitions=1, partition_sizes=[1]                                                             |\
+\n|               |         ProjectionExec: expr=[count(Int64(1))@1 as count(*), a@0 as a, true as __always_true]                             |\
+\n|               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(Int64(1))]                                    |\
+\n|               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |\
+\n|               |               RepartitionExec: partitioning=Hash([a@0], 12), input_partitions=12                                          |\
+\n|               |                 RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1                                     |\
+\n|               |                   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(Int64(1))]                                     |\
+\n|               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |\
+\n|               |                                                                                                                           |\
+\n+---------------+---------------------------------------------------------------------------------------------------------------------------+";
     assert_eq!(
         actual_sql_result,
         pretty_format_batches(&sql_results)?.to_string()
@@ -2736,7 +2845,34 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
         .collect()
         .await?;
 
-    let actual_df_result = "+---------------+---------------------------------------------------------------------------------------------------------------------------+\n| plan_type     | plan                                                                                                                      |\n+---------------+---------------------------------------------------------------------------------------------------------------------------+\n| logical_plan  | Projection: t1.a, t1.b                                                                                                    |\n|               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)          |\n|               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                           |\n|               |       Left Join: t1.a = __scalar_sq_1.a                                                                                   |\n|               |         TableScan: t1 projection=[a, b]                                                                                   |\n|               |         SubqueryAlias: __scalar_sq_1                                                                                      |\n|               |           Projection: count(*), t2.a, Boolean(true) AS __always_true                                                      |\n|               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1)) AS count(*)]]                                             |\n|               |               TableScan: t2 projection=[a]                                                                                |\n| physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                               |\n|               |   FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |\n|               |     CoalesceBatchesExec: target_batch_size=8192                                                                           |\n|               |       HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |\n|               |         CoalesceBatchesExec: target_batch_size=8192                                                                       |\n|               |           RepartitionExec: partitioning=Hash([a@0], 12), input_partitions=1                                               |\n|               |             DataSourceExec: partitions=1, partition_sizes=[1]                                                             |\n|               |         ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                    |\n|               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                           |\n|               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |\n|               |               RepartitionExec: partitioning=Hash([a@0], 12), input_partitions=12                                          |\n|               |                 RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1                                     |\n|               |                   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                            |\n|               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |\n|               |                                                                                                                           |\n+---------------+---------------------------------------------------------------------------------------------------------------------------+";
+    let actual_df_result = "+---------------+---------------------------------------------------------------------------------------------------------------------------+\
+\n| plan_type     | plan                                                                                                                      |\
+\n+---------------+---------------------------------------------------------------------------------------------------------------------------+\
+\n| logical_plan  | Projection: t1.a, t1.b                                                                                                    |\
+\n|               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)          |\
+\n|               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                           |\
+\n|               |       Left Join: t1.a = __scalar_sq_1.a                                                                                   |\
+\n|               |         TableScan: t1 projection=[a, b]                                                                                   |\
+\n|               |         SubqueryAlias: __scalar_sq_1                                                                                      |\
+\n|               |           Projection: count(*), t2.a, Boolean(true) AS __always_true                                                      |\
+\n|               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1)) AS count(*)]]                                             |\
+\n|               |               TableScan: t2 projection=[a]                                                                                |\
+\n| physical_plan | CoalesceBatchesExec: target_batch_size=8192                                                                               |\
+\n|               |   FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                     |\
+\n|               |     CoalesceBatchesExec: target_batch_size=8192                                                                           |\
+\n|               |       HashJoinExec: mode=Partitioned, join_type=Left, on=[(a@0, a@1)], projection=[a@0, b@1, count(*)@2, __always_true@4] |\
+\n|               |         CoalesceBatchesExec: target_batch_size=8192                                                                       |\
+\n|               |           RepartitionExec: partitioning=Hash([a@0], 12), input_partitions=1                                               |\
+\n|               |             DataSourceExec: partitions=1, partition_sizes=[1]                                                             |\
+\n|               |         ProjectionExec: expr=[count(*)@1 as count(*), a@0 as a, true as __always_true]                                    |\
+\n|               |           AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[count(*)]                                           |\
+\n|               |             CoalesceBatchesExec: target_batch_size=8192                                                                   |\
+\n|               |               RepartitionExec: partitioning=Hash([a@0], 12), input_partitions=12                                          |\
+\n|               |                 RepartitionExec: partitioning=RoundRobinBatch(12), input_partitions=1                                     |\
+\n|               |                   AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[count(*)]                                            |\
+\n|               |                     DataSourceExec: partitions=1, partition_sizes=[1]                                                     |\
+\n|               |                                                                                                                           |\
+\n+---------------+---------------------------------------------------------------------------------------------------------------------------+";
     assert_eq!(
         actual_df_result,
         pretty_format_batches(&df_results)?.to_string()
