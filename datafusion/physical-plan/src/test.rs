@@ -31,19 +31,22 @@ use crate::memory::MemoryStream;
 use crate::metrics::MetricsSet;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::streaming::PartitionStream;
+use crate::windows::{create_window_expr, WindowAggExec};
 use crate::ExecutionPlan;
 use crate::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use arrow::array::{Array, ArrayRef, Int32Array, RecordBatch};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
 use datafusion_common::{
     config::ConfigOptions, internal_err, project_schema, Result, Statistics,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
+use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_physical_expr::{
-    equivalence::ProjectionMapping, expressions::Column, utils::collect_columns,
-    EquivalenceProperties, LexOrdering, Partitioning,
+    equivalence::ProjectionMapping, expressions::col, expressions::Column,
+    utils::collect_columns, EquivalenceProperties, LexOrdering, Partitioning,
 };
+use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use futures::{Future, FutureExt};
 
@@ -511,5 +514,37 @@ impl PartitionStream for TestPartitionStream {
             Arc::clone(&self.schema),
             stream,
         ))
+    }
+}
+
+pub(crate) fn window_agg_exec(
+    input: Arc<dyn ExecutionPlan>,
+    func: WindowFunctionDefinition,
+    args: &[Arc<dyn PhysicalExpr>],
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    schema: &SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let window_expr = create_window_expr(
+        &func,
+        func.name().to_owned(),
+        args,
+        partition_by,
+        &LexOrdering::default(),
+        Arc::new(WindowFrame::new(None)),
+        schema,
+        false,
+    )?;
+
+    Ok(Arc::new(WindowAggExec::try_new(
+        vec![window_expr],
+        input,
+        false,
+    )?))
+}
+
+pub(crate) fn sort_expr(name: &str, schema: &Schema) -> PhysicalSortExpr {
+    PhysicalSortExpr {
+        expr: col(name, schema).unwrap(),
+        options: SortOptions::default(),
     }
 }

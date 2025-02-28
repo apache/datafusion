@@ -1182,13 +1182,13 @@ mod tests {
 
     use super::*;
     use crate::coalesce_partitions::CoalescePartitionsExec;
-    use crate::collect;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
-    use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use crate::test::{self, sort_expr, window_agg_exec};
+    use crate::{collect, displayable};
 
     use arrow::array::*;
     use arrow::compute::SortOptions;
@@ -1198,8 +1198,12 @@ mod tests {
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::RecordBatchStream;
+    use datafusion_expr::WindowFunctionDefinition;
+    use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_physical_expr::expressions::{Column, Literal};
-    use datafusion_physical_expr::EquivalenceProperties;
+    use datafusion_physical_expr::{
+        AcrossPartitions, ConstExpr, EquivalenceProperties, PhysicalExpr,
+    };
 
     use futures::{FutureExt, Stream};
 
@@ -1872,6 +1876,145 @@ mod tests {
             "| 8  |",
             "+----+",];
         assert_batches_eq!(expected, &batches);
+        Ok(())
+    }
+
+    fn schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]))
+    }
+
+    fn source() -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = schema();
+        let sort_exprs = vec![sort_expr("a", &schema)];
+
+        TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), Some(vec![0, 1]))?
+            .try_with_sort_information(vec![sort_exprs.into()])
+            .map(|exec| Arc::new(exec) as _)
+    }
+
+    fn window_agg_partion_by(
+        partition_by: &[Arc<dyn PhysicalExpr>],
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = schema();
+
+        window_agg_exec(
+            source()?,
+            WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            &[col("a", &schema).unwrap()],
+            partition_by,
+            &schema,
+        )
+    }
+
+    fn expected_initial_plan() -> Vec<&'static str> {
+        vec![
+            "SortExec: expr=[b@1 ASC, count@2 ASC], preserve_partitioning=[false]",
+            "  WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]",
+            "    DataSourceExec: partitions=1, partition_sizes=[0], output_ordering=a@0 ASC",
+        ]
+    }
+
+    struct TestCase {
+        partition_by: Vec<&'static str>,
+        expected_constants: Vec<&'static str>,
+        expected_output_orderings: Vec<&'static str>,
+    }
+
+    /// This test case demonstrates that the output ordering from [`SortExec`] ignores all constants from
+    /// the input, regardless of whether the constant is heterogeneous or not. Instead, it's purely about
+    /// what the input provides for it's [`EquivalenceProperties::constants`] (and not the input's partitioning).
+    #[test]
+    fn test_output_ordering_conditionally_includes_heterogeneous_constants_based_upon_input(
+    ) -> Result<()> {
+        let test_cases = vec![
+            TestCase {
+                partition_by: vec![],                 // when no window partitioning
+                expected_constants: vec!["count"], // the heterogeneous `count` constant is considered constant by `window_agg.properties.constants()`
+                expected_output_orderings: vec!["b"], // therefore not in the sort output ordering
+            },
+            TestCase {
+                partition_by: vec!["b"],    // when there is window partitioning
+                expected_constants: vec![], // the heterogeneous `count` constant is not constant
+                expected_output_orderings: vec!["b", "count"], // therefore is in the sort output ordering
+            },
+        ];
+
+        for TestCase {
+            partition_by,
+            expected_constants,
+            expected_output_orderings,
+        } in test_cases
+        {
+            // make plan with variable partitioning on window agg
+            let partition_by = partition_by
+                .into_iter()
+                .map(|col_name| col(col_name, &schema()).unwrap())
+                .collect::<Vec<_>>();
+            let wdw_agg_node = window_agg_partion_by(&partition_by)?;
+            let sort_output_of_wdw_agg = vec![
+                sort_expr("b", &wdw_agg_node.schema()),
+                sort_expr("count", &wdw_agg_node.schema()),
+            ];
+            let sort_node = Arc::new(SortExec::new(
+                sort_output_of_wdw_agg.clone().into(),
+                Arc::clone(&wdw_agg_node),
+            ));
+
+            // confirm plan is always the same
+            let initial_plan = expected_initial_plan();
+            assert_eq!(
+                displayable(sort_node.as_ref())
+                    .indent(true)
+                    .to_string()
+                    .trim()
+                    .split("\n")
+                    .collect::<Vec<_>>(),
+                initial_plan,
+            );
+
+            // Test: doesn't change: see that there is always only 1 output partition from the window agg
+            assert!(matches!(
+                wdw_agg_node.properties().output_partitioning(),
+                &Partitioning::UnknownPartitioning(1)
+            ));
+
+            // Test: doesn't change: see that the window agg, input to the sort, does not have any output ordering
+            assert_eq!(
+                wdw_agg_node.equivalence_properties().output_ordering(),
+                None
+            );
+
+            // Test: changes: see that the constants from the window agg is variable
+            let constants = wdw_agg_node
+                .properties()
+                .equivalence_properties()
+                .constants();
+            let expected_consts = expected_constants
+                .into_iter()
+                .map(|col_name| {
+                    ConstExpr::new(col(col_name, &wdw_agg_node.schema()).unwrap())
+                        .with_across_partitions(AcrossPartitions::Heterogeneous)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(constants, &expected_consts);
+
+            // Test: dependent change: see output ordering of final sort does not include any input constants
+            let expected_output_orderings = expected_output_orderings
+                .into_iter()
+                .map(|col_name| sort_expr(col_name, &wdw_agg_node.schema()))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                sort_node
+                    .properties()
+                    .equivalence_properties()
+                    .output_ordering(),
+                Some(LexOrdering::new(expected_output_orderings)),
+            );
+        }
+
         Ok(())
     }
 }

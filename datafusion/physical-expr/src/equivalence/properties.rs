@@ -4089,28 +4089,39 @@ mod tests {
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
 
         // Setup constant columns
-        let col_a = col("a", &schema)?;
-        let col_b = col("b", &schema)?;
-        eq_properties = eq_properties.with_constants([ConstExpr::from(&col_a)]);
+        let col_heterogeneous_const = col("a", &schema)?;
+        let col_uniform_const = col("b", &schema)?;
+        let col_non_const = col("c", &schema)?;
+        eq_properties = eq_properties.with_constants([
+            ConstExpr::from(&col_heterogeneous_const)
+                .with_across_partitions(AcrossPartitions::Heterogeneous),
+            ConstExpr::from(&col_uniform_const)
+                .with_across_partitions(AcrossPartitions::Uniform(None)),
+        ]);
 
         let sort_exprs = LexOrdering::new(vec![
             PhysicalSortExpr {
-                expr: Arc::clone(&col_a),
+                expr: Arc::clone(&col_heterogeneous_const),
                 options: SortOptions::default(),
             },
             PhysicalSortExpr {
-                expr: Arc::clone(&col_b),
+                expr: Arc::clone(&col_uniform_const),
+                options: SortOptions::default(),
+            },
+            PhysicalSortExpr {
+                expr: Arc::clone(&col_non_const),
                 options: SortOptions::default(),
             },
         ]);
 
         let result = eq_properties.with_reorder(sort_exprs);
 
-        // Should only contain b since a is constant
+        // Contains only c, which is not a constant.
+        // Removes both the uniform and heterogeneous constants.
         assert_eq!(result.oeq_class().len(), 1);
         let ordering = result.oeq_class().iter().next().unwrap();
         assert_eq!(ordering.len(), 1);
-        assert!(ordering[0].expr.eq(&col_b));
+        assert!(ordering[0].expr.eq(&col_non_const));
 
         Ok(())
     }
