@@ -2471,7 +2471,6 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
         .collect()
         .await?;
 
-    // TODO: Remove duplicated alias in Sort
     let expected_sql_result = "+---------------+------------------------------------------------------------------------------------------------------------+\
     \n| plan_type     | plan                                                                                                       |\
     \n+---------------+------------------------------------------------------------------------------------------------------------+\
@@ -2613,9 +2612,6 @@ async fn test_count_wildcard_on_where_exist() -> Result<()> {
         .collect()
         .await?;
 
-    // TODO:
-    // 1) remove empty Projection
-    // 2) why count(*) alias is not shown
     let actual_sql_result =
         "+---------------+---------------------------------------------------------+\
     \n| plan_type     | plan                                                    |\
