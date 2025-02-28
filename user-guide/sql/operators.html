@@ -5,7 +5,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Operators &#8212; Apache DataFusion  documentation</title>
+    <title>Operators and Literals &#8212; Apache DataFusion  documentation</title>
     
     <link href="../../_static/styles/theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
 <link href="../../_static/styles/pydata-sphinx-theme.css?digest=1999514e3f237ded88cf" rel="stylesheet">
@@ -255,7 +255,7 @@
    </li>
    <li class="toctree-l2 current active">
     <a class="current reference internal" href="#">
-     Operators
+     Operators and Literals
     </a>
    </li>
    <li class="toctree-l2">
@@ -856,6 +856,18 @@
    </li>
   </ul>
  </li>
+ <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#literals">
+   Literals
+  </a>
+  <ul class="nav section-nav flex-column">
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#escaping">
+     Escaping
+    </a>
+   </li>
+  </ul>
+ </li>
 </ul>
 
 </nav>
@@ -902,8 +914,8 @@
   specific language governing permissions and limitations
   under the License.
 -->
-<section id="operators">
-<h1>Operators<a class="headerlink" href="#operators" title="Link to this heading">¶</a></h1>
+<section id="operators-and-literals">
+<h1>Operators and Literals<a class="headerlink" href="#operators-and-literals" title="Link to this heading">¶</a></h1>
 <section id="numerical-operators">
 <h2>Numerical Operators<a class="headerlink" href="#numerical-operators" title="Link to this heading">¶</a></h2>
 <ul class="simple">
@@ -1361,6 +1373,58 @@
 <span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
 <span class="o">|</span><span class="w"> </span><span class="k">true</span><span class="w">                                                                    </span><span class="o">|</span>
 <span class="o">+</span><span class="c1">-------------------------------------------------------------------------+</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="literals">
+<h2>Literals<a class="headerlink" href="#literals" title="Link to this heading">¶</a></h2>
+<p>Use single quotes for literal values. For example, the string <code class="docutils literal notranslate"><span class="pre">foo</span> <span class="pre">bar</span></code> is
+referred to using <code class="docutils literal notranslate"><span class="pre">'foo</span> <span class="pre">bar'</span></code></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">select</span><span class="w"> </span><span class="s1">&#39;foo&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<section id="escaping">
+<h3>Escaping<a class="headerlink" href="#escaping" title="Link to this heading">¶</a></h3>
+<p>Unlike many other languages, SQL literals do not by default support C-style escape
+sequences such as <code class="docutils literal notranslate"><span class="pre">\n</span></code> for newline. Instead all characters in a <code class="docutils literal notranslate"><span class="pre">'</span></code> string are treated
+literally.</p>
+<p>To escape <code class="docutils literal notranslate"><span class="pre">'</span></code> in SQL literals, use <code class="docutils literal notranslate"><span class="pre">''</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="s1">&#39;it&#39;&#39;s escaped&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;it&#39;s escaped&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">it</span><span class="err">&#39;</span><span class="n">s</span><span class="w"> </span><span class="n">escaped</span><span class="w">         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">----------------------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+</pre></div>
+</div>
+<p>Strings such as <code class="docutils literal notranslate"><span class="pre">foo\nbar</span></code> mean <code class="docutils literal notranslate"><span class="pre">\</span></code> followed by <code class="docutils literal notranslate"><span class="pre">n</span></code> (not newline):</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="s1">&#39;foo\nbar&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo\nbar&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">foo</span><span class="err">\</span><span class="n">nbar</span><span class="w">         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">------------------+</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">row</span><span class="p">(</span><span class="n">s</span><span class="p">)</span><span class="w"> </span><span class="n">fetched</span><span class="p">.</span>
+<span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">005</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
+</pre></div>
+</div>
+<p>To add escaped characters such as newline or tab, instead of <code class="docutils literal notranslate"><span class="pre">\n</span></code> you use the
+<code class="docutils literal notranslate"><span class="pre">E</span></code> style strings. For example, to add the text with a newline</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>foo
+bar
+</pre></div>
+</div>
+<p>You can use <code class="docutils literal notranslate"><span class="pre">E'foo\nbar'</span></code></p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="o">&gt;</span><span class="w"> </span><span class="k">select</span><span class="w"> </span><span class="n">E</span><span class="s1">&#39;foo\nbar&#39;</span><span class="p">;</span>
+<span class="o">+</span><span class="c1">-----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Utf8</span><span class="p">(</span><span class="ss">&quot;foo</span>
+<span class="ss">bar&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------+</span>
+<span class="o">|</span><span class="w"> </span><span class="n">foo</span>
+<span class="n">bar</span><span class="w">         </span><span class="o">|</span>
+<span class="o">+</span><span class="c1">-----------------+</span>
 </pre></div>
 </div>
 </section>
