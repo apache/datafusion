@@ -1173,7 +1173,6 @@ impl ListingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::avro::AvroFormat;
     use crate::datasource::file_format::csv::CsvFormat;
     use crate::datasource::file_format::json::JsonFormat;
     #[cfg(feature = "parquet")]
@@ -1185,6 +1184,7 @@ mod tests {
         assert_batches_eq,
         test::{columns, object_store::register_test_store},
     };
+    use datafusion_datasource_avro::AvroFormat;
     use datafusion_physical_plan::collect;
 
     use arrow::compute::SortOptions;
@@ -1368,7 +1368,7 @@ mod tests {
         let path = String::from("table/p1=v1/file.avro");
         register_test_store(&ctx, &[(&path, 100)]);
 
-        let opt = ListingOptions::new(Arc::new(AvroFormat {}))
+        let opt = ListingOptions::new(Arc::new(AvroFormat))
             .with_file_extension(AvroFormat.get_ext())
             .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
             .with_target_partitions(4);
@@ -1403,6 +1403,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "avro")]
     #[tokio::test]
     async fn test_assert_list_files_for_scan_grouping() -> Result<()> {
         // more expected partitions than files
@@ -1492,6 +1493,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "avro")]
     #[tokio::test]
     async fn test_assert_list_files_for_multi_path() -> Result<()> {
         // more expected partitions than files
@@ -1612,9 +1614,7 @@ mod tests {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
-        let format = AvroFormat {};
-
-        let opt = ListingOptions::new(Arc::new(format))
+        let opt = ListingOptions::new(Arc::new(AvroFormat))
             .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
@@ -1636,6 +1636,7 @@ mod tests {
 
     /// Check that the files listed by the table match the specified `output_partitioning`
     /// when the object store contains `files`.
+    #[cfg(feature = "avro")]
     async fn assert_list_files_for_multi_paths(
         files: &[&str],
         table_prefix: &[&str],
@@ -1643,10 +1644,12 @@ mod tests {
         output_partitioning: usize,
         file_ext: Option<&str>,
     ) -> Result<()> {
+        use datafusion_datasource_avro::AvroFormat;
+
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
-        let format = AvroFormat {};
+        let format = AvroFormat;
 
         let opt = ListingOptions::new(Arc::new(format))
             .with_file_extension_opt(file_ext)

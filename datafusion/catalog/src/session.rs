@@ -16,7 +16,7 @@
 // under the License.
 
 use async_trait::async_trait;
-use datafusion_common::config::ConfigOptions;
+use datafusion_common::config::{ConfigOptions, TableOptions};
 use datafusion_common::{DFSchema, Result};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -120,6 +120,15 @@ pub trait Session: Send + Sync {
     fn execution_props(&self) -> &ExecutionProps;
 
     fn as_any(&self) -> &dyn Any;
+
+    /// Return the table options
+    fn table_options(&self) -> &TableOptions;
+
+    /// return the TableOptions options with its extensions
+    fn default_table_options(&self) -> TableOptions {
+        self.table_options()
+            .combine_with_session_config(self.config_options())
+    }
 }
 
 /// Create a new task context instance from Session

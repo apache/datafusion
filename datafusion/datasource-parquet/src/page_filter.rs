@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::metrics::ParquetFileMetrics;
-use crate::datasource::physical_plan::parquet::ParquetAccessPlan;
+use crate::ParquetAccessPlan;
 
 use arrow::array::BooleanArray;
 use arrow::{

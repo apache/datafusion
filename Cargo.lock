@@ -1719,7 +1719,6 @@ dependencies = [
 name = "datafusion"
 version = "45.0.0"
 dependencies = [
- "apache-avro",
  "arrow",
  "arrow-ipc",
  "arrow-schema",
@@ -1735,6 +1734,10 @@ dependencies = [
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
+ "datafusion-datasource-avro",
+ "datafusion-datasource-csv",
+ "datafusion-datasource-json",
+ "datafusion-datasource-parquet",
  "datafusion-doc",
  "datafusion-execution",
  "datafusion-expr",
@@ -1759,7 +1762,6 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "nix",
- "num-traits",
  "object_store",
  "parking_lot",
  "parquet",
@@ -1930,6 +1932,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "object_store",
+ "parquet",
  "rand 0.8.5",
  "tempfile",
  "tokio",
@@ -1937,6 +1940,107 @@ dependencies = [
  "url",
  "xz2",
  "zstd",
+]
+
+[[package]]
+name = "datafusion-datasource-avro"
+version = "45.0.0"
+dependencies = [
+ "apache-avro",
+ "arrow",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-datasource",
+ "datafusion-execution",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "futures",
+ "num-traits",
+ "object_store",
+ "rstest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "datafusion-datasource-csv"
+version = "45.0.0"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "bytes",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-common-runtime",
+ "datafusion-datasource",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "futures",
+ "itertools 0.14.0",
+ "log",
+ "object_store",
+ "rand 0.8.5",
+ "regex",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "datafusion-datasource-json"
+version = "45.0.0"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "bytes",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-common-runtime",
+ "datafusion-datasource",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-plan",
+ "futures",
+ "object_store",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "datafusion-datasource-parquet"
+version = "45.0.0"
+dependencies = [
+ "arrow",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-common-runtime",
+ "datafusion-datasource",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-functions-aggregate",
+ "datafusion-physical-expr",
+ "datafusion-physical-expr-common",
+ "datafusion-physical-optimizer",
+ "datafusion-physical-plan",
+ "futures",
+ "itertools 0.14.0",
+ "log",
+ "object_store",
+ "parking_lot",
+ "parquet",
+ "rand 0.8.5",
+ "tokio",
 ]
 
 [[package]]

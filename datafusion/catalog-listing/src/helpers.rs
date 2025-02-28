@@ -532,6 +532,7 @@ pub fn describe_partition(partition: &Partition) -> (&str, usize, Vec<&str>) {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
+    use datafusion_common::config::TableOptions;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::FutureExt;
@@ -1066,6 +1067,10 @@ mod tests {
         }
 
         fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
+
+        fn table_options(&self) -> &TableOptions {
             unimplemented!()
         }
     }
