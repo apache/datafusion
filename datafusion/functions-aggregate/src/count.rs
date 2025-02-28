@@ -81,6 +81,7 @@ pub fn count_distinct(expr: Expr) -> Expr {
 }
 
 /// Creates aggregation to count all rows, equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`
+/// Alias to count(*) for backward comaptibility
 pub fn count_all() -> Expr {
     count(Expr::Literal(COUNT_STAR_EXPANSION)).alias("count(*)")
 }
@@ -91,6 +92,14 @@ pub fn count_all_window() -> Expr {
         WindowFunctionDefinition::AggregateUDF(count_udaf()),
         vec![Expr::Literal(COUNT_STAR_EXPANSION)],
     ))
+}
+
+/// Create count wildcard window func of Expr::Column
+pub fn count_all_window_column() -> Expr {
+    col(Expr::WindowFunction(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(count_udaf()),
+        vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+    )).schema_name().to_string())
 }
 
 /// Create count wildcard of Expr::Column

@@ -32,7 +32,7 @@ use arrow::datatypes::{
 };
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion_functions_aggregate::count::{count_all, count_all_column, count_all_window};
+use datafusion_functions_aggregate::count::{count_all, count_all_column, count_all_window, count_all_window_column};
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,
 };
@@ -2803,6 +2803,8 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
 async fn test_count_wildcard_shema_name() {
     assert_eq!(count_all().schema_name().to_string(), "count(*)");
     assert_eq!(count_all_column(), col("count(*)"));
+    assert_eq!(count_all_window_column(), col("count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"));
+
 }
 
 #[tokio::test]
