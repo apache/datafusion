@@ -244,7 +244,7 @@ impl DataSource for FileScanConfig {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        self.file_source.statistics()
+        Ok(self.projected_stats())
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn DataSource>> {
@@ -324,13 +324,7 @@ impl FileScanConfig {
 
     /// Set the file source
     pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
-        let (
-            _projected_schema,
-            _constraints,
-            projected_statistics,
-            _projected_output_ordering,
-        ) = self.project();
-        self.file_source = file_source.with_statistics(projected_statistics);
+        self.file_source = file_source;
         self
     }
 
@@ -346,41 +340,74 @@ impl FileScanConfig {
         self
     }
 
+    fn projection_indices(&self) -> Vec<usize> {
+        match &self.projection {
+            Some(proj) => proj.clone(),
+            None => (0..self.file_schema.fields().len()
+                + self.table_partition_cols.len())
+                .collect(),
+        }
+    }
+
+    fn projected_stats(&self) -> Statistics {
+        let table_cols_stats = self
+            .projection_indices()
+            .into_iter()
+            .map(|idx| {
+                if idx < self.file_schema.fields().len() {
+                    self.statistics.column_statistics[idx].clone()
+                } else {
+                    // TODO provide accurate stat for partition column (#1186)
+                    ColumnStatistics::new_unknown()
+                }
+            })
+            .collect();
+
+        Statistics {
+            num_rows: self.statistics.num_rows,
+            // TODO correct byte size?
+            total_byte_size: Precision::Absent,
+            column_statistics: table_cols_stats,
+        }
+    }
+
+    fn projected_schema(&self) -> Arc<Schema> {
+        let table_fields: Vec<_> = self
+            .projection_indices()
+            .into_iter()
+            .map(|idx| {
+                if idx < self.file_schema.fields().len() {
+                    self.file_schema.field(idx).clone()
+                } else {
+                    let partition_idx = idx - self.file_schema.fields().len();
+                    self.table_partition_cols[partition_idx].clone()
+                }
+            })
+            .collect();
+
+        Arc::new(Schema::new_with_metadata(
+            table_fields,
+            self.file_schema.metadata().clone(),
+        ))
+    }
+
+    fn projected_constraints(&self) -> Constraints {
+        let indexes = self.projection_indices();
+
+        self.constraints
+            .project(&indexes)
+            .unwrap_or_else(Constraints::empty)
+    }
+
     /// Set the projection of the files
     pub fn with_projection(mut self, projection: Option<Vec<usize>>) -> Self {
         self.projection = projection;
-        self.with_updated_statistics()
+        self
     }
 
     /// Set the limit of the files
     pub fn with_limit(mut self, limit: Option<usize>) -> Self {
         self.limit = limit;
-        self
-    }
-
-    // Update source statistics with the current projection data
-    fn with_updated_statistics(mut self) -> Self {
-        let max_projection_column = *self
-            .projection
-            .as_ref()
-            .and_then(|proj| proj.iter().max())
-            .unwrap_or(&0);
-
-        if max_projection_column
-            >= self.file_schema.fields().len() + self.table_partition_cols.len()
-        {
-            // we don't yet have enough information (file schema info or partition column info) to perform projection
-            return self;
-        }
-
-        let (
-            _projected_schema,
-            _constraints,
-            projected_statistics,
-            _projected_output_ordering,
-        ) = self.project();
-
-        self.file_source = self.file_source.with_statistics(projected_statistics);
         self
     }
 
@@ -413,7 +440,7 @@ impl FileScanConfig {
     /// Set the partitioning columns of the files
     pub fn with_table_partition_cols(mut self, table_partition_cols: Vec<Field>) -> Self {
         self.table_partition_cols = table_partition_cols;
-        self.with_updated_statistics()
+        self
     }
 
     /// Set the output ordering of the files
@@ -459,54 +486,13 @@ impl FileScanConfig {
             );
         }
 
-        let proj_indices = if let Some(proj) = &self.projection {
-            proj
-        } else {
-            let len = self.file_schema.fields().len() + self.table_partition_cols.len();
-            &(0..len).collect::<Vec<_>>()
-        };
+        let schema = self.projected_schema();
+        let constraints = self.projected_constraints();
+        let stats = self.projected_stats();
 
-        let mut table_fields = vec![];
-        let mut table_cols_stats = vec![];
-        for idx in proj_indices {
-            if *idx < self.file_schema.fields().len() {
-                let field = self.file_schema.field(*idx);
-                table_fields.push(field.clone());
-                table_cols_stats.push(self.statistics.column_statistics[*idx].clone())
-            } else {
-                let partition_idx = idx - self.file_schema.fields().len();
-                table_fields.push(self.table_partition_cols[partition_idx].to_owned());
-                // TODO provide accurate stat for partition column (#1186)
-                table_cols_stats.push(ColumnStatistics::new_unknown())
-            }
-        }
+        let output_ordering = get_projected_output_ordering(self, &schema);
 
-        let table_stats = Statistics {
-            num_rows: self.statistics.num_rows,
-            // TODO correct byte size?
-            total_byte_size: Precision::Absent,
-            column_statistics: table_cols_stats,
-        };
-
-        let projected_schema = Arc::new(Schema::new_with_metadata(
-            table_fields,
-            self.file_schema.metadata().clone(),
-        ));
-
-        let projected_constraints = self
-            .constraints
-            .project(proj_indices)
-            .unwrap_or_else(Constraints::empty);
-
-        let projected_output_ordering =
-            get_projected_output_ordering(self, &projected_schema);
-
-        (
-            projected_schema,
-            projected_constraints,
-            table_stats,
-            projected_output_ordering,
-        )
+        (schema, constraints, stats, output_ordering)
     }
 
     #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
