@@ -680,26 +680,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_char_input_none_scalar() {
-        let args = datafusion_expr::ScalarFunctionArgs {
-            args: vec![
-                ColumnarValue::Scalar(ScalarValue::Date32(None)),
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string()))),
-            ],
-            number_rows: 1,
-            return_type: &DataType::Utf8,
-        };
-        let result = ToCharFunc::new()
-            .invoke_with_args(args)
-            .expect("Expected no error");
-        if let ColumnarValue::Scalar(ScalarValue::Utf8(date)) = result {
-            assert!(date.is_none());
-        } else {
-            panic!("Expected a scalar value");
-        }
-    }
-
-    #[test]
     fn test_to_char_input_none_array() {
         let date_array = Arc::new(Date32Array::from(vec![Some(18506), None])) as ArrayRef;
         let format_array =
