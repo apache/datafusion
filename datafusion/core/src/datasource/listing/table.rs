@@ -1606,9 +1606,8 @@ mod tests {
         .await?;
 
         // more files than meta_fetch_concurrency (32)
-        let files: Vec<String> = (0..64)
-            .map(|i| format!("bucket/key1/file{}", i))
-            .collect();
+        let files: Vec<String> =
+            (0..64).map(|i| format!("bucket/key1/file{}", i)).collect();
         // Collect references to each string
         let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
         assert_list_files_for_exact_paths(file_refs.as_slice(), 5, 5, Some("")).await?;
