@@ -62,7 +62,7 @@ pub(crate) fn spill_record_batches(
     batches: Vec<RecordBatch>,
     path: PathBuf,
     schema: SchemaRef,
-) -> Result<usize> {
+) -> Result<(usize, usize)> {
     let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
     for batch in batches {
         writer.write(&batch)?;
@@ -74,7 +74,7 @@ pub(crate) fn spill_record_batches(
         writer.num_rows,
         human_readable_size(writer.num_bytes),
     );
-    Ok(writer.num_rows)
+    Ok((writer.num_rows, writer.num_bytes))
 }
 
 fn read_spill(sender: Sender<Result<RecordBatch>>, path: &Path) -> Result<()> {
@@ -184,10 +184,9 @@ mod tests {
     use super::*;
     use crate::spill::{spill_record_batch_by_size, spill_record_batches};
     use crate::test::build_table_i32;
-    use arrow::array::{Float64Array, Int32Array};
+    use arrow::array::{Float64Array, Int32Array, ListArray};
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
     use arrow::record_batch::RecordBatch;
-    use arrow_array::ListArray;
     use datafusion_common::Result;
     use datafusion_execution::disk_manager::DiskManagerConfig;
     use datafusion_execution::DiskManager;
@@ -214,12 +213,12 @@ mod tests {
         let spill_file = disk_manager.create_tmp_file("Test Spill")?;
         let schema = batch1.schema();
         let num_rows = batch1.num_rows() + batch2.num_rows();
-        let cnt = spill_record_batches(
+        let (spilled_rows, _) = spill_record_batches(
             vec![batch1, batch2],
             spill_file.path().into(),
             Arc::clone(&schema),
-        );
-        assert_eq!(cnt.unwrap(), num_rows);
+        )?;
+        assert_eq!(spilled_rows, num_rows);
 
         let file = BufReader::new(File::open(spill_file.path())?);
         let reader = FileReader::try_new(file, None)?;

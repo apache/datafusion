@@ -19,8 +19,9 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::{
     parse_interval_month_day_nano_config, IntervalParseConfig, IntervalUnit,
 };
-use arrow::datatypes::{i256, DECIMAL128_MAX_PRECISION};
-use arrow_schema::{DataType, DECIMAL256_MAX_PRECISION};
+use arrow::datatypes::{
+    i256, DataType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+};
 use bigdecimal::num_bigint::BigInt;
 use bigdecimal::{BigDecimal, Signed, ToPrimitive};
 use datafusion_common::{
@@ -303,7 +304,7 @@ fn try_decode_hex_literal(s: &str) -> Option<Vec<u8>> {
     for i in (start_idx..hex_bytes.len()).step_by(2) {
         let high = try_decode_hex_char(hex_bytes[i])?;
         let low = try_decode_hex_char(hex_bytes[i + 1])?;
-        decoded_bytes.push(high << 4 | low);
+        decoded_bytes.push((high << 4) | low);
     }
 
     Some(decoded_bytes)

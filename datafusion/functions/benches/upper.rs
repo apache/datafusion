@@ -17,9 +17,10 @@
 
 extern crate criterion;
 
+use arrow::datatypes::DataType;
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
 use std::sync::Arc;
 
@@ -38,8 +39,12 @@ fn criterion_benchmark(c: &mut Criterion) {
         let args = create_args(size, 32);
         c.bench_function("upper_all_values_are_ascii", |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
-                black_box(upper.invoke_batch(&args, size))
+                let args_cloned = args.clone();
+                black_box(upper.invoke_with_args(ScalarFunctionArgs {
+                    args: args_cloned,
+                    number_rows: size,
+                    return_type: &DataType::Utf8,
+                }))
             })
         });
     }

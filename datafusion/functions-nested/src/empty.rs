@@ -18,11 +18,13 @@
 //! [`ScalarUDFImpl`] definitions for array_empty function.
 
 use crate::utils::make_scalar_function;
-use arrow_array::{ArrayRef, BooleanArray, OffsetSizeTrait};
-use arrow_schema::DataType;
-use arrow_schema::DataType::{Boolean, FixedSizeList, LargeList, List};
+use arrow::array::{ArrayRef, BooleanArray, OffsetSizeTrait};
+use arrow::datatypes::{
+    DataType,
+    DataType::{Boolean, FixedSizeList, LargeList, List},
+};
 use datafusion_common::cast::as_generic_list_array;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{exec_err, plan_err, utils::take_function_args, Result};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
@@ -96,12 +98,11 @@ impl ScalarUDFImpl for ArrayEmpty {
         })
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_empty_inner)(args)
+        make_scalar_function(array_empty_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -115,14 +116,12 @@ impl ScalarUDFImpl for ArrayEmpty {
 
 /// Array_empty SQL function
 pub fn array_empty_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_empty expects one argument");
-    }
+    let [array] = take_function_args("array_empty", args)?;
 
-    let array_type = args[0].data_type();
+    let array_type = array.data_type();
     match array_type {
-        List(_) => general_array_empty::<i32>(&args[0]),
-        LargeList(_) => general_array_empty::<i64>(&args[0]),
+        List(_) => general_array_empty::<i32>(array),
+        LargeList(_) => general_array_empty::<i64>(array),
         _ => exec_err!("array_empty does not support type '{array_type:?}'."),
     }
 }

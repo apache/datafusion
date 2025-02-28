@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::datasource::file_format::{
+use crate::datasource::file_format::parquet::{
     coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
 };
 use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
@@ -32,7 +32,8 @@ use crate::datasource::physical_plan::{
 };
 use crate::datasource::schema_adapter::SchemaAdapterFactory;
 
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 use datafusion_common::{exec_err, Result};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;

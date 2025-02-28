@@ -32,9 +32,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::{
-    parquet::source::ParquetSource, DisplayAs, FileScanConfig,
-};
+use crate::datasource::physical_plan::{parquet::source::ParquetSource, DisplayAs};
 use crate::datasource::schema_adapter::SchemaAdapterFactory;
 use crate::{
     config::TableParquetOptions,
@@ -50,13 +48,15 @@ pub use access_plan::{ParquetAccessPlan, RowGroupAccess};
 use arrow::datatypes::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::Constraints;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion_physical_plan::source::DataSourceExec;
 pub use metrics::ParquetFileMetrics;
 pub use page_filter::PagePruningAccessPlanFilter;
 pub use reader::{DefaultParquetFileReaderFactory, ParquetFileReaderFactory};
+pub use row_filter::build_row_filter;
 pub use row_filter::can_expr_be_pushed_down_with_schemas;
 pub use row_group_filter::RowGroupAccessPlanFilter;
 pub use writer::plan_to_parquet;
@@ -293,8 +293,8 @@ impl ParquetExec {
         }
     }
     fn file_scan_config(&self) -> FileScanConfig {
-        let source = self.inner.source();
-        source
+        self.inner
+            .data_source()
             .as_any()
             .downcast_ref::<FileScanConfig>()
             .unwrap()
@@ -302,8 +302,7 @@ impl ParquetExec {
     }
 
     fn parquet_source(&self) -> ParquetSource {
-        let source = self.file_scan_config();
-        source
+        self.file_scan_config()
             .file_source()
             .as_any()
             .downcast_ref::<ParquetSource>()
@@ -344,7 +343,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.parquet_file_reader_factory = Some(parquet_file_reader_factory);
         self
     }
@@ -367,7 +366,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.schema_adapter_factory = Some(schema_adapter_factory);
         self
     }
@@ -381,7 +380,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.table_parquet_options.global.pushdown_filters = pushdown_filters;
         self
     }
@@ -405,7 +404,7 @@ impl ParquetExec {
         let file_source = self.file_scan_config();
         self.inner = self
             .inner
-            .with_source(Arc::new(file_source.with_source(Arc::new(parquet))));
+            .with_data_source(Arc::new(file_source.with_source(Arc::new(parquet))));
         self.table_parquet_options.global.reorder_filters = reorder_filters;
         self
     }
@@ -464,7 +463,7 @@ impl ParquetExec {
     ) -> Self {
         let mut config = self.file_scan_config();
         config.file_groups = file_groups;
-        self.inner = self.inner.with_source(Arc::new(config));
+        self.inner = self.inner.with_data_source(Arc::new(config));
         self
     }
 }
@@ -575,15 +574,14 @@ mod tests {
         ArrayRef, Date64Array, Int32Array, Int64Array, Int8Array, StringArray,
         StructArray,
     };
-    use arrow::datatypes::{Field, Schema, SchemaBuilder};
+    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaBuilder};
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::{DataType, Fields};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::{assert_contains, ScalarValue};
+    use datafusion_datasource::source::DataSourceExec;
     use datafusion_expr::{col, lit, when, Expr};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-    use datafusion_physical_plan::source::DataSourceExec;
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use crate::datasource::physical_plan::parquet::source::ParquetSource;
@@ -709,7 +707,7 @@ mod tests {
 
             let session_ctx = SessionContext::new();
             let task_ctx = session_ctx.task_ctx();
-            let parquet_exec = base_config.new_exec();
+            let parquet_exec = base_config.clone().build();
             RoundTripResult {
                 batches: collect(parquet_exec.clone(), task_ctx).await,
                 parquet_exec,
@@ -1355,7 +1353,7 @@ mod tests {
                 Arc::new(ParquetSource::default()),
             )
             .with_file_groups(file_groups)
-            .new_exec();
+            .build();
             assert_eq!(
                 parquet_exec
                     .properties()
@@ -1469,9 +1467,9 @@ mod tests {
                     false,
                 ),
             ])
-            .new_exec();
+            .build();
         let partition_count = parquet_exec
-            .source()
+            .data_source()
             .output_partitioning()
             .partition_count();
         assert_eq!(partition_count, 1);
@@ -1532,7 +1530,7 @@ mod tests {
             Arc::new(ParquetSource::default()),
         )
         .with_file(partitioned_file)
-        .new_exec();
+        .build();
 
         let mut results = parquet_exec.execute(0, state.task_ctx())?;
         let batch = results.next().await.unwrap();
@@ -1687,7 +1685,7 @@ mod tests {
 
         assert_contains!(
             &display,
-            "pruning_predicate=c1_null_count@2 != c1_row_count@3 AND (c1_min@0 != bar OR bar != c1_max@1)"
+            "pruning_predicate=c1_null_count@2 != row_count@3 AND (c1_min@0 != bar OR bar != c1_max@1)"
         );
 
         assert_contains!(&display, r#"predicate=c1@0 != bar"#);
@@ -2189,7 +2187,7 @@ mod tests {
                 extensions: None,
                 metadata_size_hint: None,
             })
-            .new_exec();
+            .build();
 
         let res = collect(exec, ctx.task_ctx()).await.unwrap();
         assert_eq!(res.len(), 2);

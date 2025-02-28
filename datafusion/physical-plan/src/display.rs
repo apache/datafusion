@@ -21,7 +21,7 @@
 use std::fmt;
 use std::fmt::Formatter;
 
-use arrow_schema::SchemaRef;
+use arrow::datatypes::SchemaRef;
 
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 use datafusion_expr::display_schema;
@@ -44,7 +44,7 @@ pub enum DisplayFormatType {
 /// # Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::{Field, Schema, DataType};
+/// # use arrow::datatypes::{Field, Schema, DataType};
 /// # use datafusion_expr::Operator;
 /// # use datafusion_physical_expr::expressions::{binary, col, lit};
 /// # use datafusion_physical_plan::{displayable, ExecutionPlan};

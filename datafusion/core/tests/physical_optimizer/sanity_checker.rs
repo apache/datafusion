@@ -22,7 +22,8 @@ use crate::physical_optimizer::test_utils::{
     repartition_exec, sort_exec, sort_expr_options, sort_merge_join_exec,
 };
 
-use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::stream::{FileStreamProvider, StreamConfig, StreamTable};
 use datafusion::prelude::{CsvReadOptions, SessionContext};
 use datafusion_common::config::ConfigOptions;
@@ -387,13 +388,21 @@ fn create_test_schema2() -> SchemaRef {
 }
 
 /// Check if sanity checker should accept or reject plans.
-fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
+pub(crate) fn assert_sanity_check(plan: &Arc<dyn ExecutionPlan>, is_sane: bool) {
     let sanity_checker = SanityCheckPlan::new();
     let opts = ConfigOptions::default();
     assert_eq!(
         sanity_checker.optimize(plan.clone(), &opts).is_ok(),
         is_sane
     );
+}
+
+/// Assert reason for sanity check failure.
+pub(crate) fn assert_sanity_check_err(plan: &Arc<dyn ExecutionPlan>, err: &str) {
+    let sanity_checker = SanityCheckPlan::new();
+    let opts = ConfigOptions::default();
+    let error = sanity_checker.optimize(plan.clone(), &opts).unwrap_err();
+    assert!(error.message().contains(err));
 }
 
 /// Check if the plan we created is as expected by comparing the plan

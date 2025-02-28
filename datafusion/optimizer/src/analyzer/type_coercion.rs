@@ -33,8 +33,8 @@ use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::{
-    self, Alias, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like,
-    ScalarFunction, Sort, WindowFunction,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
+    InSubquery, Like, ScalarFunction, Sort, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -506,11 +506,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }
             Expr::AggregateFunction(expr::AggregateFunction {
                 func,
-                args,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
+                params:
+                    AggregateFunctionParams {
+                        args,
+                        distinct,
+                        filter,
+                        order_by,
+                        null_treatment,
+                    },
             }) => {
                 let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
                     args,
@@ -530,11 +533,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
+                params:
+                    expr::WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        null_treatment,
+                    },
             }) => {
                 let window_frame =
                     coerce_window_frame(window_frame, self.schema, &order_by)?;
@@ -1047,8 +1053,8 @@ mod test {
     use datafusion_expr::{
         cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
         BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
-        Operator, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery,
-        Volatility,
+        Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        SimpleAggregateUDF, Subquery, Volatility,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -1266,11 +1272,7 @@ mod test {
             Ok(Utf8)
         }
 
-        fn invoke_batch(
-            &self,
-            _args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
         }
     }

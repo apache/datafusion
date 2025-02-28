@@ -512,7 +512,7 @@ mod test {
         assert_strong_count_converges_to_zero, BlockingExec, MockExec, PanicExec,
     };
 
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::exec_err;
 
     fn schema() -> SchemaRef {

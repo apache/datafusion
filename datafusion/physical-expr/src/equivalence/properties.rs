@@ -32,7 +32,8 @@ use crate::{
     PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use arrow_schema::{SchemaRef, SortOptions};
+use arrow::compute::SortOptions;
+use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     internal_err, plan_err, Constraint, Constraints, HashMap, JoinSide, JoinType, Result,
@@ -99,7 +100,7 @@ use itertools::Itertools;
 /// # Code Example
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::{Schema, Field, DataType, SchemaRef};
+/// # use arrow::datatypes::{Schema, Field, DataType, SchemaRef};
 /// # use datafusion_physical_expr::{ConstExpr, EquivalenceProperties};
 /// # use datafusion_physical_expr::expressions::col;
 /// use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -639,7 +640,7 @@ impl EquivalenceProperties {
                         req.expr.eq(&existing.expr)
                             && req
                                 .options
-                                .map_or(true, |req_opts| req_opts == existing.options)
+                                .is_none_or(|req_opts| req_opts == existing.options)
                     },
                 )
         })
@@ -1463,12 +1464,12 @@ fn update_properties(
     let normalized_expr = eq_properties
         .eq_group
         .normalize_expr(Arc::clone(&node.expr));
-    if eq_properties.is_expr_constant(&normalized_expr) {
-        node.data.sort_properties = SortProperties::Singleton;
-    } else if let Some(options) = eq_properties
-        .normalized_oeq_class()
-        .get_options(&normalized_expr)
+    let oeq_class = eq_properties.normalized_oeq_class();
+    if eq_properties.is_expr_constant(&normalized_expr)
+        || oeq_class.is_expr_partial_const(&normalized_expr)
     {
+        node.data.sort_properties = SortProperties::Singleton;
+    } else if let Some(options) = oeq_class.get_options(&normalized_expr) {
         node.data.sort_properties = SortProperties::Ordered(options);
     }
     Ok(Transformed::yes(node))
@@ -2258,7 +2259,7 @@ impl UnionEquivalentOrderingBuilder {
     ) -> AddedOrdering {
         if ordering.is_empty() {
             AddedOrdering::Yes
-        } else if constants.is_empty() && properties.ordering_satisfy(ordering.as_ref()) {
+        } else if properties.ordering_satisfy(ordering.as_ref()) {
             // If the ordering satisfies the target properties, no need to
             // augment it with constants.
             self.orderings.push(ordering);
@@ -2403,8 +2404,7 @@ mod tests {
     use crate::expressions::{col, BinaryExpr, Column};
     use crate::ScalarFunctionExpr;
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{Fields, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
     use datafusion_common::{Constraint, ScalarValue};
     use datafusion_expr::Operator;
 

@@ -35,7 +35,7 @@ use datafusion_catalog::information_schema::{
 };
 use datafusion_catalog::MemoryCatalogProviderList;
 
-use arrow_schema::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_catalog::{Session, TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
@@ -480,7 +480,7 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                      Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi."
+                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
         let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
@@ -518,7 +518,7 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                          Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                         MsSQL, ClickHouse, BigQuery, Ansi."
+                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
 
@@ -1990,8 +1990,8 @@ mod tests {
     use super::{SessionContextProvider, SessionStateBuilder};
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
-    use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;
     use datafusion_common::Result;

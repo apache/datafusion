@@ -26,20 +26,21 @@ use super::file_compression_type::FileCompressionType;
 use super::FileFormat;
 use super::FileFormatFactory;
 use crate::datasource::avro_to_arrow::read_avro_schema_from_reader;
-use crate::datasource::physical_plan::{AvroSource, FileScanConfig};
+use crate::datasource::physical_plan::AvroSource;
 use crate::error::Result;
-use crate::execution::context::SessionState;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
-use crate::datasource::data_source::FileSource;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 use datafusion_common::internal_err;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::GetExt;
 use datafusion_common::DEFAULT_AVRO_EXTENSION;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_physical_expr::PhysicalExpr;
 use object_store::{GetResultPayload, ObjectMeta, ObjectStore};
 
@@ -57,7 +58,7 @@ impl AvroFormatFactory {
 impl FileFormatFactory for AvroFormatFactory {
     fn create(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _format_options: &HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(AvroFormat))
@@ -112,7 +113,7 @@ impl FileFormat for AvroFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -137,7 +138,7 @@ impl FileFormat for AvroFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -147,12 +148,11 @@ impl FileFormat for AvroFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
-        mut conf: FileScanConfig,
+        _state: &dyn Session,
+        conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        conf = conf.with_source(self.file_source());
-        Ok(conf.new_exec())
+        Ok(conf.with_source(self.file_source()).build())
     }
 
     fn file_source(&self) -> Arc<dyn FileSource> {
@@ -505,7 +505,7 @@ mod tests {
     }
 
     async fn get_exec(
-        state: &SessionState,
+        state: &dyn Session,
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,

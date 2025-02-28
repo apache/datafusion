@@ -21,9 +21,9 @@
 //! physical format into how they should be used by DataFusion.  For instance, a schema
 //! can be stored external to a parquet file that maps parquet logical types to arrow types.
 
+use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
 use arrow::compute::{can_cast_types, cast};
-use arrow_array::{new_null_array, RecordBatch, RecordBatchOptions};
-use arrow_schema::{Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::plan_err;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -434,16 +434,16 @@ mod tests {
     use std::sync::Arc;
 
     use crate::assert_batches_sorted_eq;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::array::{Int32Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use arrow_array::{Int32Array, StringArray};
-    use arrow_schema::{DataType, SchemaRef};
+    use datafusion_datasource::file_scan_config::FileScanConfig;
     use object_store::path::Path;
     use object_store::ObjectMeta;
 
     use crate::datasource::listing::PartitionedFile;
     use crate::datasource::object_store::ObjectStoreUrl;
-    use crate::datasource::physical_plan::{FileScanConfig, ParquetSource};
+    use crate::datasource::physical_plan::ParquetSource;
     use crate::datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapter, SchemaAdapterFactory, SchemaMapper,
     };
@@ -508,7 +508,7 @@ mod tests {
             FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
                 .with_file(partitioned_file);
 
-        let parquet_exec = base_conf.new_exec();
+        let parquet_exec = base_conf.build();
 
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();

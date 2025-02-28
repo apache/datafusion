@@ -29,18 +29,19 @@ use crate::datasource::{
         file_compression_type::FileCompressionType, FileFormat, FilePushdownSupport,
     },
     get_statistics_with_limit,
-    physical_plan::{FileScanConfig, FileSinkConfig},
+    physical_plan::FileSinkConfig,
 };
 use crate::execution::context::SessionState;
 use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_expr::dml::InsertOp;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
-use datafusion_physical_plan::{empty::EmptyExec, ExecutionPlan, Statistics};
+use datafusion_physical_plan::empty::EmptyExec;
+use datafusion_physical_plan::{ExecutionPlan, Statistics};
 
-use arrow::datatypes::{DataType, Field, SchemaBuilder, SchemaRef};
-use arrow_schema::Schema;
+use arrow::datatypes::{DataType, Field, Schema, SchemaBuilder, SchemaRef};
 use datafusion_common::{
     config_datafusion_err, internal_err, plan_err, project_schema, Constraints,
     SchemaExt, ToDFSchema,
@@ -137,7 +138,7 @@ impl ListingTableConfig {
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
-    pub async fn infer_options(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_options(self, state: &dyn Session) -> Result<Self> {
         let store = if let Some(url) = self.table_paths.first() {
             state.runtime_env().object_store(url)?
         } else {
@@ -164,7 +165,7 @@ impl ListingTableConfig {
             format_options
                 .insert("format.compression".to_string(), compression_type.clone());
         }
-
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let file_format = state
             .get_file_format_factory(&file_extension)
             .ok_or(config_datafusion_err!(
@@ -191,7 +192,7 @@ impl ListingTableConfig {
     }
 
     /// Infer the [`SchemaRef`] based on `table_path` suffix.  Requires `self.options` to be set prior to using.
-    pub async fn infer_schema(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_schema(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let schema = if let Some(url) = self.table_paths.first() {
@@ -211,12 +212,12 @@ impl ListingTableConfig {
     }
 
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
-    pub async fn infer(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer(self, state: &dyn Session) -> Result<Self> {
         self.infer_options(state).await?.infer_schema(state).await
     }
 
     /// Infer the partition columns from the path. Requires `self.options` to be set prior to using.
-    pub async fn infer_partitions_from_path(self, state: &SessionState) -> Result<Self> {
+    pub async fn infer_partitions_from_path(self, state: &dyn Session) -> Result<Self> {
         match self.options {
             Some(options) => {
                 let Some(url) = self.table_paths.first() else {
@@ -484,7 +485,7 @@ impl ListingOptions {
     /// locally or ask a remote service to do it (e.g a scheduler).
     pub async fn infer_schema<'a>(
         &'a self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &'a ListingTableUrl,
     ) -> Result<SchemaRef> {
         let store = state.runtime_env().object_store(table_path)?;
@@ -509,7 +510,7 @@ impl ListingOptions {
     /// Allows specifying partial partitions.
     pub async fn validate_partitions(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &ListingTableUrl,
     ) -> Result<()> {
         if self.table_partition_cols.is_empty() {
@@ -563,7 +564,7 @@ impl ListingOptions {
     /// and therefore may fail to detect invalid partitioning.
     pub(crate) async fn infer_partitions(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         table_path: &ListingTableUrl,
     ) -> Result<Vec<String>> {
         let store = state.runtime_env().object_store(table_path)?;
@@ -997,27 +998,8 @@ impl TableProvider for ListingTable {
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Check that the schema of the plan matches the schema of this table.
-        if !self
-            .schema()
-            .logically_equivalent_names_and_types(&input.schema())
-        {
-            // Return an error if schema of the input query does not match with the table schema.
-            return plan_err!(
-                "Inserting query must have the same schema with the table. \
-                Expected: {:?}, got: {:?}",
-                self.schema()
-                    .fields()
-                    .iter()
-                    .map(|field| field.data_type())
-                    .collect::<Vec<_>>(),
-                input
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|field| field.data_type())
-                    .collect::<Vec<_>>()
-            );
-        }
+        self.schema()
+            .logically_equivalent_names_and_types(&input.schema())?;
 
         let table_path = &self.table_paths()[0];
         if !table_path.is_collection() {
@@ -1095,7 +1077,7 @@ impl ListingTable {
     /// be distributed to different threads / executors.
     async fn list_files_for_scan<'a>(
         &'a self,
-        ctx: &'a SessionState,
+        ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
@@ -1156,7 +1138,7 @@ impl ListingTable {
     /// If they are not, it infers the statistics from the file and stores them in the cache.
     async fn do_collect_statistics(
         &self,
-        ctx: &SessionState,
+        ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
     ) -> Result<Arc<Statistics>> {
@@ -1196,7 +1178,7 @@ mod tests {
     use crate::datasource::file_format::json::JsonFormat;
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
-    use crate::datasource::{provider_as_source, MemTable};
+    use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
     use crate::{
@@ -1205,8 +1187,8 @@ mod tests {
     };
     use datafusion_physical_plan::collect;
 
+    use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::SortOptions;
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
@@ -1998,7 +1980,7 @@ mod tests {
         // Create a new batch of data to insert into the table
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(arrow_array::Int32Array::from(vec![
+            vec![Arc::new(arrow::array::Int32Array::from(vec![
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
             ]))],
         )?;
@@ -2066,6 +2048,8 @@ mod tests {
         session_ctx.register_table("source", source_table.clone())?;
         // Convert the source table into a provider so that it can be used in a query
         let source = provider_as_source(source_table);
+        let target = session_ctx.table_provider("t").await?;
+        let target = Arc::new(DefaultTableSource::new(target));
         // Create a table scan logical plan to read from the source table
         let scan_plan = LogicalPlanBuilder::scan("source", source, None)?
             .filter(filter_predicate)?
@@ -2074,7 +2058,7 @@ mod tests {
         // Therefore, we will have 8 partitions in the final plan.
         // Create an insert plan to insert the source data into the initial table
         let insert_into_table =
-            LogicalPlanBuilder::insert_into(scan_plan, "t", &schema, InsertOp::Append)?
+            LogicalPlanBuilder::insert_into(scan_plan, "t", target, InsertOp::Append)?
                 .build()?;
         // Create a physical plan from the insert plan
         let plan = session_ctx

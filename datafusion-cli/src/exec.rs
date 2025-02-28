@@ -17,21 +17,15 @@
 
 //! Execution functions
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::BufReader;
-
 use crate::cli_context::CliSessionContext;
 use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
-    helper::{unescape_input, CliHelper},
+    helper::CliHelper,
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
-
 use datafusion::common::instant::Instant;
 use datafusion::common::{plan_datafusion_err, plan_err};
 use datafusion::config::ConfigFileType;
@@ -39,13 +33,17 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
-use datafusion::physical_plan::{collect, execute_stream, ExecutionPlanProperties};
+use datafusion::physical_plan::{execute_stream, ExecutionPlanProperties};
 use datafusion::sql::parser::{DFParser, Statement};
-use datafusion::sql::sqlparser::dialect::dialect_from_str;
-
 use datafusion::sql::sqlparser;
+use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::BufReader;
+use std::sync::Arc;
 use tokio::signal;
 
 /// run and execute SQL statements and commands, against a context with the given print options
@@ -170,7 +168,7 @@ pub async fn exec_from_repl(
                 }
             }
             Ok(line) => {
-                let lines = split_from_semicolon(line);
+                let lines = split_from_semicolon(&line);
                 for line in lines {
                     rl.add_history_entry(line.trim_end())?;
                     tokio::select! {
@@ -213,14 +211,13 @@ pub(super) async fn exec_and_print(
     sql: String,
 ) -> Result<()> {
     let now = Instant::now();
-    let sql = unescape_input(&sql)?;
     let task_ctx = ctx.task_ctx();
     let dialect = &task_ctx.session_config().options().sql_parser.dialect;
     let dialect = dialect_from_str(dialect).ok_or_else(|| {
         plan_datafusion_err!(
             "Unsupported SQL dialect: {dialect}. Available dialects: \
                  Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                 MsSQL, ClickHouse, BigQuery, Ansi."
+                 MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
         )
     })?;
 
@@ -228,14 +225,17 @@ pub(super) async fn exec_and_print(
     for statement in statements {
         let adjusted =
             AdjustedPrintOptions::new(print_options.clone()).with_statement(&statement);
-
         let plan = create_plan(ctx, statement).await?;
         let adjusted = adjusted.with_plan(&plan);
 
         let df = ctx.execute_logical_plan(plan).await?;
         let physical_plan = df.create_physical_plan().await?;
 
-        if physical_plan.boundedness().is_unbounded() {
+        let is_unbounded = physical_plan.boundedness().is_unbounded();
+        let mut stream = execute_stream(Arc::clone(&physical_plan), task_ctx.clone())?;
+
+        // Both bounded and unbounded streams are streaming prints
+        if is_unbounded {
             if physical_plan.pipeline_behavior() == EmissionType::Final {
                 return plan_err!(
                     "The given query can generate a valid result only once \
@@ -244,16 +244,43 @@ pub(super) async fn exec_and_print(
             }
             // As the input stream comes, we can generate results.
             // However, memory safety is not guaranteed.
-            let stream = execute_stream(physical_plan, task_ctx.clone())?;
-            print_options.print_stream(stream, now).await?;
+            print_options
+                .print_stream(MaxRows::Unlimited, stream, now)
+                .await?;
         } else {
-            // Bounded stream; collected results are printed after all input consumed.
+            // Bounded stream; collected results size is limited by the maxrows option
             let schema = physical_plan.schema();
-            let results = collect(physical_plan, task_ctx.clone()).await?;
-            adjusted.into_inner().print_batches(schema, &results, now)?;
+            let max_rows = match print_options.maxrows {
+                MaxRows::Unlimited => usize::MAX,
+                MaxRows::Limited(n) => n,
+            };
+            let stdout = std::io::stdout();
+            let mut writer = stdout.lock();
+
+            // If we don't want to print the table, we should use the streaming print same as above
+            if print_options.format != PrintFormat::Table
+                && print_options.format != PrintFormat::Automatic
+            {
+                print_options
+                    .print_stream(print_options.maxrows, stream, now)
+                    .await?;
+                continue;
+            }
+
+            // into_inner will finalize the print options to table if it's automatic
+            adjusted
+                .into_inner()
+                .print_table_batch(
+                    print_options,
+                    schema,
+                    &mut stream,
+                    max_rows,
+                    &mut writer,
+                    now,
+                )
+                .await?;
         }
     }
-
     Ok(())
 }
 
@@ -493,7 +520,7 @@ mod tests {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                  Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                 MsSQL, ClickHouse, BigQuery, Ansi."
+                 MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
         for location in locations {

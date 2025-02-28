@@ -27,7 +27,7 @@ use datafusion::common::{
     substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, TableReference,
 };
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::expr::{Exists, InSubquery, Sort};
+use datafusion::logical_expr::expr::{Exists, InSubquery, Sort, WindowFunctionParams};
 
 use datafusion::logical_expr::{
     Aggregate, BinaryExpr, Case, Cast, EmptyRelation, Expr, ExprSchemable, Extension,
@@ -1945,13 +1945,6 @@ pub async fn from_substrait_agg_func(
 
     let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
 
-    // deal with situation that count(*) got no arguments
-    let args = if udaf.name() == "count" && args.is_empty() {
-        vec![Expr::Literal(ScalarValue::Int64(Some(1)))]
-    } else {
-        args
-    };
-
     Ok(Arc::new(Expr::AggregateFunction(
         expr::AggregateFunction::new_udf(
             udaf,
@@ -2231,12 +2224,19 @@ pub async fn from_window_function(
 
     Ok(Expr::WindowFunction(expr::WindowFunction {
         fun,
-        args: from_substrait_func_args(consumer, &window.arguments, input_schema).await?,
-        partition_by: from_substrait_rex_vec(consumer, &window.partitions, input_schema)
+        params: WindowFunctionParams {
+            args: from_substrait_func_args(consumer, &window.arguments, input_schema)
+                .await?,
+            partition_by: from_substrait_rex_vec(
+                consumer,
+                &window.partitions,
+                input_schema,
+            )
             .await?,
-        order_by,
-        window_frame,
-        null_treatment: None,
+            order_by,
+            window_frame,
+            null_treatment: None,
+        },
     }))
 }
 
@@ -3294,7 +3294,7 @@ mod test {
     use datafusion::execution::SessionState;
     use datafusion::prelude::{Expr, SessionContext};
     use datafusion::scalar::ScalarValue;
-    use std::sync::OnceLock;
+    use std::sync::LazyLock;
     use substrait::proto::expression::literal::{
         interval_day_to_second, IntervalCompound, IntervalDayToSecond,
         IntervalYearToMonth, LiteralType,
@@ -3302,11 +3302,12 @@ mod test {
     use substrait::proto::expression::window_function::BoundsType;
     use substrait::proto::expression::Literal;
 
-    static TEST_SESSION_STATE: OnceLock<SessionState> = OnceLock::new();
-    static TEST_EXTENSIONS: OnceLock<Extensions> = OnceLock::new();
+    static TEST_SESSION_STATE: LazyLock<SessionState> =
+        LazyLock::new(|| SessionContext::default().state());
+    static TEST_EXTENSIONS: LazyLock<Extensions> = LazyLock::new(Extensions::default);
     fn test_consumer() -> DefaultSubstraitConsumer<'static> {
-        let extensions = TEST_EXTENSIONS.get_or_init(Extensions::default);
-        let state = TEST_SESSION_STATE.get_or_init(|| SessionContext::default().state());
+        let extensions = &TEST_EXTENSIONS;
+        let state = &TEST_SESSION_STATE;
         DefaultSubstraitConsumer::new(extensions, state)
     }
 
@@ -3369,7 +3370,7 @@ mod test {
 
         match from_substrait_rex(&consumer, &substrait, &DFSchema::empty()).await? {
             Expr::WindowFunction(window_function) => {
-                assert_eq!(window_function.order_by.len(), 1)
+                assert_eq!(window_function.params.order_by.len(), 1)
             }
             _ => panic!("expr was not a WindowFunction"),
         };

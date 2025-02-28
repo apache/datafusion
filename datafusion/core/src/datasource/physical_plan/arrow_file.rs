@@ -20,24 +20,25 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datasource::data_source::FileSource;
 use crate::datasource::listing::PartitionedFile;
 use crate::datasource::physical_plan::{
-    FileMeta, FileOpenFuture, FileOpener, FileScanConfig, JsonSource,
+    FileMeta, FileOpenFuture, FileOpener, JsonSource,
 };
 use crate::error::Result;
 
 use arrow::buffer::Buffer;
+use arrow::datatypes::SchemaRef;
 use arrow_ipc::reader::FileDecoder;
-use arrow_schema::SchemaRef;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
 };
@@ -83,8 +84,8 @@ impl ArrowExec {
     }
 
     fn file_scan_config(&self) -> FileScanConfig {
-        let source = self.inner.source();
-        source
+        self.inner
+            .data_source()
             .as_any()
             .downcast_ref::<FileScanConfig>()
             .unwrap()
@@ -92,8 +93,7 @@ impl ArrowExec {
     }
 
     fn json_source(&self) -> JsonSource {
-        let source = self.file_scan_config();
-        source
+        self.file_scan_config()
             .file_source()
             .as_any()
             .downcast_ref::<JsonSource>()
@@ -129,7 +129,7 @@ impl ArrowExec {
         self.base_config.file_groups = file_groups.clone();
         let mut file_source = self.file_scan_config();
         file_source = file_source.with_file_groups(file_groups);
-        self.inner = self.inner.with_source(Arc::new(file_source));
+        self.inner = self.inner.with_data_source(Arc::new(file_source));
         self
     }
 }
@@ -211,14 +211,14 @@ pub struct ArrowSource {
 impl FileSource for ArrowSource {
     fn create_file_opener(
         &self,
-        object_store: Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(ArrowOpener {
-            object_store: object_store?,
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(ArrowOpener {
+            object_store,
             projection: base_config.file_column_projection_indices(),
-        }))
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -317,7 +317,7 @@ impl FileOpener for ArrowOpener {
                         footer_buf[..footer_len].try_into().unwrap(),
                     )
                     .map_err(|err| {
-                        arrow_schema::ArrowError::ParseError(format!(
+                        arrow::error::ArrowError::ParseError(format!(
                             "Unable to get root as footer: {err:?}"
                         ))
                     })?;

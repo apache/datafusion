@@ -558,7 +558,6 @@ select * from validate_arrow_file_dict;
 c foo
 d bar
 
-
 # Copy from table to folder of json
 query I
 COPY source_table to 'test_files/scratch/copy/table_arrow' STORED AS ARROW;

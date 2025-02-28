@@ -85,3 +85,43 @@ impl From<TableType> for FFI_TableType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::error::Result;
+
+    fn round_trip_filter_pushdown(pushdown: TableProviderFilterPushDown) -> Result<()> {
+        let ffi_pushdown: FFI_TableProviderFilterPushDown = (&pushdown).into();
+        let round_trip: TableProviderFilterPushDown = (&ffi_pushdown).into();
+
+        assert_eq!(pushdown, round_trip);
+        Ok(())
+    }
+
+    #[test]
+    fn round_trip_all_filter_pushdowns() -> Result<()> {
+        round_trip_filter_pushdown(TableProviderFilterPushDown::Exact)?;
+        round_trip_filter_pushdown(TableProviderFilterPushDown::Inexact)?;
+        round_trip_filter_pushdown(TableProviderFilterPushDown::Unsupported)?;
+
+        Ok(())
+    }
+
+    fn round_trip_table_type(table_type: TableType) -> Result<()> {
+        let ffi_type: FFI_TableType = table_type.into();
+        let round_trip_type: TableType = ffi_type.into();
+
+        assert_eq!(table_type, round_trip_type);
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_all_trip_table_type() -> Result<()> {
+        round_trip_table_type(TableType::Base)?;
+        round_trip_table_type(TableType::Temporary)?;
+        round_trip_table_type(TableType::View)?;
+
+        Ok(())
+    }
+}

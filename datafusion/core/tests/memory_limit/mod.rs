@@ -23,11 +23,13 @@ use std::sync::{Arc, LazyLock};
 
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
+use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use arrow_array::{ArrayRef, DictionaryArray};
-use arrow_schema::SortOptions;
+use arrow_schema::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::execution::disk_manager::DiskManagerConfig;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -40,16 +42,15 @@ use datafusion_catalog::streaming::StreamingTable;
 use datafusion_catalog::Session;
 use datafusion_common::{assert_contains, Result};
 use datafusion_execution::memory_pool::{
-    GreedyMemoryPool, MemoryPool, TrackConsumersPool,
+    FairSpillPool, GreedyMemoryPool, MemoryPool, TrackConsumersPool,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::spill::get_record_batch_memory_size;
+use rand::Rng;
 use test_utils::AccessLogGenerator;
 
 use async_trait::async_trait;
@@ -70,7 +71,7 @@ async fn oom_sort() {
         .with_expected_errors(vec![
             "Resources exhausted: Memory Exhausted while Sorting (DiskManager is disabled)",
         ])
-        .with_memory_limit(200_000)
+        .with_memory_limit(500_000)
         .run()
         .await
 }
@@ -272,7 +273,8 @@ async fn sort_spill_reservation() {
 
     // Merge operation needs extra memory to do row conversion, so make the
     // memory limit larger.
-    let mem_limit = partition_size * 2;
+    let mem_limit =
+        ((partition_size * 2 + 1024) as f64 / MEMORY_FRACTION).ceil() as usize;
     let test = TestCase::new()
     // This query uses a different order than the input table to
     // force a sort. It also needs to have multiple columns to
@@ -309,7 +311,8 @@ async fn sort_spill_reservation() {
 
     test.clone()
         .with_expected_errors(vec![
-            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as: ExternalSorterMerge",
+            "Resources exhausted: Additional allocation failed with top memory consumers (across reservations) as:",
+            "bytes for ExternalSorterMerge",
         ])
         .with_config(config)
         .run()
@@ -400,6 +403,69 @@ async fn oom_with_tracked_consumer_pool() {
         ))
         .run()
         .await
+}
+
+/// For regression case: if spilled `StringViewArray`'s buffer will be referenced by
+/// other batches which are also need to be spilled, then the spill writer will
+/// repeatedly write out the same buffer, and after reading back, each batch's size
+/// will explode.
+///
+/// This test setup will cause 10 spills, each spill will sort around 20 batches.
+/// If there is memory explosion for spilled record batch, this test will fail.
+#[tokio::test]
+async fn test_stringview_external_sort() {
+    let mut rng = rand::thread_rng();
+    let array_length = 1000;
+    let num_batches = 200;
+    // Batches contain two columns: random 100-byte string, and random i32
+    let mut batches = Vec::with_capacity(num_batches);
+
+    for _ in 0..num_batches {
+        let strings: Vec<String> = (0..array_length)
+            .map(|_| {
+                (0..100)
+                    .map(|_| rng.gen_range(0..=u8::MAX) as char)
+                    .collect()
+            })
+            .collect();
+
+        let string_array = StringViewArray::from(strings);
+        let array_ref: ArrayRef = Arc::new(string_array);
+
+        let random_numbers: Vec<i32> =
+            (0..array_length).map(|_| rng.gen_range(0..=1000)).collect();
+        let int_array = Int32Array::from(random_numbers);
+        let int_array_ref: ArrayRef = Arc::new(int_array);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("strings", DataType::Utf8View, false),
+                Field::new("random_numbers", DataType::Int32, false),
+            ])),
+            vec![array_ref, int_array_ref],
+        )
+        .unwrap();
+        batches.push(batch);
+    }
+
+    // Run a sql query that sorts the batches by the int column
+    let schema = batches[0].schema();
+    let table = MemTable::try_new(schema, vec![batches]).unwrap();
+    let builder = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(60 * 1024 * 1024)));
+    let runtime = builder.build_arc().unwrap();
+
+    let config = SessionConfig::new().with_sort_spill_reservation_bytes(40 * 1024 * 1024);
+
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+    ctx.register_table("t", Arc::new(table)).unwrap();
+
+    let df = ctx
+        .sql("explain analyze SELECT * FROM t ORDER BY random_numbers")
+        .await
+        .unwrap();
+
+    let _ = df.collect().await.expect("Query execution failed");
 }
 
 /// Run the query with the specified memory limit,

@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
 #![deny(clippy::clone_on_ref_ptr)]
 
@@ -46,7 +51,6 @@ pub mod function;
 pub mod groups_accumulator {
     pub use datafusion_expr_common::groups_accumulator::*;
 }
-
 pub mod interval_arithmetic {
     pub use datafusion_expr_common::interval_arithmetic::*;
 }
@@ -56,6 +60,9 @@ pub mod registry;
 pub mod simplify;
 pub mod sort_properties {
     pub use datafusion_expr_common::sort_properties::*;
+}
+pub mod statistics {
+    pub use datafusion_expr_common::statistics::*;
 }
 pub mod test;
 pub mod tree_node;
@@ -71,8 +78,8 @@ pub use datafusion_expr_common::columnar_value::ColumnarValue;
 pub use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
 pub use datafusion_expr_common::operator::Operator;
 pub use datafusion_expr_common::signature::{
-    ArrayFunctionSignature, Signature, TypeSignature, TypeSignatureClass, Volatility,
-    TIMEZONE_WILDCARD,
+    ArrayFunctionArgument, ArrayFunctionSignature, Coercion, Signature, TypeSignature,
+    TypeSignatureClass, Volatility, TIMEZONE_WILDCARD,
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
@@ -95,8 +102,8 @@ pub use udaf::{
     SetMonotonicity, StatisticsArgs,
 };
 pub use udf::{
-    scalar_doc_sections, NullHandling, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs,
-    ScalarUDF, ScalarUDFImpl,
+    scalar_doc_sections, ReturnInfo, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl,
 };
 pub use udwf::{window_doc_sections, ReversedUDWF, WindowUDF, WindowUDFImpl};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};

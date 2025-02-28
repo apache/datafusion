@@ -32,6 +32,7 @@ use datafusion::datasource::file_format::parquet::ParquetSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::physical_plan::{AvroSource, CsvSource, FileScanConfig};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::physical_expr::aggregate::AggregateFunctionExpr;
@@ -57,7 +58,6 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion::physical_plan::unnest::{ListUnnest, UnnestExec};
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
@@ -243,7 +243,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 )?
                 .with_newlines_in_values(scan.newlines_in_values)
                 .with_file_compression_type(FileCompressionType::UNCOMPRESSED);
-                Ok(conf.new_exec())
+                Ok(conf.build())
             }
             #[cfg_attr(not(feature = "parquet"), allow(unused_variables))]
             PhysicalPlanType::ParquetScan(scan) => {
@@ -280,7 +280,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                         extension_codec,
                         Arc::new(source),
                     )?;
-                    Ok(base_config.new_exec())
+                    Ok(base_config.build())
                 }
                 #[cfg(not(feature = "parquet"))]
                 panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
@@ -292,7 +292,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     extension_codec,
                     Arc::new(AvroSource::new()),
                 )?;
-                Ok(conf.new_exec())
+                Ok(conf.build())
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
@@ -404,14 +404,14 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                     Ok(Arc::new(BoundedWindowAggExec::try_new(
                         physical_window_expr,
                         input,
-                        partition_keys,
                         input_order_mode,
+                        !partition_keys.is_empty(),
                     )?))
                 } else {
                     Ok(Arc::new(WindowAggExec::try_new(
                         physical_window_expr,
                         input,
-                        partition_keys,
+                        !partition_keys.is_empty(),
                     )?))
                 }
             }
@@ -1630,9 +1630,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             });
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_csv) = source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(maybe_csv) = data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
                 let source = maybe_csv.file_source();
                 if let Some(csv_config) = source.as_any().downcast_ref::<CsvSource>() {
                     return Ok(protobuf::PhysicalPlanNode {
@@ -1677,8 +1678,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         #[cfg(feature = "parquet")]
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_parquet) = source.as_any().downcast_ref::<FileScanConfig>()
+            let data_source_exec = exec.data_source();
+            if let Some(maybe_parquet) =
+                data_source_exec.as_any().downcast_ref::<FileScanConfig>()
             {
                 let source = maybe_parquet.file_source();
                 if let Some(conf) = source.as_any().downcast_ref::<ParquetSource>() {
@@ -1704,9 +1706,11 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_avro) = source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(maybe_avro) =
+                data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
                 let source = maybe_avro.file_source();
                 if source.as_any().downcast_ref::<AvroSource>().is_some() {
                     return Ok(protobuf::PhysicalPlanNode {
@@ -1921,7 +1925,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 .collect::<Result<Vec<protobuf::PhysicalWindowExprNode>>>()?;
 
             let partition_keys = exec
-                .partition_keys
+                .partition_keys()
                 .iter()
                 .map(|e| serialize_physical_expr(e, extension_codec))
                 .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;
@@ -1951,7 +1955,7 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 .collect::<Result<Vec<protobuf::PhysicalWindowExprNode>>>()?;
 
             let partition_keys = exec
-                .partition_keys
+                .partition_keys()
                 .iter()
                 .map(|e| serialize_physical_expr(e, extension_codec))
                 .collect::<Result<Vec<protobuf::PhysicalExprNode>>>()?;

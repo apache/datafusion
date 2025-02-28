@@ -22,6 +22,8 @@ use arrow::compute::{concat_batches, SortOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::windows::{
@@ -48,8 +50,6 @@ use datafusion_functions_window::rank::{dense_rank_udwf, rank_udwf};
 use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_plan::memory::MemorySourceConfig;
-use datafusion_physical_plan::source::DataSourceExec;
 
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
@@ -293,8 +293,8 @@ async fn bounded_window_causal_non_causal() -> Result<()> {
                 let running_window_exec = Arc::new(BoundedWindowAggExec::try_new(
                     vec![window_expr],
                     memory_exec.clone(),
-                    vec![],
                     Linear,
+                    false,
                 )?);
                 let task_ctx = ctx.task_ctx();
                 let collected_results = collect(running_window_exec, task_ctx).await?;
@@ -660,7 +660,7 @@ async fn run_window_test(
             false,
         )?],
         exec1,
-        vec![],
+        false,
     )?) as _;
     let exec2 = Arc::new(DataSourceExec::new(Arc::new(
         MemorySourceConfig::try_new(&[input1.clone()], schema.clone(), None)?
@@ -678,8 +678,8 @@ async fn run_window_test(
             false,
         )?],
         exec2,
-        vec![],
         search_mode.clone(),
+        false,
     )?) as _;
     let task_ctx = ctx.task_ctx();
     let collected_usual = collect(usual_window_exec, task_ctx.clone()).await?;

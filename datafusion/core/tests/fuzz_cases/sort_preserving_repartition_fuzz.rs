@@ -19,9 +19,9 @@
 mod sp_repartition_fuzz_tests {
     use std::sync::Arc;
 
-    use arrow::compute::{concat_batches, lexsort, SortColumn};
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
-    use arrow_schema::{DataType, Field, Schema, SchemaRef, SortOptions};
+    use arrow::array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
+    use arrow::compute::{concat_batches, lexsort, SortColumn, SortOptions};
+    use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use datafusion::physical_plan::{
         collect,
@@ -44,9 +44,9 @@ mod sp_repartition_fuzz_tests {
     };
     use test_utils::add_empty_batches;
 
+    use datafusion::datasource::memory::MemorySourceConfig;
+    use datafusion::datasource::source::DataSourceExec;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
-    use datafusion_physical_plan::memory::MemorySourceConfig;
-    use datafusion_physical_plan::source::DataSourceExec;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 

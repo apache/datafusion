@@ -31,30 +31,31 @@ use super::write::{create_writer, SharedBuffer};
 use super::FileFormatFactory;
 use crate::datasource::file_format::write::get_writer_schema;
 use crate::datasource::file_format::FileFormat;
-use crate::datasource::physical_plan::{
-    ArrowSource, FileGroupDisplay, FileScanConfig, FileSink, FileSinkConfig,
-};
+use crate::datasource::physical_plan::{ArrowSource, FileSink, FileSinkConfig};
 use crate::error::Result;
-use crate::execution::context::SessionState;
 use crate::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::error::ArrowError;
 use arrow::ipc::convert::fb_to_schema;
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::IpcWriteOptions;
 use arrow::ipc::{root_as_message, CompressionType};
-use arrow_schema::{ArrowError, Schema, SchemaRef};
+use datafusion_catalog::Session;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{
     not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_datasource::display::FileGroupDisplay;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use datafusion_physical_plan::insert::{DataSink, DataSinkExec};
 
-use crate::datasource::data_source::FileSource;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -84,7 +85,7 @@ impl ArrowFormatFactory {
 impl FileFormatFactory for ArrowFormatFactory {
     fn create(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _format_options: &HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
         Ok(Arc::new(ArrowFormat))
@@ -135,7 +136,7 @@ impl FileFormat for ArrowFormat {
 
     async fn infer_schema(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -159,7 +160,7 @@ impl FileFormat for ArrowFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         _store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         _object: &ObjectMeta,
@@ -169,18 +170,17 @@ impl FileFormat for ArrowFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
-        mut conf: FileScanConfig,
+        _state: &dyn Session,
+        conf: FileScanConfig,
         _filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        conf = conf.with_source(Arc::new(ArrowSource::default()));
-        Ok(conf.new_exec())
+        Ok(conf.with_source(Arc::new(ArrowSource::default())).build())
     }
 
     async fn create_writer_physical_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &SessionState,
+        _state: &dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

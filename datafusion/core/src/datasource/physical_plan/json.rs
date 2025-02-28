@@ -22,25 +22,27 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 use std::task::Poll;
 
-use super::{calculate_range, FileScanConfig, RangeCalculation};
-use crate::datasource::data_source::FileSource;
+use super::{calculate_range, RangeCalculation};
+
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::{deserialize_stream, DecoderDeserializer};
 use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
-use crate::datasource::physical_plan::file_stream::{FileOpenFuture, FileOpener};
 use crate::datasource::physical_plan::FileMeta;
+use crate::datasource::physical_plan::{FileOpenFuture, FileOpener};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 use arrow::json::ReaderBuilder;
 use arrow::{datatypes::SchemaRef, json};
 use datafusion_common::{Constraints, Statistics};
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
-use datafusion_physical_plan::source::DataSourceExec;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, PlanProperties};
 
 use futures::{StreamExt, TryStreamExt};
@@ -101,8 +103,8 @@ impl NdJsonExec {
     }
 
     fn file_scan_config(&self) -> FileScanConfig {
-        let source = self.inner.source();
-        source
+        self.inner
+            .data_source()
             .as_any()
             .downcast_ref::<FileScanConfig>()
             .unwrap()
@@ -146,7 +148,7 @@ impl NdJsonExec {
         self.base_config.file_groups = file_groups.clone();
         let mut file_source = self.file_scan_config();
         file_source = file_source.with_file_groups(file_groups);
-        self.inner = self.inner.with_source(Arc::new(file_source));
+        self.inner = self.inner.with_data_source(Arc::new(file_source));
         self
     }
 }
@@ -262,18 +264,18 @@ impl JsonSource {
 impl FileSource for JsonSource {
     fn create_file_opener(
         &self,
-        object_store: Result<Arc<dyn ObjectStore>>,
+        object_store: Arc<dyn ObjectStore>,
         base_config: &FileScanConfig,
         _partition: usize,
-    ) -> Result<Arc<dyn FileOpener>> {
-        Ok(Arc::new(JsonOpener {
+    ) -> Arc<dyn FileOpener> {
+        Arc::new(JsonOpener {
             batch_size: self
                 .batch_size
                 .expect("Batch size must set before creating opener"),
             projected_schema: base_config.projected_file_schema(),
             file_compression_type: base_config.file_compression_type,
-            object_store: object_store?,
-        }))
+            object_store,
+        })
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -585,7 +587,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.new_exec();
+        let exec = conf.build();
 
         // TODO: this is not where schema inference should be tested
 
@@ -656,7 +658,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_limit(Some(3))
             .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.new_exec();
+        let exec = conf.build();
 
         let mut it = exec.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
@@ -696,7 +698,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_projection(Some(vec![0, 2]))
             .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.new_exec();
+        let exec = conf.build();
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 
@@ -741,7 +743,7 @@ mod tests {
             .with_file_groups(file_groups)
             .with_projection(Some(vec![3, 0, 2]))
             .with_file_compression_type(file_compression_type.to_owned());
-        let exec = conf.new_exec();
+        let exec = conf.build();
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 3);
 

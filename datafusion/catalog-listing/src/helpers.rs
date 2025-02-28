@@ -20,20 +20,19 @@
 use std::mem;
 use std::sync::Arc;
 
-use super::ListingTableUrl;
-use super::PartitionedFile;
 use datafusion_catalog::Session;
 use datafusion_common::internal_err;
 use datafusion_common::{HashMap, Result, ScalarValue};
+use datafusion_datasource::ListingTableUrl;
+use datafusion_datasource::PartitionedFile;
 use datafusion_expr::{BinaryExpr, Operator};
 
 use arrow::{
     array::{Array, ArrayRef, AsArray, StringBuilder},
     compute::{and, cast, prep_null_mask_filter},
-    datatypes::{DataType, Field, Schema},
+    datatypes::{DataType, Field, Fields, Schema},
     record_batch::RecordBatch,
 };
-use arrow_schema::Fields;
 use datafusion_expr::execution_props::ExecutionProps;
 use futures::stream::FuturesUnordered;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};

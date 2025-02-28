@@ -28,6 +28,9 @@ license = { workspace = true }
 authors = { workspace = true }
 rust-version = { workspace = true }
 
+[package.metadata.docs.rs]
+all-features = true
+
 [lints]
 workspace = true
 
@@ -36,7 +39,6 @@ recursive_protection = ["dep:recursive"]
 
 [dependencies]
 arrow = { workspace = true }
-arrow-schema = { workspace = true }
 datafusion-common = { workspace = true, default-features = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
@@ -44,14 +46,10 @@ datafusion-expr-common = { workspace = true, default-features = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-physical-expr-common = { workspace = true }
 datafusion-physical-plan = { workspace = true }
-futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
 recursive = { workspace = true, optional = true }
-url = { workspace = true }
 
 [dev-dependencies]
 datafusion-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
-rstest = { workspace = true }
-tokio = { workspace = true }
