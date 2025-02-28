@@ -22,7 +22,7 @@ use crate::helper::split_from_semicolon;
 use crate::print_format::PrintFormat;
 use crate::{
     command::{Command, OutputFormat},
-    helper::{unescape_input, CliHelper},
+    helper::CliHelper,
     object_storage::get_object_store,
     print_options::{MaxRows, PrintOptions},
 };
@@ -168,7 +168,7 @@ pub async fn exec_from_repl(
                 }
             }
             Ok(line) => {
-                let lines = split_from_semicolon(line);
+                let lines = split_from_semicolon(&line);
                 for line in lines {
                     rl.add_history_entry(line.trim_end())?;
                     tokio::select! {
@@ -211,7 +211,6 @@ pub(super) async fn exec_and_print(
     sql: String,
 ) -> Result<()> {
     let now = Instant::now();
-    let sql = unescape_input(&sql)?;
     let task_ctx = ctx.task_ctx();
     let dialect = &task_ctx.session_config().options().sql_parser.dialect;
     let dialect = dialect_from_str(dialect).ok_or_else(|| {
