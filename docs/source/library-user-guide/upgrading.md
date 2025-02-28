@@ -120,7 +120,7 @@ if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
   if let Some(scan_config) = datasource_exec.source().as_any().downcast_ref::<FileScanConfig>() {
     // FileGroups, and other information is on the FileScanConfig
     // parquet
-    if let Some(parquet_source) = scan_config.file_source.as_any().downcast_ref::<ParquetSource>()
+    if let Some(parquet_source) = scan_config.data_source.as_any().downcast_ref::<ParquetSource>()
     {
       // Information on PruningPredicates and parquet options are here
     }
