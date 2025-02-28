@@ -41,7 +41,6 @@ use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
 use datafusion::datasource::empty::EmptyTable;
 use datafusion::datasource::file_format::csv::CsvSink;
-use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::file_format::json::JsonSink;
 use datafusion::datasource::file_format::parquet::ParquetSink;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
@@ -95,7 +94,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, Constraints, DataFusionError, Result, UnnestOptions,
+    internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -1588,24 +1587,18 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let statistics = Statistics::new_unknown(&schema);
 
-    let source = ParquetSource::default().with_statistics(statistics.clone());
-    let scan_config = FileScanConfig {
-        object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_groups: vec![vec![PartitionedFile::new(
-            "/path/to/file.parquet".to_string(),
-            1024,
-        )]],
-        constraints: Constraints::empty(),
-        statistics,
-        file_schema: schema.clone(),
-        projection: Some(vec![0, 1, 2]),
-        limit: None,
-        table_partition_cols: vec![],
-        output_ordering: vec![],
-        file_compression_type: FileCompressionType::UNCOMPRESSED,
-        new_lines_in_values: false,
-        file_source: source,
-    };
+    let file_source = ParquetSource::default().with_statistics(statistics.clone());
+    let scan_config = FileScanConfig::new(
+        ObjectStoreUrl::local_filesystem(),
+        schema.clone(),
+        file_source,
+    )
+    .with_file_groups(vec![vec![PartitionedFile::new(
+        "/path/to/file.parquet".to_string(),
+        1024,
+    )]])
+    .with_statistics(statistics)
+    .with_projection(Some(vec![0, 1, 2]));
 
     let filter = Arc::new(
         FilterExec::try_new(
