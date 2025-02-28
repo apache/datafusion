@@ -88,7 +88,7 @@ pub enum AggregateMode {
     /// group keys. If a group key is duplicated, duplicate groups would be
     /// produced
     FinalPartitioned,
-    /// *Single* layer of Aggregation, input in exactly one partition
+    /// *Single* layer of Aggregation, input is exactly one partition
     ///
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
