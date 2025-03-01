@@ -1394,6 +1394,15 @@ item1 1970-01-01T00:00:03 75
 statement ok
 drop table source_table;
 
+statement count 0
+drop table t1;
+
+statement count 0
+drop table t2;
+
+statement count 0
+drop table t3;
+
 # test count wildcard
 statement count 0
 create table t1(a int) as values (1);
@@ -1416,14 +1425,9 @@ logical_plan
 04)----Projection: 
 05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 06)--------TableScan: t2 projection=[]
-physical_plan
-01)NestedLoopJoinExec: join_type=RightSemi
-02)--ProjectionExec: expr=[]
-03)----PlaceholderRowExec
-04)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-query
+statement count 0
 drop table t1;
 
-query
+statement count 0
 drop table t2;
