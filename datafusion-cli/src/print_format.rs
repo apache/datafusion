@@ -263,8 +263,10 @@ impl PrintFormat {
                 .collect::<Result<Vec<_>, ArrowError>>()?;
             for row in 0..batch.num_rows() {
                 for (i, formatter) in formatters.iter().enumerate() {
-                    let cell = formatter.value(row);
-                    widths[i] = widths[i].max(cell.to_string().len());
+                    let cell = formatter.value(row).to_string();
+                    let max_line_width =
+                        cell.lines().map(|line| line.len()).max().unwrap_or(0);
+                    widths[i] = widths[i].max(max_line_width);
                 }
             }
         }
@@ -296,19 +298,44 @@ impl PrintFormat {
         batch: &RecordBatch,
         widths: &[usize],
         writer: &mut dyn std::io::Write,
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         let formatters = batch
             .columns()
             .iter()
             .map(|c| ArrayFormatter::try_new(c.as_ref(), &DEFAULT_CLI_FORMAT_OPTIONS))
             .collect::<Result<Vec<_>, ArrowError>>()?;
+
         for row in 0..batch.num_rows() {
-            let cells: Vec<String> = formatters
+            let cell_lines: Vec<Vec<String>> = formatters
                 .iter()
-                .enumerate()
-                .map(|(i, formatter)| Self::pad_value(&formatter.value(row), widths[i]))
+                .map(|formatter| {
+                    let s = formatter.value(row).to_string();
+                    if s.is_empty() {
+                        vec!["".to_string()]
+                    } else {
+                        s.lines().map(|line| line.to_string()).collect()
+                    }
+                })
                 .collect();
-            writeln!(writer, "| {} |", cells.join(" | "))?;
+
+            let max_lines = cell_lines
+                .iter()
+                .map(|lines| lines.len())
+                .max()
+                .unwrap_or(1);
+
+            for line_idx in 0..max_lines {
+                let mut line_cells: Vec<String> = Vec::new();
+                for (i, lines) in cell_lines.iter().enumerate() {
+                    let cell_line = if line_idx < lines.len() {
+                        lines[line_idx].clone()
+                    } else {
+                        "".to_string()
+                    };
+                    line_cells.push(format!("{:<width$}", cell_line, width = widths[i]));
+                }
+                writeln!(writer, "| {} |", line_cells.join(" | "))?;
+            }
         }
         Ok(())
     }
@@ -357,7 +384,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use arrow::array::Int32Array;
+    use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
 
     #[test]
@@ -701,6 +728,16 @@ mod tests {
         assert_eq!(widths, [7, 5, 6]);
     }
 
+    /// add the test case for compute multi_lines
+    #[test]
+    fn test_compute_column_widths_multi_lines() {
+        let schema = two_column_schema();
+        let batches = vec![two_column_batch_multi_lines()];
+        let format = PrintFormat::Table;
+        let widths = format.compute_column_widths(&batches, schema).unwrap();
+        assert_eq!(widths, vec![13, 53]);
+    }
+
     #[test]
     fn test_print_header() {
         let schema = three_column_schema();
@@ -724,6 +761,28 @@ mod tests {
             .print_batch_with_widths(&batch, &widths, &mut writer)
             .unwrap();
         let expected = &["| 1 | 4 | 7 |", "| 2 | 5 | 8 |", "| 3 | 6 | 9 |"];
+        let binding = String::from_utf8(writer.clone()).unwrap();
+        let actual: Vec<_> = binding.trim_end().split('\n').collect();
+        assert_eq!(actual, expected);
+    }
+
+    /// add the test case for print_batch with multi_lines
+    #[test]
+    fn test_print_batch_with_multi_lines() {
+        let batch = two_column_batch_multi_lines();
+        let widths = vec![13, 53];
+        let mut writer = Vec::new();
+        let format = PrintFormat::Table;
+        format
+            .print_batch_with_widths(&batch, &widths, &mut writer)
+            .unwrap();
+        let expected = &[
+            "| logical_plan  | Filter: foo.x = Int32(4)                              |",
+            "|               |   TableScan: foo projection=[x, y]                    |",
+            "| physical_plan | CoalesceBatchesExec: target_batch_size=8192           |",
+            "|               |   FilterExec: x@0 = 4                                 |",
+            "|               |     DataSourceExec: partitions=1, partition_sizes=[1] |",
+        ];
         let binding = String::from_utf8(writer.clone()).unwrap();
         let actual: Vec<_> = binding.trim_end().split('\n').collect();
         assert_eq!(actual, expected);
@@ -1123,6 +1182,14 @@ mod tests {
         ]))
     }
 
+    /// Return a schema with two StringArray columns
+    fn two_column_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("plan_type", DataType::Utf8, false),
+            Field::new("plan", DataType::Utf8, false),
+        ]))
+    }
+
     /// Return a batch with three columns and three rows
     fn three_column_batch() -> RecordBatch {
         RecordBatch::try_new(
@@ -1144,6 +1211,21 @@ mod tests {
                 Arc::new(Int32Array::from(vec![1, 2222222, 3])),
                 Arc::new(Int32Array::from(vec![42222, 5, 6])),
                 Arc::new(Int32Array::from(vec![7, 8, 922222])),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// Return a batch with two columns, but with multi-line values for each column
+    fn two_column_batch_multi_lines() -> RecordBatch {
+        RecordBatch::try_new(
+            two_column_schema(),
+            vec![
+                Arc::new(StringArray::from(vec!["logical_plan", "physical_plan"])),
+                Arc::new(StringArray::from(vec![
+                    "Filter: foo.x = Int32(4)\n  TableScan: foo projection=[x, y]",
+                    "CoalesceBatchesExec: target_batch_size=8192\n  FilterExec: x@0 = 4\n    DataSourceExec: partitions=1, partition_sizes=[1]\n",
+                ])),
             ],
         )
         .unwrap()
