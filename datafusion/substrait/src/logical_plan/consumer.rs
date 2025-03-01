@@ -1328,21 +1328,12 @@ pub async fn from_read_rel(
         schema: DFSchema,
         projection: &Option<MaskExpression>,
         filter: &Option<Box<Expression>>,
-        best_effort_filter: &Option<Box<Expression>>,
     ) -> Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
 
         let filters = if let Some(f) = filter {
-            let filter_expr = consumer.consume_expression(&(f.clone()), &schema).await?;
+            let filter_expr = consumer.consume_expression(f, &schema).await?;
             split_conjunction_owned(filter_expr)
-        } else {
-            vec![]
-        };
-
-        let best_effort_filters = if let Some(bef) = best_effort_filter {
-            let best_effort_filter_expr =
-                consumer.consume_expression(&(bef.clone()), &schema).await?;
-            split_conjunction_owned(best_effort_filter_expr)
         } else {
             vec![]
         };
@@ -1357,7 +1348,7 @@ pub async fn from_read_rel(
                 table_ref,
                 provider_as_source(Arc::clone(&provider)),
                 None,
-                [filters, best_effort_filters].concat(),
+                filters,
             )?
             .build()?
         };
@@ -1401,7 +1392,6 @@ pub async fn from_read_rel(
                 substrait_schema,
                 &read.projection,
                 &read.filter,
-                &read.best_effort_filter,
             )
             .await
         }
@@ -1485,7 +1475,6 @@ pub async fn from_read_rel(
                 substrait_schema,
                 &read.projection,
                 &read.filter,
-                &read.best_effort_filter,
             )
             .await
         }

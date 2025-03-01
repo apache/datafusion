@@ -56,9 +56,7 @@ use datafusion::logical_expr::expr::{
     InSubquery, WindowFunction, WindowFunctionParams,
 };
 use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{
-    expr, Between, JoinConstraint, LogicalPlan, Operator, TableProviderFilterPushDown,
-};
+use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
 use substrait::proto::exchange_rel::{ExchangeKind, RoundRobin, ScatterFields};
@@ -563,60 +561,29 @@ pub fn from_table_scan(
     let table_schema = scan.source.schema().to_dfschema_ref()?;
     let base_schema = to_substrait_named_struct(&table_schema)?;
 
-    let mut filter_option = None;
-    let mut best_effort_filter_option = None;
-
-    if !scan.filters.is_empty() {
-        let mut exact_filters = vec![];
-        let mut inexact_filters = vec![];
-        let filter_refs: Vec<&Expr> = scan.filters.iter().collect();
-
-        if let Ok(results) = scan.source.supports_filters_pushdown(&filter_refs) {
-            scan.filters
-                .iter()
-                .zip(results.iter())
-                .for_each(|(x, res)| match res {
-                    TableProviderFilterPushDown::Exact => exact_filters.push(x.clone()),
-                    TableProviderFilterPushDown::Inexact => {
-                        inexact_filters.push(x.clone())
-                    }
-                    _ => {}
-                });
-        }
-
+    let filter_option = if scan.filters.is_empty() {
+        None
+    } else {
         let table_schema_qualified = Arc::new(
-            if !exact_filters.is_empty() || !inexact_filters.is_empty() {
-                DFSchema::try_from_qualified_schema(
-                    scan.table_name.clone(),
-                    &(scan.source.schema()),
-                )
-                .unwrap()
-            } else {
-                DFSchema::empty()
-            },
+            DFSchema::try_from_qualified_schema(
+                scan.table_name.clone(),
+                &(scan.source.schema()),
+            )
+            .unwrap(),
         );
 
-        if !exact_filters.is_empty() {
-            let combined_expr = conjunction(exact_filters).unwrap();
-            let filter_expr =
-                producer.handle_expr(&combined_expr, &table_schema_qualified)?;
-            filter_option = Some(Box::new(filter_expr));
-        }
-
-        if !inexact_filters.is_empty() {
-            let combined_expr = conjunction(inexact_filters).unwrap();
-            let best_effort_filter_expr =
-                producer.handle_expr(&combined_expr, &table_schema_qualified)?;
-            best_effort_filter_option = Some(Box::new(best_effort_filter_expr));
-        }
-    }
+        let combined_expr = conjunction(scan.filters.clone()).unwrap();
+        let filter_expr =
+            producer.handle_expr(&combined_expr, &table_schema_qualified)?;
+        Some(Box::new(filter_expr))
+    };
 
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
             base_schema: Some(base_schema),
             filter: filter_option,
-            best_effort_filter: best_effort_filter_option,
+            best_effort_filter: None,
             projection,
             advanced_extension: None,
             read_type: Some(ReadType::NamedTable(NamedTable {

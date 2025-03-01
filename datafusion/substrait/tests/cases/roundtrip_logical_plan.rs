@@ -1236,7 +1236,7 @@ async fn roundtrip_repartition_hash() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_read_filter() -> Result<()> {
-    roundtrip_verify_read_filter_counts("SELECT a FROM data where a < 5", 0, 1).await
+    roundtrip_verify_read_filter_count("SELECT a FROM data where a < 5", 1).await
 }
 
 fn check_post_join_filters(rel: &Rel) -> Result<()> {
@@ -1324,11 +1324,7 @@ async fn verify_post_join_filter_value(proto: Box<Plan>) -> Result<()> {
     Ok(())
 }
 
-fn count_read_filters(
-    rel: &Rel,
-    filter_count: &mut u32,
-    best_effort_filter_count: &mut u32,
-) -> Result<()> {
+fn count_read_filters(rel: &Rel, filter_count: &mut u32) -> Result<()> {
     // search for target_rel and field value in proto
     match &rel.rel_type {
         Some(RelType::Read(read)) => {
@@ -1336,36 +1332,25 @@ fn count_read_filters(
             if read.filter.is_some() {
                 *filter_count += 1;
             }
-            if read.best_effort_filter.is_some() {
-                *best_effort_filter_count += 1;
-            }
             Ok(())
         }
-        Some(RelType::Filter(filter)) => count_read_filters(
-            filter.input.as_ref().unwrap().as_ref(),
-            filter_count,
-            best_effort_filter_count,
-        ),
+        Some(RelType::Filter(filter)) => {
+            count_read_filters(filter.input.as_ref().unwrap().as_ref(), filter_count)
+        }
         _ => Ok(()),
     }
 }
 
-async fn assert_read_filter_counts(
+async fn assert_read_filter_count(
     proto: Box<Plan>,
     expected_filter_count: u32,
-    expected_best_effort_filter_count: u32,
 ) -> Result<()> {
     let mut filter_count: u32 = 0;
-    let mut best_effort_filter_count: u32 = 0;
     for relation in &proto.relations {
         match relation.rel_type.as_ref() {
             Some(rt) => match rt {
                 plan_rel::RelType::Rel(rel) => {
-                    match count_read_filters(
-                        rel,
-                        &mut filter_count,
-                        &mut best_effort_filter_count,
-                    ) {
+                    match count_read_filters(rel, &mut filter_count) {
                         Err(e) => return Err(e),
                         Ok(_) => continue,
                     }
@@ -1374,7 +1359,6 @@ async fn assert_read_filter_counts(
                     match count_read_filters(
                         root.input.as_ref().unwrap(),
                         &mut filter_count,
-                        &mut best_effort_filter_count,
                     ) {
                         Err(e) => return Err(e),
                         Ok(_) => continue,
@@ -1386,7 +1370,6 @@ async fn assert_read_filter_counts(
     }
 
     assert_eq!(expected_filter_count, filter_count);
-    assert_eq!(expected_best_effort_filter_count, best_effort_filter_count);
 
     Ok(())
 }
@@ -1561,21 +1544,15 @@ async fn roundtrip_verify_post_join_filter(sql: &str) -> Result<()> {
     verify_post_join_filter_value(proto).await
 }
 
-async fn roundtrip_verify_read_filter_counts(
+async fn roundtrip_verify_read_filter_count(
     sql: &str,
     expected_filter_count: u32,
-    expected_best_effort_filter_count: u32,
 ) -> Result<()> {
     let ctx = create_context().await?;
     let proto = roundtrip_with_ctx(sql, ctx).await?;
 
     // verify that filter counts in read relations are as expected
-    assert_read_filter_counts(
-        proto,
-        expected_filter_count,
-        expected_best_effort_filter_count,
-    )
-    .await
+    assert_read_filter_count(proto, expected_filter_count).await
 }
 
 async fn roundtrip_all_types(sql: &str) -> Result<()> {
