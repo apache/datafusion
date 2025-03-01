@@ -309,12 +309,12 @@ impl AggregateUDF {
     }
 
     /// See [`AggregateUDFImpl::supports_null_handling_clause`] for more details.
-    pub fn supports_null_handling_clause(&self) -> Option<bool> {
+    pub fn supports_null_handling_clause(&self) -> bool {
         self.inner.supports_null_handling_clause()
     }
 
     /// See [`AggregateUDFImpl::is_ordered_set_aggregate`] for more details.
-    pub fn is_ordered_set_aggregate(&self) -> Option<bool> {
+    pub fn is_ordered_set_aggregate(&self) -> bool {
         self.inner.is_ordered_set_aggregate()
     }
 
@@ -437,7 +437,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
         // exclude the first function argument(= column) in ordered set aggregate function,
         // because it is duplicated with the WITHIN GROUP clause in schema name.
-        let args = if self.is_ordered_set_aggregate().unwrap_or(false) {
+        let args = if self.is_ordered_set_aggregate() {
             &args[1..]
         } else {
             &args[..]
@@ -461,7 +461,7 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         };
 
         if let Some(order_by) = order_by {
-            let clause = match self.is_ordered_set_aggregate().unwrap_or(false) {
+            let clause = match self.is_ordered_set_aggregate() {
                 true => "WITHIN GROUP",
                 false => "ORDER BY",
             };
@@ -871,15 +871,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
 
     /// If this function supports `[IGNORE NULLS | RESPECT NULLS]` clause, return true
     /// If the function does not, return false
-    /// Otherwise return None (the default)
-    fn supports_null_handling_clause(&self) -> Option<bool> {
-        None
+    fn supports_null_handling_clause(&self) -> bool {
+        true
     }
 
     /// If this function is ordered-set aggregate function, return true
     /// If the function is not, return false
-    fn is_ordered_set_aggregate(&self) -> Option<bool> {
-        None
+    fn is_ordered_set_aggregate(&self) -> bool {
+        false
     }
 
     /// Returns the documentation for this Aggregate UDF.

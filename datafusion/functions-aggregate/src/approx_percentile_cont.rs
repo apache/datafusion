@@ -320,12 +320,12 @@ impl AggregateUDFImpl for ApproxPercentileCont {
         Ok(arg_types[0].clone())
     }
 
-    fn supports_null_handling_clause(&self) -> Option<bool> {
-        Some(false)
+    fn supports_null_handling_clause(&self) -> bool {
+        false
     }
 
-    fn is_ordered_set_aggregate(&self) -> Option<bool> {
-        Some(true)
+    fn is_ordered_set_aggregate(&self) -> bool {
+        true
     }
 
     fn documentation(&self) -> Option<&Documentation> {
