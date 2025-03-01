@@ -48,7 +48,7 @@ use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
-    FileSinkConfig, ParquetSource,
+    FileSinkConfig, FileSource, ParquetSource,
 };
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::sum::sum_udaf;
@@ -87,7 +87,7 @@ use datafusion::physical_plan::windows::{
 use datafusion::physical_plan::{
     displayable, ExecutionPlan, InputOrderMode, Partitioning, PhysicalExpr, Statistics,
 };
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
@@ -155,6 +155,31 @@ fn roundtrip_test_with_context(
     let codec = DefaultPhysicalExtensionCodec {};
     roundtrip_test_and_return(exec_plan, ctx, &codec)?;
     Ok(())
+}
+
+/// Perform a serde roundtrip for the specified sql query, and  assert that
+/// query results are identical.
+async fn roundtrip_test_sql_with_context(sql: &str, ctx: &SessionContext) -> Result<()> {
+    let codec = DefaultPhysicalExtensionCodec {};
+    let initial_plan = ctx.sql(sql).await?.create_physical_plan().await?;
+
+    roundtrip_test_and_return(initial_plan, ctx, &codec)?;
+    Ok(())
+}
+
+/// returns a SessionContext with `alltypes_plain` registered
+async fn all_types_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+
+    let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_plain",
+        &format!("{testdata}/alltypes_plain.parquet"),
+        ParquetReadOptions::default(),
+    )
+    .await?;
+
+    Ok(ctx)
 }
 
 #[test]
@@ -738,7 +763,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         output_ordering: vec![],
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
-        source,
+        file_source: source,
     };
 
     roundtrip_test(scan_config.build())
@@ -753,24 +778,16 @@ async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, false)]));
 
     let source = Arc::new(ParquetSource::default());
-    let scan_config = FileScanConfig {
-        object_store_url: ObjectStoreUrl::local_filesystem(),
-        file_groups: vec![vec![file_group]],
-        constraints: Constraints::empty(),
-        statistics: Statistics::new_unknown(&schema),
-        file_schema: schema,
-        projection: Some(vec![0, 1]),
-        limit: None,
-        table_partition_cols: vec![Field::new(
-            "part".to_string(),
-            wrap_partition_type_in_dict(DataType::Int16),
-            false,
-        )],
-        output_ordering: vec![],
-        file_compression_type: FileCompressionType::UNCOMPRESSED,
-        new_lines_in_values: false,
-        source,
-    };
+    let scan_config =
+        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
+            .with_projection(Some(vec![0, 1]))
+            .with_file_group(vec![file_group])
+            .with_table_partition_cols(vec![Field::new(
+                "part".to_string(),
+                wrap_partition_type_in_dict(DataType::Int16),
+                false,
+            )])
+            .with_newlines_in_values(false);
 
     roundtrip_test(scan_config.build())
 }
@@ -810,7 +827,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         output_ordering: vec![],
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
-        source,
+        file_source: source,
     };
 
     #[derive(Debug, Clone, Eq)]
@@ -1578,4 +1595,73 @@ async fn roundtrip_coalesce() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_projection_source() -> Result<()> {
+    let schema = Arc::new(Schema::new(Fields::from([
+        Arc::new(Field::new("a", DataType::Utf8, false)),
+        Arc::new(Field::new("b", DataType::Utf8, false)),
+        Arc::new(Field::new("c", DataType::Int32, false)),
+        Arc::new(Field::new("d", DataType::Int32, false)),
+    ])));
+
+    let statistics = Statistics::new_unknown(&schema);
+
+    let source = ParquetSource::default().with_statistics(statistics.clone());
+    let scan_config = FileScanConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_groups: vec![vec![PartitionedFile::new(
+            "/path/to/file.parquet".to_string(),
+            1024,
+        )]],
+        constraints: Constraints::empty(),
+        statistics,
+        file_schema: schema.clone(),
+        projection: Some(vec![0, 1, 2]),
+        limit: None,
+        table_partition_cols: vec![],
+        output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
+        file_source: source,
+    };
+
+    let filter = Arc::new(
+        FilterExec::try_new(
+            Arc::new(BinaryExpr::new(col("c", &schema)?, Operator::Eq, lit(1))),
+            scan_config.build(),
+        )?
+        .with_projection(Some(vec![0, 1]))?,
+    );
+
+    roundtrip_test(filter)
+}
+
+#[tokio::test]
+async fn roundtrip_parquet_select_star() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let sql = "select * from alltypes_plain";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_parquet_select_projection() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let sql = "select string_col, timestamp_col from alltypes_plain";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_parquet_select_star_predicate() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let sql = "select * from alltypes_plain where id > 4";
+    roundtrip_test_sql_with_context(sql, &ctx).await
+}
+
+#[tokio::test]
+async fn roundtrip_parquet_select_projection_predicate() -> Result<()> {
+    let ctx = all_types_context().await?;
+    let sql = "select string_col, timestamp_col from alltypes_plain where id > 4";
+    roundtrip_test_sql_with_context(sql, &ctx).await
 }

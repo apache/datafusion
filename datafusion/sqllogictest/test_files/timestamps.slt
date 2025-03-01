@@ -2845,7 +2845,7 @@ NULL
 query T
 SELECT to_char(null, '%d-%m-%Y');
 ----
-(empty)
+NULL
 
 query T
 SELECT to_char(column1, column2)

@@ -51,9 +51,9 @@ pub fn to_substrait_rel(
         HashMap<String, u32>,
     ),
 ) -> Result<Box<Rel>> {
-    if let Some(data_source) = plan.as_any().downcast_ref::<DataSourceExec>() {
-        let source = data_source.source();
-        if let Some(file_config) = source.as_any().downcast_ref::<FileScanConfig>() {
+    if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+        let data_source = data_source_exec.data_source();
+        if let Some(file_config) = data_source.as_any().downcast_ref::<FileScanConfig>() {
             let is_parquet = file_config
                 .file_source()
                 .as_any()

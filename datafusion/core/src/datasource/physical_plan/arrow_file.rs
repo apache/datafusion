@@ -84,8 +84,8 @@ impl ArrowExec {
     }
 
     fn file_scan_config(&self) -> FileScanConfig {
-        let source = self.inner.source();
-        source
+        self.inner
+            .data_source()
             .as_any()
             .downcast_ref::<FileScanConfig>()
             .unwrap()
@@ -93,8 +93,7 @@ impl ArrowExec {
     }
 
     fn json_source(&self) -> JsonSource {
-        let source = self.file_scan_config();
-        source
+        self.file_scan_config()
             .file_source()
             .as_any()
             .downcast_ref::<JsonSource>()
@@ -130,7 +129,7 @@ impl ArrowExec {
         self.base_config.file_groups = file_groups.clone();
         let mut file_source = self.file_scan_config();
         file_source = file_source.with_file_groups(file_groups);
-        self.inner = self.inner.with_source(Arc::new(file_source));
+        self.inner = self.inner.with_data_source(Arc::new(file_source));
         self
     }
 }

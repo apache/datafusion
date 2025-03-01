@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Operators
+# Operators and Literals
 
 ## Numerical Operators
 
@@ -551,4 +551,65 @@ Array Is Contained By
 +-------------------------------------------------------------------------+
 | true                                                                    |
 +-------------------------------------------------------------------------+
+```
+
+## Literals
+
+Use single quotes for literal values. For example, the string `foo bar` is
+referred to using `'foo bar'`
+
+```sql
+select 'foo';
+```
+
+### Escaping
+
+Unlike many other languages, SQL literals do not by default support C-style escape
+sequences such as `\n` for newline. Instead all characters in a `'` string are treated
+literally.
+
+To escape `'` in SQL literals, use `''`:
+
+```sql
+> select 'it''s escaped';
++----------------------+
+| Utf8("it's escaped") |
++----------------------+
+| it's escaped         |
++----------------------+
+1 row(s) fetched.
+```
+
+Strings such as `foo\nbar` mean `\` followed by `n` (not newline):
+
+```sql
+> select 'foo\nbar';
++------------------+
+| Utf8("foo\nbar") |
++------------------+
+| foo\nbar         |
++------------------+
+1 row(s) fetched.
+Elapsed 0.005 seconds.
+```
+
+To add escaped characters such as newline or tab, instead of `\n` you use the
+`E` style strings. For example, to add the text with a newline
+
+```text
+foo
+bar
+```
+
+You can use `E'foo\nbar'`
+
+```sql
+> select E'foo\nbar';
++-----------------+
+| Utf8("foo
+bar") |
++-----------------+
+| foo
+bar         |
++-----------------+
 ```

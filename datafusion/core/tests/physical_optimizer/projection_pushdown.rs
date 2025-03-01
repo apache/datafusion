@@ -460,7 +460,7 @@ fn test_memory_after_projection() -> Result<()> {
             .as_any()
             .downcast_ref::<DataSourceExec>()
             .unwrap()
-            .source()
+            .data_source()
             .as_any()
             .downcast_ref::<MemorySourceConfig>()
             .unwrap()

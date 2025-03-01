@@ -190,9 +190,9 @@ pub fn partitioned_file_groups(
 pub fn partitioned_csv_config(
     schema: SchemaRef,
     file_groups: Vec<Vec<PartitionedFile>>,
-    source: Arc<dyn FileSource>,
+    file_source: Arc<dyn FileSource>,
 ) -> FileScanConfig {
-    FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, source)
+    FileScanConfig::new(ObjectStoreUrl::local_filesystem(), schema, file_source)
         .with_file_groups(file_groups)
 }
 

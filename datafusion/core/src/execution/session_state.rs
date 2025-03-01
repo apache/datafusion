@@ -68,7 +68,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_sql::parser::{DFParser, Statement};
+use datafusion_sql::parser::{DFParserBuilder, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 
 use async_trait::async_trait;
@@ -483,12 +483,21 @@ impl SessionState {
                      MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
-        let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
+
+        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+
+        let mut statements = DFParserBuilder::new(sql)
+            .with_dialect(dialect.as_ref())
+            .with_recursion_limit(recursion_limit)
+            .build()?
+            .parse_statements()?;
+
         if statements.len() > 1 {
             return not_impl_err!(
                 "The context currently only supports a single SQL statement"
             );
         }
+
         let statement = statements.pop_front().ok_or_else(|| {
             plan_datafusion_err!("No SQL statements were provided in the query string")
         })?;
@@ -522,7 +531,12 @@ impl SessionState {
             )
         })?;
 
-        let expr = DFParser::parse_sql_into_expr_with_dialect(sql, dialect.as_ref())?;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let expr = DFParserBuilder::new(sql)
+            .with_dialect(dialect.as_ref())
+            .with_recursion_limit(recursion_limit)
+            .build()?
+            .parse_expr()?;
 
         Ok(expr)
     }

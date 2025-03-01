@@ -513,5 +513,49 @@ For example, to run query 1 with the small data generated above:
 cargo run --release --bin dfbench -- h2o --path ./benchmarks/data/h2o/G1_1e7_1e7_100_0.csv  --query 1
 ```
 
+## h2o benchmarks for join
+
+### Generate data for h2o benchmarks
+There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`. The data is generated in the `data` directory.
+
+1. Generate small data (4 table files, the largest is 1e7 rows)
+```bash
+./bench.sh data h2o_small_join
+```
+
+
+2. Generate medium data (4 table files, the largest is 1e8 rows)
+```bash
+./bench.sh data h2o_medium_join
+```
+
+3. Generate large data (4 table files, the largest is 1e9 rows)
+```bash
+./bench.sh data h2o_big_join
+```
+
+### Run h2o benchmarks
+There are three options for running h2o benchmarks: `small`, `medium`, and `big`.
+1. Run small data benchmark
+```bash
+./bench.sh run h2o_small_join
+```
+
+2. Run medium data benchmark
+```bash
+./bench.sh run h2o_medium_join
+```
+
+3. Run large data benchmark
+```bash
+./bench.sh run h2o_big_join
+```
+
+4. Run a specific query with a specific join data paths, the data paths are including 4 table files.
+
+For example, to run query 1 with the small data generated above:
+```bash
+cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/join.sql --query 1
+```
 [1]: http://www.tpc.org/tpch/
 [2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page

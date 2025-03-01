@@ -1630,9 +1630,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             });
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_csv) = source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(maybe_csv) = data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
                 let source = maybe_csv.file_source();
                 if let Some(csv_config) = source.as_any().downcast_ref::<CsvSource>() {
                     return Ok(protobuf::PhysicalPlanNode {
@@ -1677,8 +1678,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         #[cfg(feature = "parquet")]
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_parquet) = source.as_any().downcast_ref::<FileScanConfig>()
+            let data_source_exec = exec.data_source();
+            if let Some(maybe_parquet) =
+                data_source_exec.as_any().downcast_ref::<FileScanConfig>()
             {
                 let source = maybe_parquet.file_source();
                 if let Some(conf) = source.as_any().downcast_ref::<ParquetSource>() {
@@ -1704,9 +1706,11 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_avro) = source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(maybe_avro) =
+                data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
                 let source = maybe_avro.file_source();
                 if source.as_any().downcast_ref::<AvroSource>().is_some() {
                     return Ok(protobuf::PhysicalPlanNode {
