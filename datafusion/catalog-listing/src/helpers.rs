@@ -1073,5 +1073,9 @@ mod tests {
         fn table_options(&self) -> &TableOptions {
             unimplemented!()
         }
+
+        fn table_options_mut(&mut self) -> &mut TableOptions {
+            unimplemented!()
+        }
     }
 }
