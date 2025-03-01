@@ -266,7 +266,10 @@ impl DataSource for FileScanConfig {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
-        Ok(all_alias_free_columns(projection.expr()).then(|| {
+
+        Ok((all_alias_free_columns(projection.expr())
+            && self.table_partition_cols.is_empty())
+        .then(|| {
             let file_scan = self.clone();
             let source = Arc::clone(&file_scan.file_source);
             let new_projections = new_projections_for_columns(
