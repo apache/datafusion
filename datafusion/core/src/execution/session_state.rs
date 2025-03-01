@@ -1081,16 +1081,40 @@ impl SessionStateBuilder {
 
     /// Create default builder with defaults for table_factories, file formats, expr_planners and builtin
     /// scalar, aggregate and windows functions.
-    /// For each setter method call, default values will only be created and set if the corresponding
-    /// field is currently None, otherwise the existing value will be preserved.
-    pub fn with_default_features(self) -> Self {
-        self.with_table_factories(SessionStateDefaults::default_table_factories())
-            .with_file_formats(SessionStateDefaults::default_file_formats())
-            .with_expr_planners(SessionStateDefaults::default_expr_planners())
-            .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
-            .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
-            .with_window_functions(SessionStateDefaults::default_window_functions())
-            .with_table_function_list(SessionStateDefaults::default_table_functions())
+    pub fn with_default_features(mut self) -> Self {
+        self.table_factories
+            .get_or_insert_with(HashMap::new)
+            .extend(SessionStateDefaults::default_table_factories());
+
+        self.file_formats
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_file_formats());
+
+        self.expr_planners
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_expr_planners());
+
+        self.scalar_functions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_scalar_functions());
+
+        self.aggregate_functions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_aggregate_functions());
+
+        self.window_functions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_window_functions());
+
+        self.table_functions
+            .get_or_insert_with(HashMap::new)
+            .extend(
+                SessionStateDefaults::default_table_functions()
+                    .into_iter()
+                    .map(|f| (f.name().to_string(), f)),
+            );
+
+        self
     }
 
     /// Set the session id.
@@ -1146,9 +1170,7 @@ impl SessionStateBuilder {
         mut self,
         expr_planners: Vec<Arc<dyn ExprPlanner>>,
     ) -> Self {
-        if self.expr_planners.is_none() {
-            self.expr_planners = Some(expr_planners);
-        }
+        self.expr_planners = Some(expr_planners);
         self
     }
 
@@ -1212,13 +1234,11 @@ impl SessionStateBuilder {
         mut self,
         table_functions: Vec<Arc<TableFunction>>,
     ) -> Self {
-        if self.table_functions.is_none() {
-            let functions = table_functions
-                .into_iter()
-                .map(|f| (f.name().to_string(), f))
-                .collect();
-            self.table_functions = Some(functions);
-        }
+        let functions = table_functions
+            .into_iter()
+            .map(|f| (f.name().to_string(), f))
+            .collect();
+        self.table_functions = Some(functions);
         self
     }
 
@@ -1227,9 +1247,7 @@ impl SessionStateBuilder {
         mut self,
         scalar_functions: Vec<Arc<ScalarUDF>>,
     ) -> Self {
-        if self.scalar_functions.is_none() {
-            self.scalar_functions = Some(scalar_functions);
-        }
+        self.scalar_functions = Some(scalar_functions);
         self
     }
 
@@ -1238,9 +1256,7 @@ impl SessionStateBuilder {
         mut self,
         aggregate_functions: Vec<Arc<AggregateUDF>>,
     ) -> Self {
-        if self.aggregate_functions.is_none() {
-            self.aggregate_functions = Some(aggregate_functions);
-        }
+        self.aggregate_functions = Some(aggregate_functions);
         self
     }
 
@@ -1249,9 +1265,7 @@ impl SessionStateBuilder {
         mut self,
         window_functions: Vec<Arc<WindowUDF>>,
     ) -> Self {
-        if self.window_functions.is_none() {
-            self.window_functions = Some(window_functions);
-        }
+        self.window_functions = Some(window_functions);
         self
     }
 
@@ -1269,9 +1283,7 @@ impl SessionStateBuilder {
         mut self,
         file_formats: Vec<Arc<dyn FileFormatFactory>>,
     ) -> Self {
-        if self.file_formats.is_none() {
-            self.file_formats = Some(file_formats);
-        }
+        self.file_formats = Some(file_formats);
         self
     }
 
@@ -1310,9 +1322,7 @@ impl SessionStateBuilder {
         mut self,
         table_factories: HashMap<String, Arc<dyn TableProviderFactory>>,
     ) -> Self {
-        if self.table_factories.is_none() {
-            self.table_factories = Some(table_factories);
-        }
+        self.table_factories = Some(table_factories);
         self
     }
 
@@ -2008,13 +2018,11 @@ mod tests {
     use crate::execution::context::SessionState;
     use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_catalog::{MemoryCatalogProviderList, TableFunction};
+    use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;
     use datafusion_common::Result;
-    use datafusion_datasource::file_format::FileFormatFactory;
     use datafusion_execution::config::SessionConfig;
-    use datafusion_expr::planner::ExprPlanner;
-    use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, WindowUDF};
+    use datafusion_expr::Expr;
     use datafusion_optimizer::optimizer::OptimizerRule;
     use datafusion_optimizer::Optimizer;
     use datafusion_sql::planner::{PlannerContext, SqlToRel};
@@ -2171,54 +2179,6 @@ mod tests {
             .with_default_features()
             .build();
         assert!(session_state.table_factories().get("test").is_some());
-
-        // Test whether the file_formats has been overridden.
-        let file_formats: Vec<Arc<dyn FileFormatFactory>> = vec![];
-        let session_state = SessionStateBuilder::new()
-            .with_file_formats(file_formats)
-            .with_default_features()
-            .build();
-        assert!(session_state.file_formats.is_empty());
-
-        // Test whether the expr_planners has been overridden.
-        let expr_planners: Vec<Arc<dyn ExprPlanner>> = vec![];
-        let session_state = SessionStateBuilder::new()
-            .with_expr_planners(expr_planners)
-            .with_default_features()
-            .build();
-        assert!(session_state.expr_planners.is_empty());
-
-        // Test whether the scalar_functions has been overridden.
-        let functions: Vec<Arc<ScalarUDF>> = vec![];
-        let session_state = SessionStateBuilder::new()
-            .with_scalar_functions(functions)
-            .with_default_features()
-            .build();
-        assert!(session_state.scalar_functions.is_empty());
-
-        // Test whether the agg_functions has been overridden.
-        let agg_functions: Vec<Arc<AggregateUDF>> = vec![];
-        let session_state = SessionStateBuilder::new()
-            .with_aggregate_functions(agg_functions)
-            .with_default_features()
-            .build();
-        assert!(session_state.aggregate_functions.is_empty());
-
-        // Test whether the window_functions has been overridden.
-        let window_functions: Vec<Arc<WindowUDF>> = vec![];
-        let session_state = SessionStateBuilder::new()
-            .with_window_functions(window_functions)
-            .with_default_features()
-            .build();
-        assert!(session_state.window_functions.is_empty());
-
-        // Test whether the table_functions has been overridden.
-        let table_functions: Vec<Arc<TableFunction>> = vec![];
-        let session_state = SessionStateBuilder::new()
-            .with_table_function_list(table_functions)
-            .with_default_features()
-            .build();
-        assert!(session_state.table_functions.is_empty());
 
         Ok(())
     }
