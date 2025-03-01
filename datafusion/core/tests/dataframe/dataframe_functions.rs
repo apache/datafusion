@@ -361,7 +361,7 @@ async fn test_fn_approx_median() -> Result<()> {
 #[tokio::test]
 async fn test_fn_approx_percentile_cont() -> Result<()> {
     let expr =
-        approx_percentile_cont(Some(vec![col("b").sort(true, false)]), lit(0.5), None);
+        approx_percentile_cont(vec![col("b").sort(true, false)], lit(0.5), None);
 
     let expected = [
         "+---------------------------------------------------------------------------+",
@@ -383,7 +383,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
         "arg_2".to_string(),
     ));
     let expr =
-        approx_percentile_cont(Some(vec![col("b").sort(true, false)]), alias_expr, None);
+        approx_percentile_cont(vec![col("b").sort(true, false)], alias_expr, None);
     let df = create_test_table().await?;
     let expected = [
         "+--------------------------------------------------------------------+",
@@ -398,7 +398,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
 
     // with number of centroids set
     let expr = approx_percentile_cont(
-        Some(vec![col("b").sort(true, false)]),
+        vec![col("b").sort(true, false)],
         lit(0.5),
         Some(lit(2)),
     );
