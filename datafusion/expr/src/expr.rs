@@ -408,6 +408,19 @@ impl Alias {
             name: name.into(),
         }
     }
+
+    /// Create an alias with an optional schema/field qualifier.
+    pub fn new_boxed(
+        expr: Box<Expr>,
+        relation: Option<impl Into<TableReference>>,
+        name: impl Into<String>,
+    ) -> Self {
+        Self {
+            expr,
+            relation: relation.map(|r| r.into()),
+            name: name.into(),
+        }
+    }
 }
 
 /// Binary expression
@@ -1275,8 +1288,23 @@ impl Expr {
     }
 
     /// Return `self AS name` alias expression
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// let expr = col("foo").alias("bar");
+    /// assert_eq!(expr.to_string(), "foo AS bar");
+    ///
+    /// // when aliasing over the exising alias, the previous one is removed
+    /// let expr = col("foo").alias("bar").alias("baz");
+    /// assert_eq!(expr.to_string(), "foo AS baz");
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        Expr::Alias(Alias::new(self, None::<&str>, name.into()))
+        if let Expr::Alias(Alias { expr, .. }) = self {
+            // reuse the existing layer if possible
+            Expr::Alias(Alias::new_boxed(expr, None::<&str>, name.into()))
+        } else {
+            Expr::Alias(Alias::new(self, None::<&str>, name.into()))
+        }
     }
 
     /// Return `self AS name` alias expression with a specific qualifier
@@ -1285,7 +1313,12 @@ impl Expr {
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, relation, name.into()))
+        if let Expr::Alias(Alias { expr, .. }) = self {
+            // reuse the existing layer if possible
+            Expr::Alias(Alias::new_boxed(expr, relation, name.into()))
+        } else {
+            Expr::Alias(Alias::new(self, relation, name.into()))
+        }
     }
 
     /// Remove an alias from an expression if one exists.
