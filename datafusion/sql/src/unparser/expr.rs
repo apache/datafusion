@@ -300,8 +300,7 @@ impl Unparser<'_> {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
                     None => None,
                 };
-                let within_group = if agg.func.is_ordered_set_aggregate()
-                {
+                let within_group = if agg.func.is_ordered_set_aggregate() {
                     order_by
                         .as_ref()
                         .unwrap_or(&Vec::new())

@@ -365,15 +365,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
-                if fm.is_ordered_set_aggregate()
-                    && within_group.is_empty()
-                {
+                if fm.is_ordered_set_aggregate() && within_group.is_empty() {
                     return plan_err!("WITHIN GROUP clause is required when calling ordered set aggregate function({})", fm.name());
                 }
 
-                if null_treatment.is_some()
-                    && !fm.supports_null_handling_clause()
-                {
+                if null_treatment.is_some() && !fm.supports_null_handling_clause() {
                     return plan_err!(
                         "[IGNORE | RESPECT] NULLS are not permitted for {}",
                         fm.name()
