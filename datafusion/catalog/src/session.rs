@@ -129,6 +129,9 @@ pub trait Session: Send + Sync {
         self.table_options()
             .combine_with_session_config(self.config_options())
     }
+
+    /// Returns a mutable reference to [`TableOptions`]
+    fn table_options_mut(&mut self) -> &mut TableOptions;
 }
 
 /// Create a new task context instance from Session

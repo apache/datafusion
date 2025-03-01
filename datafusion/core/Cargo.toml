@@ -60,7 +60,6 @@ default = [
     "string_expressions",
     "unicode_expressions",
     "compression",
-    "avro",
     "parquet",
     "recursive_protection",
 ]

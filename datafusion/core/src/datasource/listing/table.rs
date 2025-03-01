@@ -1184,8 +1184,6 @@ mod tests {
         assert_batches_eq,
         test::{columns, object_store::register_test_store},
     };
-    use datafusion_datasource_avro::AvroFormat;
-    use datafusion_physical_plan::collect;
 
     use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
@@ -1193,6 +1191,7 @@ mod tests {
     use datafusion_common::{assert_contains, ScalarValue};
     use datafusion_expr::{BinaryExpr, LogicalPlanBuilder, Operator};
     use datafusion_physical_expr::PhysicalSortExpr;
+    use datafusion_physical_plan::collect;
     use datafusion_physical_plan::ExecutionPlanProperties;
 
     use tempfile::TempDir;
@@ -1365,11 +1364,14 @@ mod tests {
     #[tokio::test]
     async fn read_empty_table() -> Result<()> {
         let ctx = SessionContext::new();
-        let path = String::from("table/p1=v1/file.avro");
+        let path = String::from("table/p1=v1/file.json");
         register_test_store(&ctx, &[(&path, 100)]);
 
-        let opt = ListingOptions::new(Arc::new(AvroFormat))
-            .with_file_extension(AvroFormat.get_ext())
+        let format = JsonFormat::default();
+        let ext = format.get_ext();
+
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension(ext)
             .with_table_partition_cols(vec![(String::from("p1"), DataType::Utf8)])
             .with_target_partitions(4);
 
@@ -1403,7 +1405,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "avro")]
     #[tokio::test]
     async fn test_assert_list_files_for_scan_grouping() -> Result<()> {
         // more expected partitions than files
@@ -1480,9 +1481,9 @@ mod tests {
         // files that don't match the prefix or the default file extention
         assert_list_files_for_scan_grouping(
             &[
-                "bucket/key-prefix/file0.avro",
+                "bucket/key-prefix/file0.json",
                 "bucket/key-prefix/file1.parquet",
-                "bucket/other-prefix/roguefile.avro",
+                "bucket/other-prefix/roguefile.json",
             ],
             "test:///bucket/key-prefix/",
             10,
@@ -1493,7 +1494,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "avro")]
     #[tokio::test]
     async fn test_assert_list_files_for_multi_path() -> Result<()> {
         // more expected partitions than files
@@ -1571,11 +1571,11 @@ mod tests {
         // files that don't match the prefix or the default file ext
         assert_list_files_for_multi_paths(
             &[
-                "bucket/key1/file0.avro",
+                "bucket/key1/file0.json",
                 "bucket/key1/file1.csv",
-                "bucket/key1/file2.avro",
+                "bucket/key1/file2.json",
                 "bucket/key2/file3.csv",
-                "bucket/key2/file4.avro",
+                "bucket/key2/file4.json",
                 "bucket/key3/file5.csv",
             ],
             &["test:///bucket/key1/", "test:///bucket/key3/"],
@@ -1614,7 +1614,7 @@ mod tests {
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
-        let opt = ListingOptions::new(Arc::new(AvroFormat))
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
             .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
@@ -1636,7 +1636,6 @@ mod tests {
 
     /// Check that the files listed by the table match the specified `output_partitioning`
     /// when the object store contains `files`.
-    #[cfg(feature = "avro")]
     async fn assert_list_files_for_multi_paths(
         files: &[&str],
         table_prefix: &[&str],
@@ -1644,14 +1643,10 @@ mod tests {
         output_partitioning: usize,
         file_ext: Option<&str>,
     ) -> Result<()> {
-        use datafusion_datasource_avro::AvroFormat;
-
         let ctx = SessionContext::new();
         register_test_store(&ctx, &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>());
 
-        let format = AvroFormat;
-
-        let opt = ListingOptions::new(Arc::new(format))
+        let opt = ListingOptions::new(Arc::new(JsonFormat::default()))
             .with_file_extension_opt(file_ext)
             .with_target_partitions(target_partitions);
 
@@ -1710,6 +1705,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn test_insert_into_append_2_new_parquet_files_defaults() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
@@ -1728,6 +1724,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "parquet")]
     #[tokio::test]
     async fn test_insert_into_append_1_new_parquet_files_defaults() -> Result<()> {
         let mut config_map: HashMap<String, String> = HashMap::new();
@@ -2014,6 +2011,7 @@ mod tests {
                     )
                     .await?;
             }
+            #[cfg(feature = "parquet")]
             "parquet" => {
                 session_ctx
                     .register_parquet(
@@ -2023,6 +2021,7 @@ mod tests {
                     )
                     .await?;
             }
+            #[cfg(feature = "avro")]
             "avro" => {
                 session_ctx
                     .register_avro(

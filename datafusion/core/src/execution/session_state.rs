@@ -262,6 +262,10 @@ impl Session for SessionState {
     fn table_options(&self) -> &TableOptions {
         self.table_options()
     }
+
+    fn table_options_mut(&mut self) -> &mut TableOptions {
+        self.table_options_mut()
+    }
 }
 
 impl SessionState {
@@ -846,7 +850,7 @@ impl SessionState {
         Session::default_table_options(self)
     }
 
-    /// Return mutable table options
+    /// Returns a mutable reference to [`TableOptions`]
     pub fn table_options_mut(&mut self) -> &mut TableOptions {
         &mut self.table_options
     }
