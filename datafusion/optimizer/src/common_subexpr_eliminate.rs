@@ -678,6 +678,8 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn is_ignored(&self, node: &Expr) -> bool {
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[allow(deprecated)]
         let is_normal_minus_aggregates = matches!(
             node,
             Expr::Literal(..)
