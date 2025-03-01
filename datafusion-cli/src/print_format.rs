@@ -26,7 +26,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use arrow::record_batch::RecordBatch;
-use arrow::util::display::{ArrayFormatter, ValueFormatter};
+use arrow::util::display::ArrayFormatter;
 use arrow::util::pretty::pretty_format_batches_with_options;
 use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
 use datafusion::error::Result;
@@ -371,11 +371,6 @@ impl PrintFormat {
 
     fn pad_cell(cell: &str, width: usize) -> String {
         format!("{:<width$}", cell, width = width)
-    }
-
-    fn pad_value(formatter: &ValueFormatter, width: usize) -> String {
-        let s = formatter.try_to_string().unwrap_or_default();
-        format!("{:<width$}", s, width = width)
     }
 }
 
