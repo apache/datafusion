@@ -445,7 +445,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         FileFormatType::Avro(..) => {
                             #[cfg(feature = "avro")] 
                             {
-                                Arc::new(AvroFormat)   
+                                Arc::new(AvroFormat)
                             }
                             #[cfg(not(feature = "avro"))]
                             panic!("Unable to process avro file since `avro` feature is not enabled");
