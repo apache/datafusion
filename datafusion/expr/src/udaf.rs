@@ -435,6 +435,14 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             null_treatment,
         } = params;
 
+        // exclude the first function argument(= column) in ordered set aggregate function,
+        // because it is duplicated with the WITHIN GROUP clause in schema name.
+        let args = if self.is_ordered_set_aggregate().unwrap_or(false) {
+            &args[1..]
+        } else {
+            &args[..]
+        };
+
         let mut schema_name = String::new();
 
         schema_name.write_fmt(format_args!(
