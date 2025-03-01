@@ -442,7 +442,8 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
 
     assert_batches_eq!(expected, &batches);
 
-    let expr = approx_percentile_cont(col("b").sort(false, false), lit(0.1), Some(lit(2)));
+    let expr =
+        approx_percentile_cont(col("b").sort(false, false), lit(0.1), Some(lit(2)));
     let expected = [
         "+-------------------------------------------------------------------------------------+",
         "| approx_percentile_cont(Float64(0.1),Int32(2)) WITHIN GROUP [test.b DESC NULLS LAST] |",
