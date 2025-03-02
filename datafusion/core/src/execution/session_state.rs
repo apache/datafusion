@@ -1109,6 +1109,22 @@ impl SessionStateBuilder {
             .with_table_function_list(SessionStateDefaults::default_table_functions())
     }
 
+    /// Returns a new [`SessionStateBuilder`] with default features.
+    ///
+    /// This is equivalent to calling [`Self::new()`] followed by [`Self::with_default_features()`].
+    ///
+    /// ```
+    /// use datafusion::execution::session_state::SessionStateBuilder;
+    ///
+    /// // Create a new SessionState with default features
+    /// let session_state = SessionStateBuilder::new_with_defaults()
+    ///     .with_session_id("my_session".to_string())
+    ///     .build();
+    /// ```
+    pub fn new_with_defaults() -> Self {
+        Self::new().with_default_features()
+    }
+
     /// Set the session id.
     pub fn with_session_id(mut self, session_id: String) -> Self {
         self.session_id = Some(session_id);
