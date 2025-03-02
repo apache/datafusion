@@ -1,0 +1,142 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::sync::Arc;
+
+use abi_stable::{std_types::RVec, StableAbi};
+use arrow::{
+    datatypes::{DataType, SchemaRef},
+    error::ArrowError,
+    ffi::FFI_ArrowSchema,
+};
+use datafusion::{
+    error::{DataFusionError, Result},
+    logical_expr::function::PartitionEvaluatorArgs,
+    physical_plan::PhysicalExpr,
+    prelude::SessionContext,
+};
+use datafusion_proto::{
+    physical_plan::{
+        from_proto::parse_physical_expr, to_proto::serialize_physical_exprs,
+        DefaultPhysicalExtensionCodec,
+    },
+    protobuf::PhysicalExprNode,
+};
+use prost::Message;
+
+use crate::arrow_wrappers::WrappedSchema;
+
+#[repr(C)]
+#[derive(Debug, StableAbi)]
+#[allow(non_camel_case_types)]
+pub struct FFI_PartitionEvaluatorArgs {
+    input_exprs: RVec<RVec<u8>>,
+    input_types: RVec<WrappedSchema>,
+    is_reversed: bool,
+    ignore_nulls: bool,
+    schema: WrappedSchema,
+}
+
+impl FFI_PartitionEvaluatorArgs {
+    pub fn new(
+        args: PartitionEvaluatorArgs,
+        schema: SchemaRef,
+    ) -> Result<Self, DataFusionError> {
+        let codec = DefaultPhysicalExtensionCodec {};
+        let input_exprs = serialize_physical_exprs(args.input_exprs(), &codec)?
+            .into_iter()
+            .map(|expr_node| expr_node.encode_to_vec().into())
+            .collect();
+
+        let input_types = args
+            .input_types()
+            .iter()
+            .map(|input_type| FFI_ArrowSchema::try_from(input_type).map(WrappedSchema))
+            .collect::<Result<Vec<_>, ArrowError>>()?
+            .into();
+
+        let schema: WrappedSchema = schema.into();
+
+        Ok(Self {
+            input_exprs,
+            input_types,
+            schema,
+            is_reversed: args.is_reversed(),
+            ignore_nulls: args.ignore_nulls(),
+        })
+    }
+}
+
+/// This struct mirrors PartitionEvaluatorArgs except that it contains owned data.
+/// It is necessary to create this struct so that we can parse the protobuf
+/// data across the FFI boundary and turn it into owned data that
+/// PartitionEvaluatorArgs can then reference.
+pub struct ForeignPartitionEvaluatorArgs {
+    input_exprs: Vec<Arc<dyn PhysicalExpr>>,
+    input_types: Vec<DataType>,
+    is_reversed: bool,
+    ignore_nulls: bool,
+}
+
+impl TryFrom<FFI_PartitionEvaluatorArgs> for ForeignPartitionEvaluatorArgs {
+    type Error = DataFusionError;
+
+    fn try_from(value: FFI_PartitionEvaluatorArgs) -> Result<Self> {
+        let default_ctx = SessionContext::new();
+        let codec = DefaultPhysicalExtensionCodec {};
+
+        let schema: SchemaRef = value.schema.into();
+
+        let input_exprs = value
+            .input_exprs
+            .into_iter()
+            .map(|input_expr_bytes| PhysicalExprNode::decode(input_expr_bytes.as_ref()))
+            .collect::<std::result::Result<Vec<_>, prost::DecodeError>>()
+            .map_err(|e| DataFusionError::Execution(e.to_string()))?
+            .iter()
+            .map(|expr_node| {
+                parse_physical_expr(expr_node, &default_ctx, &schema, &codec)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let input_types = input_exprs
+            .iter()
+            .map(|expr| expr.data_type(&schema))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Self {
+            input_exprs,
+            input_types,
+            is_reversed: value.is_reversed,
+            ignore_nulls: value.ignore_nulls,
+        })
+    }
+}
+
+impl<'a> From<&'a ForeignPartitionEvaluatorArgs> for PartitionEvaluatorArgs<'a> {
+    fn from(value: &'a ForeignPartitionEvaluatorArgs) -> Self {
+        PartitionEvaluatorArgs::new(
+            &value.input_exprs,
+            &value.input_types,
+            value.is_reversed,
+            value.ignore_nulls,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {}
