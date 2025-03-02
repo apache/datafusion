@@ -18,8 +18,8 @@
 //! [`ScalarUDFImpl`] definitions for array_replace, array_replace_n and array_replace_all functions.
 
 use arrow::array::{
-    Array, ArrayRef, AsArray, Capacities, GenericListArray, MutableArrayData,
-    NullBufferBuilder, OffsetSizeTrait,
+    new_null_array, Array, ArrayRef, AsArray, Capacities, GenericListArray,
+    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
 };
 use arrow::datatypes::{DataType, Field};
 
@@ -429,6 +429,7 @@ pub(crate) fn array_replace_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let list_array = array.as_list::<i64>();
             general_replace::<i64>(list_array, from, to, arr_n)
         }
+        DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => exec_err!("array_replace does not support type '{array_type:?}'."),
     }
 }
@@ -447,6 +448,7 @@ pub(crate) fn array_replace_n_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let list_array = array.as_list::<i64>();
             general_replace::<i64>(list_array, from, to, arr_n)
         }
+        DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => {
             exec_err!("array_replace_n does not support type '{array_type:?}'.")
         }
@@ -467,6 +469,7 @@ pub(crate) fn array_replace_all_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             let list_array = array.as_list::<i64>();
             general_replace::<i64>(list_array, from, to, arr_n)
         }
+        DataType::Null => Ok(new_null_array(array.data_type(), 1)),
         array_type => {
             exec_err!("array_replace_all does not support type '{array_type:?}'.")
         }
