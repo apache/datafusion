@@ -19,33 +19,21 @@
 //!
 //! [Avro]: https://avro.apache.org/docs/1.2.0/
 
-#[cfg(feature = "avro")]
 mod arrow_array_reader;
-#[cfg(feature = "avro")]
 mod reader;
-#[cfg(feature = "avro")]
 mod schema;
 
-use crate::arrow::datatypes::Schema;
-use crate::error::Result;
-#[cfg(feature = "avro")]
+use arrow::datatypes::Schema;
 pub use reader::{Reader, ReaderBuilder};
-#[cfg(feature = "avro")]
+
 pub use schema::to_arrow_schema;
 use std::io::Read;
 
-#[cfg(feature = "avro")]
 /// Read Avro schema given a reader
-pub fn read_avro_schema_from_reader<R: Read>(reader: &mut R) -> Result<Schema> {
+pub fn read_avro_schema_from_reader<R: Read>(
+    reader: &mut R,
+) -> datafusion_common::Result<Schema> {
     let avro_reader = apache_avro::Reader::new(reader)?;
     let schema = avro_reader.writer_schema();
     to_arrow_schema(schema)
-}
-
-#[cfg(not(feature = "avro"))]
-/// Read Avro schema given a reader (requires the avro feature)
-pub fn read_avro_schema_from_reader<R: Read>(_: &mut R) -> Result<Schema> {
-    Err(crate::error::DataFusionError::NotImplemented(
-        "cannot read avro schema without the 'avro' feature enabled".to_string(),
-    ))
 }

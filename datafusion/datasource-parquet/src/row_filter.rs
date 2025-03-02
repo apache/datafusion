@@ -71,17 +71,17 @@ use parquet::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use parquet::arrow::ProjectionMask;
 use parquet::file::metadata::ParquetMetaData;
 
-use crate::datasource::schema_adapter::SchemaMapper;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{arrow_datafusion_err, DataFusionError, Result, ScalarValue};
+use datafusion_datasource::schema_adapter::SchemaMapper;
 use datafusion_physical_expr::expressions::{Column, Literal};
 use datafusion_physical_expr::utils::reassign_predicate_columns;
 use datafusion_physical_expr::{split_conjunction, PhysicalExpr};
 
-use crate::physical_plan::metrics;
+use datafusion_physical_plan::metrics;
 
 use super::ParquetFileMetrics;
 
@@ -584,7 +584,7 @@ pub fn build_row_filter(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::datasource::schema_adapter::{
+    use datafusion_datasource::schema_adapter::{
         DefaultSchemaAdapterFactory, SchemaAdapterFactory,
     };
 
@@ -601,7 +601,7 @@ mod test {
     // We should ignore predicate that read non-primitive columns
     #[test]
     fn test_filter_candidate_builder_ignore_complex_types() {
-        let testdata = crate::test_util::parquet_test_data();
+        let testdata = datafusion_common::test_util::parquet_test_data();
         let file = std::fs::File::open(format!("{testdata}/list_columns.parquet"))
             .expect("opening file");
 
@@ -626,7 +626,7 @@ mod test {
     // If a column exists in the table schema but not the file schema it should be rewritten to a null expression
     #[test]
     fn test_filter_candidate_builder_rewrite_missing_column() {
-        let testdata = crate::test_util::parquet_test_data();
+        let testdata = datafusion_common::test_util::parquet_test_data();
         let file = std::fs::File::open(format!("{testdata}/alltypes_plain.parquet"))
             .expect("opening file");
 
@@ -665,7 +665,7 @@ mod test {
 
     #[test]
     fn test_filter_type_coercion() {
-        let testdata = crate::test_util::parquet_test_data();
+        let testdata = datafusion_common::test_util::parquet_test_data();
         let file = std::fs::File::open(format!("{testdata}/alltypes_plain.parquet"))
             .expect("opening file");
 
@@ -835,7 +835,7 @@ mod test {
     }
 
     fn get_basic_table_schema() -> Schema {
-        let testdata = crate::test_util::parquet_test_data();
+        let testdata = datafusion_common::test_util::parquet_test_data();
         let file = std::fs::File::open(format!("{testdata}/alltypes_plain.parquet"))
             .expect("opening file");
 

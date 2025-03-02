@@ -83,11 +83,13 @@ use object_store::ObjectStore;
 use parking_lot::RwLock;
 use url::Url;
 
-mod avro;
 mod csv;
 mod json;
 #[cfg(feature = "parquet")]
 mod parquet;
+
+#[cfg(feature = "avro")]
+mod avro;
 
 /// DataFilePaths adds a method to convert strings and vector of strings to vector of [`ListingTableUrl`] URLs.
 /// This allows methods such [`SessionContext::read_csv`] and [`SessionContext::read_avro`]

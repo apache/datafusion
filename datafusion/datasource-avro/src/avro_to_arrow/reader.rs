@@ -16,10 +16,10 @@
 // under the License.
 
 use super::arrow_array_reader::AvroArrowArrayReader;
-use crate::arrow::datatypes::SchemaRef;
-use crate::arrow::record_batch::RecordBatch;
-use crate::error::Result;
+use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
+use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
@@ -58,7 +58,7 @@ impl ReaderBuilder {
     /// ```
     /// use std::fs::File;
     ///
-    /// use datafusion::datasource::avro_to_arrow::{Reader, ReaderBuilder};
+    /// use datafusion_datasource_avro::avro_to_arrow::{Reader, ReaderBuilder};
     ///
     /// fn example() -> Reader<'static, File> {
     ///     let file = File::open("test/data/basic.avro").unwrap();
@@ -170,13 +170,17 @@ impl<R: Read> Iterator for Reader<'_, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array::*;
-    use crate::arrow::datatypes::{DataType, Field};
+    use arrow::array::*;
+    use arrow::array::{
+        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
+        TimestampMicrosecondArray,
+    };
     use arrow::datatypes::TimeUnit;
+    use arrow::datatypes::{DataType, Field};
     use std::fs::File;
 
     fn build_reader(name: &str) -> Reader<File> {
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/{name}");
         let builder = ReaderBuilder::new().read_schema().with_batch_size(64);
         builder.build(File::open(filename).unwrap()).unwrap()

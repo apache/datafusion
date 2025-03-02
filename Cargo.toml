@@ -16,12 +16,16 @@
 # under the License.
 
 [workspace]
-exclude = ["dev/depcheck"]
 members = [
     "datafusion/common",
     "datafusion/common-runtime",
     "datafusion/catalog",
     "datafusion/catalog-listing",
+    "datafusion/datasource",
+    "datafusion/datasource-avro",
+    "datafusion/datasource-csv",
+    "datafusion/datasource-json",
+    "datafusion/datasource-parquet",
     "datafusion/core",
     "datafusion/expr",
     "datafusion/expr-common",
@@ -57,6 +61,7 @@ members = [
     "datafusion/macros",
     "datafusion/doc",
 ]
+exclude = ["dev/depcheck"]
 resolver = "2"
 
 [workspace.package]
@@ -80,6 +85,7 @@ version = "46.0.0"
 ahash = { version = "0.8", default-features = false, features = [
     "runtime-rng",
 ] }
+apache-avro = { version = "0.17", default-features = false }
 arrow = { version = "54.2.1", features = [
     "prettyprint",
     "chrono-tz",
@@ -106,6 +112,10 @@ datafusion-catalog-listing = { path = "datafusion/catalog-listing", version = "4
 datafusion-common = { path = "datafusion/common", version = "46.0.0", default-features = false }
 datafusion-common-runtime = { path = "datafusion/common-runtime", version = "46.0.0" }
 datafusion-datasource = { path = "datafusion/datasource", version = "46.0.0", default-features = false }
+datafusion-datasource-avro = { path = "datafusion/datasource-avro", version = "46.0.0", default-features = false }
+datafusion-datasource-csv = { path = "datafusion/datasource-csv", version = "46.0.0", default-features = false }
+datafusion-datasource-json = { path = "datafusion/datasource-json", version = "46.0.0", default-features = false }
+datafusion-datasource-parquet = { path = "datafusion/datasource-parquet", version = "46.0.0", default-features = false }
 datafusion-doc = { path = "datafusion/doc", version = "46.0.0" }
 datafusion-execution = { path = "datafusion/execution", version = "46.0.0" }
 datafusion-expr = { path = "datafusion/expr", version = "46.0.0" }

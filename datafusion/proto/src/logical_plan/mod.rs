@@ -35,6 +35,8 @@ use crate::{
 use crate::protobuf::{proto_error, ToProtoError};
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::datasource::cte_worktable::CteWorkTable;
+#[cfg(feature = "avro")]
+use datafusion::datasource::file_format::avro::AvroFormat;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::{
@@ -43,8 +45,7 @@ use datafusion::datasource::file_format::{
 use datafusion::{
     datasource::{
         file_format::{
-            avro::AvroFormat, csv::CsvFormat, json::JsonFormat as OtherNdJsonFormat,
-            FileFormat,
+            csv::CsvFormat, json::JsonFormat as OtherNdJsonFormat, FileFormat,
         },
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
         view::ViewTable,
@@ -440,7 +441,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                             }
                             Arc::new(json)
                         }
-                        FileFormatType::Avro(..) => Arc::new(AvroFormat),
+                        #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
+                        FileFormatType::Avro(..) => {
+                            #[cfg(feature = "avro")] 
+                            {
+                                Arc::new(AvroFormat)
+                            }
+                            #[cfg(not(feature = "avro"))]
+                            panic!("Unable to process avro file since `avro` feature is not enabled");
+                        }
                     };
 
                 let table_paths = &scan
@@ -1072,6 +1081,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 }))
                         }
 
+                        #[cfg(feature = "avro")]
                         if any.is::<AvroFormat>() {
                             maybe_some_type =
                                 Some(FileFormatType::Avro(protobuf::AvroFormat {}))
