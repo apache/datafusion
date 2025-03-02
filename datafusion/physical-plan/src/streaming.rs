@@ -208,6 +208,10 @@ impl DisplayAs for StreamingTableExec {
 
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }

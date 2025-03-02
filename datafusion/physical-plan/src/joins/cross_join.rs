@@ -240,6 +240,10 @@ impl DisplayAs for CrossJoinExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "CrossJoinExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }

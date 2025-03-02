@@ -711,6 +711,10 @@ config_namespace! {
 
         /// When set to true, the explain statement will print schema information
         pub show_schema: bool, default = false
+
+        /// Display format of explain. Default is "indent".
+        /// When set to "tree", it will print the plan in a tree-rendered format.
+        pub format: String, default = "indent".to_string()
     }
 }
 
