@@ -17,6 +17,7 @@
 
 use ahash::RandomState;
 use datafusion_common::stats::Precision;
+use datafusion_expr::expr::WindowFunction;
 use datafusion_functions_aggregate_common::aggregate::count_distinct::BytesViewDistinctCountAccumulator;
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions;
@@ -48,10 +49,12 @@ use datafusion_common::{
 };
 use datafusion_expr::function::StateFieldsArgs;
 use datafusion_expr::{
+    col, Expr, ReversedUDAF, StatisticsArgs, TypeSignature, WindowFunctionDefinition,
+};
+use datafusion_expr::{
     function::AccumulatorArgs, utils::format_state_name, Accumulator, AggregateUDFImpl,
     Documentation, EmitTo, GroupsAccumulator, SetMonotonicity, Signature, Volatility,
 };
-use datafusion_expr::{Expr, ReversedUDAF, StatisticsArgs, TypeSignature};
 use datafusion_functions_aggregate_common::aggregate::count_distinct::{
     BytesDistinctCountAccumulator, FloatDistinctCountAccumulator,
     PrimitiveDistinctCountAccumulator,
@@ -80,8 +83,32 @@ pub fn count_distinct(expr: Expr) -> Expr {
 }
 
 /// Creates aggregation to count all rows, equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`
+/// Alias to count(*) for backward comaptibility
 pub fn count_all() -> Expr {
-    count(Expr::Literal(COUNT_STAR_EXPANSION))
+    count(Expr::Literal(COUNT_STAR_EXPANSION)).alias("count(*)")
+}
+
+/// Creates window aggregation to count all rows, equivalent to `COUNT(*)`, `COUNT()`, `COUNT(1)`
+pub fn count_all_window() -> Expr {
+    Expr::WindowFunction(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(count_udaf()),
+        vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+    ))
+}
+
+/// Create count wildcard window func of Expr::Column
+pub fn count_all_window_column() -> Expr {
+    col(Expr::WindowFunction(WindowFunction::new(
+        WindowFunctionDefinition::AggregateUDF(count_udaf()),
+        vec![Expr::Literal(COUNT_STAR_EXPANSION)],
+    ))
+    .schema_name()
+    .to_string())
+}
+
+/// Create count wildcard of Expr::Column
+pub fn count_all_column() -> Expr {
+    col(count_all().schema_name().to_string())
 }
 
 #[user_doc(
