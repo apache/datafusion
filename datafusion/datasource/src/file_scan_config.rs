@@ -264,9 +264,9 @@ impl DataSource for FileScanConfig {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
 
+        // Must be all column references, with no table partition columns (which can not be projected)
         let partitioned_columns_in_proj = projection.expr().iter().any(|(expr, _)| {
             expr.as_any()
                 .downcast_ref::<Column>()
@@ -274,25 +274,25 @@ impl DataSource for FileScanConfig {
                 .unwrap_or(false)
         });
 
-        Ok(
-            (all_alias_free_columns(projection.expr()) && !partitioned_columns_in_proj)
-                .then(|| {
-                    let file_scan = self.clone();
-                    let source = Arc::clone(&file_scan.file_source);
-                    let new_projections = new_projections_for_columns(
-                        projection,
-                        &file_scan
-                            .projection
-                            .clone()
-                            .unwrap_or((0..self.file_schema.fields().len()).collect()),
-                    );
-                    file_scan
-                        // Assign projected statistics to source
-                        .with_projection(Some(new_projections))
-                        .with_source(source)
-                        .build() as _
-                }),
-        )
+        // If there is any non-column or alias-carrier expression, Projection should not be removed.
+        let no_aliases = all_alias_free_columns(projection.expr());
+
+        Ok((no_aliases && !partitioned_columns_in_proj).then(|| {
+            let file_scan = self.clone();
+            let source = Arc::clone(&file_scan.file_source);
+            let new_projections = new_projections_for_columns(
+                projection,
+                &file_scan
+                    .projection
+                    .clone()
+                    .unwrap_or((0..self.file_schema.fields().len()).collect()),
+            );
+            file_scan
+                // Assign projected statistics to source
+                .with_projection(Some(new_projections))
+                .with_source(source)
+                .build() as _
+        }))
     }
 }
 
