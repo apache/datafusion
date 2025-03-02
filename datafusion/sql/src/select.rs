@@ -24,10 +24,11 @@ use crate::utils::{
     resolve_columns, resolve_positions_to_exprs, rewrite_recursive_unnests_bottom_up,
     CheckColumnsSatisfyExprsPurpose,
 };
+use datafusion_expr::utils::exprlist_to_fields;
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{not_impl_err, plan_err, Column, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
@@ -42,7 +43,7 @@ use datafusion_expr::{
     Partitioning,
 };
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use sqlparser::ast::{
     Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr,
     WildcardAdditionalOptions, WindowType,
@@ -210,6 +211,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 None => (base_plan.clone(), select_exprs.clone(), having_expr_opt)
             }
         };
+        let missing_cols =
+            Self::calc_missing_columns(&select_exprs_post_aggr, &plan, &order_by_rex)?;
+
+        if !missing_cols.is_empty() && select.distinct.is_some() {
+            let missing_col_names = missing_cols
+                .iter()
+                .map(|col| col.flat_name())
+                .collect::<String>();
+
+            return plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list");
+        }
+        let add_missing_cols = !missing_cols.is_empty();
+        missing_cols
+            .into_iter()
+            .for_each(|column| select_exprs_post_aggr.push(Expr::Column(column)));
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
@@ -262,7 +278,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 // Build the final plan
                 LogicalPlanBuilder::from(base_plan)
-                    .distinct_on(on_expr, select_exprs, None)?
+                    .distinct_on(on_expr, select_exprs.clone(), None)?
                     .build()
             }
         }?;
@@ -287,7 +303,60 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        self.order_by(plan, order_by_rex)
+        let plan = self.order_by(plan, order_by_rex)?;
+        // if add missing columns, we MUST remove unused columns in project
+        if add_missing_cols {
+            LogicalPlanBuilder::from(plan)
+                .project(select_exprs)?
+                .build()
+        } else {
+            Ok(plan)
+        }
+    }
+
+    fn calc_missing_columns(
+        exprs: &[Expr],
+        plan: &LogicalPlan,
+        order_by: &[datafusion_expr::expr::Sort],
+    ) -> Result<IndexSet<Column>> {
+        let mut expr_columns: IndexSet<&Column> = IndexSet::new();
+        let mut wildcard_columns: Vec<Column> = vec![];
+        for expr in exprs {
+            match expr {
+                Expr::Wildcard { .. } => {
+                    // `exprlist_to_fields` to handle Expr::Wildcard case
+                    let wildcard_fields = exprlist_to_fields([expr], plan)?;
+                    wildcard_fields.into_iter().for_each(|field| {
+                        let column = Column::new(field.0, field.1.name());
+                        wildcard_columns.push(column);
+                    });
+                }
+                Expr::Alias(alias) => {
+                    let column = Column::new(alias.relation.clone(), alias.name.clone());
+                    wildcard_columns.push(column);
+                }
+                _ => expr_columns.extend(expr.column_refs()),
+            }
+        }
+        wildcard_columns.iter().for_each(|column| {
+            expr_columns.insert(column);
+        });
+
+        let mut missing_cols: IndexSet<Column> = IndexSet::new();
+        order_by.iter().try_for_each::<_, Result<()>>(|sort| {
+            let columns = sort.expr.column_refs();
+            missing_cols.extend(
+                columns
+                    .clone()
+                    .into_iter()
+                    .filter(|c| !expr_columns.contains(c))
+                    .cloned(),
+            );
+
+            Ok(())
+        })?;
+
+        Ok(missing_cols)
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
