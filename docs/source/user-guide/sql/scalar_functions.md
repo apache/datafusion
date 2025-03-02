@@ -3008,7 +3008,7 @@ array_length(array, dimension)
 
 Returns the maximum value in the array.
 
-```
+```sql
 array_max(array)
 ```
 
