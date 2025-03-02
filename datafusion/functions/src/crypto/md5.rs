@@ -18,11 +18,16 @@
 //! "crypto" DataFusion functions
 use crate::crypto::basic::md5;
 use arrow::datatypes::DataType;
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{
+    plan_err,
+    types::{logical_binary, logical_string},
+    Result,
+};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignature, Volatility,
 };
+use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
 use std::any::Any;
 
@@ -52,11 +57,16 @@ impl Default for Md5Func {
 
 impl Md5Func {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::uniform(
-                1,
-                vec![Utf8View, Utf8, LargeUtf8, Binary, LargeBinary],
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Native(logical_string()),
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Native(logical_binary()),
+                    )]),
+                ],
                 Volatility::Immutable,
             ),
         }
