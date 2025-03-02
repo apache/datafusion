@@ -593,10 +593,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 not_impl_err!("AnyOp not supported by ExprPlanner: {binary_expr:?}")
             }
+            #[allow(deprecated)]
             SQLExpr::Wildcard(_token) => Ok(Expr::Wildcard {
                 qualifier: None,
                 options: Box::new(WildcardOptions::default()),
             }),
+            #[allow(deprecated)]
             SQLExpr::QualifiedWildcard(object_name, _token) => Ok(Expr::Wildcard {
                 qualifier: Some(self.object_name_to_table_reference(object_name)?),
                 options: Box::new(WildcardOptions::default()),

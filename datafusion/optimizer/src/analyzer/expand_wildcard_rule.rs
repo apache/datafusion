@@ -89,6 +89,7 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
     let input = find_base_plan(input);
     for e in expr {
         match e {
+            #[allow(deprecated)]
             Expr::Wildcard { qualifier, options } => {
                 if let Some(qualifier) = qualifier {
                     let expanded = expand_qualified_wildcard(

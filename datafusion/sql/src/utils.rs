@@ -632,6 +632,8 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
     } = original_expr.clone().rewrite(&mut rewriter)?;
 
     if !transformed {
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[allow(deprecated)]
         if matches!(&transformed_expr, Expr::Column(_))
             || matches!(&transformed_expr, Expr::Wildcard { .. })
         {

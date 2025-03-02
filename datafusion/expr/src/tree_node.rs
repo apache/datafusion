@@ -67,6 +67,8 @@ impl TreeNode for Expr {
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 lists_of_exprs.apply_elements(f)
             }
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[allow(deprecated)]
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
@@ -113,6 +115,8 @@ impl TreeNode for Expr {
         mut f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[allow(deprecated)]
             Expr::Column(_)
             | Expr::Wildcard { .. }
             | Expr::Placeholder(Placeholder { .. })
