@@ -148,9 +148,6 @@ pub struct FileScanConfig {
     pub file_groups: Vec<Vec<PartitionedFile>>,
     /// Table constraints
     pub constraints: Constraints,
-    /// Estimated overall statistics of the files, taking `filters` into account.
-    /// Defaults to [`Statistics::new_unknown`].
-    pub statistics: Statistics,
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub projection: Option<Vec<usize>>,
@@ -308,7 +305,6 @@ impl FileScanConfig {
             file_schema,
             file_groups: vec![],
             constraints: Constraints::empty(),
-            statistics,
             projection: None,
             limit: None,
             table_partition_cols: vec![],
@@ -317,14 +313,15 @@ impl FileScanConfig {
             new_lines_in_values: false,
             file_source: Arc::clone(&file_source),
         };
+        config = config.with_statistics(statistics);
 
-        config = config.with_source(Arc::clone(&file_source));
         config
     }
 
     /// Set the file source
     pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
-        self.file_source = file_source.with_statistics(self.statistics.clone());
+        self.file_source =
+            file_source.with_statistics(Statistics::new_unknown(&self.file_schema));
         self
     }
 
@@ -336,7 +333,6 @@ impl FileScanConfig {
 
     /// Set the statistics of the files
     pub fn with_statistics(mut self, statistics: Statistics) -> Self {
-        self.statistics = statistics.clone();
         self.file_source = self.file_source.with_statistics(statistics);
         self
     }
@@ -351,10 +347,7 @@ impl FileScanConfig {
     }
 
     fn projected_stats(&self) -> Statistics {
-        let statistics = self
-            .file_source
-            .statistics()
-            .unwrap_or(self.statistics.clone());
+        let statistics = self.file_source.statistics().unwrap();
 
         let table_cols_stats = self
             .projection_indices()
@@ -487,7 +480,7 @@ impl FileScanConfig {
             return (
                 Arc::clone(&self.file_schema),
                 self.constraints.clone(),
-                self.statistics.clone(),
+                self.file_source.statistics().unwrap().clone(),
                 self.output_ordering.clone(),
             );
         }
@@ -630,7 +623,11 @@ impl Debug for FileScanConfig {
         write!(f, "FileScanConfig {{")?;
         write!(f, "object_store_url={:?}, ", self.object_store_url)?;
 
-        write!(f, "statistics={:?}, ", self.statistics)?;
+        write!(
+            f,
+            "statistics={:?}, ",
+            self.file_source.statistics().unwrap()
+        )?;
 
         DisplayAs::fmt_as(self, DisplayFormatType::Verbose, f)?;
         write!(f, "}}")
