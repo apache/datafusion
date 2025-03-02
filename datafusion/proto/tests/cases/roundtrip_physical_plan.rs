@@ -741,8 +741,15 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let source = Arc::new(
         ParquetSource::new(options).with_predicate(Arc::clone(&file_schema), predicate),
     );
+    let statistics = Statistics {
+        num_rows: Precision::Inexact(100),
+        total_byte_size: Precision::Inexact(1024),
+        column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+            Field::new("col", DataType::Utf8, false),
+        ]))),
+    };
 
-    let scan_config = FileScanConfig {
+    let mut scan_config = FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_schema,
         file_groups: vec![vec![PartitionedFile::new(
@@ -750,13 +757,6 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
             1024,
         )]],
         constraints: Constraints::empty(),
-        statistics: Statistics {
-            num_rows: Precision::Inexact(100),
-            total_byte_size: Precision::Inexact(1024),
-            column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
-                Field::new("col", DataType::Utf8, false),
-            ]))),
-        },
         projection: None,
         limit: None,
         table_partition_cols: vec![],
@@ -765,6 +765,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         new_lines_in_values: false,
         file_source: source,
     };
+    scan_config = scan_config.with_statistics(statistics);
 
     roundtrip_test(scan_config.build())
 }
@@ -806,7 +807,15 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             .with_predicate(Arc::clone(&file_schema), custom_predicate_expr),
     );
 
-    let scan_config = FileScanConfig {
+    let statistics = Statistics {
+        num_rows: Precision::Inexact(100),
+        total_byte_size: Precision::Inexact(1024),
+        column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+            Field::new("col", DataType::Utf8, false),
+        ]))),
+    };
+
+    let mut scan_config = FileScanConfig {
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_schema,
         file_groups: vec![vec![PartitionedFile::new(
@@ -814,13 +823,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             1024,
         )]],
         constraints: Constraints::empty(),
-        statistics: Statistics {
-            num_rows: Precision::Inexact(100),
-            total_byte_size: Precision::Inexact(1024),
-            column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
-                Field::new("col", DataType::Utf8, false),
-            ]))),
-        },
+
         projection: None,
         limit: None,
         table_partition_cols: vec![],
@@ -829,6 +832,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         new_lines_in_values: false,
         file_source: source,
     };
+    scan_config = scan_config.with_statistics(statistics);
 
     #[derive(Debug, Clone, Eq)]
     struct CustomPredicateExpr {
@@ -1616,7 +1620,6 @@ async fn roundtrip_projection_source() -> Result<()> {
             1024,
         )]],
         constraints: Constraints::empty(),
-        statistics,
         file_schema: schema.clone(),
         projection: Some(vec![0, 1, 2]),
         limit: None,
