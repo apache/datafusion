@@ -1496,6 +1496,20 @@ select array_max(make_array(5.1, -3.2, 6.3, 4.9));
 ----
 6.3
 
+query ?I
+select input, array_max(input) from (select make_array(d - 1, d, d + 1) input from (values (0), (10), (20), (30), (NULL)) t(d))
+----
+[-1, 0, 1] 1
+[9, 10, 11] 11
+[19, 20, 21] 21
+[29, 30, 31] 31
+[NULL, NULL, NULL] NULL
+
+query II
+select array_max(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_max(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'));
+----
+3 1
+
 query I
 select array_max(make_array());
 ----

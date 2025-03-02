@@ -18,15 +18,16 @@
 //! [`ScalarUDFImpl`] definitions for array_max function.
 use crate::utils::make_scalar_function;
 use arrow::array::ArrayRef;
-use arrow_schema::DataType;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List};
+use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::List;
 use datafusion_common::cast::as_list_array;
-use datafusion_common::exec_err;
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{exec_err, ScalarValue};
 use datafusion_doc::Documentation;
 use datafusion_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
-use datafusion_functions::utils::take_function_args;
 use datafusion_functions_aggregate::min_max;
 use datafusion_macros::user_doc;
+use itertools::Itertools;
 use std::any::Any;
 
 make_udf_expr_and_func!(
@@ -90,12 +91,8 @@ impl ScalarUDFImpl for ArrayMax {
 
     fn return_type(&self, arg_types: &[DataType]) -> datafusion_common::Result<DataType> {
         match &arg_types[0] {
-            List(field) | LargeList(field) | FixedSizeList(field, _) => {
-                Ok(field.data_type().clone())
-            }
-            _ => exec_err!(
-                "Not reachable, data_type should be List, LargeList or FixedSizeList"
-            ),
+            List(field) => Ok(field.data_type().clone()),
+            _ => exec_err!("Not reachable, data_type should be List"),
         }
     }
 
@@ -127,10 +124,13 @@ pub fn array_max_inner(args: &[ArrayRef]) -> datafusion_common::Result<ArrayRef>
     let [arg1] = take_function_args("array_max", args)?;
 
     match arg1.data_type() {
-        List(_) | LargeList(_) | FixedSizeList(_, _) => {
-            let input_array = as_list_array(&arg1)?.value(0);
-            let max_result = min_max::max_batch(&input_array);
-            max_result?.to_array()
+        List(_) => {
+            let input_list_array = as_list_array(&arg1)?;
+            let result_vec = input_list_array
+                .iter()
+                .flat_map(|arr| min_max::max_batch(&arr.unwrap()))
+                .collect_vec();
+            ScalarValue::iter_to_array(result_vec)
         }
         _ => exec_err!("array_max does not support type: {:?}", arg1.data_type()),
     }
