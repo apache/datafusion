@@ -151,9 +151,6 @@ pub struct FileScanConfig {
     pub file_groups: Vec<FileGroup>,
     /// Table constraints
     pub constraints: Constraints,
-    /// Estimated overall statistics of the files, taking `filters` into account.
-    /// Defaults to [`Statistics::new_unknown`].
-    pub statistics: Statistics,
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub projection: Option<Vec<usize>>,
@@ -412,7 +409,6 @@ impl FileScanConfigBuilder {
             table_partition_cols,
             constraints,
             file_groups,
-            statistics,
             output_ordering,
             file_compression_type,
             new_lines_in_values,
@@ -426,9 +422,9 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
         Self {
             object_store_url: config.object_store_url,
             file_schema: config.file_schema,
-            file_source: config.file_source,
+            file_source: config.file_source.clone(),
             file_groups: config.file_groups,
-            statistics: Some(config.statistics),
+            statistics: config.file_source.statistics().ok(),
             output_ordering: config.output_ordering,
             file_compression_type: Some(config.file_compression_type),
             new_lines_in_values: Some(config.new_lines_in_values),
@@ -610,7 +606,6 @@ impl FileScanConfig {
             file_schema,
             file_groups: vec![],
             constraints: Constraints::empty(),
-            statistics,
             projection: None,
             limit: None,
             table_partition_cols: vec![],
@@ -625,7 +620,8 @@ impl FileScanConfig {
     /// Set the file source
     #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
     pub fn with_source(mut self, file_source: Arc<dyn FileSource>) -> Self {
-        self.file_source = file_source.with_statistics(self.statistics.clone());
+        self.file_source =
+            file_source.with_statistics(Statistics::new_unknown(&self.file_schema));
         self
     }
 
@@ -639,7 +635,6 @@ impl FileScanConfig {
     /// Set the statistics of the files
     #[deprecated(since = "47.0.0", note = "use FileScanConfigBuilder instead")]
     pub fn with_statistics(mut self, statistics: Statistics) -> Self {
-        self.statistics = statistics.clone();
         self.file_source = self.file_source.with_statistics(statistics);
         self
     }
@@ -654,10 +649,7 @@ impl FileScanConfig {
     }
 
     fn projected_stats(&self) -> Statistics {
-        let statistics = self
-            .file_source
-            .statistics()
-            .unwrap_or(self.statistics.clone());
+        let statistics = self.file_source.statistics().unwrap();
 
         let table_cols_stats = self
             .projection_indices()
@@ -804,7 +796,7 @@ impl FileScanConfig {
             return (
                 Arc::clone(&self.file_schema),
                 self.constraints.clone(),
-                self.statistics.clone(),
+                self.file_source.statistics().unwrap().clone(),
                 self.output_ordering.clone(),
             );
         }
@@ -949,7 +941,11 @@ impl Debug for FileScanConfig {
         write!(f, "FileScanConfig {{")?;
         write!(f, "object_store_url={:?}, ", self.object_store_url)?;
 
-        write!(f, "statistics={:?}, ", self.statistics)?;
+        write!(
+            f,
+            "statistics={:?}, ",
+            self.file_source.statistics().unwrap()
+        )?;
 
         DisplayAs::fmt_as(self, DisplayFormatType::Verbose, f)?;
         write!(f, "}}")
@@ -2161,13 +2157,13 @@ mod tests {
         assert!(config.constraints.is_empty());
 
         // Verify statistics are set to unknown
-        assert_eq!(config.statistics.num_rows, Precision::Absent);
-        assert_eq!(config.statistics.total_byte_size, Precision::Absent);
+        assert_eq!(config.file_source.statistics().unwrap().num_rows, Precision::Absent);
+        assert_eq!(config.file_source.statistics().unwrap().total_byte_size, Precision::Absent);
         assert_eq!(
-            config.statistics.column_statistics.len(),
+            config.file_source.statistics().unwrap().column_statistics.len(),
             file_schema.fields().len()
         );
-        for stat in config.statistics.column_statistics {
+        for stat in config.file_source.statistics().unwrap().column_statistics {
             assert_eq!(stat.distinct_count, Precision::Absent);
             assert_eq!(stat.min_value, Precision::Absent);
             assert_eq!(stat.max_value, Precision::Absent);
