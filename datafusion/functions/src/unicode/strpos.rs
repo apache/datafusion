@@ -23,9 +23,11 @@ use arrow::array::{
     ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray, StringArrayType,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
+use datafusion_common::types::logical_string;
 use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -60,7 +62,13 @@ impl Default for StrposFunc {
 impl StrposFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("instr"), String::from("position")],
         }
     }
@@ -115,6 +123,11 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
             let substring_array = args[1].as_string::<i32>();
             calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
         }
+        (DataType::Utf8, DataType::Utf8View) => {
+            let string_array = args[0].as_string::<i32>();
+            let substring_array = args[1].as_string_view();
+            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+        }
         (DataType::Utf8, DataType::LargeUtf8) => {
             let string_array = args[0].as_string::<i32>();
             let substring_array = args[1].as_string::<i64>();
@@ -123,6 +136,11 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
         (DataType::LargeUtf8, DataType::Utf8) => {
             let string_array = args[0].as_string::<i64>();
             let substring_array = args[1].as_string::<i32>();
+            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+        }
+        (DataType::LargeUtf8, DataType::Utf8View) => {
+            let string_array = args[0].as_string::<i64>();
+            let substring_array = args[1].as_string_view();
             calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
