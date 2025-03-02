@@ -1382,3 +1382,54 @@ fn test_union_after_projection() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_partition_col_projection_pushdown() -> Result<()> {
+    let file_schema = Arc::new(Schema::new(vec![
+        Field::new("int_col", DataType::Int32, true),
+        Field::new("string_col", DataType::Utf8, true),
+    ]));
+
+    let partitioned_schema = Arc::new(Schema::new(vec![
+        Field::new("int_col", DataType::Int32, true),
+        Field::new("string_col", DataType::Utf8, true),
+        Field::new("partition_col", DataType::Utf8, true),
+    ]));
+
+    let source = FileScanConfig::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        file_schema.clone(),
+        Arc::new(CsvSource::default()),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .with_table_partition_cols(vec![Field::new("partition_col", DataType::Utf8, true)])
+    .with_projection(Some(vec![0, 1, 2]))
+    .build();
+
+    let projection = Arc::new(ProjectionExec::try_new(
+        vec![
+            (
+                col("string_col", partitioned_schema.as_ref())?,
+                "string_col".to_string(),
+            ),
+            (
+                col("partition_col", partitioned_schema.as_ref())?,
+                "partition_col".to_string(),
+            ),
+            (
+                col("int_col", partitioned_schema.as_ref())?,
+                "int_col".to_string(),
+            ),
+        ],
+        source,
+    )?);
+
+    let after_optimize =
+        ProjectionPushdown::new().optimize(projection, &ConfigOptions::new())?;
+
+    let expected = ["ProjectionExec: expr=[string_col@1 as string_col, partition_col@2 as partition_col, int_col@0 as int_col]",
+        "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[int_col, string_col, partition_col], file_type=csv, has_header=false"];
+    assert_eq!(get_plan_string(&after_optimize), expected);
+
+    Ok(())
+}
