@@ -21,7 +21,7 @@ use arrow::datatypes::{
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
 };
 
-use datafusion_common::{internal_err, plan_err, Result};
+use datafusion_common::{internal_err, plan_err, types::NativeType, Result};
 
 pub static STRINGS: &[DataType] =
     &[DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View];
@@ -62,6 +62,19 @@ pub static NUMERICS: &[DataType] = &[
     DataType::UInt64,
     DataType::Float32,
     DataType::Float64,
+];
+
+pub static NATIVE_NUMERICS: &[NativeType] = &[
+    NativeType::Int8,
+    NativeType::Int16,
+    NativeType::Int32,
+    NativeType::Int64,
+    NativeType::UInt8,
+    NativeType::UInt16,
+    NativeType::UInt32,
+    NativeType::UInt64,
+    NativeType::Float32,
+    NativeType::Float64,
 ];
 
 pub static TIMESTAMPS: &[DataType] = &[
