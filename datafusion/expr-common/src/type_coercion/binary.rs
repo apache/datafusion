@@ -296,17 +296,17 @@ fn math_decimal_coercion(
         }
         // Unlike with comparison we don't coerce to a decimal in the case of floating point
         // numbers, instead falling back to floating point arithmetic instead
-        (Decimal128(_, _), Int8 | Int16 | Int32 | Int64) => {
+        (Decimal128(_, _), Int8 | Int16 | Int32 | Int64 |UInt8 | UInt16 | UInt32 | UInt64) => {
             Some((lhs_type.clone(), coerce_numeric_type_to_decimal(rhs_type)?))
         }
-        (Int8 | Int16 | Int32 | Int64, Decimal128(_, _)) => {
+        (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Decimal128(_, _)) => {
             Some((coerce_numeric_type_to_decimal(lhs_type)?, rhs_type.clone()))
         }
-        (Decimal256(_, _), Int8 | Int16 | Int32 | Int64) => Some((
+        (Decimal256(_, _), Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64) => Some((
             lhs_type.clone(),
             coerce_numeric_type_to_decimal256(rhs_type)?,
         )),
-        (Int8 | Int16 | Int32 | Int64, Decimal256(_, _)) => Some((
+        (Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64, Decimal256(_, _)) => Some((
             coerce_numeric_type_to_decimal256(lhs_type)?,
             rhs_type.clone(),
         )),
@@ -1975,6 +1975,18 @@ mod tests {
             DataType::Decimal128(10, 2),
             DataType::Decimal128(10, 0),
             DataType::Decimal128(10, 2),
+        );
+        test_math_decimal_coercion_rule(
+            DataType::UInt32,
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(10, 0),
+            DataType::Decimal128(10, 2),
+        );
+        test_math_decimal_coercion_rule(
+            DataType::Decimal128(10, 2),
+            DataType::UInt32,
+            DataType::Decimal128(10, 2),
+            DataType::Decimal128(10, 0),
         );
 
         Ok(())
