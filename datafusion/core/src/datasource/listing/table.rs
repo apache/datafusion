@@ -616,6 +616,7 @@ impl ListingOptions {
 /// using an  [`ObjectStore`] instance, for example from local files or objects
 /// from AWS S3.
 ///
+/// # Reading Directories
 /// For example, given the `table1` directory (or object store prefix)
 ///
 /// ```text
@@ -651,13 +652,19 @@ impl ListingOptions {
 /// If the query has a predicate like `WHERE date = '2024-06-01'`
 /// only the corresponding directory will be read.
 ///
-/// `ListingTable` also supports filter and projection pushdown for formats that
+/// `ListingTable` also supports limit, filter and projection pushdown for formats that
 /// support it as such as Parquet.
+///
+/// # Implementation
+///
+/// `ListingTable` Uses [`DataSourceExec`] to execute the data. See that struct
+/// for more details.
+///
+/// [`DataSourceExec`]: crate::datasource::source::DataSourceExec
 ///
 /// # Example
 ///
-/// Here is an example of reading a directory of parquet files using a
-/// [`ListingTable`]:
+/// To read a directory of parquet files using a [`ListingTable`]:
 ///
 /// ```no_run
 /// # use datafusion::prelude::SessionContext;
