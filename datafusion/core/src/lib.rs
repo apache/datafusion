@@ -1028,12 +1028,6 @@ doc_comment::doctest!(
 
 #[cfg(doctest)]
 doc_comment::doctest!(
-    "../../../docs/source/library-user-guide/api-health.md",
-    library_user_guide_api_health
-);
-
-#[cfg(doctest)]
-doc_comment::doctest!(
     "../../../docs/source/library-user-guide/building-logical-plans.md",
     library_user_guide_building_logical_plans
 );
@@ -1096,4 +1090,16 @@ doc_comment::doctest!(
 doc_comment::doctest!(
     "../../../docs/source/library-user-guide/working-with-exprs.md",
     library_user_guide_working_with_exprs
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/library-user-guide/upgrading.md",
+    library_user_guide_upgrading
+);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../../docs/source/contributor-guide/api-health.md",
+    contributor_guide_api_health
 );
