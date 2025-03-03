@@ -20,11 +20,15 @@
 #[cfg(feature = "integration-tests")]
 mod tests {
     use datafusion::error::{DataFusionError, Result};
-    use datafusion::prelude::SessionContext;
+    use datafusion::prelude::{col, SessionContext};
     use datafusion_ffi::catalog_provider::ForeignCatalogProvider;
     use datafusion_ffi::table_provider::ForeignTableProvider;
     use datafusion_ffi::tests::create_record_batch;
     use datafusion_ffi::tests::utils::get_module;
+    use datafusion::logical_expr::{ScalarUDF, WindowUDF};
+    use datafusion_ffi::udf::ForeignScalarUDF;
+    use datafusion_ffi::udwf::ForeignWindowUDF;
+    use std::path::Path;
     use std::sync::Arc;
 
     /// It is important that this test is in the `tests` directory and not in the
@@ -94,5 +98,42 @@ mod tests {
         assert!(results[0].num_rows() != 0);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_rank_udwf() -> Result<()> {
+        let module = get_module()?;
+
+        let ffi_rank_func =
+            module
+                .create_rank_udwf()
+                .ok_or(DataFusionError::NotImplemented(
+                    "External table provider failed to implement create_scalar_udf"
+                        .to_string(),
+                ))?();
+        let foreign_rank_func: ForeignWindowUDF = (&ffi_rank_func).try_into()?;
+
+        let udwf: WindowUDF = foreign_rank_func.into();
+
+        let ctx = SessionContext::default();
+        let df = ctx.read_batch(create_record_batch(-5, 5))?;
+
+        let df = df
+            .with_column("rank_a", udwf.call(vec![]))?;
+
+        let result = df.collect().await?;
+
+        let expected = record_batch!(
+            ("a", Int32, vec![-5, -4, -3, -2, -1]),
+            ("b", Float64, vec![-5., -4., -3., -2., -1.]),
+            ("abs_a", Int32, vec![5, 4, 3, 2, 1]),
+            ("abs_b", Float64, vec![5., 4., 3., 2., 1.])
+        )?;
+
+        assert!(result.len() == 1);
+        assert!(result[0] == expected);
+
+        Ok(())
+
     }
 }

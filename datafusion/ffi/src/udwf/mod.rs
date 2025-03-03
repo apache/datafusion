@@ -87,8 +87,6 @@ pub struct FFI_WindowUDF {
         arg_types: RVec<WrappedSchema>,
     ) -> RResult<RVec<WrappedSchema>, RString>,
 
-    pub schema: unsafe extern "C" fn(udwf: &Self) -> WrappedSchema,
-
     pub sort_options: ROption<FFI_SortOptions>,
 
     /// Used to create a clone on the provider of the udf. This should
@@ -108,18 +106,12 @@ unsafe impl Sync for FFI_WindowUDF {}
 
 pub struct WindowUDFPrivateData {
     pub udf: Arc<WindowUDF>,
-    pub schema: SchemaRef,
 }
 
 impl FFI_WindowUDF {
     unsafe fn inner(&self) -> &Arc<WindowUDF> {
         let private_data = self.private_data as *const WindowUDFPrivateData;
         &(*private_data).udf
-    }
-
-    unsafe fn inner_schema(&self) -> SchemaRef {
-        let private_data = self.private_data as *const WindowUDFPrivateData;
-        Arc::clone(&(*private_data).schema)
     }
 }
 
@@ -167,12 +159,6 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
     rresult!(vec_datatype_to_rvec_wrapped(&return_types))
 }
 
-unsafe extern "C" fn schema_fn_wrapper(udwf: &FFI_WindowUDF) -> WrappedSchema {
-    let schema = udwf.inner_schema();
-
-    schema.into()
-}
-
 unsafe extern "C" fn release_fn_wrapper(udwf: &mut FFI_WindowUDF) {
     let private_data = Box::from_raw(udwf.private_data as *mut WindowUDFPrivateData);
     drop(private_data);
@@ -187,7 +173,6 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
     // });
     let private_data = Box::new(WindowUDFPrivateData {
         udf: Arc::clone(udwf.inner()),
-        schema: udwf.inner_schema(),
     });
 
     FFI_WindowUDF {
@@ -196,7 +181,6 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
         volatility: udwf.volatility.clone(),
         partition_evaluator: partition_evaluator_fn_wrapper,
         sort_options: udwf.sort_options.clone(),
-        schema: schema_fn_wrapper,
         coerce_types: coerce_types_fn_wrapper,
         field: field_fn_wrapper,
         clone: clone_fn_wrapper,
@@ -211,14 +195,14 @@ impl Clone for FFI_WindowUDF {
     }
 }
 
-impl FFI_WindowUDF {
-    pub fn new(udf: Arc<WindowUDF>, schema: SchemaRef) -> Self {
+impl From<Arc<WindowUDF>> for FFI_WindowUDF {
+    fn from(udf: Arc<WindowUDF>) -> Self {
         let name = udf.name().into();
         let aliases = udf.aliases().iter().map(|a| a.to_owned().into()).collect();
         let volatility = udf.signature().volatility.into();
         let sort_options = udf.sort_options().map(|v| (&v).into()).into();
 
-        let private_data = Box::new(WindowUDFPrivateData { udf, schema });
+        let private_data = Box::new(WindowUDFPrivateData { udf });
 
         Self {
             name,
@@ -226,7 +210,6 @@ impl FFI_WindowUDF {
             volatility,
             partition_evaluator: partition_evaluator_fn_wrapper,
             sort_options,
-            schema: schema_fn_wrapper,
             coerce_types: coerce_types_fn_wrapper,
             field: field_fn_wrapper,
             clone: clone_fn_wrapper,
@@ -307,8 +290,7 @@ impl WindowUDFImpl for ForeignWindowUDF {
         args: datafusion::logical_expr::function::PartitionEvaluatorArgs,
     ) -> Result<Box<dyn PartitionEvaluator>> {
         let evaluator = unsafe {
-            let schema = (self.udf.schema)(&self.udf);
-            let args = FFI_PartitionEvaluatorArgs::new(args, schema.into())?;
+            let args = FFI_PartitionEvaluatorArgs::try_from(args)?;
             (self.udf.partition_evaluator)(&self.udf, args)
         };
 

@@ -15,18 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use abi_stable::{std_types::RVec, StableAbi};
 use arrow::{
-    datatypes::{DataType, SchemaRef},
+    datatypes::{DataType, Field, Schema, SchemaRef},
     error::ArrowError,
     ffi::FFI_ArrowSchema,
 };
 use datafusion::{
     error::{DataFusionError, Result},
     logical_expr::function::PartitionEvaluatorArgs,
-    physical_plan::PhysicalExpr,
+    physical_plan::{expressions::Column, PhysicalExpr},
     prelude::SessionContext,
 };
 use datafusion_proto::{
@@ -51,11 +51,40 @@ pub struct FFI_PartitionEvaluatorArgs {
     schema: WrappedSchema,
 }
 
-impl FFI_PartitionEvaluatorArgs {
-    pub fn new(
+
+impl TryFrom<PartitionEvaluatorArgs<'_>> for FFI_PartitionEvaluatorArgs {
+
+    type Error = DataFusionError;
+    fn try_from(
         args: PartitionEvaluatorArgs,
-        schema: SchemaRef,
     ) -> Result<Self, DataFusionError> {
+        // This is a bit of a hack. Since PartitionEvaluatorArgs does not carry a schema
+        // around, and instead passes the data types directly we are unable to decode the
+        // protobuf PhysicalExpr correctly. In evaluating the code the only place these
+        // appear to be really used are the Column data types. So here we will find all
+        // of the required columns and create a schema that has empty fields except for
+        // the ones we require. Ideally we would enhance PartitionEvaluatorArgs to just
+        // pass along the schema, but that is a larger breaking change.
+        let required_columns: HashMap<usize, (&str, &DataType)> = args.input_exprs().iter().zip(args.input_types())
+            .filter_map(|(expr, data_type)| {
+                expr.as_any().downcast_ref::<Column>().map(|column| (column.index(), (column.name(), data_type)))
+            })
+            .collect();
+
+        let max_column = required_columns.keys().max().unwrap_or(&0).to_owned();
+        let fields: Vec<_> = (0..max_column).into_iter()
+            .map(|idx| {
+                match required_columns.get(&idx) {
+                    Some((name, data_type)) => {
+                        Field::new(*name, (*data_type).clone(), true)
+                    }
+                    None => {
+                        Field::new(format!("ffi_partition_evaluator_col_{idx}"), DataType::Null, true)
+                    }
+                }
+            }).collect();
+        let schema = Arc::new(Schema::new(fields));
+
         let codec = DefaultPhysicalExtensionCodec {};
         let input_exprs = serialize_physical_exprs(args.input_exprs(), &codec)?
             .into_iter()
