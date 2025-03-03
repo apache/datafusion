@@ -228,7 +228,7 @@ fn csv_exec_multiple_sorted(output_ordering: Vec<LexOrdering>) -> Arc<DataSource
     .build()
 }
 
-pub(crate) fn projection_exec_with_alias(
+fn projection_exec_with_alias(
     input: Arc<dyn ExecutionPlan>,
     alias_pairs: Vec<(String, String)>,
 ) -> Arc<dyn ExecutionPlan> {

@@ -57,41 +57,60 @@ mod row_hash;
 mod topk;
 mod topk_stream;
 
-/// Hash aggregate modes
+/// Aggregation modes
 ///
 /// See [`Accumulator::state`] for background information on multi-phase
 /// aggregation and how these modes are used.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
+    /// One of multiple layers of aggregation, any input partitioning
+    ///
     /// Partial aggregate that can be applied in parallel across input
     /// partitions.
     ///
     /// This is the first phase of a multi-phase aggregation.
     Partial,
+    /// *Final* of multiple layers of aggregation, in exactly one partition
+    ///
     /// Final aggregate that produces a single partition of output by combining
     /// the output of multiple partial aggregates.
     ///
     /// This is the second phase of a multi-phase aggregation.
+    ///
+    /// This mode requires that the input is a single partition
+    ///
+    /// Note: Adjacent `Partial` and `Final` mode aggregation is equivalent to a `Single`
+    /// mode aggregation node. The `Final` mode is required since this is used in an
+    /// intermediate step. The [`CombinePartialFinalAggregate`] physical optimizer rule
+    /// will replace this combination with `Single` mode for more efficient execution.
+    ///
+    /// [`CombinePartialFinalAggregate`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/combine_partial_final_agg/struct.CombinePartialFinalAggregate.html
     Final,
+    /// *Final* of multiple layers of aggregation, input is *Partitioned*
+    ///
     /// Final aggregate that works on pre-partitioned data.
     ///
-    /// This requires the invariant that all rows with a particular
-    /// grouping key are in the same partitions, such as is the case
-    /// with Hash repartitioning on the group keys. If a group key is
-    /// duplicated, duplicate groups would be produced
+    /// This mode requires that all rows with a particular grouping key are in
+    /// the same partitions, such as is the case with Hash repartitioning on the
+    /// group keys. If a group key is duplicated, duplicate groups would be
+    /// produced
     FinalPartitioned,
+    /// *Single* layer of Aggregation, input is exactly one partition
+    ///
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
     ///
     /// This mode requires that the input is a single partition (like Final)
     Single,
-    /// Applies the entire logical aggregation operation in a single operator,
-    /// as opposed to Partial / Final modes which apply the logical aggregation using
-    /// two operators.
+    /// *Single* layer of Aggregation, input is *Partitioned*
     ///
-    /// This mode requires that the input is partitioned by group key (like
-    /// FinalPartitioned)
+    /// Applies the entire logical aggregation operation in a single operator,
+    /// as opposed to Partial / Final modes which apply the logical aggregation
+    /// using two operators.
+    ///
+    /// This mode requires that the input has more than one partition, and is
+    /// partitioned by group key (like FinalPartitioned).
     SinglePartitioned,
 }
 

@@ -2141,6 +2141,7 @@ impl Projection {
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
+        #[expect(deprecated)]
         if !expr.iter().any(|e| matches!(e, Expr::Wildcard { .. }))
             && expr.len() != schema.fields().len()
         {
@@ -3451,6 +3452,7 @@ fn calc_func_dependencies_for_project(
     let proj_indices = exprs
         .iter()
         .map(|expr| match expr {
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => {
                 let wildcard_fields = exprlist_to_fields(
                     vec![&Expr::Wildcard {

@@ -103,6 +103,8 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
         // - Can `Wildcard` be considered as a `Literal`?
         // - ScalarVariable could be `applicable`, but that would require access to the context
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         Expr::AggregateFunction { .. }
         | Expr::WindowFunction { .. }
         | Expr::Wildcard { .. }
