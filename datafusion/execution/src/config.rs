@@ -441,6 +441,14 @@ impl SessionConfig {
         self
     }
 
+    pub fn with_parquet_force_view_metadata(
+        mut self,
+        schema_force_view_types: bool,
+    ) -> Self {
+        self.options.execution.parquet.schema_force_view_types = schema_force_view_types;
+        self
+    }
+
     /// Returns true if the joins will be enforced to output batches of the configured size
     pub fn enforce_batch_size_in_joins(&self) -> bool {
         self.options.execution.enforce_batch_size_in_joins
