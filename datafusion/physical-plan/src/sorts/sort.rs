@@ -28,20 +28,18 @@ use crate::common::spawn_buffered;
 use crate::execution_plan::{Boundedness, CardinalityEffect, EmissionType};
 use crate::expressions::PhysicalSortExpr;
 use crate::limit::LimitStream;
-use datafusion_execution::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
-};
 use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::spill::{
-    get_record_batch_memory_size, read_spill_as_stream, spill_record_batches,
-};
+use crate::spill::{get_record_batch_memory_size, read_spill_as_stream};
 use crate::stream::RecordBatchStreamAdapter;
 use crate::topk::TopK;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, SendableRecordBatchStream,
     Statistics,
+};
+use datafusion_execution::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet, SpillMetrics,
 };
 
 use arrow::array::{
@@ -65,23 +63,19 @@ struct ExternalSorterMetrics {
     /// metrics
     baseline: BaselineMetrics,
 
-    /// count of spills during the execution of the operator
-    spill_count: Count,
-
-    /// total spilled bytes during the execution of the operator
-    spilled_bytes: Count,
-
-    /// total spilled rows during the execution of the operator
-    spilled_rows: Count,
+    /// Spilling-related metrics
+    spill_metrics: SpillMetrics,
 }
 
 impl ExternalSorterMetrics {
     fn new(metrics: &ExecutionPlanMetricsSet, partition: usize) -> Self {
         Self {
             baseline: BaselineMetrics::new(metrics, partition),
-            spill_count: MetricBuilder::new(metrics).spill_count(partition),
-            spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
-            spilled_rows: MetricBuilder::new(metrics).spilled_rows(partition),
+            spill_metrics: SpillMetrics::new(
+                MetricBuilder::new(metrics).spill_count(partition),
+                MetricBuilder::new(metrics).spilled_bytes(partition),
+                MetricBuilder::new(metrics).spilled_rows(partition),
+            ),
         }
     }
 }
@@ -377,17 +371,17 @@ impl ExternalSorter {
 
     /// How many bytes have been spilled to disk?
     fn spilled_bytes(&self) -> usize {
-        self.metrics.spilled_bytes.value()
+        self.metrics.spill_metrics.spilled_bytes.value()
     }
 
     /// How many rows have been spilled to disk?
     fn spilled_rows(&self) -> usize {
-        self.metrics.spilled_rows.value()
+        self.metrics.spill_metrics.spilled_rows.value()
     }
 
     /// How many spill files have been created?
     fn spill_count(&self) -> usize {
-        self.metrics.spill_count.value()
+        self.metrics.spill_metrics.spill_file_count.value()
     }
 
     /// Writes any `in_memory_batches` to a spill file and clears
@@ -404,17 +398,13 @@ impl ExternalSorter {
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
 
-        let spill_file = self.runtime.disk_manager.create_tmp_file("Sorting")?;
         let batches = std::mem::take(&mut self.in_mem_batches);
-        let (spilled_rows, spilled_bytes) = spill_record_batches(
+        let spill_file = self.runtime.disk_manager.try_spill_record_batches(
             &batches,
-            spill_file.path().into(),
-            Arc::clone(&self.schema),
+            "Sorting",
+            &mut self.metrics.spill_metrics,
         )?;
         let used = self.reservation.free();
-        self.metrics.spill_count.add(1);
-        self.metrics.spilled_bytes.add(spilled_bytes);
-        self.metrics.spilled_rows.add(spilled_rows);
         self.spills.push(spill_file);
         Ok(used)
     }

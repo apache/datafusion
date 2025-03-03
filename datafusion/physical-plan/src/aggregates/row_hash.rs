@@ -29,7 +29,7 @@ use crate::aggregates::{
 };
 use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
-use crate::spill::{read_spill_as_stream, spill_record_batch_by_size};
+use crate::spill::read_spill_as_stream;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{aggregates, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
@@ -41,7 +41,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::metrics;
+use datafusion_execution::metrics::{self, SpillMetrics};
 use datafusion_execution::metrics::{BaselineMetrics, MetricBuilder, RecordOutput};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
@@ -110,12 +110,8 @@ struct SpillState {
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: metrics::Gauge,
-    /// count of spill files during the execution of the operator
-    spill_count: metrics::Count,
-    /// total spilled bytes during the execution of the operator
-    spilled_bytes: metrics::Count,
-    /// total spilled rows during the execution of the operator
-    spilled_rows: metrics::Count,
+    /// Spilling-related metrics
+    spill_metrics: SpillMetrics,
 }
 
 /// Tracks if the aggregate should skip partial aggregations
@@ -554,9 +550,11 @@ impl GroupedHashAggregateStream {
             merging_group_by: PhysicalGroupBy::new_single(agg_group_by.expr.clone()),
             peak_mem_used: MetricBuilder::new(&agg.metrics)
                 .gauge("peak_mem_used", partition),
-            spill_count: MetricBuilder::new(&agg.metrics).spill_count(partition),
-            spilled_bytes: MetricBuilder::new(&agg.metrics).spilled_bytes(partition),
-            spilled_rows: MetricBuilder::new(&agg.metrics).spilled_rows(partition),
+            spill_metrics: SpillMetrics::new(
+                MetricBuilder::new(&agg.metrics).spill_count(partition),
+                MetricBuilder::new(&agg.metrics).spilled_bytes(partition),
+                MetricBuilder::new(&agg.metrics).spilled_rows(partition),
+            ),
         };
 
         // Skip aggregation is supported if:
@@ -988,22 +986,14 @@ impl GroupedHashAggregateStream {
             return Ok(());
         };
         let sorted = sort_batch(&emit, self.spill_state.spill_expr.as_ref(), None)?;
-        let spillfile = self.runtime.disk_manager.create_tmp_file("HashAggSpill")?;
         // TODO: slice large `sorted` and write to multiple files in parallel
-        spill_record_batch_by_size(
+        let spillfile = self.runtime.disk_manager.try_spill_record_batch_by_size(
             &sorted,
-            spillfile.path().into(),
-            sorted.schema(),
+            "HashAggSpill",
+            &mut self.spill_state.spill_metrics,
             self.batch_size,
         )?;
         self.spill_state.spills.push(spillfile);
-
-        // Update metrics
-        self.spill_state.spill_count.add(1);
-        self.spill_state
-            .spilled_bytes
-            .add(sorted.get_array_memory_size());
-        self.spill_state.spilled_rows.add(sorted.num_rows());
 
         Ok(())
     }

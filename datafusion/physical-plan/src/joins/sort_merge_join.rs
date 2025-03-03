@@ -45,7 +45,6 @@ use crate::projection::{
     join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_on, ProjectionExec,
 };
-use crate::spill::spill_record_batches;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
@@ -65,7 +64,7 @@ use datafusion_common::{
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_execution::metrics;
+use datafusion_execution::metrics::{self, SpillMetrics};
 use datafusion_execution::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
@@ -583,12 +582,8 @@ struct SortMergeJoinMetrics {
     /// Peak memory used for buffered data.
     /// Calculated as sum of peak memory values across partitions
     peak_mem_used: metrics::Gauge,
-    /// count of spills during the execution of the operator
-    spill_count: Count,
-    /// total spilled bytes during the execution of the operator
-    spilled_bytes: Count,
-    /// total spilled rows during the execution of the operator
-    spilled_rows: Count,
+    /// Spilling-related metrics
+    spill_metrics: SpillMetrics,
 }
 
 impl SortMergeJoinMetrics {
@@ -602,9 +597,11 @@ impl SortMergeJoinMetrics {
             MetricBuilder::new(metrics).counter("output_batches", partition);
         let output_rows = MetricBuilder::new(metrics).output_rows(partition);
         let peak_mem_used = MetricBuilder::new(metrics).gauge("peak_mem_used", partition);
-        let spill_count = MetricBuilder::new(metrics).spill_count(partition);
-        let spilled_bytes = MetricBuilder::new(metrics).spilled_bytes(partition);
-        let spilled_rows = MetricBuilder::new(metrics).spilled_rows(partition);
+        let spill_metrics = SpillMetrics::new(
+            MetricBuilder::new(metrics).spill_count(partition),
+            MetricBuilder::new(metrics).spilled_bytes(partition),
+            MetricBuilder::new(metrics).spilled_rows(partition),
+        );
 
         Self {
             join_time,
@@ -613,9 +610,7 @@ impl SortMergeJoinMetrics {
             output_batches,
             output_rows,
             peak_mem_used,
-            spill_count,
-            spilled_bytes,
-            spilled_rows,
+            spill_metrics,
         }
     }
 }
@@ -1390,26 +1385,17 @@ impl SortMergeJoinStream {
             }
             Err(_) if self.runtime_env.disk_manager.tmp_files_enabled() => {
                 // spill buffered batch to disk
-                let spill_file = self
-                    .runtime_env
-                    .disk_manager
-                    .create_tmp_file("sort_merge_join_buffered_spill")?;
-
                 if let Some(batch) = buffered_batch.batch {
-                    spill_record_batches(
-                        &[batch],
-                        spill_file.path().into(),
-                        Arc::clone(&self.buffered_schema),
-                    )?;
+                    let spill_file =
+                        self.runtime_env.disk_manager.try_spill_record_batches(
+                            &[batch],
+                            "sort_merge_join_buffered_spill",
+                            &mut self.join_metrics.spill_metrics,
+                        )?;
+
                     buffered_batch.spill_file = Some(spill_file);
                     buffered_batch.batch = None;
 
-                    // update metrics to register spill
-                    self.join_metrics.spill_count.add(1);
-                    self.join_metrics
-                        .spilled_bytes
-                        .add(buffered_batch.size_estimation);
-                    self.join_metrics.spilled_rows.add(buffered_batch.num_rows);
                     Ok(())
                 } else {
                     internal_err!("Buffered batch has empty body")
