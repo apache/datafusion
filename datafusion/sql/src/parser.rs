@@ -34,10 +34,14 @@ use sqlparser::{
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
-    ($MSG:expr) => {
-        Err(ParserError::ParserError($MSG.to_string()))
+    ($MSG:expr, $token:expr, $line:expr, $column:expr, $suggestion:expr) => {
+        Err(ParserError::ParserError(format!(
+            "{} at Line: {}, Column: {}. Found: '{}'. {}",
+            $MSG, $line, $column, $token, $suggestion
+        )))
     };
 }
+
 
 fn parse_file_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
