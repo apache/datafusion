@@ -29,10 +29,6 @@ use datafusion_functions::string;
 use rand::{distr::Alphanumeric, rngs::StdRng, Rng, SeedableRng};
 use std::{fmt, sync::Arc};
 
-pub fn seedable_rng() -> StdRng {
-    StdRng::seed_from_u64(42)
-}
-
 #[derive(Clone, Copy)]
 pub enum StringArrayType {
     Utf8View,
@@ -58,7 +54,7 @@ pub fn create_string_array_and_characters(
     remaining_len: usize,
     string_array_type: StringArrayType,
 ) -> (ArrayRef, ScalarValue) {
-    let rng = &mut seedable_rng();
+    let rng = &mut StdRng::seed_from_u64(42);
 
     // Create `size` rows:
     //   - 10% rows will be `None`
