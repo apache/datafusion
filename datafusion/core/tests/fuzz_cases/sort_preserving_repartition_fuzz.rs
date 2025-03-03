@@ -20,9 +20,9 @@ mod sp_repartition_fuzz_tests {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
-    use arrow::compute::{concat_batches, lexsort};
+    use arrow::compute::{concat_batches, lexsort, SortColumn};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-
+    use arrow_schema::SortOptions;
     use datafusion::physical_plan::{
         collect,
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet},
@@ -162,14 +162,14 @@ mod sp_repartition_fuzz_tests {
         for ordering in eq_properties.oeq_class().iter() {
             let (sort_columns, indices): (Vec<_>, Vec<_>) = ordering
                 .iter()
-                .map(|PhysicalSortExpr { expr, options: options }| {
+                .map(|PhysicalSortExpr { expr, options }| {
                     let col = expr.as_any().downcast_ref::<Column>().unwrap();
                     let (idx, _field) = schema.column_with_name(col.name()).unwrap();
                     let arr = generate_random_array(n_elem, n_distinct);
                     (
                         SortColumn {
                             values: arr,
-                            options: Some(*options),
+                            options: Some(options.to_arrow().unwrap()),
                         },
                         idx,
                     )

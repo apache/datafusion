@@ -730,7 +730,11 @@ fn determine_prune_length(
     };
 
     // Perform binary search on the array to determine the length of the record batch to be pruned
-    bisect::<true>(&[batch_arr], &[target], &[origin_sorted_expr.options.clone()])
+    bisect::<true>(
+        &[batch_arr],
+        &[target],
+        &[origin_sorted_expr.options.to_arrow()?],
+    )
 }
 
 /// This method determines if the result of the join should be produced in the final step or not.

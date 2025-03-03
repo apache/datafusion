@@ -49,12 +49,12 @@ use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
 use super::order::GroupOrdering;
 use super::AggregateExec;
+use datafusion_common::sort::AdvSortOptions;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
-use datafusion_common::sort::SortOptions;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)
@@ -521,7 +521,7 @@ impl GroupedHashAggregateStream {
             .enumerate()
             .map(|(idx, field)| PhysicalSortExpr {
                 expr: Arc::new(Column::new(field.name().as_str(), idx)) as _,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             })
             .collect();
 

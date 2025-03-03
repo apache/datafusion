@@ -41,7 +41,7 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
-use datafusion_common::sort::SortOptions;
+use datafusion_common::sort::AdvSortOptions;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
@@ -644,9 +644,10 @@ impl EquivalenceProperties {
                 && normalized_reqs[..ordering_len].iter().zip(ordering).all(
                     |(req, existing)| {
                         req.expr.eq(&existing.expr)
-                            && req.options.as_ref().is_none_or(|req_opts| {
-                                req_opts == &existing.options
-                            })
+                            && req
+                                .options
+                                .as_ref()
+                                .is_none_or(|req_opts| *req_opts == existing.options)
                     },
                 )
         })
@@ -672,7 +673,7 @@ impl EquivalenceProperties {
             SortProperties::Ordered(options) => {
                 let sort_expr = PhysicalSortExpr {
                     expr: Arc::clone(&req.expr),
-                    options: options,
+                    options,
                 };
                 sort_expr.satisfy(req, self.schema())
             }
@@ -740,8 +741,7 @@ impl EquivalenceProperties {
             .zip(rhs.inner.iter_mut())
             .all(|(lhs, rhs)| {
                 lhs.expr.eq(&rhs.expr)
-                    && match (lhs.options.as_ref(), rhs.options.as_ref())
-                    {
+                    && match (lhs.options.as_ref(), rhs.options.as_ref()) {
                         (Some(lhs_opt), Some(rhs_opt)) => lhs_opt == rhs_opt,
                         (Some(options), None) => {
                             rhs.options = Some(options.clone());
@@ -974,10 +974,10 @@ impl EquivalenceProperties {
                         None
                     }
                 })
-                .flat_map(|(sort_definition, relevant_deps)| {
+                .flat_map(|(options, relevant_deps)| {
                     let sort_expr = PhysicalSortExpr {
                         expr: Arc::clone(target),
-                        options: sort_definition,
+                        options,
                     };
                     // Generate dependent orderings (i.e. prefixes for `sort_expr`):
                     let mut dependency_orderings =
@@ -1157,7 +1157,7 @@ impl EquivalenceProperties {
                         )),
                         SortProperties::Singleton => {
                             // Assign default ordering to constant expressions
-                            let options = SortOptions::default();
+                            let options = AdvSortOptions::default();
                             Some((
                                 PhysicalSortExpr {
                                     expr: Arc::clone(&exprs[idx]),
@@ -1689,9 +1689,7 @@ fn get_expr_properties(
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
         // If exact match is found, return its ordering.
         Ok(ExprProperties {
-            sort_properties: SortProperties::Ordered(
-                column_order.options.clone(),
-            ),
+            sort_properties: SortProperties::Ordered(column_order.options.clone()),
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
         })
@@ -2395,10 +2393,8 @@ fn advance_if_matches_constant(
 ) -> Option<PhysicalSortExpr> {
     let expr = iter.peek()?;
     let const_expr = constants.iter().find(|c| c.eq_expr(expr))?;
-    let found_expr = PhysicalSortExpr::new(
-        Arc::clone(const_expr.expr()),
-        expr.options.clone(),
-    );
+    let found_expr =
+        PhysicalSortExpr::new(Arc::clone(const_expr.expr()), expr.options.clone());
     iter.next();
     Some(found_expr)
 }
@@ -2525,7 +2521,7 @@ mod tests {
         let offset = schema.fields.len();
         let col_a2 = &add_offset_to_expr(Arc::clone(col_a), offset);
         let col_b2 = &add_offset_to_expr(Arc::clone(col_b), offset);
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
             descending: false,
             nulls_first: false,
         };
@@ -2640,7 +2636,7 @@ mod tests {
         let col_y = &col("y", &child_schema)?;
         let col_z = &col("z", &child_schema)?;
         let col_w = &col("w", &child_schema)?;
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
             descending: false,
             nulls_first: false,
         };
@@ -2697,7 +2693,7 @@ mod tests {
 
     #[test]
     fn test_normalize_ordering_equivalence_classes() -> Result<()> {
-        let sort_options = SortOptions::default();
+        let sort_options = AdvSortOptions::default();
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
@@ -2743,8 +2739,8 @@ mod tests {
 
     #[test]
     fn test_get_indices_of_matching_sort_exprs_with_order_eq() -> Result<()> {
-        let sort_options = SortOptions::default();
-        let sort_options_not = SortOptions::default().not();
+        let sort_options = AdvSortOptions::default();
+        let sort_options_not = AdvSortOptions::default().not();
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, true),
@@ -2867,7 +2863,7 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let col_d = &col("d", &schema)?;
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
             descending: false,
             nulls_first: false,
         };
@@ -2948,11 +2944,11 @@ mod tests {
             Arc::clone(col_d),
         )) as Arc<dyn PhysicalExpr>;
 
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
             descending: false,
             nulls_first: false,
         };
-        let option_desc = SortOptions {
+        let option_desc = AdvSortOptions {
             descending: true,
             nulls_first: true,
         };
@@ -3058,7 +3054,7 @@ mod tests {
             // TEST CASE 1
             // ordering of the constants are treated as default ordering.
             // This is the convention currently used.
-            (vec![col_h], vec![(col_h, SortOptions::default())]),
+            (vec![col_h], vec![(col_h, AdvSortOptions::default())]),
         ];
         for (exprs, expected) in test_cases {
             let exprs = exprs.into_iter().cloned().collect::<Vec<_>>();
@@ -3077,11 +3073,11 @@ mod tests {
         let col_b = &col("b", &schema)?;
         let col_c = &col("c", &schema)?;
         let eq_properties = EquivalenceProperties::new(schema);
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
             descending: false,
             nulls_first: false,
         };
-        let option_desc = SortOptions {
+        let option_desc = AdvSortOptions {
             descending: true,
             nulls_first: true,
         };
@@ -3142,11 +3138,11 @@ mod tests {
         let col_d = &col("d", &test_schema)?;
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
             descending: false,
             nulls_first: false,
         };
-        let option_desc = SortOptions {
+        let option_desc = AdvSortOptions {
             descending: true,
             nulls_first: true,
         };
@@ -3206,7 +3202,7 @@ mod tests {
 
     #[test]
     fn test_schema_normalize_sort_requirement_with_equivalence() -> Result<()> {
-        let option1 = SortOptions {
+        let option1 = AdvSortOptions {
             descending: false,
             nulls_first: false,
         };
@@ -3254,7 +3250,7 @@ mod tests {
                     .map(|c| {
                         col(c, schema.as_ref()).map(|expr| PhysicalSortExpr {
                             expr,
-                            options: SortOptions {
+                            options: AdvSortOptions {
                                 descending: false,
                                 nulls_first: true,
                             },
@@ -3347,7 +3343,7 @@ mod tests {
                     .map(|&name| {
                         col(name, &schema).map(|col| PhysicalSortExpr {
                             expr: col,
-                            options: SortOptions::default(),
+                            options: AdvSortOptions::default(),
                         })
                     })
                     .collect::<Result<LexOrdering>>()?;
@@ -3932,7 +3928,7 @@ mod tests {
         let name = parts.next().expect("empty sort expression");
         let mut sort_expr = PhysicalSortExpr::new(
             col(name, schema).expect("invalid column name"),
-            SortOptions::default(),
+            AdvSortOptions::default(),
         );
 
         if let Some(options) = parts.next() {
@@ -4108,11 +4104,11 @@ mod tests {
         let sort_exprs = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::clone(&col_a),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
             PhysicalSortExpr {
                 expr: Arc::clone(&col_b),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
         ]);
 
@@ -4136,8 +4132,8 @@ mod tests {
         let col_b = col("b", &schema)?;
         let col_c = col("c", &schema)?;
 
-        let asc = SortOptions::default();
-        let desc = SortOptions {
+        let asc = AdvSortOptions::default();
+        let desc = AdvSortOptions {
             descending: true,
             nulls_first: true,
         };
@@ -4192,7 +4188,7 @@ mod tests {
         // Make a and b equivalent
         eq_properties.add_equal_conditions(&col_a, &col_b)?;
 
-        let asc = SortOptions::default();
+        let asc = AdvSortOptions::default();
 
         // Initial ordering: [a ASC, c ASC]
         eq_properties.add_new_orderings([LexOrdering::new(vec![
@@ -4236,8 +4232,8 @@ mod tests {
         let col_a = col("a", &schema)?;
         let col_b = col("b", &schema)?;
 
-        let asc = SortOptions::default();
-        let desc = SortOptions {
+        let asc = AdvSortOptions::default();
+        let desc = AdvSortOptions {
             descending: true,
             nulls_first: true,
         };
@@ -4281,7 +4277,7 @@ mod tests {
         let col_d = col("d", &schema)?;
         let col_e = col("e", &schema)?;
 
-        let asc = SortOptions::default();
+        let asc = AdvSortOptions::default();
 
         // Constants: c is constant
         eq_properties = eq_properties.with_constants([ConstExpr::from(&col_c)]);
@@ -4479,7 +4475,7 @@ mod tests {
                     .iter()
                     .map(|col_name| PhysicalSortExpr {
                         expr: col(col_name, schema).unwrap(),
-                        options: SortOptions::default(),
+                        options: AdvSortOptions::default(),
                     })
                     .collect(),
             );
@@ -4492,7 +4488,7 @@ mod tests {
                         cols.iter()
                             .map(|col_name| PhysicalSortExpr {
                                 expr: col(col_name, schema).unwrap(),
-                                options: SortOptions::default(),
+                                options: AdvSortOptions::default(),
                             })
                             .collect(),
                     )
@@ -4506,7 +4502,7 @@ mod tests {
                         cols.iter()
                             .map(|col_name| PhysicalSortExpr {
                                 expr: col(col_name, schema).unwrap(),
-                                options: SortOptions::default(),
+                                options: AdvSortOptions::default(),
                             })
                             .collect(),
                     )

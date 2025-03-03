@@ -23,6 +23,8 @@ use std::sync::Arc;
 use crate::{LexOrdering, PhysicalExpr};
 
 use arrow::array::{new_empty_array, Array, ArrayRef};
+use arrow::compute::kernels::sort::SortColumn;
+use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compare_rows;
@@ -33,7 +35,6 @@ use datafusion_expr::window_state::{
 use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame, WindowFrameBound};
 
 use indexmap::IndexMap;
-use datafusion_common::sort::{SortColumn, SortOptions};
 
 /// Common trait for [window function] implementations
 ///
@@ -189,8 +190,11 @@ pub trait AggregateWindowExpr: WindowExpr {
     fn aggregate_evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
         let mut accumulator = self.get_accumulator()?;
         let mut last_range = Range { start: 0, end: 0 };
-        let sort_options: Vec<SortOptions> =
-            self.order_by().iter().map(|o| o.options.clone()).collect();
+        let sort_options: Vec<SortOptions> = self
+            .order_by()
+            .iter()
+            .map(|o| o.options.to_arrow())
+            .collect::<Result<Vec<_>>>()?;
         let mut window_frame_ctx =
             WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options);
         self.get_result_column(
@@ -237,9 +241,12 @@ pub trait AggregateWindowExpr: WindowExpr {
             let most_recent_row = partition_batch_state.most_recent_row.as_ref();
 
             // If there is no window state context, initialize it.
+            let sort_options: Vec<SortOptions> = self
+                .order_by()
+                .iter()
+                .map(|o| o.options.to_arrow())
+                .collect::<Result<Vec<_>>>()?;
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
-                let sort_options: Vec<SortOptions> =
-                    self.order_by().iter().map(|o| o.options.clone()).collect();
                 WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options)
             });
             let out_col = self.get_result_column(
@@ -359,7 +366,7 @@ pub(crate) fn is_end_bound_safe(
             &window_frame.end_bound,
             &order_bys[0],
             most_recent_order_bys.map(|items| &items[0]),
-            &sort_exprs[0].options,
+            &sort_exprs[0].options.to_arrow()?,
             idx,
         ),
         WindowFrameContext::Groups {
@@ -370,7 +377,7 @@ pub(crate) fn is_end_bound_safe(
             state,
             &order_bys[0],
             most_recent_order_bys.map(|items| &items[0]),
-            &sort_exprs[0].options,
+            &sort_exprs[0].options.to_arrow()?,
         ),
     }
 }
@@ -514,7 +521,7 @@ fn is_row_ahead(
     }
     let last_value = ScalarValue::try_from_array(old_col, old_col.len() - 1)?;
     let current_value = ScalarValue::try_from_array(current_col, 0)?;
-    let cmp = compare_rows(&[current_value], &[last_value], &[sort_options.clone()])?;
+    let cmp = compare_rows(&[current_value], &[last_value], &[*sort_options])?;
     Ok(cmp.is_gt())
 }
 

@@ -23,7 +23,7 @@ use crate::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 
 use arrow::{
     array::ArrayRef,
-    compute::{concat, concat_batches},
+    compute::{concat, concat_batches, SortOptions},
     datatypes::{DataType, SchemaRef},
     record_batch::RecordBatch,
 };
@@ -32,7 +32,6 @@ use datafusion_common::{
     utils::{compare_rows, get_row_at_idx, search_in_slice},
     DataFusionError, Result, ScalarValue,
 };
-use datafusion_common::sort::SortOptions;
 
 /// Holds the state of evaluating a window function
 #[derive(Debug)]
@@ -135,12 +134,12 @@ pub enum WindowFrameContext {
 
 impl WindowFrameContext {
     /// Create a new state object for the given window frame.
-    pub fn new(window_frame: Arc<WindowFrame>, sort_definition: Vec<SortOptions>) -> Self {
+    pub fn new(window_frame: Arc<WindowFrame>, sort_options: Vec<SortOptions>) -> Self {
         match window_frame.units {
             WindowFrameUnits::Rows => WindowFrameContext::Rows(window_frame),
             WindowFrameUnits::Range => WindowFrameContext::Range {
                 window_frame,
-                state: WindowFrameStateRange::new(sort_definition),
+                state: WindowFrameStateRange::new(sort_options),
             },
             WindowFrameUnits::Groups => WindowFrameContext::Groups {
                 window_frame,
@@ -289,13 +288,13 @@ impl PartitionBatchState {
 /// BY clause. This information is used to calculate the range.
 #[derive(Debug, Default)]
 pub struct WindowFrameStateRange {
-    sort_definitions: Vec<SortOptions>,
+    sort_options: Vec<SortOptions>,
 }
 
 impl WindowFrameStateRange {
     /// Create a new object to store the search state.
     fn new(sort_options: Vec<SortOptions>) -> Self {
-        Self { sort_definitions: sort_options }
+        Self { sort_options }
     }
 
     /// This function calculates beginning/ending indices for the frame of the current row.
@@ -390,14 +389,14 @@ impl WindowFrameStateRange {
         let current_row_values = get_row_at_idx(range_columns, idx)?;
         let end_range = if let Some(delta) = delta {
             let is_descending: bool = self
-                .sort_definitions
+                .sort_options
                 .first()
                 .ok_or_else(|| {
                     DataFusionError::Internal(
                         "Sort options unexpectedly absent in a window frame".to_string(),
                     )
                 })?
-                .descending();
+                .descending;
 
             current_row_values
                 .iter()
@@ -428,7 +427,7 @@ impl WindowFrameStateRange {
             last_range.end
         };
         let compare_fn = |current: &[ScalarValue], target: &[ScalarValue]| {
-            let cmp = compare_rows(current, target, &self.sort_definitions)?;
+            let cmp = compare_rows(current, target, &self.sort_options)?;
             Ok(if SIDE { cmp.is_lt() } else { cmp.is_le() })
         };
         search_in_slice(range_columns, &end_range, compare_fn, search_start, length)
@@ -671,7 +670,6 @@ mod tests {
     use super::*;
 
     use arrow::array::Float64Array;
-    use arrow::compute::SortOptions;
 
     fn get_test_data() -> (Vec<ArrayRef>, Vec<SortOptions>) {
         let range_columns: Vec<ArrayRef> = vec![Arc::new(Float64Array::from(vec![

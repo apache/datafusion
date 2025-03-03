@@ -19,9 +19,17 @@
 mod dataframe_functions;
 mod describe;
 
-use arrow::array::{record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray, FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder, Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, UnionBuilder};
+use arrow::array::{
+    record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
+    FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder,
+    Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
+    StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, UnionBuilder,
+};
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type, Schema, SchemaRef, UInt64Type, UnionFields, UnionMode};
+use arrow::datatypes::{
+    DataType, Field, Float32Type, Float64Type, Int32Type, Schema, SchemaRef, UInt64Type,
+    UnionFields, UnionMode,
+};
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
@@ -31,12 +39,12 @@ use datafusion_functions_aggregate::expr_fn::{
 };
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, row_number};
+use futures::StreamExt;
 use object_store::local::LocalFileSystem;
 use sqlparser::ast::NullTreatment;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
-use futures::StreamExt;
 use tempfile::TempDir;
 use url::Url;
 
@@ -2845,8 +2853,8 @@ async fn sort_on_union_with_logical_type() -> Result<()> {
         (0, Arc::new(Field::new("A", DataType::Int32, false))),
         (1, Arc::new(Field::new("B", DataType::Float64, false))),
     ]
-        .into_iter()
-        .collect();
+    .into_iter()
+    .collect();
     let schema = Schema::new(vec![Field::new(
         "my_union",
         DataType::Union(fields, UnionMode::Dense),

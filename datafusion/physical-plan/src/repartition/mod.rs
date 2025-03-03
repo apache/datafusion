@@ -1700,7 +1700,7 @@ mod test {
         let options = SortOptions::default();
         LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("c0", schema).unwrap(),
-            options: options,
+            options,
         }])
     }
 

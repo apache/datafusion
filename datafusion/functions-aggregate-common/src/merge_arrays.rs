@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::compute::SortOptions;
 use datafusion_common::utils::compare_rows;
 use datafusion_common::{exec_err, ScalarValue};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
-use datafusion_common::sort::SortOptions;
 
 /// This is a wrapper struct to be able to correctly merge `ARRAY_AGG` data from
 /// multiple partitions using `BinaryHeap`. When used inside `BinaryHeap`, this
@@ -34,7 +34,7 @@ struct CustomElement<'a> {
     // Comparison "key"
     ordering: Vec<ScalarValue>,
     /// Options defining the ordering semantics
-    sort_definitions: &'a [SortOptions],
+    sort_options: &'a [SortOptions],
 }
 
 impl<'a> CustomElement<'a> {
@@ -42,13 +42,13 @@ impl<'a> CustomElement<'a> {
         branch_idx: usize,
         value: ScalarValue,
         ordering: Vec<ScalarValue>,
-        sort_definitions: &'a [SortOptions],
+        sort_options: &'a [SortOptions],
     ) -> Self {
         Self {
             branch_idx,
             value,
             ordering,
-            sort_definitions,
+            sort_options,
         }
     }
 
@@ -58,7 +58,7 @@ impl<'a> CustomElement<'a> {
         target: &[ScalarValue],
     ) -> datafusion_common::Result<Ordering> {
         // Calculate ordering according to `sort_options`
-        compare_rows(current, target, self.sort_definitions)
+        compare_rows(current, target, self.sort_options)
     }
 }
 
@@ -116,7 +116,7 @@ pub fn merge_ordered_arrays(
     // each `ScalarValue` in the values`.
     ordering_values: &mut [VecDeque<Vec<ScalarValue>>],
     // Defines according to which ordering comparisons should be done.
-    sort_definitions: &[SortOptions],
+    sort_options: &[SortOptions],
 ) -> datafusion_common::Result<(Vec<ScalarValue>, Vec<Vec<ScalarValue>>)> {
     // Keep track the most recent data of each branch, in binary heap data structure.
     let mut heap = BinaryHeap::<CustomElement>::new();
@@ -149,7 +149,7 @@ pub fn merge_ordered_arrays(
                         branch_idx,
                         value,
                         orderings,
-                        sort_definitions,
+                        sort_options,
                     ));
                 }
                 // If None, we consumed this branch, skip it.
@@ -186,7 +186,7 @@ pub fn merge_ordered_arrays(
                 branch_idx,
                 value,
                 orderings,
-                sort_definitions,
+                sort_options,
             ));
         }
     }

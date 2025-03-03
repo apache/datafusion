@@ -29,7 +29,7 @@ use arrow::array::{
     OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::compute::{partition};
+use arrow::compute::{partition, SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field, SchemaRef};
 use sqlparser::ast::Ident;
 use sqlparser::dialect::GenericDialect;
@@ -41,7 +41,6 @@ use std::num::NonZero;
 use std::ops::Range;
 use std::sync::Arc;
 use std::thread::available_parallelism;
-use crate::sort::{SortColumn, SortOptions};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -101,13 +100,13 @@ pub fn compare_rows(
     // Preserving lexical ordering.
     for ((lhs, rhs), sort_options) in zip_it {
         // Consider all combinations of NULLS FIRST/LAST and ASC/DESC configurations.
-        let result = match (lhs.is_null(), rhs.is_null(), sort_options.nulls_first()) {
+        let result = match (lhs.is_null(), rhs.is_null(), sort_options.nulls_first) {
             (true, false, false) | (false, true, true) => Ordering::Greater,
             (true, false, true) | (false, true, false) => Ordering::Less,
-            (false, false, _) => if sort_options.descending() {
-                sort_options.ordering().partial_cmp(rhs, lhs)
+            (false, false, _) => if sort_options.descending {
+                rhs.partial_cmp(lhs)
             } else {
-                sort_options.ordering().partial_cmp(lhs, rhs)
+                lhs.partial_cmp(rhs)
             }
             .ok_or_else(|| {
                 _internal_datafusion_err!("Column array shouldn't be empty")

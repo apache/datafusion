@@ -731,11 +731,11 @@ impl Scenario {
                 let sort_information = vec![LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("a", &schema).unwrap(),
-                        options: options,
+                        options,
                     },
                     PhysicalSortExpr {
                         expr: col("b", &schema).unwrap(),
-                        options: options,
+                        options,
                     },
                 ])];
 

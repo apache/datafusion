@@ -41,8 +41,9 @@ use std::sync::Arc;
 use crate::expressions::Column;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
-use datafusion_common::sort::SortOptions;
 use datafusion_expr::{AggregateUDF, ReversedUDAF, SetMonotonicity};
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::groups_accumulator::GroupsAccumulator;
@@ -553,10 +554,12 @@ impl AggregateFunctionExpr {
             return None;
         }
         let expr = Arc::new(Column::new(self.name(), aggr_func_idx));
-        todo!("Sort?")
-        // let options =
-        //     SortOptions::new(monotonicity == SetMonotonicity::Decreasing, false);
-        // Some(PhysicalSortExpr { expr, options })
+        let options = AdvSortOptions::new(
+            SortOrdering::Default,
+            monotonicity == SetMonotonicity::Decreasing,
+            false,
+        );
+        Some(PhysicalSortExpr { expr, options })
     }
 }
 

@@ -21,6 +21,8 @@ use crate::fuzz_cases::equivalence::utils::{
     is_table_same_after_sort, TestScalarUDF,
 };
 use arrow::compute::SortOptions;
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::expressions::{col, BinaryExpr};
@@ -309,7 +311,11 @@ fn test_ordering_satisfy_with_equivalence() -> Result<()> {
             .into_iter()
             .map(|(expr, options)| PhysicalSortExpr {
                 expr: Arc::clone(expr),
-                options: options,
+                options: AdvSortOptions::new(
+                    SortOrdering::Default,
+                    options.descending,
+                    options.nulls_first,
+                ),
             })
             .collect::<LexOrdering>();
 

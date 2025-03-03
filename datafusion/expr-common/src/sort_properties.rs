@@ -20,9 +20,9 @@ use std::ops::Neg;
 use crate::interval_arithmetic::Interval;
 
 use arrow::datatypes::DataType;
-use datafusion_common::sort::SortOptions;
+use datafusion_common::sort::AdvSortOptions;
 
-/// To propagate [`SortOptions`] across the `PhysicalExpr`, it is insufficient
+/// To propagate [`AdvSortOptions`] across the `PhysicalExpr`, it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between
 /// unordered columns and literal values, since literals may not break the ordering
 /// when they are used as a child of some binary expression when the other child has
@@ -35,8 +35,8 @@ use datafusion_common::sort::SortOptions;
 /// often more ordering-friendly under most mathematical operations.
 #[derive(PartialEq, Debug, Clone, Default)]
 pub enum SortProperties {
-    /// Use the ordinary [`SortOptions`] struct to represent ordered data
-    Ordered(SortOptions),
+    /// Use the ordinary [`AdvSortOptions`] struct to represent ordered data
+    Ordered(AdvSortOptions),
     /// This alternative represents unordered data:
     #[default]
     Unordered,
@@ -50,12 +50,11 @@ impl SortProperties {
             (Self::Singleton, _) => rhs.clone(),
             (_, Self::Singleton) => self.clone(),
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.ordering() == rhs.ordering()
-                    && lhs.descending() == rhs.descending() =>
+                if lhs.ordering == rhs.ordering && lhs.descending == rhs.descending =>
             {
                 Self::Ordered(
                     lhs.clone()
-                        .with_nulls_first(lhs.nulls_first() || rhs.nulls_first()),
+                        .with_nulls_first(lhs.nulls_first || rhs.nulls_first),
                 )
             }
             _ => Self::Unordered,
@@ -66,16 +65,15 @@ impl SortProperties {
         match (self, rhs) {
             (Self::Singleton, Self::Singleton) => Self::Singleton,
             (Self::Singleton, Self::Ordered(rhs)) => {
-                Self::Ordered(rhs.clone().with_descending(!rhs.descending()))
+                Self::Ordered(rhs.clone().with_descending(!rhs.descending))
             }
             (_, Self::Singleton) => self.clone(),
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.ordering() == rhs.ordering()
-                    && lhs.descending() != rhs.descending() =>
+                if lhs.ordering == rhs.ordering && lhs.descending != rhs.descending =>
             {
                 Self::Ordered(
                     lhs.clone()
-                        .with_nulls_first(lhs.nulls_first() || rhs.nulls_first()),
+                        .with_nulls_first(lhs.nulls_first || rhs.nulls_first),
                 )
             }
             _ => Self::Unordered,
@@ -85,12 +83,11 @@ impl SortProperties {
     pub fn gt_or_gteq(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Singleton, Self::Ordered(rhs)) => {
-                Self::Ordered(rhs.clone().with_descending(!rhs.descending()))
+                Self::Ordered(rhs.clone().with_descending(!rhs.descending))
             }
             (_, Self::Singleton) => self.clone(),
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.ordering() == rhs.ordering()
-                    && lhs.descending() != rhs.descending() =>
+                if lhs.ordering == rhs.ordering && lhs.descending != rhs.descending =>
             {
                 self.clone()
             }
@@ -101,12 +98,11 @@ impl SortProperties {
     pub fn and_or(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.ordering() == rhs.ordering()
-                    && lhs.descending() == rhs.descending() =>
+                if lhs.ordering == rhs.ordering && lhs.descending == rhs.descending =>
             {
                 Self::Ordered(
                     lhs.clone()
-                        .with_nulls_first(lhs.nulls_first() || rhs.nulls_first()),
+                        .with_nulls_first(lhs.nulls_first || rhs.nulls_first),
                 )
             }
             (Self::Ordered(opt), Self::Singleton)

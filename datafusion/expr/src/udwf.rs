@@ -17,6 +17,8 @@
 
 //! [`WindowUDF`]: User Defined Window Functions
 
+use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field};
 use std::cmp::Ordering;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
@@ -25,14 +27,11 @@ use std::{
     sync::Arc,
 };
 
-use arrow::datatypes::{DataType, Field};
-
 use crate::expr::WindowFunction;
 use crate::{
     function::WindowFunctionSimplification, Expr, PartitionEvaluator, Signature,
 };
 use datafusion_common::{not_impl_err, Result};
-use datafusion_common::sort::SortOptions;
 use datafusion_doc::Documentation;
 use datafusion_functions_window_common::expr::ExpressionArgs;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;

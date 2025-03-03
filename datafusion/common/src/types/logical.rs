@@ -17,6 +17,7 @@
 
 use super::NativeType;
 use crate::error::Result;
+use crate::ScalarValue;
 use arrow::array::ArrayRef;
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
@@ -24,7 +25,6 @@ use core::fmt;
 use std::fmt::Debug;
 use std::hash::Hasher;
 use std::{cmp::Ordering, hash::Hash, sync::Arc};
-use crate::ScalarValue;
 
 /// Signature that uniquely identifies a type among other types.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -32,26 +32,13 @@ pub enum TypeSignature<'a> {
     /// Represents a built-in native type.
     Native(&'a NativeType),
     /// Represents an arrow-compatible extension type.
-    Extension(ExtensionTypeSignature<'a>),
-}
-
-/// Represents an arrow-compatible extension type.
-/// (<https://arrow.apache.org/docs/format/Columnar.html#extension-types>)
-///
-/// The `name` should contain the same value as 'ARROW:extension:name'.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ExtensionTypeSignature<'a> {
-    name: &'a str,
-    parameters: &'a [TypeParameter<'a>],
-}
-
-impl ExtensionTypeSignature<'_> {
-    /// Returns the name of the extension type.
+    /// (<https://arrow.apache.org/docs/format/Columnar.html#extension-types>)
     ///
     /// The `name` should contain the same value as 'ARROW:extension:name'.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
+    Extension {
+        name: &'a str,
+        parameters: &'a [TypeParameter<'a>],
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -185,7 +172,7 @@ impl SortOrdering {
     pub fn partial_cmp(&self, lhs: &ScalarValue, rhs: &ScalarValue) -> Option<Ordering> {
         match self {
             SortOrdering::Default => lhs.partial_cmp(rhs),
-            SortOrdering::Custom(_) => todo!("custom order")
+            SortOrdering::Custom(_) => todo!("custom order"),
         }
     }
 }

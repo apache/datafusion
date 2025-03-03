@@ -29,8 +29,8 @@ use crate::spill::get_record_batch_memory_size;
 use crate::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream};
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{HashMap, _internal_datafusion_err};
 use datafusion_common::Result;
+use datafusion_common::{internal_datafusion_err, HashMap};
 use datafusion_execution::{
     memory_pool::{MemoryConsumer, MemoryReservation},
     runtime_env::RuntimeEnv,
@@ -115,7 +115,9 @@ impl TopK {
             .map(|e| {
                 Ok(SortField::new_with_options(
                     e.expr.data_type(&schema)?,
-                    e.options.to_arrow().map_err(|_| _internal_datafusion_err!("Custom sorts not supported in TopK"))?,
+                    e.options.to_arrow().map_err(|_| {
+                        internal_datafusion_err!("Custom sorts not supported in TopK")
+                    })?,
                 ))
             })
             .collect::<Result<_>>()?;

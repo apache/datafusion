@@ -97,13 +97,16 @@ impl ScalarUDFImpl for LogFunc {
             // log(x) defaults to log(10, x)
             (SortProperties::Singleton, input[0].sort_properties.clone())
         } else {
-            (input[0].sort_properties.clone(), input[1].sort_properties.clone())
+            (
+                input[0].sort_properties.clone(),
+                input[1].sort_properties.clone(),
+            )
         };
         match (&num_sort_properties, &base_sort_properties) {
             (first @ SortProperties::Ordered(num), SortProperties::Ordered(base))
-                if num.ordering() == base.ordering()
-                    && num.descending() != base.descending()
-                    && num.nulls_first() == base.nulls_first() =>
+                if num.ordering == base.ordering
+                    && num.descending != base.descending
+                    && num.nulls_first == base.nulls_first =>
             {
                 Ok(first.clone())
             }

@@ -52,7 +52,7 @@ use itertools::Itertools;
 
 // Public interface:
 pub use bounded_window_agg_exec::BoundedWindowAggExec;
-use datafusion_common::sort::SortOptions;
+use datafusion_common::sort::AdvSortOptions;
 use datafusion_common::types::SortOrdering;
 pub use datafusion_physical_expr::window::{
     PlainAggregateWindowExpr, StandardWindowExpr, WindowExpr,
@@ -121,12 +121,14 @@ pub fn create_window_expr(
                 aggregate,
             )
         }
-        WindowFunctionDefinition::WindowUDF(fun) => Arc::new(StandardWindowExpr::new(
-            create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
-            partition_by,
-            order_by,
-            window_frame,
-        )),
+        WindowFunctionDefinition::WindowUDF(fun) => {
+            Arc::new(StandardWindowExpr::try_new(
+                create_udwf_window_expr(fun, args, input_schema, name, ignore_nulls)?,
+                partition_by,
+                order_by,
+                window_frame,
+            )?)
+        }
     })
 }
 
@@ -271,7 +273,7 @@ impl StandardWindowFunctionExpr for WindowUDFExpr {
                 let expr = Arc::new(Column::new(field.name(), idx));
                 PhysicalSortExpr {
                     expr,
-                    options: options.clone(),
+                    options: AdvSortOptions::with_default_ordering(options),
                 }
             })
     }
@@ -293,10 +295,7 @@ pub(crate) fn calc_requirements<
             .collect::<Vec<_>>(),
     );
     for element in orderby_sort_exprs.into_iter() {
-        let PhysicalSortExpr {
-            expr,
-            options,
-        } = element.borrow();
+        let PhysicalSortExpr { expr, options } = element.borrow();
         if !sort_reqs.iter().any(|e| e.expr.eq(expr)) {
             sort_reqs.push(PhysicalSortRequirement::new(
                 Arc::clone(expr),
@@ -435,7 +434,11 @@ pub(crate) fn window_equivalence_properties(
                         let new_ordering =
                             vec![LexOrdering::new(vec![PhysicalSortExpr::new(
                                 Arc::new(window_col),
-                                SortOptions::new(SortOrdering::Default, increasing, true),
+                                AdvSortOptions::new(
+                                    SortOrdering::Default,
+                                    increasing,
+                                    true,
+                                ),
                             )])];
                         window_eq_properties.add_new_orderings(new_ordering);
                     } else {
@@ -444,7 +447,11 @@ pub(crate) fn window_equivalence_properties(
                             let mut existing = lex.take_exprs();
                             existing.push(PhysicalSortExpr::new(
                                 Arc::new(window_col.clone()),
-                                SortOptions::new(SortOrdering::Default, increasing, true),
+                                AdvSortOptions::new(
+                                    SortOrdering::Default,
+                                    increasing,
+                                    true,
+                                ),
                             ));
                             window_eq_properties
                                 .add_new_ordering(LexOrdering::new(existing));
@@ -479,14 +486,22 @@ pub(crate) fn window_equivalence_properties(
                             let new_ordering =
                                 LexOrdering::new(vec![PhysicalSortExpr::new(
                                     Arc::new(window_col),
-                                    SortOptions::new(SortOrdering::Default, false, false),
+                                    AdvSortOptions::new(
+                                        SortOrdering::Default,
+                                        false,
+                                        false,
+                                    ),
                                 )]);
                             window_eq_properties.add_new_ordering(new_ordering);
                         } else if !increasing && (!asc || no_partitioning) {
                             let new_ordering =
                                 LexOrdering::new(vec![PhysicalSortExpr::new(
                                     Arc::new(window_col),
-                                    SortOptions::new(SortOrdering::Default, true, false),
+                                    AdvSortOptions::new(
+                                        SortOrdering::Default,
+                                        true,
+                                        false,
+                                    ),
                                 )]);
                             window_eq_properties.add_new_ordering(new_ordering);
                         };
@@ -635,9 +650,12 @@ fn sort_options_resolving_constant(expr: Arc<dyn PhysicalExpr>) -> Vec<PhysicalS
     vec![
         PhysicalSortExpr::new(
             Arc::clone(&expr),
-            SortOptions::new(SortOrdering::Default, false, false),
+            AdvSortOptions::new(SortOrdering::Default, false, false),
         ),
-        PhysicalSortExpr::new(expr, SortOptions::new(SortOrdering::Default, true, true)),
+        PhysicalSortExpr::new(
+            expr,
+            AdvSortOptions::new(SortOrdering::Default, true, true),
+        ),
     ]
 }
 
@@ -699,7 +717,7 @@ mod tests {
     ) -> PhysicalSortExpr {
         PhysicalSortExpr {
             expr: col(name, schema).unwrap(),
-            options: options,
+            options,
         }
     }
 
@@ -763,10 +781,7 @@ mod tests {
                     descending,
                     nulls_first,
                 };
-                orderbys.push(PhysicalSortExpr {
-                    expr,
-                    options: options,
-                });
+                orderbys.push(PhysicalSortExpr { expr, options });
             }
 
             let mut expected: Option<LexRequirement> = None;
@@ -1005,10 +1020,7 @@ mod tests {
                 // Give default ordering, this is same with input ordering direction
                 // In this test we do check for reversibility.
                 let options = SortOptions::default();
-                order_by_exprs.push(PhysicalSortExpr {
-                    expr,
-                    options: options,
-                });
+                order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
             let res = get_window_mode(
                 &partition_by_exprs,
@@ -1174,10 +1186,7 @@ mod tests {
                     descending: *descending,
                     nulls_first: *nulls_first,
                 };
-                order_by_exprs.push(PhysicalSortExpr {
-                    expr,
-                    options: options,
-                });
+                order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
 
             assert_eq!(

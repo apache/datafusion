@@ -19,6 +19,7 @@
 
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::UInt64Array;
+use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
@@ -32,8 +33,6 @@ use field::WindowUDFFieldArgs;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
-use datafusion_common::sort::SortOptions;
-use datafusion_common::types::SortOrdering;
 
 define_udwf_and_expr!(
     RowNumber,
@@ -93,7 +92,6 @@ impl WindowUDFImpl for RowNumber {
 
     fn sort_options(&self) -> Option<SortOptions> {
         Some(SortOptions {
-            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         })

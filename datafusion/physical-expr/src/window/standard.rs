@@ -26,11 +26,12 @@ use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
 use arrow::array::{new_empty_array, ArrayRef};
+use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::sort::SortOptions;
+use datafusion_common::types::SortOrdering;
 use datafusion_common::utils::evaluate_partition_ranges;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
 use datafusion_expr::WindowFrame;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -46,18 +47,25 @@ pub struct StandardWindowExpr {
 
 impl StandardWindowExpr {
     /// create a new standard window function expression
-    pub fn new(
+    pub fn try_new(
         expr: Arc<dyn StandardWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &LexOrdering,
         window_frame: Arc<WindowFrame>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let has_unsupported_ordering = order_by
+            .iter()
+            .any(|expr| expr.options.ordering != SortOrdering::Default);
+        if has_unsupported_ordering {
+            return internal_err!("Unsupported ordering for window expressions.");
+        }
+
+        Ok(Self {
             expr,
             partition_by: partition_by.to_vec(),
             order_by: order_by.clone(),
             window_frame,
-        }
+        })
     }
 
     /// Get StandardWindowFunction expr of StandardWindowExpr
@@ -115,7 +123,7 @@ impl WindowExpr for StandardWindowExpr {
             let sort_options: Vec<SortOptions> = self
                 .order_by
                 .iter()
-                .map(|o| o.options.clone())
+                .map(|o| o.options.to_arrow().expect("Checked in try_new"))
                 .collect();
             let mut row_wise_results = vec![];
 
@@ -160,10 +168,10 @@ impl WindowExpr for StandardWindowExpr {
     ) -> Result<()> {
         let field = self.expr.field()?;
         let out_type = field.data_type();
-        let sort_definitions = self
+        let sort_options = self
             .order_by
             .iter()
-            .map(|o| o.options.clone())
+            .map(|o| o.options.to_arrow().expect("Checked in try_new"))
             .collect::<Vec<_>>();
         for (partition_row, partition_batch_state) in partition_batches.iter() {
             let window_state =
@@ -211,7 +219,7 @@ impl WindowExpr for StandardWindowExpr {
                         .get_or_insert_with(|| {
                             WindowFrameContext::new(
                                 Arc::clone(&self.window_frame),
-                                sort_definitions.clone(),
+                                sort_options.clone(),
                             )
                         })
                         .calculate_range(
@@ -257,12 +265,15 @@ impl WindowExpr for StandardWindowExpr {
 
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
         self.expr.reverse_expr().map(|reverse_expr| {
-            Arc::new(StandardWindowExpr::new(
-                reverse_expr,
-                &self.partition_by.clone(),
-                reverse_order_bys(self.order_by.as_ref()).as_ref(),
-                Arc::new(self.window_frame.reverse()),
-            )) as _
+            Arc::new(
+                StandardWindowExpr::try_new(
+                    reverse_expr,
+                    &self.partition_by.clone(),
+                    reverse_order_bys(self.order_by.as_ref()).as_ref(),
+                    Arc::new(self.window_frame.reverse()),
+                )
+                .expect("self has no custom sorts"),
+            ) as _
         })
     }
 

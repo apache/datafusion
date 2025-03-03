@@ -55,7 +55,7 @@ use crate::{
 
 use arrow::array::{types::UInt64Type, *};
 use arrow::compute::{
-    self, concat_batches, filter_record_batch, is_not_null, take,
+    self, concat_batches, filter_record_batch, is_not_null, take, SortOptions,
 };
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
@@ -72,8 +72,9 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 use futures::{Stream, StreamExt};
-use datafusion_common::sort::SortOptions;
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
 /// join algorithm and applies an optional filter post join. Can be used to join arbitrarily large
@@ -189,11 +190,19 @@ impl SortMergeJoinExec {
             .map(|((l, r), sort_op)| {
                 let left = PhysicalSortExpr {
                     expr: Arc::clone(l),
-                    options: sort_op.clone(),
+                    options: AdvSortOptions::new(
+                        SortOrdering::Default,
+                        sort_op.descending,
+                        sort_op.nulls_first,
+                    ),
                 };
                 let right = PhysicalSortExpr {
                     expr: Arc::clone(r),
-                    options: sort_op.clone(),
+                    options: AdvSortOptions::new(
+                        SortOrdering::Default,
+                        sort_op.descending,
+                        sort_op.nulls_first,
+                    ),
                 };
                 (left, right)
             })

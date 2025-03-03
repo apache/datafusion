@@ -103,7 +103,9 @@ impl RowCursorStream {
                 let data_type = expr.expr.data_type(schema)?;
                 match expr.options.to_arrow() {
                     Ok(options) => Ok(SortField::new_with_options(data_type, options)),
-                    Err(_) => internal_err!("Custom orderings not supported in RowCursorStream."),
+                    Err(_) => internal_err!(
+                        "Custom orderings not supported in RowCursorStream."
+                    ),
                 }
             })
             .collect::<Result<Vec<_>>>()?;
@@ -198,7 +200,7 @@ impl<T: CursorArray> FieldCursorStream<T> {
         let mut array_reservation = self.reservation.new_empty();
         array_reservation.try_grow(size_in_mem)?;
         Ok(ArrayValues::new(
-            self.sort.options.clone(),
+            self.sort.options.to_arrow()?,
             array,
             array_reservation,
         ))

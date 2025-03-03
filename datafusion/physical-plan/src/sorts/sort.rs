@@ -47,7 +47,7 @@ use crate::{
 use arrow::array::{
     Array, RecordBatch, RecordBatchOptions, StringViewArray, UInt32Array,
 };
-use arrow::compute::{concat_batches, take_arrays};
+use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, SortField};
 use datafusion_common::{internal_err, Result};
@@ -60,7 +60,6 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
-use datafusion_common::sort::{lexsort_to_indices, SortColumn};
 
 struct ExternalSorterMetrics {
     /// metrics
@@ -789,7 +788,7 @@ pub(crate) fn lexsort_to_indices_multi_columns(
         |(mut fields, mut columns), sort_column| {
             fields.push(SortField::new_with_options(
                 sort_column.values.data_type().clone(),
-                sort_column.options.map(|o| o.to_arrow().expect("TODO")).unwrap_or_default(),
+                sort_column.options.unwrap_or_default(),
             ));
             columns.push(sort_column.values);
             (fields, columns)

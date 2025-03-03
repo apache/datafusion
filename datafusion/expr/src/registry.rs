@@ -21,9 +21,7 @@ use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use datafusion_common::types::{LogicalTypeRef, TypeSignature};
-use datafusion_common::{
-    internal_err, not_impl_err, plan_datafusion_err, Result,
-};
+use datafusion_common::{internal_err, not_impl_err, plan_datafusion_err, Result};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -255,11 +253,9 @@ impl ExtensionTypeRegistry for MemoryExtensionTypeRegistry {
             TypeSignature::Native(_) => {
                 return internal_err!("Cannot register a native type")
             }
-            TypeSignature::Extension(sig) => sig,
+            TypeSignature::Extension { name, .. } => name,
         };
-        Ok(self
-            .extension_types
-            .insert(signature.name().into(), logical_type))
+        Ok(self.extension_types.insert(signature.into(), logical_type))
     }
 
     fn deregister_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>> {

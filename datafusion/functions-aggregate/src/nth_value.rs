@@ -35,7 +35,7 @@ use datafusion_expr::{
     Signature, SortExpr, Volatility,
 };
 use datafusion_functions_aggregate_common::merge_arrays::merge_ordered_arrays;
-use datafusion_functions_aggregate_common::utils::ordering_fields;
+use datafusion_functions_aggregate_common::utils::{get_sort_options, ordering_fields};
 use datafusion_macros::user_doc;
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -330,11 +330,7 @@ impl Accumulator for NthValueAccumulator {
                 partition_ordering_values.push(ordering_values.into());
             }
 
-            let sort_options = self
-                .ordering_req
-                .iter()
-                .map(|sort_expr| sort_expr.options.clone())
-                .collect::<Vec<_>>();
+            let sort_options = get_sort_options(&self.ordering_req)?;
             let (new_values, new_orderings) = merge_ordered_arrays(
                 &mut partition_values,
                 &mut partition_ordering_values,

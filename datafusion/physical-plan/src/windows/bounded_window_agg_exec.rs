@@ -1599,7 +1599,7 @@ mod tests {
 
         let window_exprs = vec![
             // LAST_VALUE(a)
-            Arc::new(StandardWindowExpr::new(
+            Arc::new(StandardWindowExpr::try_new(
                 last_value_func,
                 &[],
                 &LexOrdering::default(),
@@ -1610,7 +1610,7 @@ mod tests {
                 )),
             )) as _,
             // NTH_VALUE(a, -1)
-            Arc::new(StandardWindowExpr::new(
+            Arc::new(StandardWindowExpr::try_new(
                 nth_value_func1,
                 &[],
                 &LexOrdering::default(),
@@ -1621,7 +1621,7 @@ mod tests {
                 )),
             )) as _,
             // NTH_VALUE(a, -2)
-            Arc::new(StandardWindowExpr::new(
+            Arc::new(StandardWindowExpr::try_new(
                 nth_value_func2,
                 &[],
                 &LexOrdering::default(),

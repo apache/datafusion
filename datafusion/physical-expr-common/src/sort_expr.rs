@@ -19,8 +19,9 @@
 
 use crate::physical_expr::PhysicalExpr;
 use arrow::array::RecordBatch;
+use arrow::compute::SortColumn;
 use arrow::datatypes::Schema;
-use datafusion_common::sort::{SortColumn, SortOptions};
+use datafusion_common::sort::{AdvSortColumn, AdvSortOptions};
 use datafusion_common::Result;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use itertools::Itertools;
@@ -78,18 +79,18 @@ pub struct PhysicalSortExpr {
     /// Physical expression representing the column to sort
     pub expr: Arc<dyn PhysicalExpr>,
     /// Option to specify how the given column should be sorted
-    pub options: SortOptions,
+    pub options: AdvSortOptions,
 }
 
 impl PhysicalSortExpr {
     /// Create a new PhysicalSortExpr
-    pub fn new(expr: Arc<dyn PhysicalExpr>, options: SortOptions) -> Self {
+    pub fn new(expr: Arc<dyn PhysicalExpr>, options: AdvSortOptions) -> Self {
         Self { expr, options }
     }
 
-    /// Create a new PhysicalSortExpr with default [`SortOptions`]
+    /// Create a new PhysicalSortExpr with default [`AdvSortOptions`]
     pub fn new_default(expr: Arc<dyn PhysicalExpr>) -> Self {
-        Self::new(expr, SortOptions::default())
+        Self::new(expr, AdvSortOptions::default())
     }
 
     /// Set the sort sort options to ASC
@@ -148,12 +149,21 @@ impl Display for PhysicalSortExpr {
 impl PhysicalSortExpr {
     /// evaluate the sort expression into SortColumn that can be passed into arrow sort kernel
     pub fn evaluate_to_sort_column(&self, batch: &RecordBatch) -> Result<SortColumn> {
+        self.evaluate_to_adv_sort_column(batch)?.to_arrow()
+    }
+
+    /// Evaluate the sort expression into an [AdvSortColumn] that can be passed to the DataFusion
+    /// sorting algorithms that supporting user-defined sorting.
+    pub fn evaluate_to_adv_sort_column(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<AdvSortColumn> {
         let value_to_sort = self.expr.evaluate(batch)?;
         let array_to_sort = match value_to_sort {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(batch.num_rows())?,
         };
-        Ok(SortColumn {
+        Ok(AdvSortColumn {
             values: array_to_sort,
             options: Some(self.options.clone()),
         })
@@ -177,8 +187,8 @@ impl PhysicalSortExpr {
                     .is_none_or(|opts| &self.options == opts)
             } else {
                 requirement.options.as_ref().is_none_or(|opts| {
-                    self.options.ordering() == opts.ordering()
-                        && self.options.descending() == opts.descending()
+                    self.options.ordering == opts.ordering
+                        && self.options.descending == opts.descending
                 })
             }
     }
@@ -186,10 +196,10 @@ impl PhysicalSortExpr {
 
 /// Represents sort requirement associated with a plan
 ///
-/// If the requirement includes [`SortOptions`] then both the
+/// If the requirement includes [`AdvSortOptions`] then both the
 /// expression *and* the sort options must match.
 ///
-/// If the requirement does not include [`SortOptions`]) then only the
+/// If the requirement does not include [`AdvSortOptions`]) then only the
 /// expressions must match.
 ///
 /// # Examples
@@ -209,7 +219,7 @@ pub struct PhysicalSortRequirement {
     pub expr: Arc<dyn PhysicalExpr>,
     /// Option to specify how the given column should be sorted.
     /// If unspecified, there are no constraints on sort options.
-    pub options: Option<SortOptions>,
+    pub options: Option<AdvSortOptions>,
 }
 
 impl From<PhysicalSortRequirement> for PhysicalSortExpr {
@@ -276,14 +286,8 @@ impl PhysicalSortRequirement {
     /// which must match only `expr`.
     ///
     /// See [`PhysicalSortRequirement`] for examples.
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        sort_definition: Option<SortOptions>,
-    ) -> Self {
-        Self {
-            expr,
-            options: sort_definition,
-        }
+    pub fn new(expr: Arc<dyn PhysicalExpr>, options: Option<AdvSortOptions>) -> Self {
+        Self { expr, options }
     }
 
     /// Replace the required expression for this requirement with the new one
@@ -317,10 +321,10 @@ impl PhysicalSortRequirement {
     }
 }
 
-/// Returns the SQL string representation of the given [SortOptions] object.
+/// Returns the SQL string representation of the given [AdvSortOptions] object.
 #[inline]
-fn to_str(options: &SortOptions) -> &'static str {
-    match (options.descending(), options.nulls_first()) {
+fn to_str(options: &AdvSortOptions) -> &str {
+    match (options.descending, options.nulls_first) {
         (true, true) => "DESC",
         (true, false) => "DESC NULLS LAST",
         (false, true) => "ASC",
@@ -445,7 +449,7 @@ impl LexOrdering {
     /// Collapse a `LexOrdering` into a new duplicate-free `LexOrdering` based on expression.
     ///
     /// This function filters  duplicate entries that have same physical
-    /// expression inside, ignoring [`SortOptions`]. For example:
+    /// expression inside, ignoring [`AdvSortOptions`]. For example:
     ///
     /// `vec![a ASC, a DESC]` collapses to `vec![a ASC]`.
     pub fn collapse(self) -> Self {

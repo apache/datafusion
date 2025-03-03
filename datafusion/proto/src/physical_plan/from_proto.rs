@@ -79,7 +79,7 @@ pub fn parse_physical_sort_expr(
             descending: !proto.asc,
             nulls_first: proto.nulls_first,
         };
-        Ok(PhysicalSortExpr { expr, options: options })
+        Ok(PhysicalSortExpr { expr, options })
     } else {
         Err(proto_error("Unexpected empty physical expression"))
     }

@@ -283,7 +283,7 @@ fn roundtrip_udwf() -> Result<()> {
     let field_b = Field::new("b", DataType::Int64, false);
     let schema = Arc::new(Schema::new(vec![field_a, field_b]));
 
-    let udwf_expr = Arc::new(StandardWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::try_new(
         create_udwf_window_expr(
             &row_number_udwf(),
             &[],
@@ -330,7 +330,7 @@ fn roundtrip_window() -> Result<()> {
             "NTH_VALUE(a, 2) PARTITION BY [b] ORDER BY [a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW".to_string(),
             false,
         )?;
-    let udwf_expr = Arc::new(StandardWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::try_new(
         nth_value_window,
         &[col("b", &schema)?],
         &LexOrdering::new(vec![PhysicalSortExpr {
@@ -1146,7 +1146,7 @@ fn roundtrip_udwf_extension_codec() -> Result<()> {
         WindowFrameBound::CurrentRow,
     );
 
-    let udwf_expr = Arc::new(StandardWindowExpr::new(
+    let udwf_expr = Arc::new(StandardWindowExpr::try_new(
         udwf,
         &[col("b", &schema)?],
         &LexOrdering::new(vec![PhysicalSortExpr {

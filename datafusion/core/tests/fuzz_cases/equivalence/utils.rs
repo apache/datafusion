@@ -387,18 +387,23 @@ pub fn generate_table_for_eq_properties(
     for ordering in eq_properties.oeq_class().iter() {
         let (sort_columns, indices): (Vec<_>, Vec<_>) = ordering
             .iter()
-            .map(|PhysicalSortExpr { expr, options: options }| {
-                let col = expr.as_any().downcast_ref::<Column>().unwrap();
-                let (idx, _field) = schema.column_with_name(col.name()).unwrap();
-                let arr = generate_random_array(n_elem, n_distinct);
-                (
-                    SortColumn {
-                        values: arr,
-                        options: Some(*options),
-                    },
-                    idx,
-                )
-            })
+            .map(
+                |PhysicalSortExpr {
+                     expr,
+                     options: options,
+                 }| {
+                    let col = expr.as_any().downcast_ref::<Column>().unwrap();
+                    let (idx, _field) = schema.column_with_name(col.name()).unwrap();
+                    let arr = generate_random_array(n_elem, n_distinct);
+                    (
+                        SortColumn {
+                            values: arr,
+                            options: Some(*options),
+                        },
+                        idx,
+                    )
+                },
+            )
             .unzip();
 
         let sort_arrs = arrow::compute::lexsort(&sort_columns, None)?;

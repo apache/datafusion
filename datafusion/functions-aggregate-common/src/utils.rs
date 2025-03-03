@@ -21,6 +21,7 @@ use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::ArrowNativeType;
 use arrow::{
     array::ArrowNativeTypeOp,
+    compute::SortOptions,
     datatypes::{
         DataType, Decimal128Type, DecimalType, Field, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
@@ -28,7 +29,6 @@ use arrow::{
     },
 };
 use datafusion_common::{exec_err, DataFusionError, Result};
-use datafusion_common::sort::SortOptions;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -108,8 +108,11 @@ pub fn ordering_fields(
 }
 
 /// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
-pub fn get_sort_options(ordering_req: &LexOrdering) -> Vec<SortOptions> {
-    ordering_req.iter().map(|item| item.options.clone()).collect()
+pub fn get_sort_options(ordering_req: &LexOrdering) -> Result<Vec<SortOptions>> {
+    ordering_req
+        .iter()
+        .map(|item| item.options.to_arrow())
+        .collect()
 }
 
 /// A wrapper around a type to provide hash for floats

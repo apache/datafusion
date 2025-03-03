@@ -73,6 +73,7 @@ use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, Sq
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_common::types::LogicalTypeRef;
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
@@ -80,7 +81,6 @@ use sqlparser::ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias};
 use sqlparser::dialect::dialect_from_str;
 use url::Url;
 use uuid::Uuid;
-use datafusion_common::types::LogicalTypeRef;
 
 /// `SessionState` contains all the necessary state to plan and execute queries,
 /// such as configuration, functions, and runtime environment. Please see the

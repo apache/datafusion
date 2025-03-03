@@ -61,6 +61,7 @@ use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 
 use arrow::array::{builder::StringBuilder, RecordBatch};
 use arrow::datatypes::{Schema, SchemaRef};
+use arrow_schema::SortOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion_common::{
@@ -89,12 +90,12 @@ use datafusion_physical_plan::unnest::ListUnnest;
 
 use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
+use datafusion_common::sort::AdvSortOptions;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
 use sqlparser::ast::NullTreatment;
 use tokio::sync::Mutex;
-use datafusion_common::sort::SortOptions;
 
 /// Physical query planner that converts a `LogicalPlan` to an
 /// `ExecutionPlan` suitable for execution.
@@ -1688,7 +1689,7 @@ pub fn create_physical_sort_expr(
     } = e;
     Ok(PhysicalSortExpr {
         expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-        options: SortOptions {
+        options: AdvSortOptions {
             descending: !asc,
             nulls_first: *nulls_first,
         },

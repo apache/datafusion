@@ -27,12 +27,11 @@ use std::sync::{Arc, LazyLock};
 use crate::define_udwf_and_expr;
 use datafusion_common::arrow::array::ArrayRef;
 use datafusion_common::arrow::array::{Float64Array, UInt64Array};
+use datafusion_common::arrow::compute::SortOptions;
 use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::arrow::datatypes::Field;
 use datafusion_common::utils::get_row_at_idx;
 use datafusion_common::{exec_err, Result, ScalarValue};
-use datafusion_common::sort::SortOptions;
-use datafusion_common::types::SortOrdering;
 use datafusion_expr::window_doc_sections::DOC_SECTION_RANKING;
 use datafusion_expr::{
     Documentation, PartitionEvaluator, Signature, Volatility, WindowUDFImpl,
@@ -174,7 +173,6 @@ impl WindowUDFImpl for Rank {
 
     fn sort_options(&self) -> Option<SortOptions> {
         Some(SortOptions {
-            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         })
