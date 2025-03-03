@@ -118,7 +118,8 @@ test_source_distribution() {
   # build and test rust
 
   # raises on any formatting errors
-  rustup component add rustfmt --toolchain stable
+  rustup toolchain install 1.85.0
+  rustup component add rustfmt --toolchain 1.85.0
   cargo fmt --all -- --check
 
   # Clone testing repositories into the expected location
