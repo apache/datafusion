@@ -948,8 +948,8 @@ impl Unparser<'_> {
             Operator::BitwiseShiftRight => Ok(BinaryOperator::PGBitwiseShiftRight),
             Operator::BitwiseShiftLeft => Ok(BinaryOperator::PGBitwiseShiftLeft),
             Operator::StringConcat => Ok(BinaryOperator::StringConcat),
-            Operator::AtArrow => not_impl_err!("unsupported operation: {op:?}"),
-            Operator::ArrowAt => not_impl_err!("unsupported operation: {op:?}"),
+            Operator::AtArrow => Ok(BinaryOperator::AtArrow),
+            Operator::ArrowAt => Ok(BinaryOperator::ArrowAt),
         }
     }
 
