@@ -40,14 +40,14 @@ jobs:
     name: linux build test
     runs-on: ubuntu-latest
     steps:
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
       - uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 1
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
       - name: Prepare cargo build
         run: |
           cargo check --profile ci --all-targets
