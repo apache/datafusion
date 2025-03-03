@@ -117,8 +117,11 @@ test_source_distribution() {
 
   # build and test rust
 
+  # install the needed version of rust defined in rust-toolchain.toml
+  rustup toolchain install
+
   # raises on any formatting errors
-  rustup component add rustfmt --toolchain stable
+  rustup component add rustfmt
   cargo fmt --all -- --check
 
   # Clone testing repositories into the expected location
