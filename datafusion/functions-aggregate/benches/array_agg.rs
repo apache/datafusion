@@ -71,7 +71,7 @@ where
 }
 
 /// Create List array with the given item data type, null density, null locations and zero length lists density
-/// Creates an random (but fixed-seeded) array of a given size and null density
+/// Creates a random (but fixed-seeded) array of a given size and null density
 pub fn create_list_array<T>(
     size: usize,
     null_density: f32,
@@ -79,20 +79,20 @@ pub fn create_list_array<T>(
 ) -> ListArray
 where
     T: ArrowPrimitiveType,
-    Standard: Distribution<T::Native>,
+    StandardUniform: Distribution<T::Native>,
 {
     let mut nulls_builder = NullBufferBuilder::new(size);
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
 
     let offsets = OffsetBuffer::from_lengths((0..size).map(|_| {
-        let is_null = rng.gen::<f32>() < null_density;
+        let is_null = rng.random::<f32>() < null_density;
 
-        let mut length = rng.gen_range(1..10);
+        let mut length = rng.random_range(1..10);
 
         if is_null {
             nulls_builder.append_null();
 
-            if rng.gen::<f32>() <= zero_length_lists_probability {
+            if rng.random::<f32>() <= zero_length_lists_probability {
                 length = 0;
             }
         } else {
@@ -114,6 +114,24 @@ where
         Arc::new(values),
         nulls_builder.finish(),
     )
+}
+
+fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
+where
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
+    let mut rng = StdRng::seed_from_u64(42);
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                Some(rng.random())
+            }
+        })
+        .collect()
 }
 
 fn array_agg_benchmark(c: &mut Criterion) {

@@ -26,7 +26,7 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use rand::distributions::Standard;
+use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::rngs::StdRng;
 use rand::Rng;
@@ -41,11 +41,11 @@ macro_rules! basic_random_data {
     ($ARROW_TYPE: ty) => {
         impl RandomNativeData for $ARROW_TYPE
         where
-            Standard: Distribution<Self::Native>,
+            StandardUniform: Distribution<Self::Native>,
         {
             #[inline]
             fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
-                rng.gen::<Self::Native>()
+                rng.random::<Self::Native>()
             }
         }
     };
@@ -81,7 +81,7 @@ basic_random_data!(DurationNanosecondType);
 impl RandomNativeData for Date64Type {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
         // TODO: constrain this range to valid dates if necessary
-        let date_value = rng.gen_range(i64::MIN..=i64::MAX);
+        let date_value = rng.random_range(i64::MIN..=i64::MAX);
         let millis_per_day = 86_400_000;
         date_value - (date_value % millis_per_day)
     }
@@ -90,8 +90,8 @@ impl RandomNativeData for Date64Type {
 impl RandomNativeData for IntervalDayTimeType {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
         IntervalDayTime {
-            days: rng.gen::<i32>(),
-            milliseconds: rng.gen::<i32>(),
+            days: rng.random::<i32>(),
+            milliseconds: rng.random::<i32>(),
         }
     }
 }
@@ -99,9 +99,9 @@ impl RandomNativeData for IntervalDayTimeType {
 impl RandomNativeData for IntervalMonthDayNanoType {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
         IntervalMonthDayNano {
-            months: rng.gen::<i32>(),
-            days: rng.gen::<i32>(),
-            nanoseconds: rng.gen::<i64>(),
+            months: rng.random::<i32>(),
+            days: rng.random::<i32>(),
+            nanoseconds: rng.random::<i64>(),
         }
     }
 }
@@ -117,6 +117,6 @@ impl RandomNativeData for DurationSecondType {
 
 impl RandomNativeData for Decimal256Type {
     fn generate_random_native_data(rng: &mut StdRng) -> Self::Native {
-        i256::from_parts(rng.gen::<u128>(), rng.gen::<i128>())
+        i256::from_parts(rng.random::<u128>(), rng.random::<i128>())
     }
 }
