@@ -44,7 +44,6 @@ pub use crate::execution_plan::{
     execute_stream_partitioned, get_plan_string, with_new_children_if_necessary,
     ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-pub use crate::metrics::Metric;
 pub use crate::ordering::InputOrderMode;
 pub use crate::stream::EmptyRecordBatchStream;
 pub use crate::topk::TopK;
@@ -68,7 +67,6 @@ pub mod insert;
 pub mod joins;
 pub mod limit;
 pub mod memory;
-pub mod metrics;
 pub mod placeholder_row;
 pub mod projection;
 pub mod recursive_query;
@@ -86,6 +84,9 @@ pub mod work_table;
 pub mod udaf {
     pub use datafusion_expr::StatisticsArgs;
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
+}
+pub mod metrics {
+    pub use datafusion_execution::metrics::*;
 }
 
 pub mod coalesce;

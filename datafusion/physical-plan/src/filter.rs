@@ -30,10 +30,7 @@ use crate::projection::{
     make_with_child, try_embed_projection, update_expr, EmbeddedProjection,
     ProjectionExec,
 };
-use crate::{
-    metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
-    DisplayFormatType, ExecutionPlan,
-};
+use crate::{DisplayFormatType, ExecutionPlan};
 
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
@@ -42,6 +39,9 @@ use datafusion_common::cast::as_boolean_array;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
     internal_err, plan_err, project_schema, DataFusionError, Result, ScalarValue,
+};
+use datafusion_execution::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;

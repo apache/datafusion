@@ -41,16 +41,15 @@ use crate::joins::utils::{
     reorder_output_after_swap, symmetric_join_output_partitioning, JoinFilter, JoinOn,
     JoinOnRef,
 };
-use crate::metrics::{Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::projection::{
     join_allows_pushdown, join_table_borders, new_join_children,
     physical_to_column_exprs, update_join_on, ProjectionExec,
 };
 use crate::spill::spill_record_batches;
 use crate::{
-    metrics, DisplayAs, DisplayFormatType, Distribution, ExecutionPlan,
-    ExecutionPlanProperties, PhysicalExpr, PlanProperties, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    PhysicalExpr, PlanProperties, RecordBatchStream, SendableRecordBatchStream,
+    Statistics,
 };
 
 use arrow::array::{types::UInt64Type, *};
@@ -66,6 +65,10 @@ use datafusion_common::{
 };
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::metrics;
+use datafusion_execution::metrics::{
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;

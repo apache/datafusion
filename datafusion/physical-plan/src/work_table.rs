@@ -23,10 +23,10 @@ use std::sync::{Arc, Mutex};
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::memory::MemoryStream;
 use crate::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream, Statistics,
 };
-use crate::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;

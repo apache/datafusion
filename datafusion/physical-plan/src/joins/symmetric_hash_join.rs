@@ -52,10 +52,9 @@ use crate::projection::{
     physical_to_column_exprs, update_join_filter, update_join_on, ProjectionExec,
 };
 use crate::{
-    joins::StreamJoinPartitionMode,
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
-    DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
+    joins::StreamJoinPartitionMode, DisplayAs, DisplayFormatType, Distribution,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 
 use arrow::array::{
@@ -69,6 +68,7 @@ use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::utils::bisect;
 use datafusion_common::{internal_err, plan_err, HashSet, JoinSide, JoinType, Result};
 use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_execution::TaskContext;
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
