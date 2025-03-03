@@ -54,8 +54,7 @@ jobs:
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
-jobs:
-  # Run doc tests
+  # Test doc build
   linux-test-doc-build:
     name: Test doc build
     runs-on: ubuntu-latest
