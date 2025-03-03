@@ -117,6 +117,10 @@ test_source_distribution() {
 
   # build and test rust
 
+  # Temporarily remove rust-toolchain.toml
+  # work around for https://github.com/apache/datafusion/issues/14982
+  rm rust-toolchain.toml
+
   # raises on any formatting errors
   rustup component add rustfmt --toolchain stable
   cargo fmt --all -- --check
