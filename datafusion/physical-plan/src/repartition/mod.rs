@@ -1067,9 +1067,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::cast::as_string_array;
     use datafusion_common::{arrow_datafusion_err, assert_batches_sorted_eq, exec_err};
+    use datafusion_common_runtime::JoinSet;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
-
-    use tokio::task::JoinSet;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
