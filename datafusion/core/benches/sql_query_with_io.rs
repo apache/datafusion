@@ -66,7 +66,7 @@ fn create_parquet_file(rng: &mut StdRng, id_offset: usize) -> Bytes {
     let mut payload_builder = Int64Builder::new();
     for row in 0..FILE_ROWS {
         id_builder.append_value((row + id_offset) as u64);
-        payload_builder.append_value(rng.gen());
+        payload_builder.append_value(rng.random());
     }
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),

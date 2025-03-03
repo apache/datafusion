@@ -34,7 +34,7 @@ impl BooleanArrayGenerator {
         // Table of booleans from which to draw (distinct means 1 or 2)
         let distinct_booleans: BooleanArray = match self.num_distinct_booleans {
             1 => {
-                let value = self.rng.gen::<bool>();
+                let value = self.rng.random::<bool>();
                 let mut builder = BooleanBuilder::with_capacity(1);
                 builder.append_value(value);
                 builder.finish()
@@ -51,10 +51,10 @@ impl BooleanArrayGenerator {
         // Generate indices to select from the distinct booleans
         let indices: UInt32Array = (0..self.num_booleans)
             .map(|_| {
-                if self.rng.gen::<f64>() < self.null_pct {
+                if self.rng.random::<f64>() < self.null_pct {
                     None
                 } else if self.num_distinct_booleans > 1 {
-                    Some(self.rng.gen_range(0..self.num_distinct_booleans as u32))
+                    Some(self.rng.random_range(0..self.num_distinct_booleans as u32))
                 } else {
                     Some(0)
                 }

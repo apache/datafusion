@@ -60,6 +60,7 @@ wasm-bindgen = "0.2.99"
 [dev-dependencies]
 insta = { workspace = true }
 object_store = { workspace = true }
+# needs to be compiled
 tokio = { workspace = true }
 url = { workspace = true }
 wasm-bindgen-test = "0.3.49"

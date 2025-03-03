@@ -100,7 +100,7 @@ pub fn stagger_batch_with_seed(batch: RecordBatch, seed: u64) -> Vec<RecordBatch
 
     let mut remainder = batch;
     while remainder.num_rows() > 0 {
-        let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
+        let batch_size = rng.random_range(0..remainder.num_rows() + 1);
 
         batches.push(remainder.slice(0, batch_size));
         remainder = remainder.slice(batch_size, remainder.num_rows() - batch_size);
