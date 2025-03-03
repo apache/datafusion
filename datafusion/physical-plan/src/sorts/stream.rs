@@ -22,7 +22,7 @@ use arrow::array::Array;
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
-use datafusion_common::Result;
+use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::stream::{Fuse, StreamExt};
@@ -101,7 +101,10 @@ impl RowCursorStream {
             .iter()
             .map(|expr| {
                 let data_type = expr.expr.data_type(schema)?;
-                Ok(SortField::new_with_options(data_type, expr.options))
+                match expr.options.to_arrow() {
+                    Ok(options) => Ok(SortField::new_with_options(data_type, options)),
+                    Err(_) => internal_err!("Custom orderings not supported in RowCursorStream."),
+                }
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -195,7 +198,7 @@ impl<T: CursorArray> FieldCursorStream<T> {
         let mut array_reservation = self.reservation.new_empty();
         array_reservation.try_grow(size_in_mem)?;
         Ok(ArrayValues::new(
-            self.sort.options,
+            self.sort.options.clone(),
             array,
             array_reservation,
         ))

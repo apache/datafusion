@@ -32,7 +32,6 @@ use crate::{
     PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement,
 };
 
-use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
@@ -42,6 +41,7 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
+use datafusion_common::sort::SortOptions;
 use indexmap::{IndexMap, IndexSet};
 use itertools::Itertools;
 
@@ -371,7 +371,7 @@ impl EquivalenceProperties {
                 continue;
             }
 
-            let leading_ordering_options = ordering[0].options;
+            let leading_ordering_options = ordering[0].options.clone();
 
             for equivalent_expr in &eq_class {
                 let children = equivalent_expr.children();
@@ -391,7 +391,9 @@ impl EquivalenceProperties {
                             break;
                         }
                         child_properties.push(ExprProperties {
-                            sort_properties: SortProperties::Ordered(next.options),
+                            sort_properties: SortProperties::Ordered(
+                                next.options.clone(),
+                            ),
                             range: Interval::make_unbounded(
                                 &child.data_type(&self.schema)?,
                             )?,
@@ -408,17 +410,21 @@ impl EquivalenceProperties {
                     if let Ok(expr_properties) =
                         equivalent_expr.get_properties(&child_properties)
                     {
-                        if expr_properties.preserves_lex_ordering
-                            && SortProperties::Ordered(leading_ordering_options)
-                                == expr_properties.sort_properties
+                        if let SortProperties::Ordered(sort_properties) =
+                            expr_properties.sort_properties
                         {
-                            // Assume existing ordering is [c ASC, a ASC, b ASC]
-                            // When equality c = f(a,b) is given, if we know that given ordering `[a ASC, b ASC]`,
-                            // ordering `[f(a,b) ASC]` is valid, then we can deduce that ordering `[a ASC, b ASC]` is also valid.
-                            // Hence, ordering `[a ASC, b ASC]` can be added to the state as a valid ordering.
-                            // (e.g. existing ordering where leading ordering is removed)
-                            new_orderings.push(LexOrdering::new(ordering[1..].to_vec()));
-                            break;
+                            if expr_properties.preserves_lex_ordering
+                                && sort_properties == leading_ordering_options
+                            {
+                                // Assume existing ordering is [c ASC, a ASC, b ASC]
+                                // When equality c = f(a,b) is given, if we know that given ordering `[a ASC, b ASC]`,
+                                // ordering `[f(a,b) ASC]` is valid, then we can deduce that ordering `[a ASC, b ASC]` is also valid.
+                                // Hence, ordering `[a ASC, b ASC]` can be added to the state as a valid ordering.
+                                // (e.g. existing ordering where leading ordering is removed)
+                                new_orderings
+                                    .push(LexOrdering::new(ordering[1..].to_vec()));
+                                break;
+                            }
                         }
                     }
                 }
@@ -638,9 +644,9 @@ impl EquivalenceProperties {
                 && normalized_reqs[..ordering_len].iter().zip(ordering).all(
                     |(req, existing)| {
                         req.expr.eq(&existing.expr)
-                            && req
-                                .options
-                                .is_none_or(|req_opts| req_opts == existing.options)
+                            && req.options.as_ref().is_none_or(|req_opts| {
+                                req_opts == &existing.options
+                            })
                     },
                 )
         })
@@ -666,7 +672,7 @@ impl EquivalenceProperties {
             SortProperties::Ordered(options) => {
                 let sort_expr = PhysicalSortExpr {
                     expr: Arc::clone(&req.expr),
-                    options,
+                    options: options,
                 };
                 sort_expr.satisfy(req, self.schema())
             }
@@ -734,14 +740,15 @@ impl EquivalenceProperties {
             .zip(rhs.inner.iter_mut())
             .all(|(lhs, rhs)| {
                 lhs.expr.eq(&rhs.expr)
-                    && match (lhs.options, rhs.options) {
+                    && match (lhs.options.as_ref(), rhs.options.as_ref())
+                    {
                         (Some(lhs_opt), Some(rhs_opt)) => lhs_opt == rhs_opt,
                         (Some(options), None) => {
-                            rhs.options = Some(options);
+                            rhs.options = Some(options.clone());
                             true
                         }
                         (None, Some(options)) => {
-                            lhs.options = Some(options);
+                            lhs.options = Some(options.clone());
                             true
                         }
                         (None, None) => true,
@@ -784,7 +791,7 @@ impl EquivalenceProperties {
                         {
                             res.push(PhysicalSortExpr {
                                 expr: Arc::clone(&r_expr),
-                                options: sort_expr.options,
+                                options: sort_expr.options.clone(),
                             });
                         }
                     }
@@ -874,7 +881,7 @@ impl EquivalenceProperties {
                     self.project_expr(&sort_expr.expr, mapping).map(|expr| {
                         PhysicalSortExpr {
                             expr,
-                            options: sort_expr.options,
+                            options: sort_expr.options.clone(),
                         }
                     });
                 let is_projected = target_sort_expr.is_some();
@@ -961,16 +968,16 @@ impl EquivalenceProperties {
                         get_expr_properties(source, &relevant_deps, &self.schema)
                             .map(|prop| prop.sort_properties)
                     {
-                        Some((options, relevant_deps))
+                        Some((options.clone(), relevant_deps))
                     } else {
                         // Do not consider unordered cases
                         None
                     }
                 })
-                .flat_map(|(options, relevant_deps)| {
+                .flat_map(|(sort_definition, relevant_deps)| {
                     let sort_expr = PhysicalSortExpr {
                         expr: Arc::clone(target),
-                        options,
+                        options: sort_definition,
                     };
                     // Generate dependent orderings (i.e. prefixes for `sort_expr`):
                     let mut dependency_orderings =
@@ -1144,7 +1151,7 @@ impl EquivalenceProperties {
                         SortProperties::Ordered(options) => Some((
                             PhysicalSortExpr {
                                 expr: Arc::clone(&exprs[idx]),
-                                options,
+                                options: options,
                             },
                             idx,
                         )),
@@ -1154,7 +1161,7 @@ impl EquivalenceProperties {
                             Some((
                                 PhysicalSortExpr {
                                     expr: Arc::clone(&exprs[idx]),
-                                    options,
+                                    options: options,
                                 },
                                 idx,
                             ))
@@ -1470,7 +1477,7 @@ fn update_properties(
     {
         node.data.sort_properties = SortProperties::Singleton;
     } else if let Some(options) = oeq_class.get_options(&normalized_expr) {
-        node.data.sort_properties = SortProperties::Ordered(options);
+        node.data.sort_properties = SortProperties::Ordered(options.clone());
     }
     Ok(Transformed::yes(node))
 }
@@ -1682,7 +1689,9 @@ fn get_expr_properties(
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
         // If exact match is found, return its ordering.
         Ok(ExprProperties {
-            sort_properties: SortProperties::Ordered(column_order.options),
+            sort_properties: SortProperties::Ordered(
+                column_order.options.clone(),
+            ),
             range: Interval::make_unbounded(&expr.data_type(schema)?)?,
             preserves_lex_ordering: false,
         })
@@ -2386,7 +2395,10 @@ fn advance_if_matches_constant(
 ) -> Option<PhysicalSortExpr> {
     let expr = iter.peek()?;
     let const_expr = constants.iter().find(|c| c.eq_expr(expr))?;
-    let found_expr = PhysicalSortExpr::new(Arc::clone(const_expr.expr()), expr.options);
+    let found_expr = PhysicalSortExpr::new(
+        Arc::clone(const_expr.expr()),
+        expr.options.clone(),
+    );
     iter.next();
     Some(found_expr)
 }

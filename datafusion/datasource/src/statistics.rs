@@ -27,10 +27,10 @@ use crate::PartitionedFile;
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::{
-    compute::SortColumn,
     row::{Row, Rows},
 };
 use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::sort::SortColumn;
 use datafusion_physical_expr::{expressions::Column, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -122,7 +122,7 @@ impl MinMaxStatistics {
                 .enumerate()
                 .map(|(i, (col, sort))| PhysicalSortExpr {
                     expr: Arc::new(Column::new(col.name(), i)),
-                    options: sort.options,
+                    options: sort.options.clone(),
                 })
                 .collect::<Vec<_>>(),
         );
@@ -177,7 +177,7 @@ impl MinMaxStatistics {
             .map(|expr| {
                 expr.expr
                     .data_type(schema)
-                    .map(|data_type| SortField::new_with_options(data_type, expr.options))
+                    .map(|data_type| SortField::new_with_options(data_type, expr.options.to_arrow().expect("TODO")))
             })
             .collect::<Result<Vec<_>>>()
             .map_err(|e| e.context("create sort fields"))?;
@@ -233,7 +233,7 @@ impl MinMaxStatistics {
 
                     Ok(SortColumn {
                         values: Arc::clone(values.column(idx)),
-                        options: Some(sort_expr.options),
+                        options: Some(sort_expr.options.clone()),
                     })
                 })
                 .collect::<Result<Vec<_>>>()

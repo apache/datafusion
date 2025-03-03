@@ -36,7 +36,6 @@ use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
-use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
@@ -55,6 +54,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::ready;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
+use datafusion_common::sort::SortOptions;
 
 #[derive(Debug, Clone)]
 /// This object tracks the aggregation phase (input/output)

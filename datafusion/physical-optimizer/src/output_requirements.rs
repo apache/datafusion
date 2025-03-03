@@ -214,7 +214,7 @@ impl ExecutionPlan for OutputRequirementExec {
                 };
                 updated_sort_reqs.push(PhysicalSortRequirement {
                     expr: new_expr,
-                    options: req.options,
+                    options: req.options.clone(),
                 });
             }
         }

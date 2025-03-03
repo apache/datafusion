@@ -22,9 +22,9 @@ use arrow::array::{
     PrimitiveArray,
 };
 use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
-use arrow::compute::SortOptions;
 use arrow::datatypes::ArrowNativeTypeOp;
 use arrow::row::Rows;
+use datafusion_common::sort::SortOptions;
 use datafusion_execution::memory_pool::MemoryReservation;
 
 /// A comparable collection of values for use with [`Cursor`]

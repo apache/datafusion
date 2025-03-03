@@ -309,7 +309,7 @@ fn test_ordering_satisfy_with_equivalence() -> Result<()> {
             .into_iter()
             .map(|(expr, options)| PhysicalSortExpr {
                 expr: Arc::clone(expr),
-                options,
+                options: options,
             })
             .collect::<LexOrdering>();
 

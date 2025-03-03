@@ -965,7 +965,7 @@ fn get_projected_output_ordering(
                     // Compute the new sort expression (with correct index) after projection:
                     new_ordering.push(PhysicalSortExpr {
                         expr: Arc::new(Column::new(name, idx)),
-                        options: *options,
+                        options: options.clone(),
                     });
                     continue;
                 }

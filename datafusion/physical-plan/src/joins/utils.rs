@@ -489,7 +489,7 @@ fn offset_ordering(
             .iter()
             .map(|sort_expr| PhysicalSortExpr {
                 expr: add_offset_to_expr(Arc::clone(&sort_expr.expr), offset),
-                options: sort_expr.options,
+                options: sort_expr.options.clone(),
             })
             .collect(),
         _ => ordering.clone(),
@@ -2646,25 +2646,25 @@ mod tests {
         let left_ordering = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
-                options,
+                options: options,
             },
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("c", 2)),
-                options,
+                options: options,
             },
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("d", 3)),
-                options,
+                options: options,
             },
         ]);
         let right_ordering = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("z", 2)),
-                options,
+                options: options,
             },
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("y", 1)),
-                options,
+                options: options,
             },
         ]);
         let join_type = JoinType::Inner;
@@ -2680,45 +2680,45 @@ mod tests {
             Some(LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("a", 0)),
-                    options,
+                    options: options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("c", 2)),
-                    options,
+                    options: options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("d", 3)),
-                    options,
+                    options: options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("z", 7)),
-                    options,
+                    options: options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("y", 6)),
-                    options,
+                    options: options,
                 },
             ])),
             Some(LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("z", 7)),
-                    options,
+                    options: options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("y", 6)),
-                    options,
+                    options: options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("a", 0)),
-                    options,
+                    options: options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("c", 2)),
-                    options,
+                    options: options,
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("d", 3)),
-                    options,
+                    options: options,
                 },
             ])),
         ];

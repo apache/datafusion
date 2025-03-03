@@ -26,9 +26,9 @@ use crate::window::window_expr::{get_orderby_values, WindowFn};
 use crate::window::{PartitionBatches, PartitionWindowAggStates, WindowState};
 use crate::{reverse_order_bys, EquivalenceProperties, PhysicalExpr};
 use arrow::array::{new_empty_array, ArrayRef};
-use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::sort::SortOptions;
 use datafusion_common::utils::evaluate_partition_ranges;
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::window_state::{WindowAggState, WindowFrameContext};
@@ -112,8 +112,11 @@ impl WindowExpr for StandardWindowExpr {
         let mut evaluator = self.expr.create_evaluator()?;
         let num_rows = batch.num_rows();
         if evaluator.uses_window_frame() {
-            let sort_options: Vec<SortOptions> =
-                self.order_by.iter().map(|o| o.options).collect();
+            let sort_options: Vec<SortOptions> = self
+                .order_by
+                .iter()
+                .map(|o| o.options.clone())
+                .collect();
             let mut row_wise_results = vec![];
 
             let mut values = self.evaluate_args(batch)?;
@@ -157,7 +160,11 @@ impl WindowExpr for StandardWindowExpr {
     ) -> Result<()> {
         let field = self.expr.field()?;
         let out_type = field.data_type();
-        let sort_options = self.order_by.iter().map(|o| o.options).collect::<Vec<_>>();
+        let sort_definitions = self
+            .order_by
+            .iter()
+            .map(|o| o.options.clone())
+            .collect::<Vec<_>>();
         for (partition_row, partition_batch_state) in partition_batches.iter() {
             let window_state =
                 if let Some(window_state) = window_agg_state.get_mut(partition_row) {
@@ -204,7 +211,7 @@ impl WindowExpr for StandardWindowExpr {
                         .get_or_insert_with(|| {
                             WindowFrameContext::new(
                                 Arc::clone(&self.window_frame),
-                                sort_options.clone(),
+                                sort_definitions.clone(),
                             )
                         })
                         .calculate_range(

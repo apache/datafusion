@@ -95,23 +95,24 @@ impl ScalarUDFImpl for LogFunc {
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         let (base_sort_properties, num_sort_properties) = if input.len() == 1 {
             // log(x) defaults to log(10, x)
-            (SortProperties::Singleton, input[0].sort_properties)
+            (SortProperties::Singleton, input[0].sort_properties.clone())
         } else {
-            (input[0].sort_properties, input[1].sort_properties)
+            (input[0].sort_properties.clone(), input[1].sort_properties.clone())
         };
-        match (num_sort_properties, base_sort_properties) {
+        match (&num_sort_properties, &base_sort_properties) {
             (first @ SortProperties::Ordered(num), SortProperties::Ordered(base))
-                if num.descending != base.descending
-                    && num.nulls_first == base.nulls_first =>
+                if num.ordering() == base.ordering()
+                    && num.descending() != base.descending()
+                    && num.nulls_first() == base.nulls_first() =>
             {
-                Ok(first)
+                Ok(first.clone())
             }
             (
                 first @ (SortProperties::Ordered(_) | SortProperties::Singleton),
                 SortProperties::Singleton,
-            ) => Ok(first),
+            ) => Ok(first.clone()),
             (SortProperties::Singleton, second @ SortProperties::Ordered(_)) => {
-                Ok(-second)
+                Ok(-second.clone())
             }
             _ => Ok(SortProperties::Unordered),
         }

@@ -19,8 +19,8 @@ use std::ops::Neg;
 
 use crate::interval_arithmetic::Interval;
 
-use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
+use datafusion_common::sort::SortOptions;
 
 /// To propagate [`SortOptions`] across the `PhysicalExpr`, it is insufficient
 /// to simply use `Option<SortOptions>`: There must be a differentiation between
@@ -33,29 +33,30 @@ use arrow::datatypes::DataType;
 /// sorted data; however the ((a_ordered + 999) + c_ordered) expression can. Therefore,
 /// we need two different variants for literals and unordered columns as literals are
 /// often more ordering-friendly under most mathematical operations.
-#[derive(PartialEq, Debug, Clone, Copy, Default)]
+#[derive(PartialEq, Debug, Clone, Default)]
 pub enum SortProperties {
-    /// Use the ordinary [`SortOptions`] struct to represent ordered data:
+    /// Use the ordinary [`SortOptions`] struct to represent ordered data
     Ordered(SortOptions),
-    // This alternative represents unordered data:
+    /// This alternative represents unordered data:
     #[default]
     Unordered,
-    // Singleton is used for single-valued literal numbers:
+    /// Singleton is used for single-valued literal numbers:
     Singleton,
 }
 
 impl SortProperties {
     pub fn add(&self, rhs: &Self) -> Self {
         match (self, rhs) {
-            (Self::Singleton, _) => *rhs,
-            (_, Self::Singleton) => *self,
+            (Self::Singleton, _) => rhs.clone(),
+            (_, Self::Singleton) => self.clone(),
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending == rhs.descending =>
+                if lhs.ordering() == rhs.ordering()
+                    && lhs.descending() == rhs.descending() =>
             {
-                Self::Ordered(SortOptions {
-                    descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
-                })
+                Self::Ordered(
+                    lhs.clone()
+                        .with_nulls_first(lhs.nulls_first() || rhs.nulls_first()),
+                )
             }
             _ => Self::Unordered,
         }
@@ -64,18 +65,18 @@ impl SortProperties {
     pub fn sub(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Singleton, Self::Singleton) => Self::Singleton,
-            (Self::Singleton, Self::Ordered(rhs)) => Self::Ordered(SortOptions {
-                descending: !rhs.descending,
-                nulls_first: rhs.nulls_first,
-            }),
-            (_, Self::Singleton) => *self,
+            (Self::Singleton, Self::Ordered(rhs)) => {
+                Self::Ordered(rhs.clone().with_descending(!rhs.descending()))
+            }
+            (_, Self::Singleton) => self.clone(),
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending != rhs.descending =>
+                if lhs.ordering() == rhs.ordering()
+                    && lhs.descending() != rhs.descending() =>
             {
-                Self::Ordered(SortOptions {
-                    descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
-                })
+                Self::Ordered(
+                    lhs.clone()
+                        .with_nulls_first(lhs.nulls_first() || rhs.nulls_first()),
+                )
             }
             _ => Self::Unordered,
         }
@@ -83,15 +84,15 @@ impl SortProperties {
 
     pub fn gt_or_gteq(&self, rhs: &Self) -> Self {
         match (self, rhs) {
-            (Self::Singleton, Self::Ordered(rhs)) => Self::Ordered(SortOptions {
-                descending: !rhs.descending,
-                nulls_first: rhs.nulls_first,
-            }),
-            (_, Self::Singleton) => *self,
+            (Self::Singleton, Self::Ordered(rhs)) => {
+                Self::Ordered(rhs.clone().with_descending(!rhs.descending()))
+            }
+            (_, Self::Singleton) => self.clone(),
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending != rhs.descending =>
+                if lhs.ordering() == rhs.ordering()
+                    && lhs.descending() != rhs.descending() =>
             {
-                *self
+                self.clone()
             }
             _ => Self::Unordered,
         }
@@ -100,18 +101,16 @@ impl SortProperties {
     pub fn and_or(&self, rhs: &Self) -> Self {
         match (self, rhs) {
             (Self::Ordered(lhs), Self::Ordered(rhs))
-                if lhs.descending == rhs.descending =>
+                if lhs.ordering() == rhs.ordering()
+                    && lhs.descending() == rhs.descending() =>
             {
-                Self::Ordered(SortOptions {
-                    descending: lhs.descending,
-                    nulls_first: lhs.nulls_first || rhs.nulls_first,
-                })
+                Self::Ordered(
+                    lhs.clone()
+                        .with_nulls_first(lhs.nulls_first() || rhs.nulls_first()),
+                )
             }
             (Self::Ordered(opt), Self::Singleton)
-            | (Self::Singleton, Self::Ordered(opt)) => Self::Ordered(SortOptions {
-                descending: opt.descending,
-                nulls_first: opt.nulls_first,
-            }),
+            | (Self::Singleton, Self::Ordered(opt)) => Self::Ordered(opt.clone()),
             (Self::Singleton, Self::Singleton) => Self::Singleton,
             _ => Self::Unordered,
         }
@@ -121,11 +120,14 @@ impl SortProperties {
 impl Neg for SortProperties {
     type Output = Self;
 
-    fn neg(mut self) -> Self::Output {
-        if let SortProperties::Ordered(SortOptions { descending, .. }) = &mut self {
-            *descending = !*descending;
+    fn neg(self) -> Self::Output {
+        match self {
+            SortProperties::Ordered(sort_definition) => {
+                SortProperties::Ordered(sort_definition.with_reversed_order())
+            }
+            SortProperties::Unordered => self,
+            SortProperties::Singleton => self,
         }
-        self
     }
 }
 

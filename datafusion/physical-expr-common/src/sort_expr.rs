@@ -18,19 +18,18 @@
 //! Sort expressions
 
 use crate::physical_expr::PhysicalExpr;
+use arrow::array::RecordBatch;
+use arrow::datatypes::Schema;
+use datafusion_common::sort::{SortColumn, SortOptions};
+use datafusion_common::Result;
+use datafusion_expr_common::columnar_value::ColumnarValue;
+use itertools::Itertools;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, Index, Range, RangeFrom, RangeTo};
 use std::sync::{Arc, LazyLock};
 use std::vec::IntoIter;
-
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
-use arrow::datatypes::Schema;
-use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
-use datafusion_expr_common::columnar_value::ColumnarValue;
-use itertools::Itertools;
 
 /// Represents Sort operation for a column in a RecordBatch
 ///
@@ -95,25 +94,25 @@ impl PhysicalSortExpr {
 
     /// Set the sort sort options to ASC
     pub fn asc(mut self) -> Self {
-        self.options.descending = false;
+        self.options = self.options.with_descending(false);
         self
     }
 
     /// Set the sort sort options to DESC
     pub fn desc(mut self) -> Self {
-        self.options.descending = true;
+        self.options = self.options.with_descending(true);
         self
     }
 
     /// Set the sort sort options to NULLS FIRST
     pub fn nulls_first(mut self) -> Self {
-        self.options.nulls_first = true;
+        self.options = self.options.with_nulls_first(true);
         self
     }
 
     /// Set the sort sort options to NULLS LAST
     pub fn nulls_last(mut self) -> Self {
-        self.options.nulls_first = false;
+        self.options = self.options.with_nulls_first(false);
         self
     }
 }
@@ -156,7 +155,7 @@ impl PhysicalSortExpr {
         };
         Ok(SortColumn {
             values: array_to_sort,
-            options: Some(self.options),
+            options: Some(self.options.clone()),
         })
     }
 
@@ -172,11 +171,15 @@ impl PhysicalSortExpr {
         let nullable = self.expr.nullable(schema).unwrap_or(true);
         self.expr.eq(&requirement.expr)
             && if nullable {
-                requirement.options.is_none_or(|opts| self.options == opts)
-            } else {
                 requirement
                     .options
-                    .is_none_or(|opts| self.options.descending == opts.descending)
+                    .as_ref()
+                    .is_none_or(|opts| &self.options == opts)
+            } else {
+                requirement.options.as_ref().is_none_or(|opts| {
+                    self.options.ordering() == opts.ordering()
+                        && self.options.descending() == opts.descending()
+                })
             }
     }
 }
@@ -215,17 +218,14 @@ impl From<PhysicalSortRequirement> for PhysicalSortExpr {
     /// The default is picked to be consistent with
     /// PostgreSQL: <https://www.postgresql.org/docs/current/queries-order.html>
     fn from(value: PhysicalSortRequirement) -> Self {
-        let options = value.options.unwrap_or(SortOptions {
-            descending: false,
-            nulls_first: false,
-        });
-        PhysicalSortExpr::new(value.expr, options)
+        let sort_definition = value.options.unwrap_or_default();
+        PhysicalSortExpr::new(value.expr, sort_definition)
     }
 }
 
 impl From<PhysicalSortExpr> for PhysicalSortRequirement {
     fn from(value: PhysicalSortExpr) -> Self {
-        PhysicalSortRequirement::new(value.expr, Some(value.options))
+        PhysicalSortRequirement::new(value.expr, Some(value.options.clone()))
     }
 }
 
@@ -276,8 +276,14 @@ impl PhysicalSortRequirement {
     /// which must match only `expr`.
     ///
     /// See [`PhysicalSortRequirement`] for examples.
-    pub fn new(expr: Arc<dyn PhysicalExpr>, options: Option<SortOptions>) -> Self {
-        Self { expr, options }
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        sort_definition: Option<SortOptions>,
+    ) -> Self {
+        Self {
+            expr,
+            options: sort_definition,
+        }
     }
 
     /// Replace the required expression for this requirement with the new one
@@ -291,7 +297,8 @@ impl PhysicalSortRequirement {
         self.expr.eq(&other.expr)
             && other
                 .options
-                .is_none_or(|other_opts| self.options == Some(other_opts))
+                .as_ref()
+                .is_none_or(|other_opts| self.options.as_ref() == Some(other_opts))
     }
 
     #[deprecated(since = "43.0.0", note = "use  LexRequirement::from_lex_ordering")]
@@ -312,8 +319,8 @@ impl PhysicalSortRequirement {
 
 /// Returns the SQL string representation of the given [SortOptions] object.
 #[inline]
-fn to_str(options: &SortOptions) -> &str {
-    match (options.descending, options.nulls_first) {
+fn to_str(options: &SortOptions) -> &'static str {
+    match (options.descending(), options.nulls_first()) {
         (true, true) => "DESC",
         (true, false) => "DESC NULLS LAST",
         (false, true) => "ASC",

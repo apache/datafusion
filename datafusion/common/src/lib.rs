@@ -54,6 +54,7 @@ pub mod test_util;
 pub mod tree_node;
 pub mod types;
 pub mod utils;
+pub mod sort;
 
 /// Reexport arrow crate
 pub use arrow;

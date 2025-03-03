@@ -23,11 +23,12 @@ use std::mem::size_of_val;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray};
-use arrow::compute::{self, LexicographicalComparator, SortColumn};
+use arrow::compute::{self, LexicographicalComparator};
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{
     arrow_datafusion_err, internal_err, DataFusionError, Result, ScalarValue,
+    internal_datafusion_err,
 };
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{format_state_name, AggregateOrderSensitivity};
@@ -254,11 +255,16 @@ impl FirstValueAccumulator {
         let sort_columns = ordering_values
             .iter()
             .zip(self.ordering_req.iter())
-            .map(|(values, req)| SortColumn {
-                values: Arc::clone(values),
-                options: Some(req.options),
+            .map(|(values, req)| {
+                let options = req.options.to_arrow().map_err(|_| {
+                    internal_datafusion_err!("FirstValue does not support custom sorts")
+                })?;
+                Ok(compute::SortColumn {
+                    values: Arc::clone(values),
+                    options: Some(options),
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
 
@@ -317,7 +323,7 @@ impl Accumulator for FirstValueAccumulator {
         let sort_columns = convert_to_sort_cols(
             &filtered_states[1..is_set_idx],
             self.ordering_req.as_ref(),
-        );
+        )?;
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
         let min = (0..filtered_states[0].len()).min_by(|&a, &b| comparator.compare(a, b));
@@ -552,14 +558,10 @@ impl LastValueAccumulator {
                 return Ok((!value.is_empty()).then_some(value.len() - 1));
             }
         }
-        let sort_columns = ordering_values
-            .iter()
-            .zip(self.ordering_req.iter())
-            .map(|(values, req)| SortColumn {
-                values: Arc::clone(values),
-                options: Some(req.options),
-            })
-            .collect::<Vec<_>>();
+        let sort_columns = convert_to_sort_cols(
+            &ordering_values,
+            self.ordering_req.as_ref(),
+        )?;
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
         let max_ind = if self.ignore_nulls {
@@ -622,7 +624,7 @@ impl Accumulator for LastValueAccumulator {
         let sort_columns = convert_to_sort_cols(
             &filtered_states[1..is_set_idx],
             self.ordering_req.as_ref(),
-        );
+        )?;
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
         let max = (0..filtered_states[0].len()).max_by(|&a, &b| comparator.compare(a, b));
@@ -672,14 +674,22 @@ fn filter_states_according_to_is_set(
 }
 
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
-fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<SortColumn> {
+fn convert_to_sort_cols(
+    arrs: &[ArrayRef],
+    sort_exprs: &LexOrdering,
+) -> Result<Vec<compute::SortColumn>> {
     arrs.iter()
         .zip(sort_exprs.iter())
-        .map(|(item, sort_expr)| SortColumn {
-            values: Arc::clone(item),
-            options: Some(sort_expr.options),
+        .map(|(item, sort_expr)| {
+            let options = sort_expr.options.to_arrow().map_err(|_| {
+                internal_datafusion_err!("FirstValue and LastValue does not support custom sorts")
+            })?;
+            Ok(compute::SortColumn {
+                values: Arc::clone(item),
+                options: Some(options),
+            })
         })
-        .collect::<Vec<_>>()
+        .collect()
 }
 
 #[cfg(test)]

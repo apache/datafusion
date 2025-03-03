@@ -357,7 +357,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             };
             updated_exprs.push(PhysicalSortExpr {
                 expr: updated_expr,
-                options: sort.options,
+                options: sort.options.clone(),
             });
         }
 

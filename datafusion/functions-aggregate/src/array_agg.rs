@@ -504,7 +504,7 @@ impl Accumulator for OrderSensitiveArrayAggAccumulator {
         let sort_options = self
             .ordering_req
             .iter()
-            .map(|sort_expr| sort_expr.options)
+            .map(|sort_expr| sort_expr.options.clone())
             .collect::<Vec<_>>();
 
         (self.values, self.ordering_values) = merge_ordered_arrays(

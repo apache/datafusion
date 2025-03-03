@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
 use arrow::compute::SortOptions;
-use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn};
+use arrow::compute::{lexsort_to_indices, take_record_batch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
@@ -387,7 +387,7 @@ pub fn generate_table_for_eq_properties(
     for ordering in eq_properties.oeq_class().iter() {
         let (sort_columns, indices): (Vec<_>, Vec<_>) = ordering
             .iter()
-            .map(|PhysicalSortExpr { expr, options }| {
+            .map(|PhysicalSortExpr { expr, options: options }| {
                 let col = expr.as_any().downcast_ref::<Column>().unwrap();
                 let (idx, _field) = schema.column_with_name(col.name()).unwrap();
                 let arr = generate_random_array(n_elem, n_distinct);

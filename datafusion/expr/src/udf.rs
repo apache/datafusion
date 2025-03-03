@@ -767,7 +767,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
             .skip(1)
             .all(|input| &input.sort_properties == first_order)
         {
-            Ok(*first_order)
+            Ok(first_order.clone())
         } else {
             Ok(SortProperties::Unordered)
         }

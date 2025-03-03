@@ -273,7 +273,7 @@ impl ScalarUDFImpl for DateTruncFunc {
         let date_value = &input[1];
 
         if precision.sort_properties.eq(&SortProperties::Singleton) {
-            Ok(date_value.sort_properties)
+            Ok(date_value.sort_properties.clone())
         } else {
             Ok(SortProperties::Unordered)
         }

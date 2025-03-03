@@ -155,7 +155,7 @@ impl WindowExpr for SlidingAggregateWindowExpr {
             .zip(order_by_exprs)
             .map(|(req, new_expr)| PhysicalSortExpr {
                 expr: new_expr,
-                options: req.options,
+                options: req.options.clone(),
             })
             .collect::<LexOrdering>();
         Some(Arc::new(SlidingAggregateWindowExpr {

@@ -17,12 +17,14 @@
 
 use super::NativeType;
 use crate::error::Result;
-use arrow::datatypes::DataType;
-use core::fmt;
-use std::{cmp::Ordering, hash::Hash, sync::Arc};
-use std::fmt::Debug;
 use arrow::array::ArrayRef;
 use arrow::compute::SortOptions;
+use arrow::datatypes::DataType;
+use core::fmt;
+use std::fmt::Debug;
+use std::hash::Hasher;
+use std::{cmp::Ordering, hash::Hash, sync::Arc};
+use crate::ScalarValue;
 
 /// Signature that uniquely identifies a type among other types.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -38,7 +40,7 @@ pub enum TypeSignature<'a> {
 ///
 /// The `name` should contain the same value as 'ARROW:extension:name'.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ExtensionTypeSignature<'a>  {
+pub struct ExtensionTypeSignature<'a> {
     name: &'a str,
     parameters: &'a [TypeParameter<'a>],
 }
@@ -152,7 +154,7 @@ impl Ord for dyn LogicalType {
 }
 
 impl Hash for dyn LogicalType {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.signature().hash(state);
         self.native().hash(state);
     }
@@ -162,29 +164,64 @@ impl Hash for dyn LogicalType {
 #[derive(Clone, Debug)]
 pub struct LogicalTypePlanningInformation {
     /// Specifies an ordering on elements of this logical type.
-    pub ordering: OrderingInformation
+    pub ordering: SortOrdering,
 }
 
 /// Specifies how a logical type should be sorted.
-#[derive(Clone, Debug)]
-pub enum OrderingInformation {
+#[derive(Clone, Debug, Default)]
+pub enum SortOrdering {
     /// Use the default arrow comparison.
+    #[default]
     Default,
     /// Use a custom comparison.
     ///
     /// Using a custom sorting allows users to override the default order of elements or implement
     /// ordering for values that do not have a natural order (e.g., unions). It is expected that
     /// the custom ordering handles all native types for the [LogicalType].
-    Custom(Arc<dyn CustomOrdering>)
+    Custom(Arc<dyn CustomOrdering>),
+}
+
+impl SortOrdering {
+    pub fn partial_cmp(&self, lhs: &ScalarValue, rhs: &ScalarValue) -> Option<Ordering> {
+        match self {
+            SortOrdering::Default => lhs.partial_cmp(rhs),
+            SortOrdering::Custom(_) => todo!("custom order")
+        }
+    }
+}
+
+impl PartialEq for SortOrdering {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (SortOrdering::Default, SortOrdering::Default) => true,
+            (SortOrdering::Custom(c1), SortOrdering::Custom(c2)) => {
+                c1.ordering_id() == c2.ordering_id()
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for SortOrdering {}
+
+impl Hash for SortOrdering {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            SortOrdering::Default => state.write_u8(1),
+            SortOrdering::Custom(ordering) => ordering.ordering_id().hash(state),
+        }
+    }
 }
 
 /// A [CustomOrdering] can implement non-standard comparisons between values. This ability can be
 /// used to customize algorithms that must compare elements. The most prominent example is sorting.
 pub trait CustomOrdering: Debug + Send + Sync {
+    /// Returns the ordering id.
+    ///
+    /// The ordering id is used to establish equality between instances of [CustomOrdering].
+    fn ordering_id(&self) -> &str;
+
     /// TODO
-    fn execute(
-        &self,
-        array_ref: ArrayRef,
-        sort_options: SortOptions,
-    ) -> Result<ArrayRef>;
+    fn execute(&self, array_ref: ArrayRef, sort_options: SortOptions)
+        -> Result<ArrayRef>;
 }

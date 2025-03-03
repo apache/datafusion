@@ -23,8 +23,8 @@ use std::vec::IntoIter;
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr};
 
-use arrow::compute::SortOptions;
 use datafusion_common::HashSet;
+use datafusion_common::sort::SortOptions;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
 /// orderings than can describe a schema. For example, consider the following table:
@@ -227,11 +227,11 @@ impl OrderingEquivalenceClass {
 
     /// Gets sort options associated with this expression if it is a leading
     /// ordering expression. Otherwise, returns `None`.
-    pub fn get_options(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<SortOptions> {
+    pub fn get_options(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<&SortOptions> {
         for ordering in self.iter() {
             let leading_ordering = &ordering[0];
             if leading_ordering.expr.eq(expr) {
-                return Some(leading_ordering.options);
+                return Some(&leading_ordering.options);
             }
         }
         None

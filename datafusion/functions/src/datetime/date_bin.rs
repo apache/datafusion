@@ -217,7 +217,7 @@ impl ScalarUDFImpl for DateBinFunc {
                 .map(|r| r.sort_properties.eq(&SortProperties::Singleton))
                 .unwrap_or(true)
         {
-            Ok(date_value.sort_properties)
+            Ok(date_value.sort_properties.clone())
         } else {
             Ok(SortProperties::Unordered)
         }

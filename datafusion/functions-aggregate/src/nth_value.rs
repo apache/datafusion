@@ -333,7 +333,7 @@ impl Accumulator for NthValueAccumulator {
             let sort_options = self
                 .ordering_req
                 .iter()
-                .map(|sort_expr| sort_expr.options)
+                .map(|sort_expr| sort_expr.options.clone())
                 .collect::<Vec<_>>();
             let (new_values, new_orderings) = merge_ordered_arrays(
                 &mut partition_values,

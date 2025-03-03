@@ -31,7 +31,6 @@ use crate::utils::{
     is_sort_preserving_merge,
 };
 
-use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
@@ -62,6 +61,7 @@ use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::{Distribution, ExecutionPlan, Partitioning};
 
 use itertools::izip;
+use datafusion_common::sort::SortOptions;
 
 /// The `EnforceDistribution` rule ensures that distribution requirements are
 /// met. In doing so, this rule will increase the parallelism in the plan by
@@ -459,7 +459,7 @@ where
         if !positions.is_empty() {
             let new_join_on = new_join_conditions(&left_keys, &right_keys);
             let new_sort_options = (0..sort_options.len())
-                .map(|idx| sort_options[positions[idx]])
+                .map(|idx| sort_options[positions[idx]].clone())
                 .collect();
             join_plan.plan = join_constructor((new_join_on, new_sort_options))?;
         }
@@ -673,7 +673,7 @@ pub fn reorder_join_keys_to_inputs(
                 } = join_keys;
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
                 let new_sort_options = (0..sort_options.len())
-                    .map(|idx| sort_options[positions[idx]])
+                    .map(|idx| sort_options[positions[idx]].clone())
                     .collect();
                 return SortMergeJoinExec::try_new(
                     Arc::clone(left),

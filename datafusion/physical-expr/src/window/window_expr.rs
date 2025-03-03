@@ -23,8 +23,6 @@ use std::sync::Arc;
 use crate::{LexOrdering, PhysicalExpr};
 
 use arrow::array::{new_empty_array, Array, ArrayRef};
-use arrow::compute::kernels::sort::SortColumn;
-use arrow::compute::SortOptions;
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compare_rows;
@@ -35,6 +33,7 @@ use datafusion_expr::window_state::{
 use datafusion_expr::{Accumulator, PartitionEvaluator, WindowFrame, WindowFrameBound};
 
 use indexmap::IndexMap;
+use datafusion_common::sort::{SortColumn, SortOptions};
 
 /// Common trait for [window function] implementations
 ///
@@ -191,7 +190,7 @@ pub trait AggregateWindowExpr: WindowExpr {
         let mut accumulator = self.get_accumulator()?;
         let mut last_range = Range { start: 0, end: 0 };
         let sort_options: Vec<SortOptions> =
-            self.order_by().iter().map(|o| o.options).collect();
+            self.order_by().iter().map(|o| o.options.clone()).collect();
         let mut window_frame_ctx =
             WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options);
         self.get_result_column(
@@ -240,7 +239,7 @@ pub trait AggregateWindowExpr: WindowExpr {
             // If there is no window state context, initialize it.
             let window_frame_ctx = state.window_frame_ctx.get_or_insert_with(|| {
                 let sort_options: Vec<SortOptions> =
-                    self.order_by().iter().map(|o| o.options).collect();
+                    self.order_by().iter().map(|o| o.options.clone()).collect();
                 WindowFrameContext::new(Arc::clone(self.get_window_frame()), sort_options)
             });
             let out_col = self.get_result_column(
@@ -515,7 +514,7 @@ fn is_row_ahead(
     }
     let last_value = ScalarValue::try_from_array(old_col, old_col.len() - 1)?;
     let current_value = ScalarValue::try_from_array(current_col, 0)?;
-    let cmp = compare_rows(&[current_value], &[last_value], &[*sort_options])?;
+    let cmp = compare_rows(&[current_value], &[last_value], &[sort_options.clone()])?;
     Ok(cmp.is_gt())
 }
 

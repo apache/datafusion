@@ -16,9 +16,10 @@
 // under the License.
 
 use arrow::array::ArrayRef;
-use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
 use arrow_ord::partition::partition;
+use datafusion_common::sort::SortOptions;
+use datafusion_common::types::SortOrdering;
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
@@ -200,7 +201,10 @@ impl GroupOrderingPartial {
         range_sort_key: Vec<ScalarValue>,
     ) -> Result<(usize, Vec<ScalarValue>)> {
         if let Some(sort_key) = sort_key {
-            let sort_options = vec![SortOptions::new(false, false); sort_key.len()];
+            let sort_options = vec![
+                SortOptions::new(SortOrdering::Default, false, false);
+                sort_key.len()
+            ];
             let ordering = compare_rows(&sort_key, &range_sort_key, &sort_options)?;
             if ordering == Ordering::Equal {
                 return Ok((current_sort, sort_key));

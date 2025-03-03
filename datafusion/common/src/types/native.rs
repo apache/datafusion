@@ -17,7 +17,7 @@
 
 use super::{
     LogicalField, LogicalFieldRef, LogicalFields, LogicalType,
-    LogicalTypePlanningInformation, LogicalUnionFields, OrderingInformation,
+    LogicalTypePlanningInformation, LogicalUnionFields, SortOrdering,
     TypeSignature,
 };
 use crate::error::{Result, _internal_err};
@@ -363,7 +363,7 @@ impl LogicalType for NativeType {
 
     fn planning_information(&self) -> LogicalTypePlanningInformation {
         LogicalTypePlanningInformation {
-            ordering: OrderingInformation::Default,
+            ordering: SortOrdering::Default,
         }
     }
 }

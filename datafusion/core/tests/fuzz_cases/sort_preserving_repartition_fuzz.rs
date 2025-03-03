@@ -20,7 +20,7 @@ mod sp_repartition_fuzz_tests {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
-    use arrow::compute::{concat_batches, lexsort, SortColumn, SortOptions};
+    use arrow::compute::{concat_batches, lexsort};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use datafusion::physical_plan::{
@@ -162,7 +162,7 @@ mod sp_repartition_fuzz_tests {
         for ordering in eq_properties.oeq_class().iter() {
             let (sort_columns, indices): (Vec<_>, Vec<_>) = ordering
                 .iter()
-                .map(|PhysicalSortExpr { expr, options }| {
+                .map(|PhysicalSortExpr { expr, options: options }| {
                     let col = expr.as_any().downcast_ref::<Column>().unwrap();
                     let (idx, _field) = schema.column_with_name(col.name()).unwrap();
                     let arr = generate_random_array(n_elem, n_distinct);

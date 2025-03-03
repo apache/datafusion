@@ -199,7 +199,7 @@ pub fn sort_expr_options(
 ) -> PhysicalSortExpr {
     PhysicalSortExpr {
         expr: col(name, schema).unwrap(),
-        options,
+        options: options,
     }
 }
 
