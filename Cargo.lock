@@ -1764,7 +1764,7 @@ dependencies = [
  "parking_lot",
  "parquet",
  "paste",
- "rand 0.8.5",
+ "rand 0.9.0",
  "rand_distr",
  "regex",
  "rstest",
@@ -1795,7 +1795,7 @@ dependencies = [
  "mimalloc",
  "object_store",
  "parquet",
- "rand 0.8.5",
+ "rand 0.9.0",
  "serde",
  "serde_json",
  "snmalloc-rs",
@@ -1891,7 +1891,7 @@ dependencies = [
  "parquet",
  "paste",
  "pyo3",
- "rand 0.8.5",
+ "rand 0.9.0",
  "recursive",
  "sqlparser",
  "tokio",
@@ -1930,7 +1930,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "object_store",
- "rand 0.8.5",
+ "rand 0.9.0",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -1983,7 +1983,7 @@ dependencies = [
  "log",
  "object_store",
  "parking_lot",
- "rand 0.8.5",
+ "rand 0.9.0",
  "tempfile",
  "url",
 ]
@@ -2059,7 +2059,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "md-5",
- "rand 0.8.5",
+ "rand 0.9.0",
  "regex",
  "sha2",
  "tokio",
@@ -2085,7 +2085,7 @@ dependencies = [
  "half",
  "log",
  "paste",
- "rand 0.8.5",
+ "rand 0.9.0",
 ]
 
 [[package]]
@@ -2098,7 +2098,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr-common",
  "datafusion-physical-expr-common",
- "rand 0.8.5",
+ "rand 0.9.0",
 ]
 
 [[package]]
@@ -2119,7 +2119,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "paste",
- "rand 0.8.5",
+ "rand 0.9.0",
 ]
 
 [[package]]
@@ -2213,7 +2213,7 @@ dependencies = [
  "log",
  "paste",
  "petgraph",
- "rand 0.8.5",
+ "rand 0.9.0",
  "rstest",
 ]
 
@@ -2275,7 +2275,7 @@ dependencies = [
  "log",
  "parking_lot",
  "pin-project-lite",
- "rand 0.8.5",
+ "rand 0.9.0",
  "rstest",
  "rstest_reuse",
  "tokio",
@@ -5882,7 +5882,7 @@ dependencies = [
  "chrono-tz",
  "datafusion-common",
  "env_logger",
- "rand 0.8.5",
+ "rand 0.9.0",
 ]
 
 [[package]]
