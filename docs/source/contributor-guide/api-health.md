@@ -26,6 +26,14 @@ breaking API changes, but they are sometimes necessary.
 When possible, rather than making breaking API changes, we prefer to deprecate
 APIs to give users time to adjust to the changes.
 
+## Upgrade Guides
+
+When making changes that require DataFusion users to make changes to their code
+as part of an upgrade please consider adding documentation to the version
+specific [Upgrade Guide]
+
+[upgrade guide]: ../library-user-guide/upgrading.md
+
 ## Breaking Changes
 
 In general, a function is part of the public API if it appears on the [docs.rs page]
