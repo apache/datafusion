@@ -1105,7 +1105,9 @@ impl ListingTable {
             )
         }))
         .await?;
-        let file_list = stream::iter(file_list).flatten();
+        let meta_fetch_concurrency =
+            ctx.config_options().execution.meta_fetch_concurrency;
+        let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
         // collect the statistics if required by the config
         let files = file_list
             .map(|part_file| async {
@@ -1122,7 +1124,7 @@ impl ListingTable {
                 }
             })
             .boxed()
-            .buffered(ctx.config_options().execution.meta_fetch_concurrency);
+            .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
         let (files, statistics) = get_statistics_with_limit(
             files,
