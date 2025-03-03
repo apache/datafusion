@@ -313,7 +313,7 @@ pub enum Expr {
     /// plan into physical plan.
     #[deprecated(
         since = "46.0.0",
-        note = "A wildcard needs to be resolved to concrete expressions when constructing the logical plan"
+        note = "A wildcard needs to be resolved to concrete expressions when constructing the logical plan. See https://github.com/apache/datafusion/issues/7765"
     )]
     Wildcard {
         qualifier: Option<TableReference>,
