@@ -117,9 +117,12 @@ test_source_distribution() {
 
   # build and test rust
 
+  # Temporarily remove rust-toolchain.toml
+  # work around for https://github.com/apache/datafusion/issues/14982
+  rm rust-toolchain.toml
+
   # raises on any formatting errors
-  rustup toolchain install 1.85.0
-  rustup component add rustfmt --toolchain 1.85.0
+  rustup component add rustfmt --toolchain stable
   cargo fmt --all -- --check
 
   # Clone testing repositories into the expected location
