@@ -38,7 +38,7 @@ use futures::TryStreamExt;
 use object_store::ObjectStore;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::rngs::ThreadRng;
 use rand::Rng;
 use structopt::StructOpt;
@@ -237,7 +237,7 @@ fn find_files_on_disk(data_dir: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
             let path = file.unwrap().path();
             if path
                 .extension()
-                .map(|ext| (ext == "parquet"))
+                .map(|ext| ext == "parquet")
                 .unwrap_or(false)
             {
                 Some(path)
@@ -312,15 +312,15 @@ async fn generate_data(
 }
 
 fn random_data(column_type: &DataType, rows: usize) -> Arc<dyn Array> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let values = (0..rows).map(|_| random_value(&mut rng, column_type));
     ScalarValue::iter_to_array(values).unwrap()
 }
 
 fn random_value(rng: &mut ThreadRng, column_type: &DataType) -> ScalarValue {
     match column_type {
-        DataType::Float64 => ScalarValue::Float64(Some(rng.gen())),
-        DataType::Boolean => ScalarValue::Boolean(Some(rng.gen())),
+        DataType::Float64 => ScalarValue::Float64(Some(rng.random())),
+        DataType::Boolean => ScalarValue::Boolean(Some(rng.random())),
         DataType::Utf8 => ScalarValue::Utf8(Some(
             rng.sample_iter(&Alphanumeric)
                 .take(10)

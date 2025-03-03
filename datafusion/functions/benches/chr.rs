@@ -17,13 +17,14 @@
 
 extern crate criterion;
 
-use arrow::{array::PrimitiveArray, datatypes::Int64Type, util::test_util::seedable_rng};
+use arrow::{array::PrimitiveArray, datatypes::Int64Type};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string::chr;
-use rand::Rng;
+use rand::{Rng, SeedableRng};
 
 use arrow::datatypes::DataType;
+use rand::rngs::StdRng;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -31,13 +32,13 @@ fn criterion_benchmark(c: &mut Criterion) {
     let size = 1024;
     let input: PrimitiveArray<Int64Type> = {
         let null_density = 0.2;
-        let mut rng = seedable_rng();
+        let mut rng = StdRng::seed_from_u64(42);
         (0..size)
             .map(|_| {
-                if rng.gen::<f32>() < null_density {
+                if rng.random::<f32>() < null_density {
                     None
                 } else {
-                    Some(rng.gen_range::<i64, _>(1i64..10_000))
+                    Some(rng.random_range::<i64, _>(1i64..10_000))
                 }
             })
             .collect()
