@@ -212,14 +212,6 @@ fn _to_char_scalar(
     let is_scalar_expression = matches!(&expression, ColumnarValue::Scalar(_));
     let array = expression.into_array(1)?;
 
-    // fix https://github.com/apache/datafusion/issues/14884
-    // If the input date/time is null, return a null Utf8 result.
-    if array.is_null(0) {
-        return Ok(match is_scalar_expression {
-            true => ColumnarValue::Scalar(ScalarValue::Utf8(None)),
-            false => ColumnarValue::Array(new_null_array(&Utf8, array.len())),
-        });
-    }
     if format.is_none() {
         if is_scalar_expression {
             return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None)));
