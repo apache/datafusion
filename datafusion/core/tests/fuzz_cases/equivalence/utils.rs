@@ -114,7 +114,7 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
     };
 
     while !remaining_exprs.is_empty() {
-        let n_sort_expr = rng.gen_range(0..remaining_exprs.len() + 1);
+        let n_sort_expr = rng.random_range(0..remaining_exprs.len() + 1);
         remaining_exprs.shuffle(&mut rng);
 
         let ordering = remaining_exprs
@@ -369,7 +369,7 @@ pub fn generate_table_for_eq_properties(
     // Utility closure to generate random array
     let mut generate_random_array = |num_elems: usize, max_val: usize| -> ArrayRef {
         let values: Vec<f64> = (0..num_elems)
-            .map(|_| rng.gen_range(0..max_val) as f64 / 2.0)
+            .map(|_| rng.random_range(0..max_val) as f64 / 2.0)
             .collect();
         Arc::new(Float64Array::from_iter_values(values))
     };
@@ -524,7 +524,7 @@ fn generate_random_f64_array(
     rng: &mut StdRng,
 ) -> ArrayRef {
     let values: Vec<f64> = (0..n_elems)
-        .map(|_| rng.gen_range(0..n_distinct) as f64 / 2.0)
+        .map(|_| rng.random_range(0..n_distinct) as f64 / 2.0)
         .collect();
     Arc::new(Float64Array::from_iter_values(values))
 }

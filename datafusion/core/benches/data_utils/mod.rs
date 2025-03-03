@@ -25,8 +25,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
 use datafusion_common::DataFusionError;
+use rand::prelude::IndexedRandom;
 use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_distr::Distribution;
 use rand_distr::{Normal, Pareto};
@@ -76,10 +76,10 @@ fn create_data(size: usize, null_density: f64) -> Vec<Option<f64>> {
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f64>() > null_density {
+            if rng.random::<f64>() > null_density {
                 None
             } else {
-                Some(rng.gen::<f64>())
+                Some(rng.random::<f64>())
             }
         })
         .collect()
@@ -91,10 +91,10 @@ fn create_integer_data(size: usize, value_density: f64) -> Vec<Option<u64>> {
 
     (0..size)
         .map(|_| {
-            if rng.gen::<f64>() > value_density {
+            if rng.random::<f64>() > value_density {
                 None
             } else {
-                Some(rng.gen::<u64>())
+                Some(rng.random::<u64>())
             }
         })
         .collect()
@@ -124,7 +124,7 @@ fn create_record_batch(
 
     // Integer values between [0, 9].
     let integer_values_narrow = (0..batch_size)
-        .map(|_| rng.gen_range(0_u64..10))
+        .map(|_| rng.random_range(0_u64..10))
         .collect::<Vec<_>>();
 
     RecordBatch::try_new(
@@ -184,7 +184,7 @@ pub(crate) fn make_data(
         let mut id_builder = StringBuilder::new();
         let mut ts_builder = Int64Builder::new();
         let gen_id = |rng: &mut rand::rngs::SmallRng| {
-            rng.gen::<[u8; 16]>()
+            rng.random::<[u8; 16]>()
                 .iter()
                 .fold(String::new(), |mut output, b| {
                     let _ = write!(output, "{b:02X}");
@@ -200,7 +200,7 @@ pub(crate) fn make_data(
             .map(|_| gen_sample_cnt(&mut rng))
             .collect::<Vec<_>>();
         for _ in 0..sample_cnt {
-            let random_index = rng.gen_range(0..simultaneous_group_cnt);
+            let random_index = rng.random_range(0..simultaneous_group_cnt);
             let trace_id = &mut group_ids[random_index];
             let sample_cnt = &mut group_sample_cnts[random_index];
             *sample_cnt -= 1;

@@ -21,7 +21,7 @@ use arrow::record_batch::RecordBatch;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use datafusion_physical_expr::expressions::{col, in_list, lit};
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::prelude::*;
 use std::sync::Arc;
 
@@ -51,7 +51,7 @@ fn do_benches(
     for string_length in [5, 10, 20] {
         let values: StringArray = (0..array_length)
             .map(|_| {
-                rng.gen_bool(null_percent)
+                rng.random_bool(null_percent)
                     .then(|| random_string(&mut rng, string_length))
             })
             .collect();
@@ -71,11 +71,11 @@ fn do_benches(
     }
 
     let values: Float32Array = (0..array_length)
-        .map(|_| rng.gen_bool(null_percent).then(|| rng.gen()))
+        .map(|_| rng.random_bool(null_percent).then(|| rng.random()))
         .collect();
 
     let in_list: Vec<_> = (0..in_list_length)
-        .map(|_| ScalarValue::Float32(Some(rng.gen())))
+        .map(|_| ScalarValue::Float32(Some(rng.random())))
         .collect();
 
     do_bench(
@@ -86,11 +86,11 @@ fn do_benches(
     );
 
     let values: Int32Array = (0..array_length)
-        .map(|_| rng.gen_bool(null_percent).then(|| rng.gen()))
+        .map(|_| rng.random_bool(null_percent).then(|| rng.random()))
         .collect();
 
     let in_list: Vec<_> = (0..in_list_length)
-        .map(|_| ScalarValue::Int32(Some(rng.gen())))
+        .map(|_| ScalarValue::Int32(Some(rng.random())))
         .collect();
 
     do_bench(

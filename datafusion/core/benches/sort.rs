@@ -595,7 +595,7 @@ impl DataGenerator {
     /// Create an array of i64 sorted values (where approximately 1/3 values is repeated)
     fn i64_values(&mut self) -> Vec<i64> {
         let mut vec: Vec<_> = (0..INPUT_SIZE)
-            .map(|_| self.rng.gen_range(0..INPUT_SIZE as i64))
+            .map(|_| self.rng.random_range(0..INPUT_SIZE as i64))
             .collect();
 
         vec.sort_unstable();
@@ -620,7 +620,7 @@ impl DataGenerator {
         // pick from the 100 strings randomly
         let mut input = (0..INPUT_SIZE)
             .map(|_| {
-                let idx = self.rng.gen_range(0..strings.len());
+                let idx = self.rng.random_range(0..strings.len());
                 let s = Arc::clone(&strings[idx]);
                 Some(s)
             })
@@ -643,7 +643,7 @@ impl DataGenerator {
 
     fn random_string(&mut self) -> String {
         let rng = &mut self.rng;
-        rng.sample_iter(rand::distributions::Alphanumeric)
+        rng.sample_iter(rand::distr::Alphanumeric)
             .filter(|c| c.is_ascii_alphabetic())
             .take(20)
             .map(char::from)
@@ -665,7 +665,7 @@ where
     let mut outputs: Vec<Vec<Vec<T>>> = (0..NUM_STREAMS).map(|_| Vec::new()).collect();
 
     for i in input {
-        let stream_idx = rng.gen_range(0..NUM_STREAMS);
+        let stream_idx = rng.random_range(0..NUM_STREAMS);
         let stream = &mut outputs[stream_idx];
         match stream.last_mut() {
             Some(x) if x.len() < BATCH_SIZE => x.push(i),

@@ -22,7 +22,7 @@ use arrow::array::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_common_runtime::JoinSet;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use crate::fuzz_cases::aggregation_fuzzer::{
     check_equality_of_batches,
@@ -177,7 +177,7 @@ impl AggregationFuzzer {
 
     async fn run_inner(&self) -> Result<()> {
         let mut join_set = JoinSet::new();
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         // Loop to generate datasets and its query
         for _ in 0..self.data_gen_rounds {
@@ -191,7 +191,7 @@ impl AggregationFuzzer {
             let query_groups = datasets
                 .into_iter()
                 .map(|dataset| {
-                    let sql_idx = rng.gen_range(0..self.candidate_sqls.len());
+                    let sql_idx = rng.random_range(0..self.candidate_sqls.len());
                     let sql = self.candidate_sqls[sql_idx].clone();
 
                     QueryGroup { dataset, sql }
@@ -476,14 +476,14 @@ impl QueryBuilder {
     /// * `alias` is a unique alias `colN` for the column (to avoid duplicate column names)
     fn random_aggregate_functions(&self) -> Vec<String> {
         const MAX_NUM_FUNCTIONS: usize = 5;
-        let mut rng = thread_rng();
-        let num_aggregate_functions = rng.gen_range(1..MAX_NUM_FUNCTIONS);
+        let mut rng = rng();
+        let num_aggregate_functions = rng.random_range(1..MAX_NUM_FUNCTIONS);
 
         let mut alias_gen = 1;
 
         let mut aggregate_functions = vec![];
         while aggregate_functions.len() < num_aggregate_functions {
-            let idx = rng.gen_range(0..self.aggregate_functions.len());
+            let idx = rng.random_range(0..self.aggregate_functions.len());
             let (function_name, is_distinct) = &self.aggregate_functions[idx];
             let argument = self.random_argument();
             let alias = format!("col{}", alias_gen);
@@ -497,8 +497,8 @@ impl QueryBuilder {
 
     /// Pick a random aggregate function argument
     fn random_argument(&self) -> String {
-        let mut rng = thread_rng();
-        let idx = rng.gen_range(0..self.arguments.len());
+        let mut rng = rng();
+        let idx = rng.random_range(0..self.arguments.len());
         self.arguments[idx].clone()
     }
 
@@ -507,17 +507,17 @@ impl QueryBuilder {
     /// Limited to 3 group by columns to ensure coverage for large groups. With
     /// larger numbers of columns, each group has many fewer values.
     fn random_group_by(&self) -> Vec<String> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         const MAX_GROUPS: usize = 3;
         let max_groups = self.group_by_columns.len().max(MAX_GROUPS);
-        let num_group_by = rng.gen_range(1..max_groups);
+        let num_group_by = rng.random_range(1..max_groups);
 
         let mut already_used = HashSet::new();
         let mut group_by = vec![];
         while group_by.len() < num_group_by
             && already_used.len() != self.group_by_columns.len()
         {
-            let idx = rng.gen_range(0..self.group_by_columns.len());
+            let idx = rng.random_range(0..self.group_by_columns.len());
             if already_used.insert(idx) {
                 group_by.push(self.group_by_columns[idx].clone());
             }
