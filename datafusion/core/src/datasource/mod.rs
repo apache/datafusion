@@ -54,16 +54,55 @@ use datafusion_common::{plan_err, Result};
 use datafusion_expr::{Expr, SortExpr};
 use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 
-fn create_ordering(
+/// Converts logical sort expressions to physical sort expressions
+///
+/// This function transforms a collection of logical sort expressions into their physical
+/// representation that can be used during query execution.
+///
+/// # Arguments
+///
+/// * `schema` - The schema containing column definitions
+/// * `sort_order` - A collection of logical sort expressions grouped into lexicographic orderings
+///
+/// # Returns
+///
+/// A vector of lexicographic orderings for physical execution, or an error if the transformation fails
+///
+/// # Examples
+///
+/// ```
+/// // Create orderings from columns "id" and "name"
+/// use arrow::datatypes::{Schema, Field, DataType};
+/// use datafusion::datasource::create_ordering;
+/// use datafusion_common::Column;
+/// use datafusion_expr::{Expr, SortExpr};
+///
+/// // Create a schema with two fields
+/// let schema = Schema::new(vec![
+///     Field::new("id", DataType::Int32, false),
+///     Field::new("name", DataType::Utf8, false),
+/// ]);
+///
+/// let sort_exprs = vec![
+///     vec![
+///         SortExpr { expr: Expr::Column(Column::new(None, "id",)), asc: true, nulls_first: false }
+///     ],
+///     vec![
+///         SortExpr { expr: Expr::Column(Column::new(None, "name")), asc: false, nulls_first: true }
+///     ]
+/// ];
+/// let result = create_ordering(&schema, &sort_exprs)?;
+/// ```
+pub fn create_ordering(
     schema: &Schema,
     sort_order: &[Vec<SortExpr>],
 ) -> Result<Vec<LexOrdering>> {
     let mut all_sort_orders = vec![];
 
-    for exprs in sort_order {
+    for (group_idx, exprs) in sort_order.iter().enumerate() {
         // Construct PhysicalSortExpr objects from Expr objects:
         let mut sort_exprs = LexOrdering::default();
-        for sort in exprs {
+        for (expr_idx, sort) in exprs.iter().enumerate() {
             match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {
                     Ok(expr) => {
@@ -75,14 +114,23 @@ fn create_ordering(
                             },
                         });
                     }
-                    // Cannot find expression in the projected_schema, stop iterating
-                    // since rest of the orderings are violated
-                    Err(_) => break,
+                    Err(e) => {
+                        return plan_err!(
+                            "Cannot find column '{}' in schema at sort_order[{}][{}]: {}",
+                            col.name,
+                            group_idx,
+                            expr_idx,
+                            e
+                        );
+                    }
                 },
                 expr => {
                     return plan_err!(
-                    "Expected single column references in output_ordering, got {expr}"
-                )
+                        "Expected column reference in sort_order[{}][{}], got {}",
+                        group_idx,
+                        expr_idx,
+                        expr
+                    );
                 }
             }
         }
