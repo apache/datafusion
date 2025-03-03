@@ -49,6 +49,21 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Run doctests (embedded rust examples)
+        run: cargo test --doc --features avro,json
+      - name: Verify Working Directory Clean
+        run: git diff --exit-code
+
+jobs:
+  # Run doc tests
+  linux-test-doc-build:
+    name: Test doc build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -65,8 +80,4 @@ jobs:
           source venv/bin/activate
           cd docs
           ./build.sh # fails on errors
-      - name: Run doctests (embedded rust examples)
-        run: cargo test --doc --features avro,json
-      - name: Verify Working Directory Clean
-        run: git diff --exit-code
 
