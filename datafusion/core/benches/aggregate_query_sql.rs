@@ -148,7 +148,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
-                "SELECT utf8, approx_percentile_cont(u64_wide, 0.5, 2500)  \
+                "SELECT utf8, approx_percentile_cont(0.5, 2500) WITHIN GROUP (ORDER BY u64_wide)  \
                  FROM t GROUP BY utf8",
             )
         })
@@ -158,7 +158,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             query(
                 ctx.clone(),
-                "SELECT utf8, approx_percentile_cont(f32, 0.5, 2500)  \
+                "SELECT utf8, approx_percentile_cont(0.5, 2500) WITHIN GROUP (ORDER BY f32)  \
                  FROM t GROUP BY utf8",
             )
         })
