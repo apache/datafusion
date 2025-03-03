@@ -35,7 +35,7 @@ use parquet::file::metadata::RowGroupMetaData;
 ///
 /// ```rust
 /// # use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
-/// # use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
+/// # use datafusion_datasource_parquet::ParquetAccessPlan;
 /// // Default to scan all row groups
 /// let mut access_plan = ParquetAccessPlan::new_all(4);
 /// access_plan.skip(0); // skip row group

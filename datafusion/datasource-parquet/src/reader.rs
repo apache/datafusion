@@ -18,8 +18,8 @@
 //! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
 //! low level control of parquet file readers
 
-use crate::datasource::physical_plan::{FileMeta, ParquetFileMetrics};
 use bytes::Bytes;
+use datafusion_datasource::file_meta::FileMeta;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use futures::future::BoxFuture;
 use object_store::ObjectStore;
@@ -28,6 +28,8 @@ use parquet::file::metadata::ParquetMetaData;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
+
+use crate::ParquetFileMetrics;
 
 /// Interface for reading parquet files.
 ///

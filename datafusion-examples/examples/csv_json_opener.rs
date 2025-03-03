@@ -18,15 +18,15 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::datasource::physical_plan::JsonSource;
 use datafusion::{
     assert_batches_eq,
-    datasource::physical_plan::FileSource,
     datasource::{
         file_format::file_compression_type::FileCompressionType,
         listing::PartitionedFile,
         object_store::ObjectStoreUrl,
-        physical_plan::{CsvSource, FileScanConfig, FileStream, JsonOpener},
+        physical_plan::{
+            CsvSource, FileScanConfig, FileSource, FileStream, JsonOpener, JsonSource,
+        },
     },
     error::Result,
     physical_plan::metrics::ExecutionPlanMetricsSet,

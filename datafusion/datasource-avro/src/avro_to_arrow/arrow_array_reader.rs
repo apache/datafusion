@@ -17,13 +17,20 @@
 
 //! Avro to Arrow array readers
 
-use crate::arrow::array::{
+use apache_avro::schema::RecordSchema;
+use apache_avro::{
+    schema::{Schema as AvroSchema, SchemaKind},
+    types::Value,
+    AvroResult, Error as AvroError, Reader as AvroReader,
+};
+use arrow::array::{
     make_array, Array, ArrayBuilder, ArrayData, ArrayDataBuilder, ArrayRef,
     BooleanBuilder, LargeStringArray, ListBuilder, NullArray, OffsetSizeTrait,
     PrimitiveArray, StringArray, StringBuilder, StringDictionaryBuilder,
 };
-use crate::arrow::buffer::{Buffer, MutableBuffer};
-use crate::arrow::datatypes::{
+use arrow::array::{BinaryArray, FixedSizeBinaryArray, GenericListArray};
+use arrow::buffer::{Buffer, MutableBuffer};
+use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNumericType, ArrowPrimitiveType, DataType, Date32Type,
     Date64Type, Field, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
     Int8Type, Schema, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
@@ -31,21 +38,14 @@ use crate::arrow::datatypes::{
     TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
     UInt8Type,
 };
-use crate::arrow::error::ArrowError;
-use crate::arrow::record_batch::RecordBatch;
-use crate::arrow::util::bit_util;
-use crate::error::{DataFusionError, Result};
-use apache_avro::schema::RecordSchema;
-use apache_avro::{
-    schema::{Schema as AvroSchema, SchemaKind},
-    types::Value,
-    AvroResult, Error as AvroError, Reader as AvroReader,
-};
-use arrow::array::{BinaryArray, FixedSizeBinaryArray, GenericListArray};
 use arrow::datatypes::{Fields, SchemaRef};
+use arrow::error::ArrowError;
 use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
+use arrow::record_batch::RecordBatch;
+use arrow::util::bit_util;
 use datafusion_common::arrow_err;
+use datafusion_common::error::{DataFusionError, Result};
 use num_traits::NumCast;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -1071,10 +1071,10 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::arrow::array::Array;
-    use crate::arrow::datatypes::{Field, TimeUnit};
-    use crate::datasource::avro_to_arrow::{Reader, ReaderBuilder};
+    use crate::avro_to_arrow::{Reader, ReaderBuilder};
+    use arrow::array::Array;
     use arrow::datatypes::DataType;
+    use arrow::datatypes::{Field, TimeUnit};
     use datafusion_common::assert_batches_eq;
     use datafusion_common::cast::{
         as_int32_array, as_int64_array, as_list_array, as_timestamp_microsecond_array,
@@ -1083,7 +1083,7 @@ mod test {
     use std::sync::Arc;
 
     fn build_reader(name: &str, batch_size: usize) -> Reader<File> {
-        let testdata = crate::test_util::arrow_test_data();
+        let testdata = datafusion_common::test_util::arrow_test_data();
         let filename = format!("{testdata}/avro/{name}");
         let builder = ReaderBuilder::new()
             .read_schema()

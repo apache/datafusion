@@ -24,6 +24,7 @@
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
+pub mod decoder;
 pub mod display;
 pub mod file;
 pub mod file_compression_type;
@@ -34,17 +35,23 @@ pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
 pub mod memory;
+pub mod schema_adapter;
 pub mod source;
 mod statistics;
+
 #[cfg(test)]
 mod test_util;
+
 pub mod url;
 pub mod write;
 use chrono::TimeZone;
 use datafusion_common::Result;
 use datafusion_common::{ScalarValue, Statistics};
-use futures::Stream;
+use file_meta::FileMeta;
+use futures::{Stream, StreamExt};
 use object_store::{path::Path, ObjectMeta};
+use object_store::{GetOptions, GetRange, ObjectStore};
+use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -188,6 +195,110 @@ impl From<ObjectMeta> for PartitionedFile {
             metadata_size_hint: None,
         }
     }
+}
+
+/// Represents the possible outcomes of a range calculation.
+///
+/// This enum is used to encapsulate the result of calculating the range of
+/// bytes to read from an object (like a file) in an object store.
+///
+/// Variants:
+/// - `Range(Option<Range<usize>>)`:
+///   Represents a range of bytes to be read. It contains an `Option` wrapping a
+///   `Range<usize>`. `None` signifies that the entire object should be read,
+///   while `Some(range)` specifies the exact byte range to read.
+/// - `TerminateEarly`:
+///   Indicates that the range calculation determined no further action is
+///   necessary, possibly because the calculated range is empty or invalid.
+pub enum RangeCalculation {
+    Range(Option<Range<usize>>),
+    TerminateEarly,
+}
+
+/// Calculates an appropriate byte range for reading from an object based on the
+/// provided metadata.
+///
+/// This asynchronous function examines the `FileMeta` of an object in an object store
+/// and determines the range of bytes to be read. The range calculation may adjust
+/// the start and end points to align with meaningful data boundaries (like newlines).
+///
+/// Returns a `Result` wrapping a `RangeCalculation`, which is either a calculated byte range or an indication to terminate early.
+///
+/// Returns an `Error` if any part of the range calculation fails, such as issues in reading from the object store or invalid range boundaries.
+pub async fn calculate_range(
+    file_meta: &FileMeta,
+    store: &Arc<dyn ObjectStore>,
+    terminator: Option<u8>,
+) -> Result<RangeCalculation> {
+    let location = file_meta.location();
+    let file_size = file_meta.object_meta.size;
+    let newline = terminator.unwrap_or(b'\n');
+
+    match file_meta.range {
+        None => Ok(RangeCalculation::Range(None)),
+        Some(FileRange { start, end }) => {
+            let (start, end) = (start as usize, end as usize);
+
+            let start_delta = if start != 0 {
+                find_first_newline(store, location, start - 1, file_size, newline).await?
+            } else {
+                0
+            };
+
+            let end_delta = if end != file_size {
+                find_first_newline(store, location, end - 1, file_size, newline).await?
+            } else {
+                0
+            };
+
+            let range = start + start_delta..end + end_delta;
+
+            if range.start == range.end {
+                return Ok(RangeCalculation::TerminateEarly);
+            }
+
+            Ok(RangeCalculation::Range(Some(range)))
+        }
+    }
+}
+
+/// Asynchronously finds the position of the first newline character in a specified byte range
+/// within an object, such as a file, in an object store.
+///
+/// This function scans the contents of the object starting from the specified `start` position
+/// up to the `end` position, looking for the first occurrence of a newline character.
+/// It returns the position of the first newline relative to the start of the range.
+///
+/// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
+///
+/// The function returns an `Error` if any issues arise while reading from the object store or processing the data stream.
+///
+async fn find_first_newline(
+    object_store: &Arc<dyn ObjectStore>,
+    location: &Path,
+    start: usize,
+    end: usize,
+    newline: u8,
+) -> Result<usize> {
+    let options = GetOptions {
+        range: Some(GetRange::Bounded(start..end)),
+        ..Default::default()
+    };
+
+    let result = object_store.get_opts(location, options).await?;
+    let mut result_stream = result.into_stream();
+
+    let mut index = 0;
+
+    while let Some(chunk) = result_stream.next().await.transpose()? {
+        if let Some(position) = chunk.iter().position(|&byte| byte == newline) {
+            return Ok(index + position);
+        }
+
+        index += chunk.len();
+    }
+
+    Ok(index)
 }
 
 #[cfg(test)]

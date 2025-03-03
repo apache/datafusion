@@ -21,9 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::datasource::listing::PartitionedFile;
-use crate::datasource::physical_plan::{
-    FileMeta, FileOpenFuture, FileOpener, JsonSource,
-};
+use crate::datasource::physical_plan::{FileMeta, FileOpenFuture, FileOpener};
 use crate::error::Result;
 
 use arrow::buffer::Buffer;
@@ -34,6 +32,7 @@ use datafusion_common::{Constraints, Statistics};
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource_json::source::JsonSource;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;

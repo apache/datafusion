@@ -26,10 +26,10 @@ use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::physical_plan::collect;
 use datafusion::prelude::SessionContext;
+use datafusion::test::object_store::local_unpartitioned_file;
 use datafusion_common::Result;
 use datafusion_execution::object_store::ObjectStoreUrl;
 
-use object_store::path::Path;
 use object_store::ObjectMeta;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
@@ -167,17 +167,4 @@ pub async fn store_parquet(
 
     let meta: Vec<_> = files.iter().map(local_unpartitioned_file).collect();
     Ok((meta, files))
-}
-
-/// Helper method to fetch the file size and date at given path and create a `ObjectMeta`
-pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta {
-    let location = Path::from_filesystem_path(path.as_ref()).unwrap();
-    let metadata = std::fs::metadata(path).expect("Local file metadata");
-    ObjectMeta {
-        location,
-        last_modified: metadata.modified().map(chrono::DateTime::from).unwrap(),
-        size: metadata.len() as usize,
-        e_tag: None,
-        version: None,
-    }
 }
