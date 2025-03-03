@@ -86,8 +86,6 @@ jobs:
   hash-collisions:
     name: cargo test hash collisions (amd64)
     runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
     steps:
       - uses: actions/checkout@v4
         with:
