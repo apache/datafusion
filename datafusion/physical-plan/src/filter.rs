@@ -329,6 +329,10 @@ impl DisplayAs for FilterExec {
                 };
                 write!(f, "FilterExec: {}{}", self.predicate, display_projections)
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }

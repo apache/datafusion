@@ -380,6 +380,10 @@ impl DisplayAs for SymmetricHashJoinExec {
                     self.mode, self.join_type, on, display_filter
                 )
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }

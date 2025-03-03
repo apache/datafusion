@@ -175,6 +175,10 @@ impl DisplayAs for MockExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "MockExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -337,6 +341,10 @@ impl DisplayAs for BarrierExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BarrierExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -449,6 +457,10 @@ impl DisplayAs for ErrorExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ErrorExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -534,6 +546,10 @@ impl DisplayAs for StatisticsExec {
                     self.schema.fields().len(),
                     self.stats.num_rows,
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -629,6 +645,10 @@ impl DisplayAs for BlockingExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "BlockingExec",)
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -771,6 +791,10 @@ impl DisplayAs for PanicExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "PanicExec",)
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

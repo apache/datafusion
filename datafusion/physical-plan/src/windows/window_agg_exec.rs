@@ -181,6 +181,10 @@ impl DisplayAs for WindowAggExec {
                     .collect();
                 write!(f, "wdw=[{}]", g.join(", "))?;
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")?;
+            }
         }
         Ok(())
     }

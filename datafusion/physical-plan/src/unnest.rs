@@ -137,6 +137,9 @@ impl DisplayAs for UnnestExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "UnnestExec")
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "")
+            }
         }
     }
 }

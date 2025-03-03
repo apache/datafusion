@@ -141,6 +141,10 @@ impl DisplayAs for StatisticsValidation {
                     self.stats.num_rows,
                 )
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }

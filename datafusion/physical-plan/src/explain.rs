@@ -94,6 +94,10 @@ impl DisplayAs for ExplainExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "ExplainExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }

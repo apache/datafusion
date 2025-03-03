@@ -369,6 +369,10 @@ impl DisplayAs for SortMergeJoinExec {
                     ))
                 )
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
