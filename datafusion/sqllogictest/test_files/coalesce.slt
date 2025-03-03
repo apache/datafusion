@@ -41,7 +41,7 @@ select
   arrow_typeof(coalesce(1, 2.0))
 ;
 ----
-1 Float64
+1 Decimal128(21, 1)
 
 query RT
 select
@@ -49,7 +49,7 @@ select
   arrow_typeof(coalesce(2.0, 1))
 ;
 ----
-2 Float64
+2 Decimal128(21, 1)
 
 query RT
 select
@@ -322,7 +322,7 @@ select coalesce(null, 34, arrow_cast(123, 'Dictionary(Int32, Int8)'));
 query RT
 select coalesce(2.0, 1, '3'), arrow_typeof(coalesce(2.0, 1, '3'));
 ----
-2 Float64
+2 Decimal128(21,1)
 
 # explicitly cast to Int8, and it will implicitly cast to Int64
 query IT
