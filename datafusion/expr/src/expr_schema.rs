@@ -215,7 +215,7 @@ impl ExprSchemable for Expr {
                     Ok(DataType::Null)
                 }
             }
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => Ok(DataType::Null),
             Expr::GroupingSet(_) => {
                 // Grouping sets do not really have a type and do not appear in projections
@@ -330,7 +330,7 @@ impl ExprSchemable for Expr {
             | Expr::SimilarTo(Like { expr, pattern, .. }) => {
                 Ok(expr.nullable(input_schema)? || pattern.nullable(input_schema)?)
             }
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => Ok(false),
             Expr::GroupingSet(_) => {
                 // Grouping sets do not really have the concept of nullable and do not appear

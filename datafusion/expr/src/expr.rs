@@ -1179,7 +1179,7 @@ impl Expr {
             Expr::ScalarVariable(..) => "ScalarVariable",
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
         }
@@ -1654,7 +1654,7 @@ impl Expr {
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
             // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::AggregateFunction(..)
             | Expr::Alias(..)
             | Expr::Between(..)
@@ -2236,7 +2236,7 @@ impl HashNode for Expr {
             Expr::ScalarSubquery(subquery) => {
                 subquery.hash(state);
             }
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => {
                 qualifier.hash(state);
                 options.hash(state);
@@ -2297,7 +2297,7 @@ impl Display for SchemaDisplay<'_> {
         match self.0 {
             // The same as Display
             // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Column(_)
             | Expr::Literal(_)
             | Expr::ScalarVariable(..)
@@ -2768,7 +2768,7 @@ impl Display for Expr {
                     write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => match qualifier {
                 Some(qualifier) => write!(f, "{qualifier}.*{options}"),
                 None => write!(f, "*{options}"),

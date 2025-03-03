@@ -429,7 +429,7 @@ impl Unparser<'_> {
                 })
             }
             // TODO: unparsing wildcard addition options
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, .. } => {
                 let attached_token = AttachedToken::empty();
                 if let Some(qualifier) = qualifier {
@@ -730,7 +730,7 @@ impl Unparser<'_> {
     ) -> Result<Vec<ast::FunctionArg>> {
         args.iter()
             .map(|e| {
-                #[allow(deprecated)]
+                #[expect(deprecated)]
                 if matches!(
                     e,
                     Expr::Wildcard {
@@ -1717,7 +1717,7 @@ mod tests {
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
         let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
             .project(vec![Expr::Wildcard {
                 qualifier: None,

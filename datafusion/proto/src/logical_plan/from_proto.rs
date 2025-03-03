@@ -527,7 +527,7 @@ pub fn parse_expr(
         ))),
         ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
             let qualifier = qualifier.to_owned().map(|x| x.try_into()).transpose()?;
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Ok(Expr::Wildcard {
                 qualifier,
                 options: Box::new(WildcardOptions::default()),

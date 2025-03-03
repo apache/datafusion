@@ -1675,7 +1675,7 @@ fn project_with_validation(
     for (e, validate) in expr {
         let e = e.into();
         match e {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => projected_expr.push(e),
             _ => {
                 if validate {

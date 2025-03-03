@@ -283,7 +283,7 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
             // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Unnest(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
@@ -711,7 +711,7 @@ pub fn exprlist_to_fields<'a>(
     let result = exprs
         .into_iter()
         .map(|e| match e {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => match qualifier {
                 None => {
                     let mut excluded = exclude_using_columns(plan)?;
@@ -804,7 +804,7 @@ pub fn exprlist_len(
     exprs
         .iter()
         .map(|e| match e {
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Wildcard {
                 qualifier: None,
                 options,
@@ -822,7 +822,7 @@ pub fn exprlist_len(
                         .len(),
                 )
             }
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::Wildcard {
                 qualifier: Some(qualifier),
                 options,

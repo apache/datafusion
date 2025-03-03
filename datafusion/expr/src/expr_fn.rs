@@ -121,7 +121,7 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 /// assert_eq!(p.to_string(), "*")
 /// ```
 pub fn wildcard() -> Expr {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Expr::Wildcard {
         qualifier: None,
         options: Box::new(WildcardOptions::default()),
@@ -130,7 +130,7 @@ pub fn wildcard() -> Expr {
 
 /// Create an '*' [`Expr::Wildcard`] expression with the wildcard options
 pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Expr::Wildcard {
         qualifier: None,
         options: Box::new(options),
@@ -148,7 +148,7 @@ pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
 /// assert_eq!(p.to_string(), "t.*")
 /// ```
 pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Expr::Wildcard {
         qualifier: Some(qualifier.into()),
         options: Box::new(WildcardOptions::default()),
@@ -160,7 +160,7 @@ pub fn qualified_wildcard_with_options(
     qualifier: impl Into<TableReference>,
     options: WildcardOptions,
 ) -> Expr {
-    #[allow(deprecated)]
+    #[expect(deprecated)]
     Expr::Wildcard {
         qualifier: Some(qualifier.into()),
         options: Box::new(options),

@@ -583,7 +583,7 @@ impl<'a> ConstEvaluator<'a> {
         // at plan time
         match expr {
             // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[allow(deprecated)]
+            #[expect(deprecated)]
             Expr::AggregateFunction { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)

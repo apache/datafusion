@@ -286,7 +286,7 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
         | Expr::InList { .. }
         | Expr::ScalarFunction(_) => Ok(TreeNodeRecursion::Continue),
         // TODO: remove the next line after `Expr::Wildcard` is removed
-        #[allow(deprecated)]
+        #[expect(deprecated)]
         Expr::AggregateFunction(_)
         | Expr::WindowFunction(_)
         | Expr::Wildcard { .. }
