@@ -27,7 +27,6 @@ use std::task::{Context, Poll};
 use std::{any::Any, sync::Arc};
 
 use super::{
-    metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan,
     ExecutionPlanProperties, Partitioning, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -35,9 +34,11 @@ use super::{
 use crate::execution_plan::{
     boundedness_from_children, emission_type_from_children, InvariantLevel,
 };
-use crate::metrics::BaselineMetrics;
 use crate::projection::{make_with_child, ProjectionExec};
 use crate::stream::ObservedStream;
+use datafusion_execution::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+};
 
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;

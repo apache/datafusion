@@ -57,11 +57,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::sorts::sort::sort_batch;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+};
+use datafusion_execution::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 
 use arrow::compute::concat_batches;

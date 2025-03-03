@@ -23,8 +23,7 @@ use std::mem::size_of;
 use std::sync::Arc;
 
 use crate::joins::utils::{JoinFilter, JoinHashMapType};
-use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
-use crate::{metrics, ExecutionPlan};
+use crate::ExecutionPlan;
 
 use arrow::array::{
     ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch,
@@ -36,6 +35,8 @@ use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,
 };
+use datafusion_execution::metrics;
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::intervals::cp_solver::ExprIntervalGraph;

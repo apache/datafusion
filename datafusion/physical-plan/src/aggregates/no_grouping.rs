@@ -21,11 +21,11 @@ use crate::aggregates::{
     aggregate_expressions, create_accumulators, finalize_aggregation, AccumulatorItem,
     AggregateMode,
 };
-use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_execution::metrics::{BaselineMetrics, RecordOutput};
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::BoxStream;

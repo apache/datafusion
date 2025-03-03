@@ -25,13 +25,11 @@ use std::task::{Context, Poll};
 use std::{any::Any, vec};
 
 use super::common::SharedMemoryReservation;
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{
     DisplayAs, ExecutionPlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::execution_plan::CardinalityEffect;
 use crate::hash_utils::create_hashes;
-use crate::metrics::BaselineMetrics;
 use crate::projection::{all_columns, make_with_child, update_expr, ProjectionExec};
 use crate::repartition::distributor_channels::{
     channels, partition_aware_channels, DistributionReceiver, DistributionSender,
@@ -39,6 +37,9 @@ use crate::repartition::distributor_channels::{
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties, Statistics};
+use datafusion_execution::metrics::{
+    self, BaselineMetrics, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions};
 use arrow::compute::take_arrays;

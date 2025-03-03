@@ -37,7 +37,6 @@ use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
 };
 use crate::joins::SharedBitmapBuilder;
-use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
     try_embed_projection, try_pushdown_through_join, EmbeddedProjection, JoinData,
     ProjectionExec,
@@ -56,6 +55,7 @@ use datafusion_common::{
     exec_datafusion_err, internal_err, project_schema, JoinSide, Result, Statistics,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
+use datafusion_execution::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_execution::TaskContext;
 use datafusion_expr::JoinType;
 use datafusion_physical_expr::equivalence::{

@@ -22,12 +22,14 @@ use std::sync::Arc;
 
 use crate::common::spawn_buffered;
 use crate::limit::LimitStream;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{make_with_child, update_expr, ProjectionExec};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::{
     DisplayAs, DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
     Partitioning, PlanProperties, SendableRecordBatchStream, Statistics,
+};
+use datafusion_execution::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 
 use datafusion_common::{internal_err, Result};
@@ -384,7 +386,6 @@ mod tests {
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::execution_plan::{Boundedness, EmissionType};
     use crate::expressions::col;
-    use crate::metrics::{MetricValue, Timestamp};
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;
@@ -402,6 +403,7 @@ mod tests {
     use datafusion_common::{assert_batches_eq, assert_contains, DataFusionError};
     use datafusion_common_runtime::SpawnedTask;
     use datafusion_execution::config::SessionConfig;
+    use datafusion_execution::metrics::{MetricValue, Timestamp};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::RecordBatchStream;
     use datafusion_physical_expr::expressions::Column;

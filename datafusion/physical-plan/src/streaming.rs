@@ -25,12 +25,14 @@ use super::{DisplayAs, DisplayFormatType, PlanProperties};
 use crate::display::{display_orderings, ProjectSchemaDisplay};
 use crate::execution_plan::{Boundedness, EmissionType};
 use crate::limit::LimitStream;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{
     all_alias_free_columns, new_projections_for_columns, update_expr, ProjectionExec,
 };
 use crate::stream::RecordBatchStreamAdapter;
 use crate::{ExecutionPlan, Partitioning, SendableRecordBatchStream};
+use datafusion_execution::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{internal_err, plan_err, Result};

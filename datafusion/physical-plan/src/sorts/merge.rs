@@ -23,11 +23,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 
-use crate::metrics::BaselineMetrics;
 use crate::sorts::builder::BatchBuilder;
 use crate::sorts::cursor::{Cursor, CursorValues};
 use crate::sorts::stream::PartitionedStream;
 use crate::RecordBatchStream;
+use datafusion_execution::metrics::BaselineMetrics;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -451,9 +451,9 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                 self.update_winner(cmp_node, winner, challenger);
             }
         } else if challenger < *winner {
-            // If the winner doesn’t survive in the final match, it indicates that the original winner
+            // If the winner doesn't survive in the final match, it indicates that the original winner
             // has moved up in value, so the challenger now becomes the new winner.
-            // This also means that we’re in a new round of the tie breaker,
+            // This also means that we're in a new round of the tie breaker,
             // and the polls count is outdated (though not yet cleaned up).
             //
             // By the time we reach this code, both the new winner and the current challenger

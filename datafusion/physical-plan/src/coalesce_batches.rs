@@ -22,7 +22,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{DisplayAs, ExecutionPlanProperties, PlanProperties, Statistics};
 use crate::{
     DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
@@ -31,6 +30,9 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
+use datafusion_execution::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+};
 use datafusion_execution::TaskContext;
 
 use crate::coalesce::{BatchCoalescer, CoalescerState};
