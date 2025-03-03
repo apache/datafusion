@@ -21,7 +21,7 @@ use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{not_impl_err, Result};
 
 /// Describes how many rows should be emitted during grouping.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmitTo {
     /// Emit all groups
     All,
