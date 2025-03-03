@@ -15,17 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![doc(
-    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
-    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
-)]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#[macro_use]
+mod macros;  
+
+doc_cfg!();  
 
 extern crate proc_macro;
 use datafusion_expr::scalar_doc_sections::doc_sections_const;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, LitStr};
+
 
 /// This procedural macro is intended to parse a rust custom attribute and create user documentation
 /// from it by constructing a `DocumentBuilder()` automatically. The `Documentation` can be
