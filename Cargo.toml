@@ -104,7 +104,7 @@ bigdecimal = "0.4.7"
 bytes = "1.10"
 chrono = { version = "0.4.38", default-features = false }
 criterion = "0.5.1"
-ctor = "0.2.9"
+ctor = "0.4.0"
 dashmap = "6.0.1"
 datafusion = { path = "datafusion/core", version = "46.0.0", default-features = false }
 datafusion-catalog = { path = "datafusion/catalog", version = "46.0.0" }
@@ -156,10 +156,10 @@ pbjson = { version = "0.7.0" }
 pbjson-types = "0.7"
 # Should match arrow-flight's version of prost.
 prost = "0.13.1"
-rand = "0.8.5"
+rand = "0.9"
 recursive = "0.1.1"
 regex = "1.8"
-rstest = "0.24.0"
+rstest = "0.25.0"
 serde_json = "1"
 sqlparser = { version = "0.54.0", features = ["visitor"] }
 tempfile = "3"

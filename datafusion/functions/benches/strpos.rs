@@ -20,7 +20,7 @@ extern crate criterion;
 use arrow::array::{StringArray, StringViewArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_expr::ColumnarValue;
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::str::Chars;
@@ -45,7 +45,7 @@ fn gen_string_array(
     let mut output_string_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     let mut output_sub_string_vec: Vec<Option<String>> = Vec::with_capacity(n_rows);
     for _ in 0..n_rows {
-        let rand_num = rng_ref.gen::<f32>(); // [0.0, 1.0)
+        let rand_num = rng_ref.random::<f32>(); // [0.0, 1.0)
         if rand_num < null_density {
             output_sub_string_vec.push(None);
             output_string_vec.push(None);
@@ -53,7 +53,7 @@ fn gen_string_array(
             // Generate random UTF8 string
             let mut generated_string = String::with_capacity(str_len_chars);
             for _ in 0..str_len_chars {
-                let idx = rng_ref.gen_range(0..corpus_char_count);
+                let idx = rng_ref.random_range(0..corpus_char_count);
                 let char = utf8.chars().nth(idx).unwrap();
                 generated_string.push(char);
             }
@@ -93,8 +93,8 @@ fn random_substring(chars: Chars) -> String {
     // get the substring of a random length from the input string by byte unit
     let mut rng = StdRng::seed_from_u64(44);
     let count = chars.clone().count();
-    let start = rng.gen_range(0..count - 1);
-    let end = rng.gen_range(start + 1..count);
+    let start = rng.random_range(0..count - 1);
+    let end = rng.random_range(start + 1..count);
     chars
         .enumerate()
         .filter(|(i, _)| *i >= start && *i < end)

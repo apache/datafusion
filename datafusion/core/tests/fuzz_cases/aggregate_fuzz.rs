@@ -49,7 +49,7 @@ use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
 use rand::rngs::StdRng;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{rng, Rng, SeedableRng};
 use tokio::task::JoinSet;
 
 // ========================================================================
@@ -175,7 +175,7 @@ async fn test_median() {
 /// 1. Floating point numbers
 /// 1. structured types
 fn baseline_config() -> DatasetGeneratorConfig {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let columns = vec![
         ColumnDescr::new("i8", DataType::Int8),
         ColumnDescr::new("i16", DataType::Int16),
@@ -223,18 +223,18 @@ fn baseline_config() -> DatasetGeneratorConfig {
         // begin decimal columns
         ColumnDescr::new("decimal128", {
             // Generate valid precision and scale for Decimal128 randomly.
-            let precision: u8 = rng.gen_range(1..=DECIMAL128_MAX_PRECISION);
+            let precision: u8 = rng.random_range(1..=DECIMAL128_MAX_PRECISION);
             // It's safe to cast `precision` to i8 type directly.
-            let scale: i8 = rng.gen_range(
+            let scale: i8 = rng.random_range(
                 i8::MIN..=std::cmp::min(precision as i8, DECIMAL128_MAX_SCALE),
             );
             DataType::Decimal128(precision, scale)
         }),
         ColumnDescr::new("decimal256", {
             // Generate valid precision and scale for Decimal256 randomly.
-            let precision: u8 = rng.gen_range(1..=DECIMAL256_MAX_PRECISION);
+            let precision: u8 = rng.random_range(1..=DECIMAL256_MAX_PRECISION);
             // It's safe to cast `precision` to i8 type directly.
-            let scale: i8 = rng.gen_range(
+            let scale: i8 = rng.random_range(
                 i8::MIN..=std::cmp::min(precision as i8, DECIMAL256_MAX_SCALE),
             );
             DataType::Decimal256(precision, scale)
@@ -439,13 +439,13 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut input4: Vec<i64> = vec![0; len];
     input123.iter_mut().for_each(|v| {
         *v = (
-            rng.gen_range(0..n_distinct) as i64,
-            rng.gen_range(0..n_distinct) as i64,
-            rng.gen_range(0..n_distinct) as i64,
+            rng.random_range(0..n_distinct) as i64,
+            rng.random_range(0..n_distinct) as i64,
+            rng.random_range(0..n_distinct) as i64,
         )
     });
     input4.iter_mut().for_each(|v| {
-        *v = rng.gen_range(0..n_distinct) as i64;
+        *v = rng.random_range(0..n_distinct) as i64;
     });
     input123.sort();
     let input1 = Int64Array::from_iter_values(input123.clone().into_iter().map(|k| k.0));
@@ -465,7 +465,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
     let mut batches = vec![];
     if STREAM {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..50);
+            let batch_size = rng.random_range(0..50);
             if remainder.num_rows() < batch_size {
                 break;
             }
@@ -474,7 +474,7 @@ pub(crate) fn make_staggered_batches<const STREAM: bool>(
         }
     } else {
         while remainder.num_rows() > 0 {
-            let batch_size = rng.gen_range(0..remainder.num_rows() + 1);
+            let batch_size = rng.random_range(0..remainder.num_rows() + 1);
             batches.push(remainder.slice(0, batch_size));
             remainder = remainder.slice(batch_size, remainder.num_rows() - batch_size);
         }
