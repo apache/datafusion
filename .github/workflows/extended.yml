@@ -39,17 +39,19 @@ jobs:
   linux-build-lib:
     name: linux build test
     runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
+    # note: do not use amd/rust container to preserve disk space
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup toolchain default
+      - name: Install Protobuf Compiler
+        run: sudo apt-get install -y protobuf-compiler
       - name: Prepare cargo build
         run: |
           cargo check --profile ci --all-targets
@@ -60,8 +62,7 @@ jobs:
     name: cargo test 'extended_tests' (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
+    # note: do not use amd/rust container to preserve disk space
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,10 +70,13 @@ jobs:
           fetch-depth: 1
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          rustup toolchain install
+      - name: Install Protobuf Compiler
+        run: sudo apt-get install -y protobuf-compiler
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
