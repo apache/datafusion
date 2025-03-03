@@ -83,6 +83,8 @@ pub enum AggregateMode {
     /// mode aggregation node. The `Final` mode is required since this is used in an
     /// intermediate step. The [`CombinePartialFinalAggregate`] physical optimizer rule
     /// will replace this combination with `Single` mode for more efficient execution.
+    ///
+    /// [`CombinePartialFinalAggregate`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/combine_partial_final_agg/struct.CombinePartialFinalAggregate.html
     Final,
     /// *Final* of multiple layers of aggregation, input is *Partitioned*
     ///
