@@ -28,8 +28,11 @@ concurrency:
 #
 # We still run them as they provide important coverage to ensure correctness
 # in the (very rare) event of a hash failure or sqlite library query failure.
-on:
-  push:
+
+# TEMP for testing
+on: [push, pull_request]
+# on:
+# push:
 
 jobs:
   # Check crate compiles and base cargo check passes
@@ -37,17 +40,14 @@ jobs:
     name: linux build test
     runs-on: ubuntu-latest
     steps:
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
       - uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 1
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
-          rustup default stable
-      - name: Install Protobuf Compiler
-        run: sudo apt-get install -y protobuf-compiler
       - name: Prepare cargo build
         run: |
           cargo check --profile ci --all-targets
@@ -65,13 +65,10 @@ jobs:
           fetch-depth: 1
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
-          rustup default stable
-      - name: Install Protobuf Compiler
-        run: sudo apt-get install -y protobuf-compiler
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
       # For debugging, test binaries can be large.
       - name: Show available disk space
         run: |
