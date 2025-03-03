@@ -1105,7 +1105,9 @@ impl ListingTable {
             )
         }))
         .await?;
-        let file_list = stream::iter(file_list).flatten();
+        let meta_fetch_concurrency =
+            ctx.config_options().execution.meta_fetch_concurrency;
+        let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
         // collect the statistics if required by the config
         let files = file_list
             .map(|part_file| async {
@@ -1122,7 +1124,7 @@ impl ListingTable {
                 }
             })
             .boxed()
-            .buffered(ctx.config_options().execution.meta_fetch_concurrency);
+            .buffer_unordered(ctx.config_options().execution.meta_fetch_concurrency);
 
         let (files, statistics) = get_statistics_with_limit(
             files,
@@ -1202,7 +1204,9 @@ mod tests {
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_plan::ExecutionPlanProperties;
 
+    use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
     use tempfile::TempDir;
+    use url::Url;
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
@@ -1592,6 +1596,81 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_assert_list_files_for_exact_paths() -> Result<()> {
+        // more expected partitions than files
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+            ],
+            12,
+            5,
+            Some(""),
+        )
+        .await?;
+
+        // more files than meta_fetch_concurrency (32)
+        let files: Vec<String> =
+            (0..64).map(|i| format!("bucket/key1/file{}", i)).collect();
+        // Collect references to each string
+        let file_refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
+        assert_list_files_for_exact_paths(file_refs.as_slice(), 5, 5, Some("")).await?;
+
+        // as many expected partitions as files
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+            ],
+            5,
+            5,
+            Some(""),
+        )
+        .await?;
+
+        // more files as expected partitions
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0",
+                "bucket/key1/file1",
+                "bucket/key1/file2",
+                "bucket/key2/file3",
+                "bucket/key2/file4",
+            ],
+            2,
+            2,
+            Some(""),
+        )
+        .await?;
+
+        // no files => no groups
+        assert_list_files_for_exact_paths(&[], 2, 0, Some("")).await?;
+
+        // files that don't match the default file ext
+        assert_list_files_for_exact_paths(
+            &[
+                "bucket/key1/file0.avro",
+                "bucket/key1/file1.csv",
+                "bucket/key1/file2.avro",
+                "bucket/key2/file3.csv",
+                "bucket/key2/file4.avro",
+                "bucket/key3/file5.csv",
+            ],
+            2,
+            2,
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
     async fn load_table(
         ctx: &SessionContext,
         name: &str,
@@ -1664,6 +1743,56 @@ mod tests {
         let table_paths = table_prefix
             .iter()
             .map(|t| ListingTableUrl::parse(t).unwrap())
+            .collect();
+        let config = ListingTableConfig::new_with_multi_paths(table_paths)
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema));
+
+        let table = ListingTable::try_new(config)?;
+
+        let (file_list, _) = table.list_files_for_scan(&ctx.state(), &[], None).await?;
+
+        assert_eq!(file_list.len(), output_partitioning);
+
+        Ok(())
+    }
+
+    /// Check that the files listed by the table match the specified `output_partitioning`
+    /// when the object store contains `files`, and validate that file metadata is fetched
+    /// concurrently
+    async fn assert_list_files_for_exact_paths(
+        files: &[&str],
+        target_partitions: usize,
+        output_partitioning: usize,
+        file_ext: Option<&str>,
+    ) -> Result<()> {
+        let ctx = SessionContext::new();
+        let (store, _) = make_test_store_and_state(
+            &files.iter().map(|f| (*f, 10)).collect::<Vec<_>>(),
+        );
+
+        let meta_fetch_concurrency = ctx
+            .state()
+            .config_options()
+            .execution
+            .meta_fetch_concurrency;
+        let expected_concurrency = files.len().min(meta_fetch_concurrency);
+        let head_blocking_store = ensure_head_concurrency(store, expected_concurrency);
+
+        let url = Url::parse("test://").unwrap();
+        ctx.register_object_store(&url, head_blocking_store.clone());
+
+        let format = AvroFormat {};
+
+        let opt = ListingOptions::new(Arc::new(format))
+            .with_file_extension_opt(file_ext)
+            .with_target_partitions(target_partitions);
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+
+        let table_paths = files
+            .iter()
+            .map(|t| ListingTableUrl::parse(format!("test:///{}", t)).unwrap())
             .collect();
         let config = ListingTableConfig::new_with_multi_paths(table_paths)
             .with_listing_options(opt)

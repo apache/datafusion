@@ -20,12 +20,22 @@
 use crate::execution::context::SessionState;
 use crate::execution::session_state::SessionStateBuilder;
 use crate::prelude::SessionContext;
+use futures::stream::BoxStream;
 use futures::FutureExt;
-use object_store::{memory::InMemory, path::Path, ObjectMeta, ObjectStore};
+use object_store::{
+    memory::InMemory, path::Path, Error, GetOptions, GetResult, ListResult,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload,
+    PutResult,
+};
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
+use tokio::{
+    sync::Barrier,
+    time::{timeout, Duration},
+};
 use url::Url;
 
-/// Returns a test object store with the provided `ctx`
+/// Registers a test object store with the provided `ctx`
 pub fn register_test_store(ctx: &SessionContext, files: &[(&str, u64)]) {
     let url = Url::parse("test://").unwrap();
     ctx.register_object_store(&url, make_test_store_and_state(files).0);
@@ -59,5 +69,123 @@ pub fn local_unpartitioned_file(path: impl AsRef<std::path::Path>) -> ObjectMeta
         size: metadata.len() as usize,
         e_tag: None,
         version: None,
+    }
+}
+
+/// Blocks the object_store `head` call until `concurrency` number of calls are pending.
+pub fn ensure_head_concurrency(
+    object_store: Arc<dyn ObjectStore>,
+    concurrency: usize,
+) -> Arc<dyn ObjectStore> {
+    Arc::new(BlockingObjectStore::new(object_store, concurrency))
+}
+
+/// An object store that “blocks” in its `head` call until an expected number of concurrent calls are reached.
+#[derive(Debug)]
+struct BlockingObjectStore {
+    inner: Arc<dyn ObjectStore>,
+    barrier: Arc<Barrier>,
+}
+
+impl BlockingObjectStore {
+    const NAME: &'static str = "BlockingObjectStore";
+    fn new(inner: Arc<dyn ObjectStore>, expected_concurrency: usize) -> Self {
+        Self {
+            inner,
+            barrier: Arc::new(Barrier::new(expected_concurrency)),
+        }
+    }
+}
+
+impl Display for BlockingObjectStore {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.inner, f)
+    }
+}
+
+/// All trait methods are forwarded to the inner object store, except for
+/// the `head` method which waits until the expected number of concurrent calls is reached.
+#[async_trait::async_trait]
+impl ObjectStore for BlockingObjectStore {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOpts,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.inner.get_opts(location, options).await
+    }
+
+    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
+        println!(
+            "{} received head call for {location}",
+            BlockingObjectStore::NAME
+        );
+        // Wait until the expected number of concurrent calls is reached, but timeout after 1 second to avoid hanging failing tests.
+        let wait_result = timeout(Duration::from_secs(1), self.barrier.wait()).await;
+        match wait_result {
+            Ok(_) => println!(
+                "{} barrier reached for {location}",
+                BlockingObjectStore::NAME
+            ),
+            Err(_) => {
+                let error_message = format!(
+                    "{} barrier wait timed out for {location}",
+                    BlockingObjectStore::NAME
+                );
+                log::error!("{}", error_message);
+                return Err(Error::Generic {
+                    store: BlockingObjectStore::NAME,
+                    source: error_message.into(),
+                });
+            }
+        }
+        // Forward the call to the inner object store.
+        self.inner.head(location).await
+    }
+
+    async fn delete(&self, location: &Path) -> object_store::Result<()> {
+        self.inner.delete(location).await
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'_, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
+        self.inner.copy(from, to).await
+    }
+
+    async fn copy_if_not_exists(
+        &self,
+        from: &Path,
+        to: &Path,
+    ) -> object_store::Result<()> {
+        self.inner.copy_if_not_exists(from, to).await
     }
 }
