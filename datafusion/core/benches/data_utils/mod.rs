@@ -49,11 +49,6 @@ pub fn create_table_provider(
     MemTable::try_new(schema, partitions).map(Arc::new)
 }
 
-/// create a seedable [`StdRng`](rand::StdRng)
-fn seedable_rng() -> StdRng {
-    StdRng::seed_from_u64(42)
-}
-
 /// Create test data schema
 pub fn create_schema() -> Schema {
     Schema::new(vec![
@@ -73,7 +68,7 @@ pub fn create_schema() -> Schema {
 
 fn create_data(size: usize, null_density: f64) -> Vec<Option<f64>> {
     // use random numbers to avoid spurious compiler optimizations wrt to branching
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
 
     (0..size)
         .map(|_| {
@@ -88,7 +83,7 @@ fn create_data(size: usize, null_density: f64) -> Vec<Option<f64>> {
 
 fn create_integer_data(size: usize, value_density: f64) -> Vec<Option<u64>> {
     // use random numbers to avoid spurious compiler optimizations wrt to branching
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
 
     (0..size)
         .map(|_| {
@@ -149,7 +144,7 @@ pub fn create_record_batches(
     partitions_len: usize,
     batch_size: usize,
 ) -> Vec<Vec<RecordBatch>> {
-    let mut rng = seedable_rng();
+    let mut rng = StdRng::seed_from_u64(42);
     (0..partitions_len)
         .map(|_| {
             (0..array_len / batch_size / partitions_len)
