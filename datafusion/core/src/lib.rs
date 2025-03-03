@@ -298,10 +298,10 @@
 //!         (built in or user provided)    ExecutionPlan
 //! ```
 //!
-//! DataFusion includes several built in data sources for common use
-//! cases, and can be extended by implementing the [`TableProvider`]
-//! trait. A [`TableProvider`] provides information for planning and
-//! an [`ExecutionPlan`]s for execution.
+//! A [`TableProvider`] provides information for planning and
+//! an [`ExecutionPlan`]s for execution. DataFusion includes [`ListingTable`]
+//! which supports reading several common file formats, and you can support any
+//! new file format by implementing the [`TableProvider`] trait. See also:
 //!
 //! 1. [`ListingTable`]: Reads data from Parquet, JSON, CSV, or AVRO
 //!    files.  Supports single files or multiple files with HIVE style
@@ -314,7 +314,7 @@
 //!
 //! [`ListingTable`]: crate::datasource::listing::ListingTable
 //! [`MemTable`]: crate::datasource::memory::MemTable
-//! [`StreamingTable`]: datafusion_catalog::streaming::StreamingTable
+//! [`StreamingTable`]: crate::catalog::streaming::StreamingTable
 //!
 //! ## Plan Representations
 //!
