@@ -1079,8 +1079,10 @@ impl SessionStateBuilder {
         }
     }
 
-    /// Create default builder with defaults for table_factories, file formats, expr_planners and builtin
+    /// Adds defaults for table_factories, file formats, expr_planners and builtin
     /// scalar, aggregate and windows functions.
+    ///
+    /// Note overwrites any previously registered items with the same name.
     pub fn with_default_features(mut self) -> Self {
         self.table_factories
             .get_or_insert_with(HashMap::new)
