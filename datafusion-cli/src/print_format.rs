@@ -116,9 +116,7 @@ impl PrintFormat {
                 print_batches_with_sep(writer, &batches, b',', with_header)
             }
             Self::Tsv => print_batches_with_sep(writer, &batches, b'\t', with_header),
-            // 对于 Table 格式，不在这里处理，直接返回错误
-            Self::Table => plan_err!(
-                "print_batches does not support Table format"),
+            Self::Table => plan_err!("print_batches does not support Table format"),
             Self::Json => batches_to_json!(ArrayWriter, writer, &batches),
             Self::NdJson => batches_to_json!(LineDelimitedWriter, writer, &batches),
         }
@@ -296,7 +294,7 @@ impl PrintFormat {
         Ok(())
     }
 
-    fn print_border<W: std::io::Write>(widths: &[usize], writer: &mut W,) -> Result<()> {
+    fn print_border<W: std::io::Write>(widths: &[usize], writer: &mut W) -> Result<()> {
         let cells: Vec<String> = widths.iter().map(|&w| "-".repeat(w + 2)).collect();
         writeln!(writer, "+{}+", cells.join("+"))?;
         Ok(())

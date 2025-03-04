@@ -76,39 +76,8 @@ pub struct PrintOptions {
 }
 
 impl PrintOptions {
-    /// Print the batches to stdout using the specified format
-    pub fn print_batches(
-        &self,
-        schema: SchemaRef,
-        batches: &[RecordBatch],
-        query_start_time: Instant,
-        row_count: usize,
-    ) -> Result<()> {
-        let stdout = std::io::stdout();
-        let mut writer = stdout.lock();
-
-        self.format
-            .print_batches(&mut writer, schema, batches,  true)?;
-
-        let formatted_exec_details = self.get_execution_details_formatted(
-            row_count,
-            if self.format == PrintFormat::Table {
-                self.maxrows
-            } else {
-                MaxRows::Unlimited
-            },
-            query_start_time,
-        );
-
-        if !self.quiet {
-            writeln!(writer, "{formatted_exec_details}")?;
-        }
-
-        Ok(())
-    }
-
     /// Print the stream to stdout using the table format
-    pub async fn print_table_batch<W: std::io::Write>(
+    pub async fn print_streaming_table_batch<W: std::io::Write>(
         &self,
         schema: SchemaRef,
         stream: &mut SendableRecordBatchStream,
@@ -148,9 +117,7 @@ impl PrintOptions {
                             .compute_column_widths(&preview_batches, schema.clone())?;
                         precomputed_widths = Some(widths.clone());
                         if !header_printed {
-                            self
-                                .format
-                                .print_header(&schema, &widths, writer)?;
+                            self.format.print_header(&schema, &widths, writer)?;
                         }
                         for preview_batch in preview_batches.drain(..) {
                             self.format.print_batch_with_widths(
@@ -211,7 +178,7 @@ impl PrintOptions {
         }
 
         let formatted_exec_details =
-            self.get_execution_details_formatted(total_count, self.maxrows, now);
+            self.get_execution_details_formatted(total_count, now);
 
         if !self.quiet {
             writeln!(writer, "{formatted_exec_details}")?;
@@ -220,9 +187,8 @@ impl PrintOptions {
         Ok(())
     }
 
-
     /// Print the stream to stdout using the format which is not table format
-    pub async fn print_batch<W: std::io::Write>(
+    pub async fn print_no_table_streaming_batch<W: std::io::Write>(
         &self,
         schema: SchemaRef,
         stream: &mut SendableRecordBatchStream,
@@ -234,7 +200,6 @@ impl PrintOptions {
             MaxRows::Unlimited => usize::MAX,
             MaxRows::Limited(n) => n,
         };
-
 
         let mut row_count = 0_usize;
         let mut with_header = true;
@@ -267,8 +232,7 @@ impl PrintOptions {
             with_header = false;
         }
 
-        let formatted_exec_details =
-            self.get_execution_details_formatted(row_count, self.maxrows, now);
+        let formatted_exec_details = self.get_execution_details_formatted(row_count, now);
 
         if !self.quiet {
             writeln!(writer, "{formatted_exec_details}")?;
@@ -289,7 +253,6 @@ impl PrintOptions {
     /// The schema is used to print the header.
     pub async fn print_stream(
         &self,
-        max_rows: MaxRows,
         schema: SchemaRef,
         mut stream: Pin<Box<dyn RecordBatchStream + Send>>,
         query_start_time: Instant,
@@ -303,9 +266,23 @@ impl PrintOptions {
         let mut writer = stdout.lock();
 
         if self.format == PrintFormat::Table {
-            self.print_table_batch(schema, &mut stream, max_count, &mut writer, query_start_time).await?;
+            self.print_streaming_table_batch(
+                schema,
+                &mut stream,
+                max_count,
+                &mut writer,
+                query_start_time,
+            )
+            .await?;
         } else {
-            self.print_batch(schema, &mut stream, max_count, &mut writer, query_start_time).await?;
+            self.print_no_table_streaming_batch(
+                schema,
+                &mut stream,
+                max_count,
+                &mut writer,
+                query_start_time,
+            )
+            .await?;
         }
 
         Ok(())
@@ -315,10 +292,9 @@ impl PrintOptions {
     pub fn get_execution_details_formatted(
         &self,
         row_count: usize,
-        maxrows: MaxRows,
         query_start_time: Instant,
     ) -> String {
-        let nrows_shown_msg = match maxrows {
+        let nrows_shown_msg = match self.maxrows {
             MaxRows::Limited(nrows) if nrows < row_count => {
                 format!("(First {nrows} displayed. Use --maxrows to adjust)")
             }

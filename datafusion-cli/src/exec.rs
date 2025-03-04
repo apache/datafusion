@@ -244,14 +244,12 @@ pub(super) async fn exec_and_print(
                 );
             }
             // As the input stream comes, we can generate results.
-            print_options
-                .print_stream(MaxRows::Unlimited, schema, stream, now)
-                .await?;
+            print_options.print_stream(schema, stream, now).await?;
         } else {
             // We need to finalize and return the inner `PrintOptions` for unbounded streams
             adjusted
                 .into_inner()
-                .print_stream(print_options.maxrows, schema, stream, now)
+                .print_stream(schema, stream, now)
                 .await?;
         }
     }

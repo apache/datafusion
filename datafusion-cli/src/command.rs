@@ -31,6 +31,7 @@ use datafusion::common::instant::Instant;
 use datafusion::error::{DataFusionError, Result};
 use std::fs::File;
 use std::io::BufReader;
+use std::io::Write;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -62,9 +63,24 @@ impl Command {
             Self::Help => {
                 let now = Instant::now();
                 let command_batch = all_commands_info();
-                let schema = command_batch.schema();
                 let num_rows = command_batch.num_rows();
-                print_options.print_batches(schema, &[command_batch], now, num_rows)
+                let schema = command_batch.schema();
+                let stdout = std::io::stdout();
+                let mut writer = &mut stdout.lock();
+                // Help is using the default format Automatic
+                print_options.format.print_batches(
+                    writer,
+                    schema,
+                    &[command_batch],
+                    true,
+                )?;
+                let formatted_exec_details =
+                    print_options.get_execution_details_formatted(num_rows, now);
+
+                if !print_options.quiet {
+                    writeln!(writer, "{formatted_exec_details}")?;
+                }
+                Ok(())
             }
             Self::ListTables => {
                 exec_and_print(ctx, print_options, "SHOW TABLES".into()).await
