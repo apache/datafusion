@@ -31,6 +31,7 @@ use async_trait::async_trait;
 use datafusion_common::config::{ConfigEntry, ConfigOptions};
 use datafusion_common::error::Result;
 use datafusion_common::DataFusionError;
+use datafusion_common::FieldExt;
 use datafusion_execution::TaskContext;
 use datafusion_expr::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use datafusion_expr::{TableType, Volatility};
@@ -190,6 +191,9 @@ impl InformationSchemaConfig {
                                 for (field_position, field) in
                                     table.schema().fields().iter().enumerate()
                                 {
+                                    if field.is_system_column() {
+                                        continue;
+                                    }
                                     builder.add_column(
                                         &catalog_name,
                                         &schema_name,
