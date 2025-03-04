@@ -97,6 +97,11 @@ pub trait TableSource: Sync + Send {
     /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef;
 
+    /// Get metadata columns of this table.
+    fn metadata_columns(&self) -> Option<SchemaRef> {
+        None
+    }
+
     /// Get primary key indices, if any
     fn constraints(&self) -> Option<&Constraints> {
         None
