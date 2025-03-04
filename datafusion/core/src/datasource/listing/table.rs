@@ -1303,7 +1303,7 @@ mod tests {
                 vec![vec![
                     col("int_col").add(lit(1)).sort(true, true),
                 ]],
-                Err("Expected single column references in output_ordering, got int_col + Int32(1)"),
+                Err("Expected single column reference in sort_order[0][0], got int_col + Int32(1)"),
             ),
             // ok with one column
             (

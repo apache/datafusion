@@ -114,19 +114,13 @@ pub fn create_ordering(
                             },
                         });
                     }
-                    Err(e) => {
-                        return plan_err!(
-                            "Cannot find column '{}' in schema at sort_order[{}][{}]: {}",
-                            col.name,
-                            group_idx,
-                            expr_idx,
-                            e
-                        );
-                    }
+                    // Cannot find expression in the projected_schema, stop iterating
+                    // since rest of the orderings are violated
+                    Err(_) => break,
                 },
                 expr => {
                     return plan_err!(
-                        "Expected column reference in sort_order[{}][{}], got {}",
+                        "Expected single column reference in sort_order[{}][{}], got {}",
                         group_idx,
                         expr_idx,
                         expr
