@@ -123,7 +123,7 @@ impl PrintFormat {
     }
 
     /// Print when the result batches contain no rows
-    fn print_empty<W: std::io::Write>(
+    pub fn print_empty<W: std::io::Write>(
         &self,
         writer: &mut W,
         schema: SchemaRef,
@@ -210,14 +210,18 @@ impl PrintFormat {
         widths: &[usize],
         writer: &mut W,
     ) -> Result<()> {
-        Self::print_border(widths, writer)?;
-
         let header: Vec<String> = schema
             .fields()
             .iter()
             .enumerate()
             .map(|(i, field)| Self::pad_cell(field.name(), widths[i]))
             .collect();
+
+        if header.is_empty() {
+            return Ok(());
+        }
+
+        Self::print_border(widths, writer)?;
         writeln!(writer, "| {} |", header.join(" | "))?;
 
         Self::print_border(widths, writer)?;
@@ -276,6 +280,9 @@ impl PrintFormat {
         widths: &[usize],
         writer: &mut W,
     ) -> Result<()> {
+        if widths.is_empty() {
+            return Ok(());
+        }
         let cells: Vec<String> = widths
             .iter()
             .map(|&w| format!(" {: <width$} ", ".", width = w))
@@ -289,12 +296,18 @@ impl PrintFormat {
         widths: &[usize],
         writer: &mut W,
     ) -> Result<()> {
+        if widths.is_empty() {
+            return Ok(());
+        }
         let cells: Vec<String> = widths.iter().map(|&w| "-".repeat(w + 2)).collect();
         writeln!(writer, "+{}+", cells.join("+"))?;
         Ok(())
     }
 
     fn print_border<W: std::io::Write>(widths: &[usize], writer: &mut W) -> Result<()> {
+        if widths.is_empty() {
+            return Ok(());
+        }
         let cells: Vec<String> = widths.iter().map(|&w| "-".repeat(w + 2)).collect();
         writeln!(writer, "+{}+", cells.join("+"))?;
         Ok(())

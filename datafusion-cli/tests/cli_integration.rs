@@ -185,6 +185,18 @@ fn init() {
     ],
     ""
 )]
+
+/// Add case for create table should return empty result set for table format
+#[case::exec_create_table_empty(
+    [
+        "--command",
+        "create table t1 (c1 int);",
+        "--format",
+        "table",
+        "-q"
+    ],
+    ""
+)]
 #[test]
 fn cli_quick_test<'a>(
     #[case] args: impl IntoIterator<Item = &'a str>,
