@@ -308,7 +308,6 @@ impl PrintFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::print_options::MaxRows;
     use std::sync::Arc;
 
     use arrow::array::{Int32Array, StringArray};
@@ -324,7 +323,7 @@ mod tests {
             PrintFormat::Automatic,
         ] {
             // no output for empty batches, even with header set
-            PrintBatchesTest::new()
+            PrintNoTableBatchesTest::new()
                 .with_format(format)
                 .with_schema(three_column_schema())
                 .with_batches(vec![])
@@ -340,7 +339,7 @@ mod tests {
             "+---+---+---+",
             "+---+---+---+",
         ];
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::Table)
             .with_schema(three_column_schema())
             .with_batches(vec![])
@@ -357,7 +356,7 @@ mod tests {
             "3,6,9",
         ];
 
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::Csv)
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::No)
@@ -375,7 +374,7 @@ mod tests {
             "3,6,9",
         ];
 
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::Csv)
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Yes)
@@ -392,7 +391,7 @@ mod tests {
             "3\t6\t9",
         ];
 
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::Tsv)
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::No)
@@ -410,7 +409,7 @@ mod tests {
             "3\t6\t9",
         ];
 
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::Tsv)
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Yes)
@@ -423,7 +422,7 @@ mod tests {
         let expected =
             &[r#"[{"a":1,"b":4,"c":7},{"a":2,"b":5,"c":8},{"a":3,"b":6,"c":9}]"#];
 
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::Json)
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Ignored)
@@ -439,7 +438,7 @@ mod tests {
             r#"{"a":3,"b":6,"c":9}"#,
         ];
 
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::NdJson)
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Ignored)
@@ -456,7 +455,7 @@ mod tests {
             "3,6,9",
         ];
 
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::Automatic)
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::No)
@@ -473,7 +472,7 @@ mod tests {
             "3,6,9",
         ];
 
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::Automatic)
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Yes)
@@ -494,7 +493,7 @@ mod tests {
             "+---+",
         ];
 
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::Table)
             .with_schema(one_column_schema())
             .with_batches(vec![empty_batch])
@@ -505,7 +504,7 @@ mod tests {
         // No output for empty batch when schema contains no columns
         let empty_batch = RecordBatch::new_empty(Arc::new(Schema::empty()));
         let expected = &[""];
-        PrintBatchesTest::new()
+        PrintNoTableBatchesTest::new()
             .with_format(PrintFormat::Table)
             .with_schema(Arc::new(Schema::empty()))
             .with_batches(vec![empty_batch])
@@ -823,12 +822,13 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    /// Note: this is the older version of the test, which now is only limited to the print_no_table_batches method
+    /// so we rename it to PrintNoTableBatchesTest
     #[derive(Debug)]
-    struct PrintBatchesTest {
+    struct PrintNoTableBatchesTest {
         format: PrintFormat,
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
-        maxrows: MaxRows,
         with_header: WithHeader,
         expected: Vec<&'static str>,
     }
@@ -842,13 +842,12 @@ mod tests {
         Ignored,
     }
 
-    impl PrintBatchesTest {
+    impl PrintNoTableBatchesTest {
         fn new() -> Self {
             Self {
                 format: PrintFormat::Table,
                 schema: Arc::new(Schema::empty()),
                 batches: vec![],
-                maxrows: MaxRows::Unlimited,
                 with_header: WithHeader::Ignored,
                 expected: vec![],
             }
@@ -869,12 +868,6 @@ mod tests {
         /// set the batches to convert
         fn with_batches(mut self, batches: Vec<RecordBatch>) -> Self {
             self.batches = batches;
-            self
-        }
-
-        /// set maxrows
-        fn with_maxrows(mut self, maxrows: MaxRows) -> Self {
-            self.maxrows = maxrows;
             self
         }
 

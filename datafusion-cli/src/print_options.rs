@@ -258,11 +258,10 @@ impl PrintOptions {
     /// Print the stream to stdout using the specified format
     /// There are two modes of operation:
     /// 1. If the format is table, the stream is processed in batches and previewed to determine the column widths
-    /// before printing the full result set. And after we have the column widths, we print batch by batch with the correct widths.
+    ///    before printing the full result set. And after we have the column widths, we print batch by batch with the correct widths.
     ///
     /// 2. If the format is not table, the stream is processed batch by batch and printed immediately.
     ///
-    /// The max_rows parameter is used to limit the number of rows printed.
     /// The query_start_time is used to calculate the elapsed time for the query.
     /// The schema is used to print the header.
     pub async fn print_stream(
