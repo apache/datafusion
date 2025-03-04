@@ -1296,12 +1296,7 @@ impl Expr {
 
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        let name = name.into();
-        // don't re-alias if already aliased to the same name
-        if matches!(&self, Expr::Alias(alias) if alias.eq_name(&name)) {
-            return self;
-        }
-        Expr::Alias(Alias::new(self, None::<&str>, name))
+        self.alias_qualified(None as Option<&str>, name)
     }
 
     /// Return `self AS name` alias expression with a specific qualifier
@@ -1310,14 +1305,14 @@ impl Expr {
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
-        let relation = relation.map(|r| r.into());
-        let name = name.into();
-        // don't re-alias if already aliased to the same name
-        if matches!(&self, Expr::Alias(alias) if alias.eq_qualified_name(relation.as_ref(), &name))
-        {
-            return self;
-        }
-        Expr::Alias(Alias::new(self, relation, name))
+        // Don't nest aliases
+        let Expr::Alias(mut alias) = self else {
+            return Expr::Alias(Alias::new(self, relation, name));
+        };
+
+        alias.relation = relation.map(|r| r.into());
+        alias.name = name.into();
+        Expr::Alias(alias)
     }
 
     /// Remove an alias from an expression if one exists.
