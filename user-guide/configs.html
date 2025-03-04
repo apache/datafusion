@@ -926,31 +926,35 @@ Environment variables are read during <code class="docutils literal notranslate"
 <td><p>false</p></td>
 <td><p>When set to true, the explain statement will print schema information</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
+<tr class="row-odd"><td><p>datafusion.explain.format</p></td>
+<td><p>indent</p></td>
+<td><p>Display format of explain. Default is “indent”. When set to “tree”, it will print the plan in a tree-rendered format.</p></td>
+</tr>
+<tr class="row-even"><td><p>datafusion.sql_parser.parse_float_as_decimal</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, SQL parser will parse float as decimal type</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.enable_ident_normalization</p></td>
 <td><p>true</p></td>
 <td><p>When set to true, SQL parser will normalize ident (convert ident to lowercase when not quoted)</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.enable_options_value_normalization</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.enable_options_value_normalization</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, SQL parser will normalize options value (convert value to lowercase). Note that this option is ignored and will be removed in the future. All case-insensitive values are normalized automatically.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.dialect</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.dialect</p></td>
 <td><p>generic</p></td>
 <td><p>Configure the SQL dialect used by DataFusion’s parser; supported values include: Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.support_varchar_with_length</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.support_varchar_with_length</p></td>
 <td><p>true</p></td>
 <td><p>If true, permit lengths for <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> such as <code class="docutils literal notranslate"><span class="pre">VARCHAR(20)</span></code>, but ignore the length. If false, error if a <code class="docutils literal notranslate"><span class="pre">VARCHAR</span></code> with a length is specified. The Arrow type system does not have a notion of maximum string length and thus DataFusion can not enforce such limits.</p></td>
 </tr>
-<tr class="row-even"><td><p>datafusion.sql_parser.collect_spans</p></td>
+<tr class="row-odd"><td><p>datafusion.sql_parser.collect_spans</p></td>
 <td><p>false</p></td>
 <td><p>When set to true, the source locations relative to the original SQL query (i.e. <a class="reference external" href="https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html"><code class="docutils literal notranslate"><span class="pre">Span</span></code></a>) will be collected and recorded in the logical plan nodes.</p></td>
 </tr>
-<tr class="row-odd"><td><p>datafusion.sql_parser.recursion_limit</p></td>
+<tr class="row-even"><td><p>datafusion.sql_parser.recursion_limit</p></td>
 <td><p>50</p></td>
 <td><p>Specifies the recursion depth limit when parsing complex SQL Queries</p></td>
 </tr>
