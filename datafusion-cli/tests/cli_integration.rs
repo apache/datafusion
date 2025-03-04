@@ -70,6 +70,70 @@ fn init() {
      +----+\n"
 )]
 
+/// Add case for unlimited the number of rows to be printed for table format
+#[case::exec_from_commands(
+    [
+        "--command", "SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC;",
+        "--format", "table",
+        "--maxrows", "inf",
+        "-q"
+    ],
+    "+----+\n\
+     | v1 |\n\
+     +----+\n\
+     | 5  |\n\
+     | 4  |\n\
+     | 3  |\n\
+     | 2  |\n\
+     | 1  |\n\
+     +----+\n"
+)]
+
+/// Add case for limiting the number of rows to be printed for table format
+#[case::exec_from_commands(
+    [
+        "--command", "SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC;",
+        "--format", "table",
+        "--maxrows", "3",
+        "-q"
+    ],
+    "+----+\n\
+     | v1 |\n\
+     +----+\n\
+     | 5  |\n\
+     | 4  |\n\
+     | 3  |\n\
+     | .  |\n\
+     | .  |\n\
+     | .  |\n\
+     +----+\n"
+)]
+
+/// Add case for limiting the number to 0 of rows to be printed for table format
+#[case::exec_from_commands(
+    [
+        "--command", "SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC;",
+        "--format", "table",
+        "--maxrows", "0",
+        "-q"
+    ],
+    "+----+\n\
+     | v1 |\n\
+     +----+\n\
+     +----+\n"
+)]
+
+/// Add case for limiting the number of rows to be printed for csv format
+#[case::exec_from_commands(
+    [
+        "--command", "SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC;",
+        "--format", "csv",
+        "--maxrows", "3",
+        "-q"
+    ],
+    "v1\n5\n4\n3\n"
+)]
+
 /// Add case for explain table format printing
 #[case::exec_explain_simple(
     ["--command", "explain select 1;", "--format", "table", "-q"],
@@ -83,7 +147,7 @@ fn init() {
      +---------------+--------------------------------------+\n"
 )]
 
-/// Add case for printing empty result set
+/// Add case for printing empty result set for table format
 #[case::exec_select_empty(
     [
         "--command",
@@ -96,6 +160,30 @@ fn init() {
      | col |\n\
      +-----+\n\
      +-----+\n"
+)]
+
+/// Add case for printing empty result set for json format
+#[case::exec_select_empty_json(
+    [
+        "--command",
+        "select * from (values (1)) as t(col) where false;",
+        "--format",
+        "json",
+        "-q"
+    ],
+    ""
+)]
+
+/// Add case for printing empty result set for csv format
+#[case::exec_select_empty_csv(
+    [
+        "--command",
+        "select * from (values (1)) as t(col) where false;",
+        "--format",
+        "csv",
+        "-q"
+    ],
+    ""
 )]
 #[test]
 fn cli_quick_test<'a>(
