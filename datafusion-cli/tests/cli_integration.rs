@@ -57,6 +57,20 @@ fn init() {
     ["--command", "SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC;", "--format", "table", "-q"],
     "+----+\n| v1 |\n+----+\n| 5  |\n| 4  |\n| 3  |\n| 2  |\n| 1  |\n+----+\n"
 )]
+
+/// Add case for explain table format printing
+#[case::exec_explain_simple(
+    ["--command", "explain select 1;", "--format", "table", "-q"],
+    "+---------------+--------------------------------------+\n\
+     | plan_type     | plan                                 |\n\
+     +---------------+--------------------------------------+\n\
+     | logical_plan  | Projection: Int64(1)                 |\n\
+     |               |   EmptyRelation                      |\n\
+     | physical_plan | ProjectionExec: expr=[1 as Int64(1)] |\n\
+     |               |   PlaceholderRowExec                 |\n\
+     +---------------+--------------------------------------+\n"
+)]
+
 #[test]
 fn cli_quick_test<'a>(
     #[case] args: impl IntoIterator<Item = &'a str>,
