@@ -144,6 +144,40 @@ impl PrintFormat {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Processes a batch of records and writes them to the provided writer in a table format.
+    ///
+    /// This function handles the formatting and output of a `RecordBatch` by either storing it
+    /// for preview purposes or printing it directly, depending on whether column widths have
+    /// been precomputed. It ensures that the table header is printed once and manages the
+    /// accumulation of preview batches until a specified limit is reached.
+    ///
+    /// # Arguments
+    ///
+    /// * `batch` - The `RecordBatch` to process.
+    /// * `schema` - The schema reference associated with the batch.
+    /// * `preview_batches` - A mutable vector to store batches for preview purposes.
+    /// * `preview_row_count` - A mutable reference to the count of rows in the preview batches.
+    /// * `preview_limit` - The maximum number of rows to accumulate before printing.
+    /// * `precomputed_widths` - An optional mutable reference to precomputed column widths.
+    /// * `header_printed` - A mutable reference indicating whether the table header has been printed.
+    /// * `writer` - The output writer where the formatted table will be written.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<()>` - Returns `Ok(())` if processing is successful; otherwise, returns an error.
+    ///
+    /// # Behavior
+    ///
+    /// - If `precomputed_widths` is `None`, the function accumulates batches in `preview_batches`
+    ///   until `preview_row_count` reaches `preview_limit`. Once the limit is reached, it computes
+    ///   the column widths, prints the table header, and then prints all accumulated batches.
+    /// - If `precomputed_widths` is `Some`, it means the column widths have already been computed.
+    ///   In this case, the function directly prints the current batch using the precomputed widths.
+    /// - The table header is printed only once, controlled by the `header_printed` flag.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if computing column widths or writing to the writer fails.
     pub fn process_table_batch<W: std::io::Write>(
         &self,
         batch: &RecordBatch,
