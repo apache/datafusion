@@ -573,7 +573,7 @@ fn min_batch(values: &ArrayRef) -> Result<ScalarValue> {
 }
 
 /// dynamically-typed max(array) -> ScalarValue
-fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
+pub fn max_batch(values: &ArrayRef) -> Result<ScalarValue> {
     Ok(match values.data_type() {
         DataType::Utf8 => {
             typed_min_max_batch_string!(values, StringArray, Utf8, max_string)
