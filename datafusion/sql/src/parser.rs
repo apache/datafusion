@@ -34,13 +34,14 @@ use sqlparser::{
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
-    ($MSG:expr, $token:expr, $line:expr, $column:expr, $suggestion:expr) => {
+    ($MSG:expr, $token:expr, $line:expr, $column:expr) => {
         Err(ParserError::ParserError(format!(
-            "{} at Line: {}, Column: {}. Found: '{}'. {}",
-            $MSG, $line, $column, $token, $suggestion
+            "{} at Line: {}, Column: {}. Found: '{}'.",
+            $MSG, $line, $column, $token
         )))
     };
 }
+
 
 
 fn parse_file_type(s: &str) -> Result<String, ParserError> {
@@ -420,13 +421,15 @@ impl<'a> DFParser<'a> {
     }
 
     /// Report an unexpected token
-    fn expected<T>(
-        &self,
-        expected: &str,
-        found: TokenWithSpan,
-    ) -> Result<T, ParserError> {
-        parser_err!(format!("Expected {expected}, found: {found}"))
+    fn expected<T>(&self, expected: &str, found: TokenWithSpan) -> Result<T, ParserError> {
+        parser_err!(
+            format!("Expected: {}", expected),
+            found.token.to_string(),
+            found.span.start.line,
+            found.span.start.column
+        )
     }
+    
 
     /// Parse a new expression
     pub fn parse_statement(&mut self) -> Result<Statement, ParserError> {
@@ -1014,6 +1017,34 @@ mod tests {
             options: vec![],
         }
     }
+
+    #[test]
+fn test_parser_error_message() {
+    let sql = "WITH cte AS (SELECT 1 AS col), SELECT * FROM cte"; // Incorrect SQL
+    let result = DFParser::parse_sql(sql);
+
+    match result {
+        Err(ParserError::ParserError(msg)) => {
+            assert!(
+                msg.contains("Expected: AS"),
+                "Expected error message to contain 'Expected: AS', got: {}",
+                msg
+            );
+            assert!(
+                msg.contains("Found: '*'"),
+                "Expected error message to mention the incorrect token '*', got: {}",
+                msg
+            );
+            assert!(
+                msg.contains("Line: 1, Column: 39"),
+                "Expected error message to contain correct position, got: {}",
+                msg
+            );
+        }
+        _ => panic!("Expected ParserError, but got {:?}", result),
+    }
+}
+
 
     #[test]
     fn create_external_table() -> Result<(), ParserError> {
