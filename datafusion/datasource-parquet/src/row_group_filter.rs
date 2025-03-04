@@ -19,13 +19,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{ParquetAccessPlan, ParquetFileMetrics};
-use crate::datasource::listing::FileRange;
-
 use arrow::array::{ArrayRef, BooleanArray};
 use arrow::datatypes::Schema;
 use datafusion_common::{Column, Result, ScalarValue};
+use datafusion_datasource::FileRange;
 use datafusion_physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::parquet_column;
 use parquet::basic::Type;
@@ -435,15 +433,14 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::datasource::physical_plan::parquet::reader::ParquetFileReader;
-    use crate::physical_plan::metrics::ExecutionPlanMetricsSet;
+    use crate::reader::ParquetFileReader;
 
     use arrow::datatypes::DataType::Decimal128;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::Result;
     use datafusion_expr::{cast, col, lit, Expr};
     use datafusion_physical_expr::planner::logical2physical;
-
+    use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
     use parquet::arrow::async_reader::ParquetObjectReader;
     use parquet::arrow::ArrowSchemaConverter;
     use parquet::basic::LogicalType;

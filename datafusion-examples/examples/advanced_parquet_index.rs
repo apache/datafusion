@@ -23,8 +23,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
@@ -32,7 +30,7 @@ use datafusion::common::{
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
-    parquet::ParquetFileReaderFactory, FileMeta, FileScanConfig, ParquetSource,
+    FileMeta, FileScanConfig, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -53,6 +51,8 @@ use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 
+use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
