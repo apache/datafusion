@@ -99,7 +99,6 @@ impl PrintFormat {
         writer: &mut W,
         schema: SchemaRef,
         batches: &[RecordBatch],
-        maxrows: MaxRows,
         with_header: bool,
     ) -> Result<()> {
         // filter out any empty batches
@@ -147,7 +146,7 @@ impl PrintFormat {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn process_batch(
+    pub fn process_batch<W: std::io::Write>(
         &self,
         batch: &RecordBatch,
         schema: SchemaRef,
@@ -156,7 +155,7 @@ impl PrintFormat {
         preview_limit: usize,
         precomputed_widths: &mut Option<Vec<usize>>,
         header_printed: &mut bool,
-        writer: &mut dyn std::io::Write,
+        writer: &mut W,
     ) -> Result<()> {
         if precomputed_widths.is_none() {
             preview_batches.push(batch.clone());
@@ -207,11 +206,11 @@ impl PrintFormat {
         Ok(widths)
     }
 
-    pub fn print_header(
+    pub fn print_header<W: std::io::Write>(
         &self,
         schema: &SchemaRef,
         widths: &[usize],
-        writer: &mut dyn std::io::Write,
+        writer: &mut W,
     ) -> Result<()> {
         Self::print_border(widths, writer)?;
 
@@ -227,11 +226,11 @@ impl PrintFormat {
         Ok(())
     }
 
-    pub fn print_batch_with_widths(
+    pub fn print_batch_with_widths<W: std::io::Write>(
         &self,
         batch: &RecordBatch,
         widths: &[usize],
-        writer: &mut dyn std::io::Write,
+        writer: &mut W,
     ) -> Result<(), ArrowError> {
         let formatters = batch
             .columns()
@@ -274,10 +273,10 @@ impl PrintFormat {
         Ok(())
     }
 
-    pub fn print_dotted_line(
+    pub fn print_dotted_line<W: std::io::Write>(
         &self,
         widths: &[usize],
-        writer: &mut dyn std::io::Write,
+        writer: &mut W,
     ) -> Result<()> {
         let cells: Vec<String> = widths
             .iter()
@@ -287,17 +286,17 @@ impl PrintFormat {
         Ok(())
     }
 
-    pub fn print_bottom_border(
+    pub fn print_bottom_border<W: std::io::Write>(
         &self,
         widths: &[usize],
-        writer: &mut dyn std::io::Write,
+        writer: &mut W,
     ) -> Result<()> {
         let cells: Vec<String> = widths.iter().map(|&w| "-".repeat(w + 2)).collect();
         writeln!(writer, "+{}+", cells.join("+"))?;
         Ok(())
     }
 
-    fn print_border(widths: &[usize], writer: &mut dyn std::io::Write) -> Result<()> {
+    fn print_border<W: std::io::Write>(widths: &[usize], writer: &mut W,) -> Result<()> {
         let cells: Vec<String> = widths.iter().map(|&w| "-".repeat(w + 2)).collect();
         writeln!(writer, "+{}+", cells.join("+"))?;
         Ok(())

@@ -88,7 +88,7 @@ impl PrintOptions {
         let mut writer = stdout.lock();
 
         self.format
-            .print_batches(&mut writer, schema, batches, self.maxrows, true)?;
+            .print_batches(&mut writer, schema, batches,  true)?;
 
         let formatted_exec_details = self.get_execution_details_formatted(
             row_count,
@@ -107,6 +107,7 @@ impl PrintOptions {
         Ok(())
     }
 
+    /// Print the stream to stdout using the table format
     pub async fn print_table_batch<W: std::io::Write>(
         &self,
         schema: SchemaRef,
@@ -219,6 +220,63 @@ impl PrintOptions {
         Ok(())
     }
 
+
+    /// Print the stream to stdout using the format which is not table format
+    pub async fn print_batch<W: std::io::Write>(
+        &self,
+        schema: SchemaRef,
+        stream: &mut SendableRecordBatchStream,
+        max_rows: usize,
+        writer: &mut W,
+        now: Instant,
+    ) -> Result<()> {
+        let max_count = match self.maxrows {
+            MaxRows::Unlimited => usize::MAX,
+            MaxRows::Limited(n) => n,
+        };
+
+
+        let mut row_count = 0_usize;
+        let mut with_header = true;
+        let mut max_rows_reached = false;
+
+        while let Some(maybe_batch) = stream.next().await {
+            let batch = maybe_batch?;
+            let curr_batch_rows = batch.num_rows();
+            if !max_rows_reached && row_count < max_count {
+                if row_count + curr_batch_rows > max_count {
+                    let needed = max_count - row_count;
+                    let batch_to_print = batch.slice(0, needed);
+                    self.format.print_batches(
+                        writer,
+                        batch.schema(),
+                        &[batch_to_print],
+                        with_header,
+                    )?;
+                    max_rows_reached = true;
+                } else {
+                    self.format.print_batches(
+                        writer,
+                        batch.schema(),
+                        &[batch],
+                        with_header,
+                    )?;
+                }
+            }
+            row_count += curr_batch_rows;
+            with_header = false;
+        }
+
+        let formatted_exec_details =
+            self.get_execution_details_formatted(row_count, self.maxrows, now);
+
+        if !self.quiet {
+            writeln!(writer, "{formatted_exec_details}")?;
+        }
+
+        Ok(())
+    }
+
     /// Print the stream to stdout using the specified format
     /// There are two modes of operation:
     /// 1. If the format is table, the stream is processed in batches and previewed to determine the column widths
@@ -244,47 +302,10 @@ impl PrintOptions {
         let stdout = std::io::stdout();
         let mut writer = stdout.lock();
 
-        let mut row_count = 0_usize;
-        let mut with_header = true;
-        let mut max_rows_reached = false;
-
         if self.format == PrintFormat::Table {
             self.print_table_batch(schema, &mut stream, max_count, &mut writer, query_start_time).await?;
         } else {
-            while let Some(maybe_batch) = stream.next().await {
-                let batch = maybe_batch?;
-                let curr_batch_rows = batch.num_rows();
-                if !max_rows_reached && row_count < max_count {
-                    if row_count + curr_batch_rows > max_count {
-                        let needed = max_count - row_count;
-                        let batch_to_print = batch.slice(0, needed);
-                        self.format.print_batches(
-                            &mut writer,
-                            batch.schema(),
-                            &[batch_to_print],
-                            max_rows,
-                            with_header,
-                        )?;
-                        max_rows_reached = true;
-                    } else {
-                        self.format.print_batches(
-                            &mut writer,
-                            batch.schema(),
-                            &[batch],
-                            max_rows,
-                            with_header,
-                        )?;
-                    }
-                }
-                row_count += curr_batch_rows;
-                with_header = false;
-            }
-            let formatted_exec_details =
-                self.get_execution_details_formatted(row_count, max_rows, query_start_time);
-
-            if !self.quiet {
-                writeln!(writer, "{formatted_exec_details}")?;
-            }
+            self.print_batch(schema, &mut stream, max_count, &mut writer, query_start_time).await?;
         }
 
         Ok(())
