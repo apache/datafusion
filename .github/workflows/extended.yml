@@ -28,11 +28,8 @@ concurrency:
 #
 # We still run them as they provide important coverage to ensure correctness
 # in the (very rare) event of a hash failure or sqlite library query failure.
-
-# TEMP for testing
-on: [push, pull_request]
-# on:
-# push:
+on:
+  push:
 
 jobs:
   # Check crate compiles and base cargo check passes
