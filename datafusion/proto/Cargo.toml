@@ -41,6 +41,7 @@ name = "datafusion_proto"
 default = ["parquet"]
 json = ["pbjson", "serde", "serde_json"]
 parquet = ["datafusion/parquet", "datafusion-common/parquet"]
+avro = ["datafusion/avro", "datafusion-common/avro"]
 
 [dependencies]
 arrow = { workspace = true }
