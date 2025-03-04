@@ -1016,6 +1016,9 @@ impl SessionStateBuilder {
     ///
     /// See [`Self::with_default_features`] to install the default set of functions,
     /// catalogs, etc.
+    ///
+    /// To create a `SessionStateBuilder` with default features such as functions,
+    /// please see [`Self::new_with_default_features`].
     pub fn new() -> Self {
         Self {
             session_id: None,
