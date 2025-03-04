@@ -412,6 +412,19 @@ impl Alias {
             name: name.into(),
         }
     }
+
+    /// Return true if this alias represents the unaliased `name`
+    pub fn eq_name(&self, name: &str) -> bool {
+        self.eq_qualified_name(None, name)
+    }
+
+    pub fn eq_qualified_name(
+        &self,
+        relation: Option<&TableReference>,
+        name: &str,
+    ) -> bool {
+        self.relation.as_ref() == relation && self.name == name
+    }
 }
 
 /// Binary expression
@@ -1270,6 +1283,8 @@ impl Expr {
 
     /// Ensure `expr` has the name as `original_name` by adding an
     /// alias if necessary.
+    ///
+    // TODO: remove? and deprecate??
     pub fn alias_if_changed(self, original_name: String) -> Result<Expr> {
         let new_name = self.name_for_alias()?;
         if new_name == original_name {
@@ -1281,7 +1296,12 @@ impl Expr {
 
     /// Return `self AS name` alias expression
     pub fn alias(self, name: impl Into<String>) -> Expr {
-        Expr::Alias(Alias::new(self, None::<&str>, name.into()))
+        let name = name.into();
+        // don't re-alias if already aliased to the same name
+        if matches!(&self, Expr::Alias(alias) if alias.eq_name(&name)) {
+            return self;
+        }
+        Expr::Alias(Alias::new(self, None::<&str>, name))
     }
 
     /// Return `self AS name` alias expression with a specific qualifier
@@ -1290,7 +1310,14 @@ impl Expr {
         relation: Option<impl Into<TableReference>>,
         name: impl Into<String>,
     ) -> Expr {
-        Expr::Alias(Alias::new(self, relation, name.into()))
+        let relation = relation.map(|r| r.into());
+        let name = name.into();
+        // don't re-alias if already aliased to the same name
+        if matches!(&self, Expr::Alias(alias) if alias.eq_qualified_name(relation.as_ref(), &name))
+        {
+            return self;
+        }
+        Expr::Alias(Alias::new(self, relation, name))
     }
 
     /// Remove an alias from an expression if one exists.
@@ -2831,7 +2858,6 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
         _ => Ok(expr.schema_name().to_string()),
     }
 }
-
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;

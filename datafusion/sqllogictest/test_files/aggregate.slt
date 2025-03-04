@@ -6640,3 +6640,16 @@ SELECT a, median(b), arrow_typeof(median(b)) FROM group_median_all_nulls GROUP B
 ----
 group0 NULL Int32
 group1 NULL Int32
+
+# should not be a double alias
+query TT
+explain SELECT count(*) order by count(*);
+----
+logical_plan
+01)Sort: count(*) ASC NULLS LAST
+02)--Projection: count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+04)------EmptyRelation
+physical_plan
+01)ProjectionExec: expr=[1 as count(*)]
+02)--PlaceholderRowExec
