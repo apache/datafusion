@@ -32,9 +32,7 @@ use arrow::datatypes::{
 };
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion_functions_aggregate::count::{
-    count_all, count_all_column, count_all_window, count_all_window_column,
-};
+use datafusion_functions_aggregate::count::{count_all, count_all_window};
 use datafusion_functions_aggregate::expr_fn::{
     array_agg, avg, count, count_distinct, max, median, min, sum,
 };
@@ -2798,16 +2796,6 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_count_wildcard_shema_name() {
-    assert_eq!(count_all().schema_name().to_string(), "count(*)");
-    assert_eq!(count_all_column(), col("count(*)"));
-    assert_eq!(
-        count_all_window_column(),
-        col("count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING")
-    );
-}
-
-#[tokio::test]
 async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     let ctx = create_join_context()?;
 
@@ -2855,6 +2843,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     // https://github.com/apache/datafusion/blame/cf45eb9020092943b96653d70fafb143cc362e19/datafusion/optimizer/src/alias.rs#L40-L43
     // for compare difference between sql and df logical plan, we need to create a new SessionContext here
     let ctx = create_join_context()?;
+    let agg_expr = count_all();
+    let agg_expr_col = col(agg_expr.schema_name().to_string());
     let df_results = ctx
         .table("t1")
         .await?
@@ -2863,8 +2853,8 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
                 ctx.table("t2")
                     .await?
                     .filter(out_ref_col(DataType::UInt32, "t1.a").eq(col("t2.a")))?
-                    .aggregate(vec![], vec![count_all()])?
-                    .select(vec![count_all_column()])?
+                    .aggregate(vec![], vec![agg_expr])?
+                    .select(vec![agg_expr_col])?
                     .into_unoptimized_plan(),
             ))
             .gt(lit(ScalarValue::UInt8(Some(0)))),
