@@ -72,11 +72,11 @@ use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 ///
 /// ```
 /// // Create orderings from columns "id" and "name"
-/// use arrow::datatypes::{Schema, Field, DataType};
-/// use datafusion::datasource::create_ordering;
-/// use datafusion_common::Column;
-/// use datafusion_expr::{Expr, SortExpr};
-///
+/// # use arrow::datatypes::{Schema, Field, DataType};
+/// # use datafusion::datasource::create_ordering;
+/// # use datafusion_common::Column;
+/// # use datafusion_expr::{Expr, SortExpr};
+/// #
 /// // Create a schema with two fields
 /// let schema = Schema::new(vec![
 ///     Field::new("id", DataType::Int32, false),
