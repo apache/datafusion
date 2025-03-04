@@ -312,7 +312,7 @@ fn eliminate_redundant_null_check_on_count() {
         GROUP BY col_int32
         HAVING c IS NOT NULL";
     let plan = test_sql(sql).unwrap();
-    let expected = "Projection: test.col_int32, count(Int64(1)) AS count(*) AS c\
+    let expected = "Projection: test.col_int32, count(Int64(1)) AS c\
     \n  Aggregate: groupBy=[[test.col_int32]], aggr=[[count(Int64(1))]]\
     \n    TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan}"));
