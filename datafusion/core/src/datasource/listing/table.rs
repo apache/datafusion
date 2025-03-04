@@ -1658,11 +1658,11 @@ mod tests {
         // files that don't match the default file ext
         assert_list_files_for_exact_paths(
             &[
-                "bucket/key1/file0.avro",
+                "bucket/key1/file0.json",
                 "bucket/key1/file1.csv",
-                "bucket/key1/file2.avro",
+                "bucket/key1/file2.json",
                 "bucket/key2/file3.csv",
-                "bucket/key2/file4.avro",
+                "bucket/key2/file4.json",
                 "bucket/key3/file5.csv",
             ],
             2,
@@ -1780,7 +1780,7 @@ mod tests {
         let url = Url::parse("test://").unwrap();
         ctx.register_object_store(&url, head_blocking_store.clone());
 
-        let format = AvroFormat {};
+        let format = JsonFormat::default();
 
         let opt = ListingOptions::new(Arc::new(format))
             .with_file_extension_opt(file_ext)
