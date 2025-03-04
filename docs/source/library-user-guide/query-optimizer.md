@@ -401,7 +401,7 @@ interval arithmetic to take an expression such as `a > 2500 AND a <= 5000` and
 build an accurate selectivity estimate that can then be used to find more efficient
 plans.
 
-#### `AnalysisContext` API
+### `AnalysisContext` API
 
 The `AnalysisContext` serves as a shared knowledge base during expression evaluation
 and boundary analysis. Think of it as a dynamic repository that maintains information about:
@@ -414,7 +414,7 @@ What makes `AnalysisContext` particularly powerful is its ability to propagate i
 through the expression tree. As each node in the expression tree is analyzed, it can both
 read from and write to this shared context, allowing for sophisticated boundary analysis and inference.
 
-#### `ColumnStatistics` for Cardinality Estimation
+### `ColumnStatistics` for Cardinality Estimation
 
 Column statistics form the foundation of optimization decisions. Rather than just tracking
 simple metrics, DataFusion's `ColumnStatistics` provides a rich set of information including:
