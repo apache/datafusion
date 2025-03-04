@@ -99,10 +99,18 @@ impl SortRequiredExec {
 impl DisplayAs for SortRequiredExec {
     fn fmt_as(
         &self,
-        _t: DisplayFormatType,
+        t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(f, "SortRequiredExec: [{}]", self.expr)
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "SortRequiredExec: [{}]", self.expr)
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
+        }
     }
 }
 

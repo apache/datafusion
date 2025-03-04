@@ -19,6 +19,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::datasource::file_format::file_type_to_format;
@@ -87,6 +88,7 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
+use datafusion_physical_plan::DisplayFormatType;
 
 use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
@@ -1723,6 +1725,7 @@ impl DefaultPhysicalPlanner {
             let mut stringified_plans = vec![];
 
             let config = &session_state.config_options().explain;
+            let explain_format = DisplayFormatType::from_str(&config.format)?;
 
             if !config.physical_plan_only {
                 stringified_plans.clone_from(&e.stringified_plans);
@@ -1742,7 +1745,11 @@ impl DefaultPhysicalPlanner {
                             displayable(input.as_ref())
                                 .set_show_statistics(config.show_statistics)
                                 .set_show_schema(config.show_schema)
-                                .to_stringified(e.verbose, InitialPhysicalPlan),
+                                .to_stringified(
+                                    e.verbose,
+                                    InitialPhysicalPlan,
+                                    explain_format,
+                                ),
                         );
 
                         // Show statistics + schema in verbose output even if not
@@ -1755,6 +1762,7 @@ impl DefaultPhysicalPlanner {
                                         .to_stringified(
                                             e.verbose,
                                             InitialPhysicalPlanWithStats,
+                                            explain_format,
                                         ),
                                 );
                             }
@@ -1765,6 +1773,7 @@ impl DefaultPhysicalPlanner {
                                         .to_stringified(
                                             e.verbose,
                                             InitialPhysicalPlanWithSchema,
+                                            explain_format,
                                         ),
                                 );
                             }
@@ -1780,7 +1789,11 @@ impl DefaultPhysicalPlanner {
                                     displayable(plan)
                                         .set_show_statistics(config.show_statistics)
                                         .set_show_schema(config.show_schema)
-                                        .to_stringified(e.verbose, plan_type),
+                                        .to_stringified(
+                                            e.verbose,
+                                            plan_type,
+                                            explain_format,
+                                        ),
                                 );
                             },
                         );
@@ -1791,7 +1804,11 @@ impl DefaultPhysicalPlanner {
                                     displayable(input.as_ref())
                                         .set_show_statistics(config.show_statistics)
                                         .set_show_schema(config.show_schema)
-                                        .to_stringified(e.verbose, FinalPhysicalPlan),
+                                        .to_stringified(
+                                            e.verbose,
+                                            FinalPhysicalPlan,
+                                            explain_format,
+                                        ),
                                 );
 
                                 // Show statistics + schema in verbose output even if not
@@ -1804,6 +1821,7 @@ impl DefaultPhysicalPlanner {
                                                 .to_stringified(
                                                     e.verbose,
                                                     FinalPhysicalPlanWithStats,
+                                                    explain_format,
                                                 ),
                                         );
                                     }
@@ -1814,6 +1832,7 @@ impl DefaultPhysicalPlanner {
                                                 .to_stringified(
                                                     e.verbose,
                                                     FinalPhysicalPlanWithSchema,
+                                                    explain_format,
                                                 ),
                                         );
                                     }
@@ -2719,6 +2738,10 @@ mod tests {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "NoOpExecutionPlan")
+                }
+                DisplayFormatType::TreeRender => {
+                    // TODO: collect info
+                    write!(f, "")
                 }
             }
         }

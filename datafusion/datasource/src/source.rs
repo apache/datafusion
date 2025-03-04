@@ -99,7 +99,12 @@ pub struct DataSourceExec {
 
 impl DisplayAs for DataSourceExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-        write!(f, "DataSourceExec: ")?;
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "DataSourceExec: ")?;
+            }
+            DisplayFormatType::TreeRender => write!(f, "")?,
+        }
         self.data_source.fmt_as(t, f)
     }
 }
