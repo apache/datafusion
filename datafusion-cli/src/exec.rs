@@ -232,7 +232,8 @@ pub(super) async fn exec_and_print(
         let physical_plan = df.create_physical_plan().await?;
 
         let is_unbounded = physical_plan.boundedness().is_unbounded();
-        let mut stream = execute_stream(Arc::clone(&physical_plan), task_ctx.clone())?;
+        let stream = execute_stream(Arc::clone(&physical_plan), task_ctx.clone())?;
+        let schema = physical_plan.schema();
 
         // Both bounded and unbounded streams are streaming prints
         if is_unbounded {
@@ -243,41 +244,14 @@ pub(super) async fn exec_and_print(
                 );
             }
             // As the input stream comes, we can generate results.
-            // However, memory safety is not guaranteed.
             print_options
-                .print_stream(MaxRows::Unlimited, stream, now)
+                .print_stream(MaxRows::Unlimited, schema, stream, now)
                 .await?;
         } else {
-            // Bounded stream; collected results size is limited by the maxrows option
-            let schema = physical_plan.schema();
-            let max_rows = match print_options.maxrows {
-                MaxRows::Unlimited => usize::MAX,
-                MaxRows::Limited(n) => n,
-            };
-            let stdout = std::io::stdout();
-            let mut writer = stdout.lock();
-
-            // If we don't want to print the table, we should use the streaming print same as above
-            if print_options.format != PrintFormat::Table
-                && print_options.format != PrintFormat::Automatic
-            {
-                print_options
-                    .print_stream(print_options.maxrows, stream, now)
-                    .await?;
-                continue;
-            }
-
-            // into_inner will finalize the print options to table if it's automatic
+            // We need to finalize and return the inner `PrintOptions` for unbounded streams
             adjusted
                 .into_inner()
-                .print_table_batch(
-                    print_options,
-                    schema,
-                    &mut stream,
-                    max_rows,
-                    &mut writer,
-                    now,
-                )
+                .print_stream(print_options.maxrows, schema, stream, now)
                 .await?;
         }
     }

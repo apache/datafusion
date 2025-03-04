@@ -29,6 +29,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::display::ArrayFormatter;
 use arrow::util::pretty::pretty_format_batches_with_options;
 use datafusion::common::format::DEFAULT_CLI_FORMAT_OPTIONS;
+use datafusion::common::plan_err;
 use datafusion::error::Result;
 
 /// Allow records to be printed in different formats
@@ -91,70 +92,6 @@ fn print_batches_with_sep<W: std::io::Write>(
     Ok(())
 }
 
-fn keep_only_maxrows(s: &str, maxrows: usize) -> String {
-    let lines: Vec<String> = s.lines().map(String::from).collect();
-
-    assert!(lines.len() >= maxrows + 4); // 4 lines for top and bottom border
-
-    let last_line = &lines[lines.len() - 1]; // bottom border line
-
-    let spaces = last_line.len().saturating_sub(4);
-    let dotted_line = format!("| .{:<spaces$}|", "", spaces = spaces);
-
-    let mut result = lines[0..(maxrows + 3)].to_vec(); // Keep top border and `maxrows` lines
-    result.extend(vec![dotted_line; 3]); // Append ... lines
-    result.push(last_line.clone());
-
-    result.join("\n")
-}
-
-fn format_batches_with_maxrows<W: std::io::Write>(
-    writer: &mut W,
-    batches: &[RecordBatch],
-    maxrows: MaxRows,
-) -> Result<()> {
-    match maxrows {
-        MaxRows::Limited(maxrows) => {
-            // Filter batches to meet the maxrows condition
-            let mut filtered_batches = Vec::new();
-            let mut row_count: usize = 0;
-            let mut over_limit = false;
-            for batch in batches {
-                if row_count + batch.num_rows() > maxrows {
-                    // If adding this batch exceeds maxrows, slice the batch
-                    let limit = maxrows - row_count;
-                    let sliced_batch = batch.slice(0, limit);
-                    filtered_batches.push(sliced_batch);
-                    over_limit = true;
-                    break;
-                } else {
-                    filtered_batches.push(batch.clone());
-                    row_count += batch.num_rows();
-                }
-            }
-
-            let formatted = pretty_format_batches_with_options(
-                &filtered_batches,
-                &DEFAULT_CLI_FORMAT_OPTIONS,
-            )?;
-            if over_limit {
-                let mut formatted_str = format!("{}", formatted);
-                formatted_str = keep_only_maxrows(&formatted_str, maxrows);
-                writeln!(writer, "{}", formatted_str)?;
-            } else {
-                writeln!(writer, "{}", formatted)?;
-            }
-        }
-        MaxRows::Unlimited => {
-            let formatted =
-                pretty_format_batches_with_options(batches, &DEFAULT_CLI_FORMAT_OPTIONS)?;
-            writeln!(writer, "{}", formatted)?;
-        }
-    }
-
-    Ok(())
-}
-
 impl PrintFormat {
     /// Print the batches to a writer using the specified format
     pub fn print_batches<W: std::io::Write>(
@@ -180,12 +117,9 @@ impl PrintFormat {
                 print_batches_with_sep(writer, &batches, b',', with_header)
             }
             Self::Tsv => print_batches_with_sep(writer, &batches, b'\t', with_header),
-            Self::Table => {
-                if maxrows == MaxRows::Limited(0) {
-                    return Ok(());
-                }
-                format_batches_with_maxrows(writer, &batches, maxrows)
-            }
+            // 对于 Table 格式，不在这里处理，直接返回错误
+            Self::Table => plan_err!(
+                "print_batches does not support Table format"),
             Self::Json => batches_to_json!(ArrayWriter, writer, &batches),
             Self::NdJson => batches_to_json!(LineDelimitedWriter, writer, &batches),
         }
