@@ -114,7 +114,9 @@ impl PrintFormat {
                 print_batches_with_sep(writer, &batches, b',', with_header)
             }
             Self::Tsv => print_batches_with_sep(writer, &batches, b'\t', with_header),
-            Self::Table => plan_err!("print_no_table_batches does not support Table format"),
+            Self::Table => {
+                plan_err!("print_no_table_batches does not support Table format")
+            }
             Self::Json => batches_to_json!(ArrayWriter, writer, &batches),
             Self::NdJson => batches_to_json!(LineDelimitedWriter, writer, &batches),
         }

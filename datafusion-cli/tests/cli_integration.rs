@@ -54,8 +54,20 @@ fn init() {
 
 /// Add case fixed issue: https://github.com/apache/datafusion/issues/14920
 #[case::exec_from_commands(
-    ["--command", "SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC;", "--format", "table", "-q"],
-    "+----+\n| v1 |\n+----+\n| 5  |\n| 4  |\n| 3  |\n| 2  |\n| 1  |\n+----+\n"
+    [
+        "--command", "SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC;",
+        "--format", "table",
+        "-q"
+    ],
+    "+----+\n\
+     | v1 |\n\
+     +----+\n\
+     | 5  |\n\
+     | 4  |\n\
+     | 3  |\n\
+     | 2  |\n\
+     | 1  |\n\
+     +----+\n"
 )]
 
 /// Add case for explain table format printing
@@ -71,6 +83,20 @@ fn init() {
      +---------------+--------------------------------------+\n"
 )]
 
+/// Add case for printing empty result set
+#[case::exec_select_empty(
+    [
+        "--command",
+        "select * from (values (1)) as t(col) where false;",
+        "--format",
+        "table",
+        "-q"
+    ],
+    "+-----+\n\
+     | col |\n\
+     +-----+\n\
+     +-----+\n"
+)]
 #[test]
 fn cli_quick_test<'a>(
     #[case] args: impl IntoIterator<Item = &'a str>,

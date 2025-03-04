@@ -150,21 +150,39 @@ impl PrintOptions {
         }
 
         if !max_rows_reached {
-            if precomputed_widths.is_none() && !preview_batches.is_empty() {
-                let widths = self
-                    .format
-                    .compute_column_widths(&preview_batches, schema.clone())?;
-                precomputed_widths = Some(widths);
+            if precomputed_widths.is_none() {
+                // If we have not printed any rows, we also need to compute the column widths
+                if preview_batches.is_empty() {
+                    let widths = schema
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().len())
+                        .collect::<Vec<usize>>();
+                    precomputed_widths = Some(widths);
+                } else {
+                    let widths = self
+                        .format
+                        .compute_column_widths(&preview_batches, schema.clone())?;
+                    precomputed_widths = Some(widths);
+                    if !header_printed {
+                        self.format.print_header(
+                            &schema,
+                            precomputed_widths.as_ref().unwrap(),
+                            writer,
+                        )?;
+                        header_printed = true;
+                    }
+                    for preview_batch in preview_batches.drain(..) {
+                        self.format.print_batch_with_widths(
+                            &preview_batch,
+                            precomputed_widths.as_ref().unwrap(),
+                            writer,
+                        )?;
+                    }
+                }
                 if !header_printed {
                     self.format.print_header(
                         &schema,
-                        precomputed_widths.as_ref().unwrap(),
-                        writer,
-                    )?;
-                }
-                for preview_batch in preview_batches.drain(..) {
-                    self.format.print_batch_with_widths(
-                        &preview_batch,
                         precomputed_widths.as_ref().unwrap(),
                         writer,
                     )?;
