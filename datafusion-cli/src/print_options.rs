@@ -16,7 +16,6 @@
 // under the License.
 
 use std::fmt::{Display, Formatter};
-use std::io::{StdoutLock, Write};
 use std::pin::Pin;
 use std::str::FromStr;
 
@@ -25,7 +24,6 @@ use crate::print_format::PrintFormat;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::common::instant::Instant;
-use datafusion::common::DataFusionError;
 use datafusion::error::Result;
 use datafusion::physical_plan::RecordBatchStream;
 
@@ -190,9 +188,7 @@ impl PrintOptions {
     /// Print the stream to stdout using the format which is not table format
     pub async fn print_no_table_streaming_batch<W: std::io::Write>(
         &self,
-        schema: SchemaRef,
         stream: &mut SendableRecordBatchStream,
-        max_rows: usize,
         writer: &mut W,
         now: Instant,
     ) -> Result<()> {
@@ -276,9 +272,7 @@ impl PrintOptions {
             .await?;
         } else {
             self.print_no_table_streaming_batch(
-                schema,
                 &mut stream,
-                max_count,
                 &mut writer,
                 query_start_time,
             )

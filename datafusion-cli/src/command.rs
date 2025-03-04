@@ -66,7 +66,7 @@ impl Command {
                 let num_rows = command_batch.num_rows();
                 let schema = command_batch.schema();
                 let stdout = std::io::stdout();
-                let mut writer = &mut stdout.lock();
+                let writer = &mut stdout.lock();
                 // Help is using the default format Automatic
                 print_options.format.print_batches(
                     writer,

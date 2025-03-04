@@ -19,8 +19,6 @@
 
 use std::str::FromStr;
 
-use crate::print_options::MaxRows;
-
 use arrow::csv::writer::WriterBuilder;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
@@ -308,6 +306,7 @@ impl PrintFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::print_options::MaxRows;
     use std::sync::Arc;
 
     use arrow::array::{Int32Array, StringArray};
@@ -418,25 +417,6 @@ mod tests {
     }
 
     #[test]
-    fn print_table() {
-        let expected = &[
-            "+---+---+---+",
-            "| a | b | c |",
-            "+---+---+---+",
-            "| 1 | 4 | 7 |",
-            "| 2 | 5 | 8 |",
-            "| 3 | 6 | 9 |",
-            "+---+---+---+",
-        ];
-
-        PrintBatchesTest::new()
-            .with_format(PrintFormat::Table)
-            .with_batches(split_batch(three_column_batch()))
-            .with_header(WithHeader::Ignored)
-            .with_expected(expected)
-            .run();
-    }
-    #[test]
     fn print_json() {
         let expected =
             &[r#"[{"a":1,"b":4,"c":7},{"a":2,"b":5,"c":8},{"a":3,"b":6,"c":9}]"#];
@@ -495,107 +475,6 @@ mod tests {
             .with_format(PrintFormat::Automatic)
             .with_batches(split_batch(three_column_batch()))
             .with_header(WithHeader::Yes)
-            .with_expected(expected)
-            .run();
-    }
-
-    #[test]
-    fn print_maxrows_unlimited() {
-        #[rustfmt::skip]
-            let expected = &[
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "| 3 |",
-            "+---+",
-        ];
-
-        // should print out entire output with no truncation if unlimited or
-        // limit greater than number of batches or equal to the number of batches
-        for max_rows in [MaxRows::Unlimited, MaxRows::Limited(5), MaxRows::Limited(3)] {
-            PrintBatchesTest::new()
-                .with_format(PrintFormat::Table)
-                .with_schema(one_column_schema())
-                .with_batches(vec![one_column_batch()])
-                .with_maxrows(max_rows)
-                .with_expected(expected)
-                .run();
-        }
-    }
-
-    #[test]
-    fn print_maxrows_limited_one_batch() {
-        #[rustfmt::skip]
-            let expected = &[
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| . |",
-            "| . |",
-            "| . |",
-            "+---+",
-        ];
-
-        PrintBatchesTest::new()
-            .with_format(PrintFormat::Table)
-            .with_batches(vec![one_column_batch()])
-            .with_maxrows(MaxRows::Limited(1))
-            .with_expected(expected)
-            .run();
-    }
-
-    #[test]
-    fn print_maxrows_limited_multi_batched() {
-        #[rustfmt::skip]
-            let expected = &[
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "| 3 |",
-            "| 1 |",
-            "| 2 |",
-            "| . |",
-            "| . |",
-            "| . |",
-            "+---+",
-        ];
-
-        PrintBatchesTest::new()
-            .with_format(PrintFormat::Table)
-            .with_batches(vec![
-                one_column_batch(),
-                one_column_batch(),
-                one_column_batch(),
-            ])
-            .with_maxrows(MaxRows::Limited(5))
-            .with_expected(expected)
-            .run();
-    }
-
-    #[test]
-    fn test_print_batches_empty_batches() {
-        let batch = one_column_batch();
-        let empty_batch = RecordBatch::new_empty(batch.schema());
-
-        #[rustfmt::skip]
-        let expected =&[
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "| 3 |",
-            "+---+",
-        ];
-
-        PrintBatchesTest::new()
-            .with_format(PrintFormat::Table)
-            .with_batches(vec![empty_batch.clone(), batch, empty_batch])
             .with_expected(expected)
             .run();
     }
@@ -752,52 +631,6 @@ mod tests {
         let format = PrintFormat::Table;
         format.print_bottom_border(&widths, &mut writer).unwrap();
         let expected = &["+---+---+---+"];
-        let binding = String::from_utf8(writer.clone()).unwrap();
-        let actual: Vec<_> = binding.trim_end().split('\n').collect();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn test_print_batches_with_maxrows() {
-        let batch = one_column_batch();
-        let schema = one_column_schema();
-        let format = PrintFormat::Table;
-
-        // should print out entire output with no truncation if unlimited or
-        // limit greater than number of batches or equal to the number of batches
-        for max_rows in [MaxRows::Unlimited, MaxRows::Limited(5), MaxRows::Limited(3)] {
-            let mut writer = Vec::new();
-            format
-                .print_batches(
-                    &mut writer,
-                    schema.clone(),
-                    &[batch.clone()],
-                    max_rows,
-                    true,
-                )
-                .unwrap();
-            let expected = &[
-                "+---+", "| a |", "+---+", "| 1 |", "| 2 |", "| 3 |", "+---+",
-            ];
-            let binding = String::from_utf8(writer.clone()).unwrap();
-            let actual: Vec<_> = binding.trim_end().split('\n').collect();
-            assert_eq!(actual, expected);
-        }
-
-        // should truncate output if limit is less than number of batches
-        let mut writer = Vec::new();
-        format
-            .print_batches(
-                &mut writer,
-                schema.clone(),
-                &[batch.clone()],
-                MaxRows::Limited(1),
-                true,
-            )
-            .unwrap();
-        let expected = &[
-            "+---+", "| a |", "+---+", "| 1 |", "| . |", "| . |", "| . |", "+---+",
-        ];
         let binding = String::from_utf8(writer.clone()).unwrap();
         let actual: Vec<_> = binding.trim_end().split('\n').collect();
         assert_eq!(actual, expected);
@@ -1091,7 +924,6 @@ mod tests {
                     &mut buffer,
                     self.schema.clone(),
                     &self.batches,
-                    self.maxrows,
                     with_header,
                 )
                 .unwrap();
