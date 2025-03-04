@@ -85,13 +85,13 @@ use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 ///
 /// let sort_exprs = vec![
 ///     vec![
-///         SortExpr { expr: Expr::Column(Column::new(None, "id",)), asc: true, nulls_first: false }
+///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "id")), asc: true, nulls_first: false }
 ///     ],
 ///     vec![
-///         SortExpr { expr: Expr::Column(Column::new(None, "name")), asc: false, nulls_first: true }
+///         SortExpr { expr: Expr::Column(Column::new(Some("t"), "name")), asc: false, nulls_first: true }
 ///     ]
 /// ];
-/// let result = create_ordering(&schema, &sort_exprs)?;
+/// let result = create_ordering(&schema, &sort_exprs).unwrap();
 /// ```
 pub fn create_ordering(
     schema: &Schema,
