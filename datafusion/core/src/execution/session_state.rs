@@ -1023,6 +1023,9 @@ impl SessionStateBuilder {
     ///
     /// See [`Self::with_default_features`] to install the default set of functions,
     /// catalogs, etc.
+    ///
+    /// To create a `SessionStateBuilder` with default features such as functions,
+    /// please see [`Self::new_with_default_features`].
     pub fn new() -> Self {
         Self {
             session_id: None,
@@ -1142,6 +1145,22 @@ impl SessionStateBuilder {
             );
 
         self
+    }
+
+    /// Returns a new [`SessionStateBuilder`] with default features.
+    ///
+    /// This is equivalent to calling [`Self::new()`] followed by [`Self::with_default_features()`].
+    ///
+    /// ```
+    /// use datafusion::execution::session_state::SessionStateBuilder;
+    ///
+    /// // Create a new SessionState with default features
+    /// let session_state = SessionStateBuilder::new_with_default_features()
+    ///     .with_session_id("my_session".to_string())
+    ///     .build();
+    /// ```
+    pub fn new_with_default_features() -> Self {
+        Self::new().with_default_features()
     }
 
     /// Set the session id.
