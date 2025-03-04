@@ -229,11 +229,7 @@ pub fn can_reduce_to_equal_statement(haystack: &Expr, needle: &Expr) -> bool {
                 right: n_right,
             }),
         ) if left == n_left && right == n_right => true,
-        _ => {
-            println!("haystack: {:?}", haystack);
-            println!("needle: {:?}", needle);
-            false
-        }
+        _ => false,
     }
 }
 

@@ -30,5 +30,5 @@ physical_plan
 02)--FilterExec: a@0 = 3
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
-query
+statement count 0
 drop table t;
