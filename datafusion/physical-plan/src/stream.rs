@@ -241,8 +241,17 @@ impl RecordBatchReceiverStreamBuilder {
         self.inner.spawn(task)
     }
 
-    /// Spawn a blocking task that will be aborted if this builder (or the stream
-    /// built from it) are dropped
+    /// Spawns a blocking task that attempts to send `RecordBatch` data to this stream.
+    ///
+    /// If this builder (or the stream built from it) is dropped **before** the task starts,  
+    /// the task will never execute.  
+    ///
+    /// **Note:** Once the blocking task has started, it **will not** be forcibly stopped,  
+    /// as Rust does not allow forcing a running thread to terminate. The task will continue  
+    /// running until it completes or encounters an error.  
+    ///
+    /// Users should ensure that their blocking function checks for errors from  
+    /// `tx.blocking_send` and exits cleanly when the receiver is dropped.
     ///
     /// This is often used to spawn tasks that write to the sender
     /// retrieved from [`Self::tx`], for examples, see the document
