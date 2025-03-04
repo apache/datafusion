@@ -126,7 +126,6 @@ Optional features:
 - `backtrace`: include backtrace information in error messages
 - `pyarrow`: conversions between PyArrow and DataFusion types
 - `serde`: enable arrow-schema's `serde` feature
-- `tracing`: propagates the current span across thread boundaries
 
 [apache avro]: https://avro.apache.org/
 [apache parquet]: https://parquet.apache.org/
