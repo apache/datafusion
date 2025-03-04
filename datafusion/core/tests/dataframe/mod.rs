@@ -54,7 +54,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{ColumnarValue, Volatility};
 use datafusion::prelude::{
-    AvroReadOptions, CsvReadOptions, JoinType, NdJsonReadOptions, ParquetReadOptions,
+    CsvReadOptions, JoinType, NdJsonReadOptions, ParquetReadOptions,
 };
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
@@ -5263,6 +5263,7 @@ async fn register_non_csv_file() {
     );
 }
 
+#[cfg(feature = "avro")]
 #[tokio::test]
 async fn register_non_avro_file() {
     let ctx = SessionContext::new();
@@ -5270,7 +5271,7 @@ async fn register_non_avro_file() {
         .register_avro(
             "data",
             "tests/data/test_binary.parquet",
-            AvroReadOptions::default(),
+            datafusion::prelude::AvroReadOptions::default(),
         )
         .await;
     assert_contains!(

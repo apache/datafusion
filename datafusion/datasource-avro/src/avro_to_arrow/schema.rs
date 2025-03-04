@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::datatypes::{DataType, IntervalUnit, Schema, TimeUnit, UnionMode};
-use crate::error::{DataFusionError, Result};
 use apache_avro::schema::{
     Alias, DecimalSchema, EnumSchema, FixedSchema, Name, RecordSchema,
 };
 use apache_avro::types::Value;
 use apache_avro::Schema as AvroSchema;
+use arrow::datatypes::{DataType, IntervalUnit, Schema, TimeUnit, UnionMode};
 use arrow::datatypes::{Field, UnionFields};
+use datafusion_common::error::{DataFusionError, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -309,12 +309,12 @@ pub fn aliased(
 #[cfg(test)]
 mod test {
     use super::{aliased, external_props, to_arrow_schema};
-    use crate::arrow::datatypes::DataType::{Binary, Float32, Float64, Timestamp, Utf8};
-    use crate::arrow::datatypes::TimeUnit::Microsecond;
-    use crate::arrow::datatypes::{Field, Schema};
     use apache_avro::schema::{Alias, EnumSchema, FixedSchema, Name, RecordSchema};
     use apache_avro::Schema as AvroSchema;
+    use arrow::datatypes::DataType::{Binary, Float32, Float64, Timestamp, Utf8};
     use arrow::datatypes::DataType::{Boolean, Int32, Int64};
+    use arrow::datatypes::TimeUnit::Microsecond;
+    use arrow::datatypes::{Field, Schema};
 
     fn alias(name: &str) -> Alias {
         Alias::new(name).unwrap()
