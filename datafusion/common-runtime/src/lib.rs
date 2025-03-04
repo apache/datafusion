@@ -25,8 +25,8 @@
 
 pub mod common;
 mod join_set;
+mod trace_utils;
 
 pub use common::SpawnedTask;
-pub use join_set::trace_utils::set_join_set_tracer;
-pub use join_set::trace_utils::JoinSetTracer;
 pub use join_set::JoinSet;
+pub use trace_utils::{set_join_set_tracer, JoinSetTracer};

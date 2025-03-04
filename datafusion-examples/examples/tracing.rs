@@ -111,7 +111,7 @@ impl JoinSetTracer for SpanTracer {
         f: Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>,
     ) -> Box<dyn FnOnce() -> Box<dyn Any + Send> + Send> {
         let span = Span::current();
-        Box::new(move || span.in_scope(|| f()))
+        Box::new(move || span.in_scope(f))
     }
 }
 
