@@ -456,13 +456,16 @@ explain insert into table_without_values select c1 from aggregate_test_100 order
 ----
 logical_plan
 01)Dml: op=[Insert Into] table=[table_without_values]
-02)--Projection: aggregate_test_100.c1 AS c1
+02)--Projection: CAST(aggregate_test_100.c1 AS Utf8View) AS c1
 03)----Sort: aggregate_test_100.c1 ASC NULLS LAST
 04)------TableScan: aggregate_test_100 projection=[c1]
 physical_plan
 01)DataSinkExec: sink=ParquetSink(file_groups=[])
-02)--SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
+02)--CoalescePartitionsExec
+03)----ProjectionExec: expr=[CAST(c1@0 AS Utf8View) as c1]
+04)------RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+05)--------SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[false]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], file_type=csv, has_header=true
 
 query I
 insert into table_without_values select c1 from aggregate_test_100 order by c1;

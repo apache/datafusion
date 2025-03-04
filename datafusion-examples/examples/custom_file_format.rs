@@ -96,6 +96,10 @@ impl FileFormat for TSVFileFormat {
             .await
     }
 
+    async fn transform_schema(&self, schema: SchemaRef) -> Result<SchemaRef> {
+        Ok(schema)
+    }
+
     async fn infer_stats(
         &self,
         state: &dyn Session,

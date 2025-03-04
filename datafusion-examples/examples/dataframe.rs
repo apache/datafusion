@@ -59,7 +59,8 @@ use tempfile::tempdir;
 #[tokio::main]
 async fn main() -> Result<()> {
     // The SessionContext is the main high level API for interacting with DataFusion
-    let ctx = SessionContext::new();
+    let config = SessionConfig::new().with_parquet_force_view_metadata(false);
+    let ctx = SessionContext::new_with_config(config);
     read_parquet(&ctx).await?;
     read_csv(&ctx).await?;
     read_memory(&ctx).await?;
