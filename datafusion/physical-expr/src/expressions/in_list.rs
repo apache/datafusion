@@ -45,6 +45,7 @@ use datafusion_physical_expr_common::datum::compare_with_eq;
 
 use ahash::RandomState;
 use datafusion_common::HashMap;
+use datafusion_expr::interval_arithmetic::Interval;
 use hashbrown::hash_map::RawEntryMut;
 
 /// InList
@@ -397,6 +398,51 @@ impl PhysicalExpr for InListExpr {
             self.negated,
             self.static_filter.clone(),
         )))
+    }
+
+    /// The output interval is computed by checking if the list item intervals are
+    /// a subset of, overlap, or are disjoint with the input expression's interval.
+    ///
+    /// If [InListExpr::negated] is true, the output interval gets negated.
+    ///
+    /// # Example:
+    /// If the input expression's interval is a superset of the
+    /// conjunction of the list items intervals, the output
+    /// interval is [`Interval::CERTAINLY_TRUE`].
+    ///
+    /// ```text
+    /// interval of expr:   ....---------------------....
+    /// Some list items:    ..........|..|.....|.|.......
+    ///
+    /// output interval:    [`true`, `true`]
+    /// ```
+    fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
+        let expr_bounds = children[0];
+
+        debug_assert!(
+            children.len() >= 2,
+            "InListExpr requires at least one list item"
+        );
+
+        // conjunction of list item intervals
+        let list_bounds = children
+            .iter()
+            .skip(2)
+            .try_fold(children[1].clone(), |acc, item| acc.union(*item))?;
+
+        if self.negated {
+            expr_bounds.contains(list_bounds)?.boolean_negate()
+        } else {
+            expr_bounds.contains(list_bounds)
+        }
+    }
+
+    fn supports_bounds_evaluation(&self, schema: &SchemaRef) -> bool {
+        self.expr.supports_bounds_evaluation(schema)
+            && self
+                .list
+                .iter()
+                .all(|expr| expr.supports_bounds_evaluation(schema))
     }
 }
 
@@ -1419,6 +1465,39 @@ mod tests {
                 &schema
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_bounds_eval() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let col_a = col("a", &schema)?;
+        let list = vec![lit(0i64), lit(2i64), lit(9i64), lit(6i64)];
+
+        let expr = in_list(col_a, list, &false, &schema).unwrap();
+
+        let child_intervals: &[&Interval] = &[
+            &Interval::make(Some(3_i64), Some(5_i64))?,
+            &Interval::make(Some(0_i64), Some(2_i64))?,
+            &Interval::make(Some(6_i64), Some(9_i64))?,
+        ];
+        let result = expr.evaluate_bounds(child_intervals)?;
+        debug_assert_eq!(result, Interval::UNCERTAIN);
+
+        let child_intervals: &[&Interval] = &[
+            &Interval::make(Some(3_i64), Some(5_i64))?,
+            &Interval::make(Some(4_i64), Some(4_i64))?,
+        ];
+        let result = expr.evaluate_bounds(child_intervals)?;
+        debug_assert_eq!(result, Interval::CERTAINLY_TRUE);
+
+        let child_intervals: &[&Interval] = &[
+            &Interval::make(Some(3_i64), Some(5_i64))?,
+            &Interval::make(Some(10_i64), Some(10_i64))?,
+        ];
+        let result = expr.evaluate_bounds(child_intervals)?;
+        debug_assert_eq!(result, Interval::CERTAINLY_FALSE);
 
         Ok(())
     }
