@@ -1117,11 +1117,11 @@ impl SessionStateBuilder {
     /// use datafusion::execution::session_state::SessionStateBuilder;
     ///
     /// // Create a new SessionState with default features
-    /// let session_state = SessionStateBuilder::new_with_defaults()
+    /// let session_state = SessionStateBuilder::new_with_default_features()
     ///     .with_session_id("my_session".to_string())
     ///     .build();
     /// ```
-    pub fn new_with_defaults() -> Self {
+    pub fn new_with_default_features() -> Self {
         Self::new().with_default_features()
     }
 
