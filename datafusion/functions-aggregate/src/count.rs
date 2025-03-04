@@ -96,7 +96,8 @@ pub fn count_all_window() -> Expr {
     ))
 }
 
-/// Create count wildcard window func of Expr::Column
+/// Expr::Column(Count Wildcard Window Function)
+/// Could be used in Dataframe API where you need Expr::Column of count wildcard
 pub fn count_all_window_column() -> Expr {
     col(Expr::WindowFunction(WindowFunction::new(
         WindowFunctionDefinition::AggregateUDF(count_udaf()),
@@ -106,7 +107,8 @@ pub fn count_all_window_column() -> Expr {
     .to_string())
 }
 
-/// Create count wildcard of Expr::Column
+/// Expr::Column(Count Wildcard Aggregate Function)
+/// Could be used in Dataframe API where you need Expr::Column of count wildcard
 pub fn count_all_column() -> Expr {
     col(count_all().schema_name().to_string())
 }
