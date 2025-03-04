@@ -86,7 +86,6 @@ serde = [
     "arrow-schema/serde",
 ]
 string_expressions = ["datafusion-functions/string_expressions"]
-tracing = ["datafusion-common-runtime/tracing"]
 unicode_expressions = [
     "datafusion-sql/unicode_expressions",
     "datafusion-functions/unicode_expressions",
