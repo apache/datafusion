@@ -21,11 +21,10 @@ use std::cmp::{self, Ordering};
 use std::task::{ready, Poll};
 use std::{any::Any, sync::Arc};
 
-use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
-use super::{DisplayAs, ExecutionPlanProperties, PlanProperties};
+use super::DisplayAs;
 use crate::{
-    DisplayFormatType, Distribution, ExecutionPlan, RecordBatchStream,
-    SendableRecordBatchStream,
+    DisplayFormatType, Distribution, ExecutionPlan, ExecutionPlanProperties,
+    PlanProperties, RecordBatchStream, SendableRecordBatchStream,
 };
 
 use arrow::array::{
@@ -40,6 +39,9 @@ use arrow::record_batch::RecordBatch;
 use arrow_ord::cmp::lt;
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, HashMap, HashSet, Result, UnnestOptions,
+};
+use datafusion_execution::metrics::{
+    self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::EquivalenceProperties;

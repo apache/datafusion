@@ -18,7 +18,6 @@
 //! Merge that deals with an arbitrary size of streaming inputs.
 //! This is an order-preserving merge.
 
-use crate::metrics::BaselineMetrics;
 use crate::sorts::{
     merge::SortPreservingMergeStream,
     stream::{FieldCursorStream, RowCursorStream},
@@ -28,6 +27,7 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::memory_pool::MemoryReservation;
+use datafusion_execution::metrics::BaselineMetrics;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 macro_rules! primitive_merge_helper {
