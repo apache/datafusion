@@ -2376,6 +2376,8 @@ fn to_substrait_literal(
             }),
             DEFAULT_TYPE_VARIATION_REF,
         ),
+        // TODO: DataDog-specific workaround, don't commit upstream
+        ScalarValue::Dictionary(_, value) => return to_substrait_literal(producer, value),
         _ => (
             not_impl_err!("Unsupported literal: {value:?}")?,
             DEFAULT_TYPE_VARIATION_REF,
