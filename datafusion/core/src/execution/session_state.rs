@@ -1019,7 +1019,10 @@ pub struct SessionStateBuilder {
 }
 
 impl SessionStateBuilder {
-    /// Returns a new [`SessionStateBuilder`] with no options set.
+    /// Returns a new empty [`SessionStateBuilder`].
+    ///
+    /// See [`Self::with_default_features`] to install the default set of functions,
+    /// catalogs, etc.
     pub fn new() -> Self {
         Self {
             session_id: None,
@@ -1049,9 +1052,10 @@ impl SessionStateBuilder {
         }
     }
 
-    /// Returns a new [SessionStateBuilder] based on an existing [SessionState]
+    /// Returns a new [SessionStateBuilder] based on an existing [SessionState].
+    ///
     /// The session id for the new builder will be unset; all other fields will
-    /// be cloned from what is set in the provided session state. If the default
+    /// be cloned from `existing`. If the default
     /// catalog exists in existing session state, the new session state will not
     /// create default catalog and schema.
     pub fn new_from_existing(existing: SessionState) -> Self {
