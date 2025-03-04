@@ -17,7 +17,7 @@
 
 use datafusion::error::Result;
 use datafusion::logical_expr::{LogicalPlan, PlanType};
-use datafusion::physical_plan::displayable;
+use datafusion::physical_plan::{displayable, DisplayFormatType};
 use datafusion::physical_planner::DefaultPhysicalPlanner;
 use datafusion::prelude::*;
 
@@ -78,7 +78,11 @@ async fn to_physical_plan_in_one_api_demo(
     println!(
         "Physical plan direct from logical plan:\n\n{}\n\n",
         displayable(physical_plan.as_ref())
-            .to_stringified(false, PlanType::InitialPhysicalPlan)
+            .to_stringified(
+                false,
+                PlanType::InitialPhysicalPlan,
+                DisplayFormatType::Default
+            )
             .plan
     );
 
@@ -120,7 +124,11 @@ async fn to_physical_plan_step_by_step_demo(
     println!(
         "Final physical plan:\n\n{}\n\n",
         displayable(physical_plan.as_ref())
-            .to_stringified(false, PlanType::InitialPhysicalPlan)
+            .to_stringified(
+                false,
+                PlanType::InitialPhysicalPlan,
+                DisplayFormatType::Default
+            )
             .plan
     );
 
@@ -135,7 +143,11 @@ async fn to_physical_plan_step_by_step_demo(
     println!(
         "Optimized physical plan:\n\n{}\n\n",
         displayable(physical_plan.as_ref())
-            .to_stringified(false, PlanType::InitialPhysicalPlan)
+            .to_stringified(
+                false,
+                PlanType::InitialPhysicalPlan,
+                DisplayFormatType::Default
+            )
             .plan
     );
 

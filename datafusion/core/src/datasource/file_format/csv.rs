@@ -16,7 +16,6 @@
 // under the License.
 
 //! Re-exports the [`datafusion_datasource_csv::file_format`] module, and contains tests for it.
-
 pub use datafusion_datasource_csv::file_format::*;
 
 #[cfg(test)]

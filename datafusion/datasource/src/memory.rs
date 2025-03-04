@@ -412,10 +412,10 @@ impl DataSource for MemorySourceConfig {
                     .map_or(String::new(), |limit| format!(", fetch={}", limit));
                 if self.show_sizes {
                     write!(
-                        f,
-                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                        partition_sizes.len(),
-                    )
+                                f,
+                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                                partition_sizes.len(),
+                            )
                 } else {
                     write!(
                         f,
@@ -423,6 +423,27 @@ impl DataSource for MemorySourceConfig {
                         partition_sizes.len(),
                     )
                 }
+            }
+            DisplayFormatType::TreeRender => {
+                let partition_sizes: Vec<_> =
+                    self.partitions.iter().map(|b| b.len()).collect();
+                writeln!(f, "partition_sizes={:?}", partition_sizes)?;
+
+                if let Some(output_ordering) = self.sort_information.first() {
+                    writeln!(f, "output_ordering={}", output_ordering)?;
+                }
+
+                let eq_properties = self.eq_properties();
+                let constraints = eq_properties.constraints();
+                if !constraints.is_empty() {
+                    writeln!(f, "constraints={}", constraints)?;
+                }
+
+                if let Some(limit) = self.fetch {
+                    writeln!(f, "fetch={}", limit)?;
+                }
+
+                write!(f, "partitions={}", partition_sizes.len())
             }
         }
     }
