@@ -92,7 +92,7 @@ fn print_batches_with_sep<W: std::io::Write>(
 
 impl PrintFormat {
     /// Print the batches to a writer using the specified format
-    pub fn print_batches<W: std::io::Write>(
+    pub fn print_no_table_batches<W: std::io::Write>(
         &self,
         writer: &mut W,
         schema: SchemaRef,
@@ -142,7 +142,7 @@ impl PrintFormat {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn process_batch<W: std::io::Write>(
+    pub fn process_table_batch<W: std::io::Write>(
         &self,
         batch: &RecordBatch,
         schema: SchemaRef,
@@ -651,7 +651,7 @@ mod tests {
         let mut writer = Vec::new();
 
         format
-            .process_batch(
+            .process_table_batch(
                 &batch,
                 schema.clone(),
                 &mut preview_batches,
@@ -692,7 +692,7 @@ mod tests {
         let mut writer = Vec::new();
 
         format
-            .process_batch(
+            .process_table_batch(
                 &batch1,
                 schema.clone(),
                 &mut preview_batches,
@@ -705,7 +705,7 @@ mod tests {
             .unwrap();
 
         format
-            .process_batch(
+            .process_table_batch(
                 &batch2,
                 schema.clone(),
                 &mut preview_batches,
@@ -718,7 +718,7 @@ mod tests {
             .unwrap();
 
         format
-            .process_batch(
+            .process_table_batch(
                 &batch1,
                 schema.clone(),
                 &mut preview_batches,
@@ -764,7 +764,7 @@ mod tests {
         let mut writer = Vec::new();
 
         format
-            .process_batch(
+            .process_table_batch(
                 &batch1,
                 schema.clone(),
                 &mut preview_batches,
@@ -777,7 +777,7 @@ mod tests {
             .unwrap();
 
         format
-            .process_batch(
+            .process_table_batch(
                 &batch2,
                 schema.clone(),
                 &mut preview_batches,
@@ -790,7 +790,7 @@ mod tests {
             .unwrap();
 
         format
-            .process_batch(
+            .process_table_batch(
                 &batch1,
                 schema.clone(),
                 &mut preview_batches,
@@ -920,7 +920,7 @@ mod tests {
         fn output_with_header(&self, with_header: bool) -> String {
             let mut buffer: Vec<u8> = vec![];
             self.format
-                .print_batches(
+                .print_no_table_batches(
                     &mut buffer,
                     self.schema.clone(),
                     &self.batches,

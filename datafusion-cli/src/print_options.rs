@@ -99,7 +99,7 @@ impl PrintOptions {
                 if total_count + batch_rows > max_rows {
                     let needed = max_rows - total_count;
                     let batch_to_print = batch.slice(0, needed);
-                    self.format.process_batch(
+                    self.format.process_table_batch(
                         &batch_to_print,
                         schema.clone(),
                         &mut preview_batches,
@@ -133,7 +133,7 @@ impl PrintOptions {
                     }
                     max_rows_reached = true;
                 } else {
-                    self.format.process_batch(
+                    self.format.process_table_batch(
                         &batch,
                         schema.clone(),
                         &mut preview_batches,
@@ -208,7 +208,7 @@ impl PrintOptions {
                 if row_count + curr_batch_rows > max_count {
                     let needed = max_count - row_count;
                     let batch_to_print = batch.slice(0, needed);
-                    self.format.print_batches(
+                    self.format.print_no_table_batches(
                         writer,
                         batch.schema(),
                         &[batch_to_print],
@@ -216,7 +216,7 @@ impl PrintOptions {
                     )?;
                     max_rows_reached = true;
                 } else {
-                    self.format.print_batches(
+                    self.format.print_no_table_batches(
                         writer,
                         batch.schema(),
                         &[batch],

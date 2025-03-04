@@ -68,7 +68,7 @@ impl Command {
                 let stdout = std::io::stdout();
                 let writer = &mut stdout.lock();
                 // Help is using the default format Automatic
-                print_options.format.print_batches(
+                print_options.format.print_no_table_batches(
                     writer,
                     schema,
                     &[command_batch],
