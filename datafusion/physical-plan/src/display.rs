@@ -37,10 +37,41 @@ use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 #[derive(Debug, Clone, Copy)]
 pub enum DisplayFormatType {
     /// Default, compact format. Example: `FilterExec: c12 < 10.0`
+    ///
+    /// This format is designed to provide a detailed textual description
+    /// of all rele
     Default,
-    /// Verbose, showing all available details
+    /// Verbose, showing all available details.
+    ///
+    /// This form is even more detailed than [`Self::Default`]
     Verbose,
-    /// TreeRender, display plan like a tree.
+    /// TreeRender, displayed in the `tree` explain type.
+    ///
+    /// This format is inspired by DuckDB's explain plans. The information
+    /// presented should be "user friendly", and contain only the most relevant
+    /// information for understanding a plan. It should NOT contain the same level
+    /// of detail information as the  [`Self::Default`] format.
+    ///
+    /// In this mode, each line contains a key=value pair.
+    /// Everything before the first `=` is treated as the key, and everything after the
+    /// first `=` is treated as the value.
+    ///
+    /// For example, if the output of `TreeRender` is this:
+    /// ```text
+    /// partition_sizes=[1]
+    /// partitions=1
+    /// ```
+    ///
+    /// It is rendered in the center of a box in the following way:
+    ///
+    /// ```text
+    /// ┌───────────────────────────┐
+    /// │       DataSourceExec      │
+    /// │    --------------------   │
+    /// │    partition_sizes: [1]   │
+    /// │       partitions: 1       │
+    /// └───────────────────────────┘
+    ///  ```
     TreeRender,
 }
 

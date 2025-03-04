@@ -74,13 +74,16 @@ physical_plan
 03)└─────────────┬─────────────┘
 04)┌─────────────┴─────────────┐
 05)│         FilterExec        │
-06)└─────────────┬─────────────┘
-07)┌─────────────┴─────────────┐
-08)│      RepartitionExec      │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
 09)└─────────────┬─────────────┘
 10)┌─────────────┴─────────────┐
-11)│       DataSourceExec      │
-12)└───────────────────────────┘
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)└───────────────────────────┘
 
 # Aggregate
 query TT
@@ -185,6 +188,32 @@ physical_plan
 26)│       DataSourceExec      ││       DataSourceExec      │
 27)└───────────────────────────┘└───────────────────────────┘
 
+# Long Filter (demonstrate what happens with wrapping)
+query TT
+explain SELECT int_col FROM table1
+WHERE string_col != 'foo' AND string_col != 'bar' AND string_col != 'a really long string constant'
+;
+----
+logical_plan
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8("foo") AND table1.string_col != Utf8("bar") AND table1.string_col != Utf8("a really long string constant")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("foo"), table1.string_col != Utf8("bar"), table1.string_col != Utf8("a really long string constant")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│string_col@1 != foo AND ...│
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)└───────────────────────────┘
 
 
 # cleanup
