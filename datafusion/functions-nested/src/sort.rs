@@ -204,7 +204,6 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     for i in 0..row_count {
         if list_array.is_null(i) {
             array_lengths.push(0);
-            arrays.push(new_null_array(list_array.value(i).data_type(), 1));
             valid.append_null();
         } else {
             let arr_ref = list_array.value(i);
@@ -226,12 +225,16 @@ pub fn array_sort_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|a| a.as_ref())
         .collect::<Vec<&dyn Array>>();
 
-    let list_arr = ListArray::new(
-        Arc::new(Field::new_list_field(data_type, true)),
-        OffsetBuffer::from_lengths(array_lengths),
-        Arc::new(compute::concat(elements.as_slice())?),
-        buffer,
-    );
+    let list_arr = if elements.is_empty() {
+        ListArray::new_null(Arc::new(Field::new_list_field(data_type, true)), row_count)
+    } else {
+        ListArray::new(
+            Arc::new(Field::new_list_field(data_type, true)),
+            OffsetBuffer::from_lengths(array_lengths),
+            Arc::new(compute::concat(elements.as_slice())?),
+            buffer,
+        )
+    };
     Ok(Arc::new(list_arr))
 }
 
