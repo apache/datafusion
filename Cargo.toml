@@ -45,6 +45,7 @@ members = [
     "datafusion/proto-common/gen",
     "datafusion/sql",
     "datafusion/sqllogictest",
+    "datafusion/storage",
     "datafusion/substrait",
     "datafusion/wasmtest",
     "datafusion-cli",
@@ -127,6 +128,7 @@ datafusion-physical-plan = { path = "datafusion/physical-plan", version = "45.0.
 datafusion-proto = { path = "datafusion/proto", version = "45.0.0" }
 datafusion-proto-common = { path = "datafusion/proto-common", version = "45.0.0" }
 datafusion-sql = { path = "datafusion/sql", version = "45.0.0" }
+datafusion-storage = { path = "datafusion/storage", version = "45.0.0" }
 doc-comment = "0.3"
 env_logger = "0.11"
 futures = "0.3"
@@ -144,6 +146,7 @@ parquet = { version = "54.2.0", default-features = false, features = [
 ] }
 pbjson = { version = "0.7.0" }
 pbjson-types = "0.7"
+percent-encoding = "2.1.0"
 # Should match arrow-flight's version of prost.
 prost = "0.13.1"
 rand = "0.8.5"

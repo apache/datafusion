@@ -1752,6 +1752,7 @@ dependencies = [
  "datafusion-physical-optimizer",
  "datafusion-physical-plan",
  "datafusion-sql",
+ "datafusion-storage",
  "doc-comment",
  "env_logger",
  "flate2",
@@ -1835,6 +1836,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-storage",
  "futures",
  "log",
  "object_store",
@@ -1921,6 +1923,7 @@ dependencies = [
  "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
+ "datafusion-storage",
  "flate2",
  "futures",
  "glob",
@@ -1976,9 +1979,9 @@ dependencies = [
  "dashmap",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-storage",
  "futures",
  "log",
- "object_store",
  "parking_lot",
  "rand 0.8.5",
  "tempfile",
@@ -2366,6 +2369,19 @@ dependencies = [
  "thiserror 2.0.11",
  "tokio",
  "tokio-postgres",
+]
+
+[[package]]
+name = "datafusion-storage"
+version = "45.0.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "datafusion-common",
+ "futures",
+ "url",
 ]
 
 [[package]]
