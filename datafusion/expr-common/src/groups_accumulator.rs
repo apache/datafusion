@@ -106,6 +106,13 @@ impl EmitTo {
 /// [`Accumulator`]: crate::accumulator::Accumulator
 /// [Aggregating Millions of Groups Fast blog]: https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/
 pub trait GroupsAccumulator: Send {
+    /// Called with metadata about the groups that will be processed.
+    ///
+    /// [`GroupsAccumulator`]: datafusion_expr_common::groups_accumulator::GroupsAccumulator
+    fn register_metadata(&mut self, _metadata: &GroupsAccumulatorMetadata) -> Result<()> {
+        Ok(())
+    }
+
     /// Updates the accumulator's state from its arguments, encoded as
     /// a vector of [`ArrayRef`]s.
     ///
@@ -250,4 +257,19 @@ pub trait GroupsAccumulator: Send {
     /// This function is called once per batch, so it should be `O(n)` to
     /// compute, not `O(num_groups)`
     fn size(&self) -> usize;
+}
+
+/// Metadata for [`GroupsAccumulator`] with some execution time information so you can optimize your implementation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupsAccumulatorMetadata {
+    /// Whether each group is contiguous, this will be `true`
+    ///
+    /// Meaning that if you get the following group indices in [`GroupsAccumulator::update_batch`]/[`GroupsAccumulator::merge_batch`]
+    /// ```text
+    /// [1, 1, 1, 1, 1, 2, 2, 3]
+    /// ```
+    ///
+    /// You can be sure that you will never get another group with index 1 or 2 (until call to [`GroupsAccumulator::state`]/[`GroupsAccumulator::evaluate`] which will shift the group indices).
+    /// However, you might get another group with index 3 in the future.
+    pub group_indices_contiguous: bool,
 }

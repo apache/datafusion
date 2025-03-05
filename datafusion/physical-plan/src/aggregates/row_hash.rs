@@ -32,7 +32,7 @@ use crate::sorts::sort::sort_batch;
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::{read_spill_as_stream, spill_record_batch_by_size};
 use crate::stream::RecordBatchStreamAdapter;
-use crate::{aggregates, metrics, ExecutionPlan, PhysicalExpr};
+use crate::{aggregates, metrics, ExecutionPlan, InputOrderMode, PhysicalExpr};
 use crate::{RecordBatchStream, SendableRecordBatchStream};
 
 use arrow::array::*;
@@ -50,6 +50,7 @@ use datafusion_physical_expr::{GroupsAccumulatorAdapter, PhysicalSortExpr};
 
 use super::order::GroupOrdering;
 use super::AggregateExec;
+use datafusion_expr::groups_accumulator::GroupsAccumulatorMetadata;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use futures::ready;
@@ -483,10 +484,14 @@ impl GroupedHashAggregateStream {
             }
         };
 
+        let group_accumulator_metadata = GroupsAccumulatorMetadata {
+            group_indices_contiguous: agg.input_order_mode == InputOrderMode::Sorted,
+        };
+
         // Instantiate the accumulators
         let accumulators: Vec<_> = aggregate_exprs
             .iter()
-            .map(create_group_accumulator)
+            .map(|expr| create_group_accumulator(expr, &group_accumulator_metadata))
             .collect::<Result<_>>()?;
 
         let group_schema = agg_group_by.group_schema(&agg.input().schema())?;
@@ -617,19 +622,25 @@ impl GroupedHashAggregateStream {
 /// [`GroupsAccumulatorAdapter`] if not.
 pub(crate) fn create_group_accumulator(
     agg_expr: &Arc<AggregateFunctionExpr>,
+    metadata: &GroupsAccumulatorMetadata,
 ) -> Result<Box<dyn GroupsAccumulator>> {
-    if agg_expr.groups_accumulator_supported() {
-        agg_expr.create_groups_accumulator()
-    } else {
-        // Note in the log when the slow path is used
-        debug!(
-            "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
-            agg_expr.name()
-        );
-        let agg_expr_captured = Arc::clone(agg_expr);
-        let factory = move || agg_expr_captured.create_accumulator();
-        Ok(Box::new(GroupsAccumulatorAdapter::new(factory)))
-    }
+    let mut group_accumulator: Box<dyn GroupsAccumulator> =
+        if agg_expr.groups_accumulator_supported() {
+            agg_expr.create_groups_accumulator()?
+        } else {
+            // Note in the log when the slow path is used
+            debug!(
+                "Creating GroupsAccumulatorAdapter for {}: {agg_expr:?}",
+                agg_expr.name()
+            );
+            let agg_expr_captured = Arc::clone(agg_expr);
+            let factory = move || agg_expr_captured.create_accumulator();
+            Box::new(GroupsAccumulatorAdapter::new(factory))
+        };
+
+    group_accumulator.register_metadata(metadata)?;
+
+    Ok(group_accumulator)
 }
 
 impl Stream for GroupedHashAggregateStream {
