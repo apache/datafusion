@@ -468,6 +468,31 @@ async fn test_stringview_external_sort() {
     let _ = df.collect().await.expect("Query execution failed");
 }
 
+/// This test case is for the regression case:
+/// When `ExternalSorter` has read all input batches
+/// - It has spilled many sorted runs to disk
+/// - Its in-memory buffer for batches is almost full
+/// The regression implementation will try to merge the spills and in-memory batches
+/// right away, without spilling the in-memory batches first, caused OOM.
+#[tokio::test]
+async fn test_external_sort_regression() {
+    let config = SessionConfig::new()
+        .with_sort_spill_reservation_bytes(3000000)
+        .with_target_partitions(1);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::new(FairSpillPool::new(10 * 1024 * 1024)))
+        .build_arc()
+        .unwrap();
+
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+
+    let query = "select * from generate_series(1,9000000) as t1(v1) order by v1;";
+    let df = ctx.sql(&query).await.unwrap();
+
+    // Check not fail
+    let _ = df.collect().await.unwrap();
+}
+
 /// Run the query with the specified memory limit,
 /// and verifies the expected errors are returned
 #[derive(Clone, Debug)]
