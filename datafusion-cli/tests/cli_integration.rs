@@ -49,7 +49,7 @@ fn init() {
 )]
 #[case::exec_backslash(
     "backslash",
-    ["--file", "tests/data/backslash.txt", "--format", "json", "-q"],
+    ["--file", "tests/sql/backslash.sql", "--format", "json", "-q"],
 )]
 #[case::exec_from_files(
     "files",
