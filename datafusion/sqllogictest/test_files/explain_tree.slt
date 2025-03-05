@@ -54,9 +54,35 @@ STORED AS PARQUET
 LOCATION 'test_files/scratch/explain_tree/table2.parquet';
 
 
-# table3: Memoru
+# table3: Memory
 statement ok
 CREATE TABLE table3 as select * from table1;
+
+# table4: JSON
+query I
+COPY (SELECT * from table1)
+TO 'test_files/scratch/explain_tree/table4.json'
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE table4
+STORED AS JSON
+LOCATION 'test_files/scratch/explain_tree/table4.json';
+
+# table5: ARROW
+query I
+COPY (SELECT * from table1)
+TO 'test_files/scratch/explain_tree/table5.arrow'
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE table5
+STORED AS ARROW
+LOCATION 'test_files/scratch/explain_tree/table5.arrow';
+
+
 
 ######## Begin Queries ########
 
@@ -83,7 +109,10 @@ physical_plan
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│       DataSourceExec      │
-15)└───────────────────────────┘
+15)│    --------------------   │
+16)│          files: 1         │
+17)│        format: csv        │
+18)└───────────────────────────┘
 
 # Aggregate
 query TT
@@ -110,7 +139,10 @@ physical_plan
 15)└─────────────┬─────────────┘
 16)┌─────────────┴─────────────┐
 17)│       DataSourceExec      │
-18)└───────────────────────────┘
+18)│    --------------------   │
+19)│          files: 1         │
+20)│        format: csv        │
+21)└───────────────────────────┘
 
 # 2 Joins
 query TT
@@ -139,7 +171,10 @@ physical_plan
 15)└─────────────┬─────────────┘└─────────────┬─────────────┘
 16)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 17)│       DataSourceExec      ││       DataSourceExec      │
-18)└───────────────────────────┘└───────────────────────────┘
+18)│    --------------------   ││    --------------------   │
+19)│          files: 1         ││          files: 1         │
+20)│        format: csv        ││      format: parquet      │
+21)└───────────────────────────┘└───────────────────────────┘
 
 # 3 Joins
 query TT
@@ -175,18 +210,22 @@ physical_plan
 13)┌─────────────┴─────────────┐┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 14)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    ││       DataSourceExec      │
 15)│                           ││                           ││    --------------------   │
-16)│                           ││                           ││    partition_sizes: [1]   │
-17)│                           ││                           ││       partitions: 1       │
-18)└─────────────┬─────────────┘└─────────────┬─────────────┘└───────────────────────────┘
-19)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-20)│      RepartitionExec      ││      RepartitionExec      │
-21)└─────────────┬─────────────┘└─────────────┬─────────────┘
-22)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-23)│      RepartitionExec      ││      RepartitionExec      │
-24)└─────────────┬─────────────┘└─────────────┬─────────────┘
-25)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-26)│       DataSourceExec      ││       DataSourceExec      │
-27)└───────────────────────────┘└───────────────────────────┘
+16)│                           ││                           ││        bytes: 1560        │
+17)│                           ││                           ││       format: memory      │
+18)│                           ││                           ││          rows: 1          │
+19)└─────────────┬─────────────┘└─────────────┬─────────────┘└───────────────────────────┘
+20)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+21)│      RepartitionExec      ││      RepartitionExec      │
+22)└─────────────┬─────────────┘└─────────────┬─────────────┘
+23)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+24)│      RepartitionExec      ││      RepartitionExec      │
+25)└─────────────┬─────────────┘└─────────────┬─────────────┘
+26)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+27)│       DataSourceExec      ││       DataSourceExec      │
+28)│    --------------------   ││    --------------------   │
+29)│          files: 1         ││          files: 1         │
+30)│        format: csv        ││      format: parquet      │
+31)└───────────────────────────┘└───────────────────────────┘
 
 # Long Filter (demonstrate what happens with wrapping)
 query TT
@@ -213,7 +252,156 @@ physical_plan
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│       DataSourceExec      │
-15)└───────────────────────────┘
+15)│    --------------------   │
+16)│          files: 1         │
+17)│        format: csv        │
+18)└───────────────────────────┘
+
+# Query with filter on csv
+query TT
+explain SELECT int_col FROM table2 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table2.int_col
+02)--Filter: table2.string_col != Utf8View("foo")
+03)----TableScan: table2 projection=[int_col, string_col], partial_filters=[table2.string_col != Utf8View("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│      format: parquet      │
+18)│                           │
+19)│         predicate:        │
+20)│    string_col@1 != foo    │
+21)└───────────────────────────┘
+
+
+# Query with filter on parquet
+query TT
+explain SELECT int_col FROM table2 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table2.int_col
+02)--Filter: table2.string_col != Utf8View("foo")
+03)----TableScan: table2 projection=[int_col, string_col], partial_filters=[table2.string_col != Utf8View("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│      format: parquet      │
+18)│                           │
+19)│         predicate:        │
+20)│    string_col@1 != foo    │
+21)└───────────────────────────┘
+
+# Query with filter on memory
+query TT
+explain SELECT int_col FROM table3 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table3.int_col
+02)--Filter: table3.string_col != Utf8("foo")
+03)----TableScan: table3 projection=[int_col, string_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│       DataSourceExec      │
+12)│    --------------------   │
+13)│        bytes: 1560        │
+14)│       format: memory      │
+15)│          rows: 1          │
+16)└───────────────────────────┘
+
+# Query with filter on json
+query TT
+explain SELECT int_col FROM table4 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table4.int_col
+02)--Filter: table4.string_col != Utf8("foo")
+03)----TableScan: table4 projection=[int_col, string_col], partial_filters=[table4.string_col != Utf8("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│        format: json       │
+18)└───────────────────────────┘
+
+# Query with filter on arrow
+query TT
+explain SELECT int_col FROM table5 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table5.int_col
+02)--Filter: table5.string_col != Utf8("foo")
+03)----TableScan: table5 projection=[int_col, string_col], partial_filters=[table5.string_col != Utf8("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│       format: arrow       │
+18)└───────────────────────────┘
+
 
 
 # cleanup
@@ -225,3 +413,9 @@ drop table table2;
 
 statement ok
 drop table table3;
+
+statement ok
+drop table table4;
+
+statement ok
+drop table table5;

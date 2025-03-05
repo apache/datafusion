@@ -554,14 +554,11 @@ impl FileSource for ParquetSource {
 
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default
-            | DisplayFormatType::Verbose
-            | DisplayFormatType::TreeRender => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 let predicate_string = self
                     .predicate()
                     .map(|p| format!(", predicate={p}"))
                     .unwrap_or_default();
-
                 let pruning_predicate_string = self
                     .pruning_predicate()
                     .map(|pre| {
@@ -580,6 +577,12 @@ impl FileSource for ParquetSource {
                     .unwrap_or_default();
 
                 write!(f, "{}{}", predicate_string, pruning_predicate_string)
+            }
+            DisplayFormatType::TreeRender => {
+                if let Some(predicate) = self.predicate() {
+                    writeln!(f, "predicate={predicate}")?;
+                }
+                Ok(())
             }
         }
     }
