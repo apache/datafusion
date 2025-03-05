@@ -68,7 +68,7 @@ pub fn col(ident: impl Into<Column>) -> Expr {
 /// Create an out reference column which hold a reference that has been resolved to a field
 /// outside of the current plan.
 pub fn out_ref_col(dt: DataType, ident: impl Into<Column>) -> Expr {
-    Expr::OuterReferenceColumn(dt, ident.into())
+    Expr::OuterReferenceColumn(Field::new("", dt, true), ident.into())
 }
 
 /// Create an unqualified column expression from the provided name, without normalizing

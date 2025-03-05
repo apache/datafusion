@@ -76,7 +76,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                     return Ok(Expr::OuterReferenceColumn(
-                        field.data_type().clone(),
+                        field.clone().with_name("").with_nullable(true),
                         Column::from((qualifier, field)),
                     ));
                 }
@@ -184,7 +184,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 Some((field, qualifier, _nested_names)) => {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
-                                        field.data_type().clone(),
+                                        field.clone().with_name("").with_nullable(true),
                                         Column::from((qualifier, field)),
                                     ))
                                 }

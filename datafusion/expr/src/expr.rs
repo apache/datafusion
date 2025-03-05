@@ -327,7 +327,7 @@ pub enum Expr {
     Placeholder(Placeholder),
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(DataType, Column),
+    OuterReferenceColumn(Field, Column),
     /// Unnest expression
     Unnest(Unnest),
 }

@@ -113,7 +113,7 @@ impl ExprSchemable for Expr {
             },
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
-            Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
+            Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
             Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
             Expr::Literal(l) => Ok(l.data_type()),
             Expr::Case(case) => {
@@ -345,6 +345,8 @@ impl ExprSchemable for Expr {
             Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
             Expr::Alias(Alias { expr, .. }) => expr.metadata(schema),
             Expr::Cast(Cast { expr, .. }) => expr.metadata(schema),
+            Expr::ScalarVariable(field, _) => Ok(field.metadata().clone()),
+            Expr::OuterReferenceColumn(field, _) => Ok(field.metadata().clone()),
             _ => Ok(HashMap::new()),
         }
     }
@@ -377,8 +379,12 @@ impl ExprSchemable for Expr {
             Expr::Column(c) => schema
                 .data_type_and_nullable(c)
                 .map(|(d, n)| (d.clone(), n)),
-            Expr::OuterReferenceColumn(ty, _) => Ok((ty.clone(), true)),
-            Expr::ScalarVariable(field, _) => Ok((field.data_type().clone(), true)),
+            Expr::OuterReferenceColumn(field, _) => {
+                Ok((field.data_type().clone(), field.is_nullable()))
+            }
+            Expr::ScalarVariable(field, _) => {
+                Ok((field.data_type().clone(), field.is_nullable()))
+            }
             Expr::Literal(l) => Ok((l.data_type(), l.is_null())),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)
@@ -463,10 +469,17 @@ impl ExprSchemable for Expr {
     ) -> Result<(Option<TableReference>, Arc<Field>)> {
         let (relation, schema_name) = self.qualified_name();
         let (data_type, nullable) = self.data_type_and_nullable(input_schema)?;
-        let field = Field::new(schema_name, data_type, nullable)
-            .with_metadata(self.metadata(input_schema)?)
-            .into();
-        Ok((relation, field))
+        let field = match self {
+            Expr::ScalarVariable(field, _) | Expr::OuterReferenceColumn(field, _) => {
+                field.clone().with_name(schema_name)
+            }
+            _ => Field::new(schema_name, data_type, nullable),
+        };
+
+        Ok((
+            relation,
+            field.with_metadata(self.metadata(input_schema)?).into(),
+        ))
     }
 
     /// Wraps this expression in a cast to a target [arrow::datatypes::DataType].
