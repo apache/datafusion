@@ -192,6 +192,10 @@ impl DisplayAs for LazyMemoryExec {
                         .join(", ")
                 )
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }

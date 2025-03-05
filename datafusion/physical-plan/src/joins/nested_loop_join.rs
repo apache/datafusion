@@ -424,6 +424,10 @@ impl DisplayAs for NestedLoopJoinExec {
                     self.join_type, display_filter, display_projections
                 )
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
