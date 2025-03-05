@@ -863,7 +863,6 @@ impl TreeRenderVisitor<'_, '_> {
             for split in splits {
                 // TODO: check every line is less than MAX_LINE_RENDER_SIZE.
                 Self::split_string_buffer(&split, result);
-                result.push(split);
             }
             requires_padding = true;
             was_inlined = is_inlined;
