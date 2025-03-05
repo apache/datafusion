@@ -1822,10 +1822,18 @@ fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(
             Expr::TryCast(TryCast { expr, .. }) | Expr::Cast(Cast { expr, .. }),
             Expr::Literal(lit_value),
         ) => {
-            let expr_type = info.get_data_type(&expr).unwrap();
+            let Ok(expr_type) = info.get_data_type(&expr) else {
+                return internal_err!("Can't get the data type of the expr {:?}", &expr);
+            };
             // if the lit_value can be casted to the type of internal_left_expr
             // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
-            let value = try_cast_literal_to_type(&lit_value, &expr_type).unwrap();
+            let Some(value) = try_cast_literal_to_type(&lit_value, &expr_type) else {
+                return internal_err!(
+                    "Can't cast the literal expr {:?} to type {:?}",
+                    &lit_value,
+                    &expr_type
+                );
+            };
             Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
                 left: expr,
                 op,
