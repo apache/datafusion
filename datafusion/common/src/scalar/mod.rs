@@ -2764,8 +2764,10 @@ impl ScalarValue {
         Ok(scalars)
     }
 
-    // TODO: Support more types after other ScalarValue is wrapped with ArrayRef
-    /// Get raw data (inner array) inside ScalarValue
+    #[deprecated(
+        since = "46.0.0",
+        note = "This function is obsolete. Use `to_array` instead"
+    )]
     pub fn raw_data(&self) -> Result<ArrayRef> {
         match self {
             ScalarValue::List(arr) => Ok(arr.to_owned()),
