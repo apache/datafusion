@@ -29,7 +29,7 @@ use datafusion_common::Result;
 ///
 /// Example:
 /// ```
-/// use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+/// use datafusion_execution::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 /// let metrics = ExecutionPlanMetricsSet::new();
 ///
 /// let partition = 2;
@@ -140,6 +140,32 @@ impl BaselineMetrics {
 impl Drop for BaselineMetrics {
     fn drop(&mut self) {
         self.try_done()
+    }
+}
+
+/// A set of metrics related to spilling during the execution of an operator
+#[derive(Debug, Clone, Default)]
+pub struct SpillMetrics {
+    /// count of spill files during the execution of the operator
+    pub spill_file_count: Count,
+    /// total spilled bytes during the execution of the operator
+    pub spilled_bytes: Count,
+    /// total spilled rows during the execution of the operator
+    pub spilled_rows: Count,
+}
+
+impl SpillMetrics {
+    /// Create a new set of spill metrics
+    pub fn new(
+        spill_file_count: Count,
+        spilled_bytes: Count,
+        spilled_rows: Count,
+    ) -> Self {
+        Self {
+            spill_file_count,
+            spilled_bytes,
+            spilled_rows,
+        }
     }
 }
 

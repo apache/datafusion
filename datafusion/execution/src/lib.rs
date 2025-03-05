@@ -40,7 +40,8 @@ pub mod registry {
     };
 }
 
-pub use disk_manager::DiskManager;
+pub use disk_manager::{DiskManager, IPCStreamWriter};
+pub mod metrics;
 pub use registry::FunctionRegistry;
 pub use stream::{RecordBatchStream, SendableRecordBatchStream};
 pub use task::TaskContext;
