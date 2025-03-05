@@ -22,7 +22,7 @@ mod struct_builder;
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::hash::Hash;
@@ -1410,6 +1410,28 @@ impl ScalarValue {
                 );
             }
         })
+    }
+
+    /// return the [`Field`] of this `ScalarValue`
+    pub fn field(&self) -> Field {
+        match self {
+            ScalarValue::Extension(storage, name, metadata) => {
+                let mut metadata_fields = HashMap::from([(
+                    "ARROW:extension:name".to_string(),
+                    name.to_string(),
+                )]);
+
+                if let Some(metadata_value) = metadata {
+                    metadata_fields.insert(
+                        "ARROW:extension:metadata".to_string(),
+                        metadata_value.to_string(),
+                    );
+                }
+
+                Field::new("", storage.data_type(), true).with_metadata(metadata_fields)
+            },
+            _ => Field::new("", self.data_type(), true)
+        }
     }
 
     /// return the [`DataType`] of this `ScalarValue`
