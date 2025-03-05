@@ -1283,7 +1283,7 @@ impl Unparser<'_> {
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(_k, v) => self.scalar_to_sql(v),
-            ScalarValue::Extension(_, _, _) => not_impl_err!("Unsupported scalar: {v:?}")
+            ScalarValue::Extension(_, _, _) => not_impl_err!("Unsupported scalar: {v:?}"),
         }
     }
 
@@ -2012,12 +2012,15 @@ mod tests {
                 r#"TRY_CAST(a AS INTEGER UNSIGNED)"#,
             ),
             (
-                Expr::ScalarVariable(Int8, vec![String::from("@a")]),
+                Expr::ScalarVariable(
+                    Field::new("", Int8, true),
+                    vec![String::from("@a")],
+                ),
                 r#"@a"#,
             ),
             (
                 Expr::ScalarVariable(
-                    Int8,
+                    Field::new("", Int8, true),
                     vec![String::from("@root"), String::from("foo")],
                 ),
                 r#"@root.foo"#,

@@ -114,7 +114,7 @@ impl ExprSchemable for Expr {
             Expr::Negative(expr) => expr.get_type(schema),
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(ty, _) => Ok(ty.clone()),
-            Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
+            Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
             Expr::Literal(l) => Ok(l.data_type()),
             Expr::Case(case) => {
                 for (_, then_expr) in &case.when_then_expr {
@@ -378,7 +378,7 @@ impl ExprSchemable for Expr {
                 .data_type_and_nullable(c)
                 .map(|(d, n)| (d.clone(), n)),
             Expr::OuterReferenceColumn(ty, _) => Ok((ty.clone(), true)),
-            Expr::ScalarVariable(ty, _) => Ok((ty.clone(), true)),
+            Expr::ScalarVariable(field, _) => Ok((field.data_type().clone(), true)),
             Expr::Literal(l) => Ok((l.data_type(), l.is_null())),
             Expr::IsNull(_)
             | Expr::IsNotNull(_)

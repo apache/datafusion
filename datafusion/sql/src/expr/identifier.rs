@@ -38,13 +38,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if id.value.starts_with('@') {
             // TODO: figure out if ScalarVariables should be insensitive.
             let var_names = vec![id.value];
+            // TODO: dropping extension information
             let ty = self
                 .context_provider
                 .get_variable_type(&var_names)
                 .ok_or_else(|| {
                     plan_datafusion_err!("variable {var_names:?} has no type information")
                 })?;
-            Ok(Expr::ScalarVariable(ty, var_names))
+            Ok(Expr::ScalarVariable(Field::new("", ty, true), var_names))
         } else {
             // Don't use `col()` here because it will try to
             // interpret names with '.' as if they were
@@ -112,6 +113,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .into_iter()
                 .map(|id| self.ident_normalizer.normalize(id))
                 .collect();
+            // TODO: dropping extension information
             let ty = self
                 .context_provider
                 .get_variable_type(&var_names)
@@ -120,7 +122,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "variable {var_names:?} has no type information"
                     ))
                 })?;
-            Ok(Expr::ScalarVariable(ty, var_names))
+            Ok(Expr::ScalarVariable(Field::new("", ty, true), var_names))
         } else {
             let ids = ids
                 .into_iter()
