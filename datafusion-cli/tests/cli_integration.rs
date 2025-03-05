@@ -103,7 +103,7 @@ async fn test_cli() {
     let settings = make_settings();
     let _bound = settings.bind_to_scope();
 
-    glob!("sql/*.sql", |path| {
+    glob!("sql/integration/*.sql", |path| {
         let input = fs::read_to_string(path).unwrap();
         assert_cmd_snapshot!(cli().pass_stdin(input))
     });
