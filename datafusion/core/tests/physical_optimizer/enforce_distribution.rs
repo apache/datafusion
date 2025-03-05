@@ -394,23 +394,26 @@ fn test_suite_default_config_options() -> ConfigOptions {
     config
 }
 
-/// How the optimizers are run.
 #[derive(PartialEq, Clone)]
-enum DoFirst {
-    /// Runs: (EnforceDistribution, EnforceDistribution, EnforceSorting)
+enum Run {
     Distribution,
-    /// Runs: (EnforceSorting, EnforceDistribution, EnforceDistribution)
     Sorting,
 }
+
+/// Standard sets of the series of optimizer runs:
+const DISTRIB_DISTRIB_SORT: [Run; 3] =
+    [Run::Distribution, Run::Distribution, Run::Sorting];
+const SORT_DISTRIB_DISTRIB: [Run; 3] =
+    [Run::Sorting, Run::Distribution, Run::Distribution];
 
 #[derive(Clone)]
 struct TestConfig {
     config: ConfigOptions,
-    optimizers_to_run: DoFirst,
+    optimizers_to_run: Vec<Run>,
 }
 
 impl TestConfig {
-    fn new(optimizers_to_run: DoFirst) -> Self {
+    fn new(optimizers_to_run: Vec<Run>) -> Self {
         Self {
             config: test_suite_default_config_options(),
             optimizers_to_run,
@@ -466,7 +469,7 @@ macro_rules! assert_optimized {
 
         // Add the ancillary output requirements operator at the start:
         let optimizer = OutputRequirements::new_add_mode();
-        let optimized = optimizer.optimize($PLAN.clone(), &config)?;
+        let mut optimized = optimizer.optimize($PLAN.clone(), &config)?;
 
         // This file has 2 rules that use tree node, apply these rules to original plan consecutively
         // After these operations tree nodes should be in a consistent state.
@@ -500,31 +503,18 @@ macro_rules! assert_optimized {
             // TODO: End state payloads will be checked here.
         }
 
-        let optimized = if *optimizers_to_run == DoFirst::Distribution {
-            // Run enforce distribution rule first:
-            let optimizer = EnforceDistribution::new();
-            let optimized = optimizer.optimize(optimized, &config)?;
-            // The rule should be idempotent.
-            // Re-running this rule shouldn't introduce unnecessary operators.
-            let optimizer = EnforceDistribution::new();
-            let optimized = optimizer.optimize(optimized, &config)?;
-            // Run the enforce sorting rule:
-            let optimizer = EnforceSorting::new();
-            let optimized = optimizer.optimize(optimized, &config)?;
-            optimized
-        } else {
-            // Run the enforce sorting rule first:
-            let optimizer = EnforceSorting::new();
-            let optimized = optimizer.optimize(optimized, &config)?;
-            // Run enforce distribution rule:
-            let optimizer = EnforceDistribution::new();
-            let optimized = optimizer.optimize(optimized, &config)?;
-            // The rule should be idempotent.
-            // Re-running this rule shouldn't introduce unnecessary operators.
-            let optimizer = EnforceDistribution::new();
-            let optimized = optimizer.optimize(optimized, &config)?;
-            optimized
-        };
+        for run in optimizers_to_run {
+            optimized = match run {
+                Run::Distribution => {
+                    let optimizer = EnforceDistribution::new();
+                    optimizer.optimize(optimized, &config)?
+                },
+                Run::Sorting => {
+                    let optimizer = EnforceSorting::new();
+                    optimizer.optimize(optimized, &config)?
+                },
+            };
+        }
 
         // Remove the ancillary output requirements operator when done:
         let optimizer = OutputRequirements::new_remove_mode();
@@ -650,9 +640,13 @@ fn multi_hash_joins() -> Result<()> {
                 assert_optimized!(
                     expected,
                     top_join.clone(),
-                    &TestConfig::new(DoFirst::Distribution)
+                    &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
                 );
-                assert_optimized!(expected, top_join, &TestConfig::new(DoFirst::Sorting));
+                assert_optimized!(
+                    expected,
+                    top_join,
+                    &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+                );
             }
             JoinType::RightSemi | JoinType::RightAnti => {}
         }
@@ -718,9 +712,13 @@ fn multi_hash_joins() -> Result<()> {
                 assert_optimized!(
                     expected,
                     top_join.clone(),
-                    &TestConfig::new(DoFirst::Distribution)
+                    &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
                 );
-                assert_optimized!(expected, top_join, &TestConfig::new(DoFirst::Sorting));
+                assert_optimized!(
+                    expected,
+                    top_join,
+                    &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+                );
             }
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {}
         }
@@ -779,9 +777,13 @@ fn multi_joins_after_alias() -> Result<()> {
     assert_optimized!(
         expected,
         top_join.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, top_join, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        top_join,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     // Join on (a2 == c)
     let top_join_on = vec![(
@@ -809,9 +811,13 @@ fn multi_joins_after_alias() -> Result<()> {
     assert_optimized!(
         expected,
         top_join.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, top_join, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        top_join,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -867,9 +873,13 @@ fn multi_joins_after_multi_alias() -> Result<()> {
     assert_optimized!(
         expected,
         top_join.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, top_join, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        top_join,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -911,9 +921,13 @@ fn join_after_agg_alias() -> Result<()> {
     assert_optimized!(
         expected,
         join.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, join, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        join,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -968,9 +982,13 @@ fn hash_join_key_ordering() -> Result<()> {
     assert_optimized!(
         expected,
         join.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, join, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        join,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -1098,12 +1116,12 @@ fn multi_hash_join_key_ordering() -> Result<()> {
     assert_optimized!(
         expected,
         filter_top_join.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
     assert_optimized!(
         expected,
         filter_top_join,
-        &TestConfig::new(DoFirst::Sorting)
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
     );
 
     Ok(())
@@ -1487,7 +1505,7 @@ fn multi_smj_joins() -> Result<()> {
         assert_optimized!(
             expected,
             top_join.clone(),
-            &TestConfig::new(DoFirst::Distribution).with_prefer_existing_sort()
+            &TestConfig::new(DISTRIB_DISTRIB_SORT.into()).with_prefer_existing_sort()
         );
 
         let expected_first_sort_enforcement = match join_type {
@@ -1545,7 +1563,7 @@ fn multi_smj_joins() -> Result<()> {
         assert_optimized!(
             expected_first_sort_enforcement,
             top_join,
-            &TestConfig::new(DoFirst::Sorting).with_prefer_existing_sort()
+            &TestConfig::new(SORT_DISTRIB_DISTRIB.into()).with_prefer_existing_sort()
         );
 
         match join_type {
@@ -1606,7 +1624,8 @@ fn multi_smj_joins() -> Result<()> {
                 assert_optimized!(
                     expected,
                     top_join.clone(),
-                    &TestConfig::new(DoFirst::Distribution).with_prefer_existing_sort()
+                    &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
+                        .with_prefer_existing_sort()
                 );
 
                 let expected_first_sort_enforcement = match join_type {
@@ -1657,7 +1676,8 @@ fn multi_smj_joins() -> Result<()> {
                 assert_optimized!(
                     expected_first_sort_enforcement,
                     top_join,
-                    &TestConfig::new(DoFirst::Sorting).with_prefer_existing_sort()
+                    &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+                        .with_prefer_existing_sort()
                 );
             }
             _ => {}
@@ -1736,7 +1756,7 @@ fn smj_join_key_ordering() -> Result<()> {
     assert_optimized!(
         expected,
         join.clone(),
-        &TestConfig::new(DoFirst::Distribution).with_prefer_existing_sort()
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into()).with_prefer_existing_sort()
     );
 
     let expected_first_sort_enforcement = &[
@@ -1766,7 +1786,7 @@ fn smj_join_key_ordering() -> Result<()> {
     assert_optimized!(
         expected_first_sort_enforcement,
         join,
-        &TestConfig::new(DoFirst::Sorting).with_prefer_existing_sort()
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into()).with_prefer_existing_sort()
     );
 
     Ok(())
@@ -1798,7 +1818,11 @@ fn merge_does_not_need_sort() -> Result<()> {
         "  CoalesceBatchesExec: target_batch_size=4096",
         "    DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
-    assert_optimized!(expected, exec, &TestConfig::new(DoFirst::Distribution));
+    assert_optimized!(
+        expected,
+        exec,
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
+    );
 
     // In this case preserving ordering through order preserving operators is not desirable
     // (according to flag: PREFER_EXISTING_SORT)
@@ -1810,7 +1834,11 @@ fn merge_does_not_need_sort() -> Result<()> {
         "    CoalesceBatchesExec: target_batch_size=4096",
         "      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
-    assert_optimized!(expected, exec, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        exec,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -1854,9 +1882,13 @@ fn union_to_interleave() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan.clone(), &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan.clone(),
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -1902,12 +1934,12 @@ fn union_not_to_interleave() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution).with_prefer_existing_union()
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into()).with_prefer_existing_union()
     );
     assert_optimized!(
         expected,
         plan,
-        &TestConfig::new(DoFirst::Sorting).with_prefer_existing_union()
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into()).with_prefer_existing_union()
     );
 
     Ok(())
@@ -1928,9 +1960,13 @@ fn added_repartition_to_single_partition() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -1951,9 +1987,13 @@ fn repartition_deepest_node() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -1975,9 +2015,13 @@ fn repartition_unsorted_limit() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2001,9 +2045,13 @@ fn repartition_sorted_limit() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2033,9 +2081,13 @@ fn repartition_sorted_limit_with_filter() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2067,9 +2119,13 @@ fn repartition_ignores_limit() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2091,9 +2147,13 @@ fn repartition_ignores_union() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2116,9 +2176,13 @@ fn repartition_through_sort_preserving_merge() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2146,7 +2210,7 @@ fn repartition_ignores_sort_preserving_merge() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     let expected = &[
@@ -2154,7 +2218,11 @@ fn repartition_ignores_sort_preserving_merge() -> Result<()> {
         "  CoalescePartitionsExec",
         "    DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2181,7 +2249,7 @@ fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     let expected = &[
@@ -2191,7 +2259,11 @@ fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2222,12 +2294,12 @@ fn repartition_does_not_destroy_sort() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution).with_prefer_existing_sort()
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into()).with_prefer_existing_sort()
     );
     assert_optimized!(
         expected,
         plan,
-        &TestConfig::new(DoFirst::Sorting).with_prefer_existing_sort()
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into()).with_prefer_existing_sort()
     );
 
     Ok(())
@@ -2271,9 +2343,13 @@ fn repartition_does_not_destroy_sort_more_complex() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2309,7 +2385,7 @@ fn repartition_transitively_with_projection() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     let expected_first_sort_enforcement = &[
@@ -2323,7 +2399,7 @@ fn repartition_transitively_with_projection() -> Result<()> {
     assert_optimized!(
         expected_first_sort_enforcement,
         plan,
-        &TestConfig::new(DoFirst::Sorting)
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
     );
 
     Ok(())
@@ -2359,9 +2435,13 @@ fn repartition_ignores_transitively_with_projection() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2396,9 +2476,13 @@ fn repartition_transitively_past_sort_with_projection() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -2424,7 +2508,7 @@ fn repartition_transitively_past_sort_with_filter() -> Result<()> {
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     let expected_first_sort_enforcement = &[
@@ -2438,7 +2522,7 @@ fn repartition_transitively_past_sort_with_filter() -> Result<()> {
     assert_optimized!(
         expected_first_sort_enforcement,
         plan,
-        &TestConfig::new(DoFirst::Sorting)
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
     );
 
     Ok(())
@@ -2479,7 +2563,7 @@ fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()>
     assert_optimized!(
         expected,
         plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     let expected_first_sort_enforcement = &[
@@ -2493,7 +2577,7 @@ fn repartition_transitively_past_sort_with_projection_and_filter() -> Result<()>
     assert_optimized!(
         expected_first_sort_enforcement,
         plan,
-        &TestConfig::new(DoFirst::Sorting)
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
     );
 
     Ok(())
@@ -2518,7 +2602,7 @@ fn parallelization_single_partition() -> Result<()> {
         "      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
 
-    let test_config = TestConfig::new(DoFirst::Distribution)
+    let test_config = TestConfig::new(DISTRIB_DISTRIB_SORT.into())
         .with_prefer_repartition_file_scans(10)
         .with_query_execution_partitions(2);
     assert_optimized!(expected_parquet, plan_parquet, &test_config);
@@ -2538,7 +2622,7 @@ fn parallelization_multiple_files() -> Result<()> {
     let plan = filter_exec(parquet_exec_multiple_sorted(vec![sort_key.clone()]));
     let plan = sort_required_exec_with_req(plan, sort_key);
 
-    let test_config = TestConfig::new(DoFirst::Distribution)
+    let test_config = TestConfig::new(DISTRIB_DISTRIB_SORT.into())
         .with_prefer_existing_sort()
         .with_prefer_repartition_file_scans(1);
 
@@ -2618,7 +2702,7 @@ fn parallelization_compressed_csv() -> Result<()> {
         assert_optimized!(
             expected,
             plan,
-            &TestConfig::new(DoFirst::Distribution)
+            &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
                 .with_query_execution_partitions(2)
                 .with_prefer_repartition_file_scans(10)
         );
@@ -2646,7 +2730,7 @@ fn parallelization_two_partitions() -> Result<()> {
         // Plan already has two partitions
         "      DataSourceExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    let test_config = TestConfig::new(DoFirst::Distribution)
+    let test_config = TestConfig::new(DISTRIB_DISTRIB_SORT.into())
         .with_query_execution_partitions(2)
         .with_prefer_repartition_file_scans(10);
     assert_optimized!(expected_parquet, plan_parquet, &test_config);
@@ -2674,7 +2758,7 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
         // Multiple source files splitted across partitions
         "      DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    let test_config = TestConfig::new(DoFirst::Distribution)
+    let test_config = TestConfig::new(DISTRIB_DISTRIB_SORT.into())
         .with_query_execution_partitions(4)
         .with_prefer_repartition_file_scans(10);
     assert_optimized!(expected_parquet, plan_parquet, &test_config);
@@ -2712,12 +2796,12 @@ fn parallelization_sorted_limit() -> Result<()> {
     assert_optimized!(
         expected_parquet,
         plan_parquet,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
     assert_optimized!(
         expected_csv,
         plan_csv,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     Ok(())
@@ -2764,12 +2848,12 @@ fn parallelization_limit_with_filter() -> Result<()> {
     assert_optimized!(
         expected_parquet,
         plan_parquet,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
     assert_optimized!(
         expected_csv,
         plan_csv,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     Ok(())
@@ -2820,12 +2904,12 @@ fn parallelization_ignores_limit() -> Result<()> {
     assert_optimized!(
         expected_parquet,
         plan_parquet,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
     assert_optimized!(
         expected_csv,
         plan_csv,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     Ok(())
@@ -2857,12 +2941,12 @@ fn parallelization_union_inputs() -> Result<()> {
     assert_optimized!(
         expected_parquet,
         plan_parquet,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
     assert_optimized!(
         expected_csv,
         plan_csv,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     Ok(())
@@ -2893,12 +2977,12 @@ fn parallelization_prior_to_sort_preserving_merge() -> Result<()> {
     assert_optimized!(
         expected_parquet,
         plan_parquet,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
     assert_optimized!(
         expected_csv,
         plan_csv,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     Ok(())
@@ -2935,12 +3019,12 @@ fn parallelization_sort_preserving_merge_with_union() -> Result<()> {
     assert_optimized!(
         expected_parquet,
         plan_parquet,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
     assert_optimized!(
         expected_csv,
         plan_csv,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     Ok(())
@@ -2974,12 +3058,12 @@ fn parallelization_does_not_benefit() -> Result<()> {
     assert_optimized!(
         expected_parquet,
         plan_parquet,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
     assert_optimized!(
         expected_csv,
         plan_csv,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     Ok(())
@@ -3022,7 +3106,7 @@ fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> 
     assert_optimized!(
         expected_parquet,
         plan_parquet,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     Ok(())
@@ -3065,7 +3149,7 @@ fn parallelization_ignores_transitively_with_projection_csv() -> Result<()> {
     assert_optimized!(
         expected_csv,
         plan_csv,
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     Ok(())
@@ -3093,9 +3177,13 @@ fn remove_redundant_roundrobins() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        physical_plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -3122,12 +3210,12 @@ fn remove_unnecessary_spm_after_filter() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution).with_prefer_existing_sort()
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into()).with_prefer_existing_sort()
     );
     assert_optimized!(
         expected,
         physical_plan,
-        &TestConfig::new(DoFirst::Sorting).with_prefer_existing_sort()
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into()).with_prefer_existing_sort()
     );
 
     Ok(())
@@ -3153,12 +3241,12 @@ fn preserve_ordering_through_repartition() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution).with_prefer_existing_sort()
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into()).with_prefer_existing_sort()
     );
     assert_optimized!(
         expected,
         physical_plan,
-        &TestConfig::new(DoFirst::Sorting).with_prefer_existing_sort()
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into()).with_prefer_existing_sort()
     );
 
     Ok(())
@@ -3185,7 +3273,7 @@ fn do_not_preserve_ordering_through_repartition() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     let expected = &[
@@ -3195,7 +3283,11 @@ fn do_not_preserve_ordering_through_repartition() -> Result<()> {
         "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
         "        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
-    assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        physical_plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -3221,9 +3313,13 @@ fn no_need_for_sort_after_filter() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        physical_plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -3254,7 +3350,7 @@ fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
 
     let expected = &[
@@ -3265,7 +3361,11 @@ fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
         "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
         "          DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
-    assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        physical_plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -3288,9 +3388,13 @@ fn do_not_preserve_ordering_through_repartition3() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        physical_plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -3389,12 +3493,12 @@ fn do_not_add_unnecessary_hash() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution).with_query_execution_partitions(1)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into()).with_query_execution_partitions(1)
     );
     assert_optimized!(
         expected,
         physical_plan,
-        &TestConfig::new(DoFirst::Sorting).with_query_execution_partitions(1)
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into()).with_query_execution_partitions(1)
     );
 
     Ok(())
@@ -3427,12 +3531,12 @@ fn do_not_add_unnecessary_hash2() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution).with_query_execution_partitions(4)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into()).with_query_execution_partitions(4)
     );
     assert_optimized!(
         expected,
         physical_plan,
-        &TestConfig::new(DoFirst::Sorting).with_query_execution_partitions(4)
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into()).with_query_execution_partitions(4)
     );
 
     Ok(())
@@ -3453,9 +3557,13 @@ fn optimize_away_unnecessary_repartition() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        physical_plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
@@ -3484,9 +3592,13 @@ fn optimize_away_unnecessary_repartition2() -> Result<()> {
     assert_optimized!(
         expected,
         physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
+        &TestConfig::new(DISTRIB_DISTRIB_SORT.into())
     );
-    assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
+    assert_optimized!(
+        expected,
+        physical_plan,
+        &TestConfig::new(SORT_DISTRIB_DISTRIB.into())
+    );
 
     Ok(())
 }
