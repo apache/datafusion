@@ -349,6 +349,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             // User defined aggregate functions (UDAF) have precedence in case it has the same name as a scalar built-in function
             if let Some(fm) = self.context_provider.get_aggregate_meta(&name) {
+                // Reject RESPECT NULLS and IGNORE NULLS for aggregate functions
+                // See https://github.com/apache/datafusion/issues/15006
+                if null_treatment.is_some() {
+                    return plan_err!("RESPECT NULLS and IGNORE NULLS are not supported for aggregate functions");
+                }
+
                 let order_by = self.order_by_to_sort_expr(
                     order_by,
                     schema,
@@ -369,7 +375,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     distinct,
                     filter,
                     order_by,
-                    null_treatment,
+                    null_treatment: None, // See https://github.com/apache/datafusion/issues/15006
                 };
                 for planner in self.context_provider.get_expr_planners().iter() {
                     match planner.plan_aggregate(aggregate_expr)? {
