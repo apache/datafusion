@@ -1964,7 +1964,10 @@ fn is_supported_numeric_type(data_type: &DataType) -> bool {
 
 /// Returns true if unwrap_cast_in_comparison supports casting this value as a string
 fn is_supported_string_type(data_type: &DataType) -> bool {
-    matches!(data_type, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
 }
 
 /// Returns true if unwrap_cast_in_comparison supports casting this value as a dictionary
