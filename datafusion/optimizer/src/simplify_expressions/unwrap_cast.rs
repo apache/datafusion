@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! UnwrapCastInComparison attempts to remove casts from
+//! Unwrap casts in binary comparisons
+//!
+//! The functions in this module attempt to remove casts from
 //! comparisons to literals ([`ScalarValue`]s) by applying the casts
 //! to the literals if possible. It is inspired by the optimizer rule
 //! `UnwrapCastInBinaryComparison` of Spark.
@@ -43,13 +45,13 @@
 //! If the DataType of c1 is INT32. Given the filter
 //!
 //! ```text
-//! Filter: cast(c1 as INT64) > INT64(10)`
+//! cast(c1 as INT64) > INT64(10)`
 //! ```
 //!
 //! This rule will remove the cast and rewrite the expression to:
 //!
 //! ```text
-//! Filter: c1 > INT32(10)
+//! c1 > INT32(10)
 //! ```
 //!
 
