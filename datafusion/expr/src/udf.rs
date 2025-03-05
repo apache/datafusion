@@ -91,9 +91,12 @@ impl ScalarUDF {
     where
         F: ScalarUDFImpl + 'static,
     {
-        Self {
-            inner: Arc::new(fun),
-        }
+        Self::new_from_shared_impl(Arc::new(fun))
+    }
+
+    /// Create a new `ScalarUDF` from a `[ScalarUDFImpl]` trait object
+    pub fn new_from_shared_impl(fun: Arc<dyn ScalarUDFImpl>) -> ScalarUDF {
+        Self { inner: fun }
     }
 
     /// Return the underlying [`ScalarUDFImpl`] trait object for this function
@@ -198,11 +201,6 @@ impl ScalarUDF {
     /// See [`ScalarUDFImpl::return_type_from_args`] for more details.
     pub fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {
         self.inner.return_type_from_args(args)
-    }
-
-    /// Returns the behavior that this function has when any of the inputs are Null.
-    pub fn null_handling(&self) -> NullHandling {
-        self.inner.null_handling()
     }
 
     /// Do the function rewrite
@@ -422,15 +420,6 @@ impl ReturnInfo {
     }
 }
 
-/// A function's behavior when the input is Null.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub enum NullHandling {
-    /// Null inputs are passed into the function implementation.
-    PassThrough,
-    /// Any Null input causes the function to return Null.
-    Propagate,
-}
-
 /// Trait for implementing user defined scalar functions.
 ///
 /// This trait exposes the full API for implementing user defined functions and
@@ -444,7 +433,7 @@ pub enum NullHandling {
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use std::sync::OnceLock;
+/// # use std::sync::LazyLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Documentation, ScalarFunctionArgs, Signature, Volatility};
@@ -464,14 +453,14 @@ pub enum NullHandling {
 ///   }
 /// }
 ///
-/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-///
-/// fn get_doc() -> &'static Documentation {
-///     DOCUMENTATION.get_or_init(|| {
+/// static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
 ///         Documentation::builder(DOC_SECTION_MATH, "Add one to an int32", "add_one(2)")
 ///             .with_argument("arg1", "The int32 number to add one to")
 ///             .build()
-///     })
+///     });
+///
+/// fn get_doc() -> &'static Documentation {
+///     &DOCUMENTATION
 /// }
 ///
 /// /// Implement the ScalarUDFImpl trait for AddOne
@@ -601,11 +590,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     )]
     fn is_nullable(&self, _args: &[Expr], _schema: &dyn ExprSchema) -> bool {
         true
-    }
-
-    /// Returns the behavior that this function has when any of the inputs are Null.
-    fn null_handling(&self) -> NullHandling {
-        NullHandling::PassThrough
     }
 
     /// Invoke the function on `args`, returning the appropriate result
@@ -915,13 +899,8 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.return_type_from_args(args)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        #[allow(deprecated)]
-        self.inner.invoke_batch(args, number_rows)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        self.inner.invoke_with_args(args)
     }
 
     fn simplify(
@@ -996,6 +975,7 @@ pub mod scalar_doc_sections {
             DOC_SECTION_STRUCT,
             DOC_SECTION_MAP,
             DOC_SECTION_HASHING,
+            DOC_SECTION_UNION,
             DOC_SECTION_OTHER,
         ]
     }
@@ -1012,6 +992,7 @@ pub mod scalar_doc_sections {
             DOC_SECTION_STRUCT,
             DOC_SECTION_MAP,
             DOC_SECTION_HASHING,
+            DOC_SECTION_UNION,
             DOC_SECTION_OTHER,
         ]
     }
@@ -1085,5 +1066,11 @@ The following regular expression functions are supported:"#,
         include: true,
         label: "Other Functions",
         description: None,
+    };
+
+    pub const DOC_SECTION_UNION: DocSection = DocSection {
+        include: true,
+        label: "Union Functions",
+        description: Some("Functions to work with the union data type, also know as tagged unions, variant types, enums or sum types. Note: Not related to the SQL UNION operator"),
     };
 }

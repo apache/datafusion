@@ -18,24 +18,24 @@
 //! [`ScalarUDFImpl`] definitions for range and gen_series functions.
 
 use crate::utils::make_scalar_function;
-use arrow::array::{Array, ArrayRef, Int64Array, ListArray, ListBuilder};
-use arrow::datatypes::{DataType, Field};
-use arrow_array::builder::{Date32Builder, TimestampNanosecondBuilder};
-use arrow_array::temporal_conversions::as_datetime_with_timezone;
-use arrow_array::timezone::Tz;
-use arrow_array::types::{
-    Date32Type, IntervalMonthDayNanoType, TimestampNanosecondType as TSNT,
+use arrow::array::{
+    builder::{Date32Builder, TimestampNanosecondBuilder},
+    temporal_conversions::as_datetime_with_timezone,
+    timezone::Tz,
+    types::{Date32Type, IntervalMonthDayNanoType, TimestampNanosecondType as TSNT},
+    Array, ArrayRef, Int64Array, ListArray, ListBuilder, NullArray, NullBufferBuilder,
+    TimestampNanosecondArray,
 };
-use arrow_array::{NullArray, TimestampNanosecondArray};
-use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
-use arrow_schema::DataType::*;
-use arrow_schema::IntervalUnit::MonthDayNano;
-use arrow_schema::TimeUnit::Nanosecond;
+use arrow::buffer::OffsetBuffer;
+use arrow::datatypes::{
+    DataType, DataType::*, Field, IntervalUnit::MonthDayNano, TimeUnit::Nanosecond,
+};
 use datafusion_common::cast::{
     as_date32_array, as_int64_array, as_interval_mdn_array, as_timestamp_nanosecond_array,
 };
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, not_impl_datafusion_err, Result,
+    exec_datafusion_err, exec_err, internal_err, not_impl_datafusion_err,
+    utils::take_function_args, Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
@@ -155,11 +155,12 @@ impl ScalarUDFImpl for Range {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
+
         if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
@@ -278,11 +279,12 @@ impl ScalarUDFImpl for GenSeries {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = &args.args;
+
         if args.iter().any(|arg| arg.data_type().is_null()) {
             return Ok(ColumnarValue::Array(Arc::new(NullArray::new(1))));
         }
@@ -435,13 +437,12 @@ fn gen_range_iter(
 }
 
 fn gen_range_date(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!("arguments length does not match");
-    }
+    let [start, stop, step] = take_function_args("range", args)?;
+
     let (start_array, stop_array, step_array) = (
-        Some(as_date32_array(&args[0])?),
-        as_date32_array(&args[1])?,
-        Some(as_interval_mdn_array(&args[2])?),
+        Some(as_date32_array(start)?),
+        as_date32_array(stop)?,
+        Some(as_interval_mdn_array(step)?),
     );
 
     // values are date32s
@@ -508,21 +509,17 @@ fn gen_range_date(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayR
 }
 
 fn gen_range_timestamp(args: &[ArrayRef], include_upper_bound: bool) -> Result<ArrayRef> {
-    if args.len() != 3 {
-        return exec_err!(
-            "Arguments length must be 3 for {}",
-            if include_upper_bound {
-                "GENERATE_SERIES"
-            } else {
-                "RANGE"
-            }
-        );
-    }
+    let func_name = if include_upper_bound {
+        "GENERATE_SERIES"
+    } else {
+        "RANGE"
+    };
+    let [start, stop, step] = take_function_args(func_name, args)?;
 
     // coerce_types fn should coerce all types to Timestamp(Nanosecond, tz)
-    let (start_arr, start_tz_opt) = cast_timestamp_arg(&args[0], include_upper_bound)?;
-    let (stop_arr, stop_tz_opt) = cast_timestamp_arg(&args[1], include_upper_bound)?;
-    let step_arr = as_interval_mdn_array(&args[2])?;
+    let (start_arr, start_tz_opt) = cast_timestamp_arg(start, include_upper_bound)?;
+    let (stop_arr, stop_tz_opt) = cast_timestamp_arg(stop, include_upper_bound)?;
+    let step_arr = as_interval_mdn_array(step)?;
     let start_tz = parse_tz(start_tz_opt)?;
     let stop_tz = parse_tz(stop_tz_opt)?;
 

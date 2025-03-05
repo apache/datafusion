@@ -52,7 +52,8 @@ use datafusion::common::{
 use datafusion::execution::registry::SerializerRegistry;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr::{
-    Alias, BinaryExpr, Case, Cast, GroupingSet, InList, InSubquery, WindowFunction,
+    AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
+    InSubquery, WindowFunction, WindowFunctionParams,
 };
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
@@ -368,7 +369,7 @@ pub trait SubstraitProducer: Send + Sync + Sized {
     }
 }
 
-struct DefaultSubstraitProducer<'a> {
+pub struct DefaultSubstraitProducer<'a> {
     extensions: Extensions,
     serializer_registry: &'a dyn SerializerRegistry,
 }
@@ -1208,11 +1209,14 @@ pub fn from_aggregate_function(
 ) -> Result<Measure> {
     let expr::AggregateFunction {
         func,
-        args,
-        distinct,
-        filter,
-        order_by,
-        null_treatment: _null_treatment,
+        params:
+            AggregateFunctionParams {
+                args,
+                distinct,
+                filter,
+                order_by,
+                null_treatment: _null_treatment,
+            },
     } = agg_fn;
     let sorts = if let Some(order_by) = order_by {
         order_by
@@ -1362,6 +1366,7 @@ pub fn to_substrait_rex(
         Expr::ScalarSubquery(expr) => {
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
+        #[expect(deprecated)]
         Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
@@ -1612,11 +1617,14 @@ pub fn from_window_function(
 ) -> Result<Expression> {
     let WindowFunction {
         fun,
-        args,
-        partition_by,
-        order_by,
-        window_frame,
-        null_treatment: _,
+        params:
+            WindowFunctionParams {
+                args,
+                partition_by,
+                order_by,
+                window_frame,
+                null_treatment: _,
+            },
     } = window_fn;
     // function reference
     let function_anchor = producer.register_function(fun.to_string());
@@ -2535,7 +2543,8 @@ mod test {
         from_substrait_named_struct, from_substrait_type_without_names,
         DefaultSubstraitConsumer,
     };
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
+    use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
+    use datafusion::arrow;
     use datafusion::arrow::array::{
         GenericListArray, Int64Builder, MapBuilder, StringBuilder,
     };
@@ -2544,13 +2553,14 @@ mod test {
     use datafusion::common::DFSchema;
     use datafusion::execution::{SessionState, SessionStateBuilder};
     use datafusion::prelude::SessionContext;
-    use std::sync::OnceLock;
+    use std::sync::LazyLock;
 
-    static TEST_SESSION_STATE: OnceLock<SessionState> = OnceLock::new();
-    static TEST_EXTENSIONS: OnceLock<Extensions> = OnceLock::new();
+    static TEST_SESSION_STATE: LazyLock<SessionState> =
+        LazyLock::new(|| SessionContext::default().state());
+    static TEST_EXTENSIONS: LazyLock<Extensions> = LazyLock::new(Extensions::default);
     fn test_consumer() -> DefaultSubstraitConsumer<'static> {
-        let extensions = TEST_EXTENSIONS.get_or_init(Extensions::default);
-        let state = TEST_SESSION_STATE.get_or_init(|| SessionContext::default().state());
+        let extensions = &TEST_EXTENSIONS;
+        let state = &TEST_SESSION_STATE;
         DefaultSubstraitConsumer::new(extensions, state)
     }
 

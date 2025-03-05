@@ -31,7 +31,6 @@ rust-version = { workspace = true }
 workspace = true
 
 [dependencies]
-arrow-buffer = { workspace = true }
 async-recursion = "1.0"
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -42,6 +41,7 @@ pbjson-types = { workspace = true }
 prost = { workspace = true }
 substrait = { version = "0.53", features = ["serde"] }
 url = { workspace = true }
+tokio = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 datafusion = { workspace = true, features = ["nested_expressions"] }

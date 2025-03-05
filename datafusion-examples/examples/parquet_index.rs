@@ -27,7 +27,7 @@ use datafusion::common::{
     internal_datafusion_err, DFSchema, DataFusionError, Result, ScalarValue,
 };
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::{FileScanConfig, ParquetExec};
+use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{
@@ -241,11 +241,14 @@ impl TableProvider for IndexTableProvider {
         let files = self.index.get_files(predicate.clone())?;
 
         let object_store_url = ObjectStoreUrl::parse("file://")?;
-        let mut file_scan_config = FileScanConfig::new(object_store_url, self.schema())
-            .with_projection(projection.cloned())
-            .with_limit(limit);
+        let source =
+            Arc::new(ParquetSource::default().with_predicate(self.schema(), predicate));
+        let mut file_scan_config =
+            FileScanConfig::new(object_store_url, self.schema(), source)
+                .with_projection(projection.cloned())
+                .with_limit(limit);
 
-        // Transform to the format needed to pass to ParquetExec
+        // Transform to the format needed to pass to DataSourceExec
         // Create one file group per file (default to scanning them all in parallel)
         for (file_name, file_size) in files {
             let path = self.dir.join(file_name);
@@ -255,11 +258,7 @@ impl TableProvider for IndexTableProvider {
                 file_size,
             ));
         }
-        let exec = ParquetExec::builder(file_scan_config)
-            .with_predicate(predicate)
-            .build_arc();
-
-        Ok(exec)
+        Ok(file_scan_config.build())
     }
 
     /// Tell DataFusion to push filters down to the scan method

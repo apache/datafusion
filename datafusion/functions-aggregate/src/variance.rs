@@ -27,9 +27,7 @@ use arrow::{
 use std::mem::{size_of, size_of_val};
 use std::{fmt::Debug, sync::Arc};
 
-use datafusion_common::{
-    downcast_value, not_impl_err, plan_err, DataFusionError, Result, ScalarValue,
-};
+use datafusion_common::{downcast_value, not_impl_err, plan_err, Result, ScalarValue};
 use datafusion_expr::{
     function::{AccumulatorArgs, StateFieldsArgs},
     utils::format_state_name,

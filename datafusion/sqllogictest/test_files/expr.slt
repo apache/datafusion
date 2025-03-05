@@ -325,6 +325,16 @@ SELECT ascii('x')
 120
 
 query I
+SELECT ascii('222')
+----
+50
+
+query I
+SELECT ascii('0xa') 
+----
+48
+
+query I
 SELECT ascii(NULL)
 ----
 NULL
@@ -571,7 +581,7 @@ select repeat('-1.2', arrow_cast(3, 'Int32'));
 ----
 -1.2-1.2-1.2
 
-query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int64\), Int64\)\) but received Float64
+query error DataFusion error: Error during planning: Internal error: Expect TypeSignatureClass::Native\(LogicalType\(Native\(Int64\), Int64\)\) but received NativeType::Float64, DataType: Float64
 select repeat('-1.2', 3.2);
 
 query T
@@ -2022,7 +2032,7 @@ logical_plan
 physical_plan
 01)ProjectionExec: expr=[min(t.a) FILTER (WHERE t.a > Int64(1))@0 as x]
 02)--AggregateExec: mode=Single, gby=[], aggr=[min(t.a) FILTER (WHERE t.a > Int64(1))]
-03)----MemoryExec: partitions=1, partition_sizes=[1]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
 
 statement ok
@@ -2047,3 +2057,16 @@ select 1 where null between null and 2;
 query T
 select 'A' where null between 2 and null;
 ----
+
+### Demonstrate use of E literals for escaping
+# should not have literal tab
+query T
+select 'foo\t\tbar';
+----
+foo\t\tbar
+
+# should have literal tab
+query T
+select E'foo\t\tbar';
+----
+foo		bar

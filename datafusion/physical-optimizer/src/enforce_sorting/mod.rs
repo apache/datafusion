@@ -72,8 +72,8 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties, InputOrde
 
 use itertools::izip;
 
-/// This rule inspects [`SortExec`]'s in the given physical plan and removes the
-/// ones it can prove unnecessary.
+/// This rule inspects [`SortExec`]'s in the given physical plan in order to
+/// remove unnecessary sorts, and optimize sort performance across the plan.
 #[derive(Default, Debug)]
 pub struct EnforceSorting {}
 
@@ -84,33 +84,43 @@ impl EnforceSorting {
     }
 }
 
-/// This object is used within the [`EnforceSorting`] rule to track the closest
+/// This context object is used within the [`EnforceSorting`] rule to track the closest
 /// [`SortExec`] descendant(s) for every child of a plan. The data attribute
 /// stores whether the plan is a `SortExec` or is connected to a `SortExec`
 /// via its children.
 pub type PlanWithCorrespondingSort = PlanContext<bool>;
 
-fn update_sort_ctx_children(
-    mut node: PlanWithCorrespondingSort,
+/// For a given node, update the [`PlanContext.data`] attribute.
+///
+/// If the node is a `SortExec`, or any of the node's children are a `SortExec`,
+/// then set the attribute to true.
+///
+/// This requires a bottom-up traversal was previously performed, updating the
+/// children previously.
+fn update_sort_ctx_children_data(
+    mut node_and_ctx: PlanWithCorrespondingSort,
     data: bool,
 ) -> Result<PlanWithCorrespondingSort> {
-    for child_node in node.children.iter_mut() {
-        let plan = &child_node.plan;
-        child_node.data = if is_sort(plan) {
-            // Initiate connection:
+    // Update `child.data` for all children.
+    for child_node in node_and_ctx.children.iter_mut() {
+        let child_plan = &child_node.plan;
+        child_node.data = if is_sort(child_plan) {
+            // child is sort
             true
-        } else if is_limit(plan) {
+        } else if is_limit(child_plan) {
             // There is no sort linkage for this path, it starts at a limit.
             false
         } else {
-            let is_spm = is_sort_preserving_merge(plan);
-            let required_orderings = plan.required_input_ordering();
-            let flags = plan.maintains_input_order();
+            // If a descendent is a sort, and the child maintains the sort.
+            let is_spm = is_sort_preserving_merge(child_plan);
+            let required_orderings = child_plan.required_input_ordering();
+            let flags = child_plan.maintains_input_order();
             // Add parent node to the tree if there is at least one child with
             // a sort connection:
             izip!(flags, required_orderings).any(|(maintains, required_ordering)| {
                 let propagates_ordering =
                     (maintains && required_ordering.is_none()) || is_spm;
+                // `connected_to_sort` only returns the correct answer with bottom-up traversal
                 let connected_to_sort =
                     child_node.children.iter().any(|child| child.data);
                 propagates_ordering && connected_to_sort
@@ -118,16 +128,45 @@ fn update_sort_ctx_children(
         }
     }
 
-    node.data = data;
-    node.update_plan_from_children()
+    // set data attribute on current node
+    node_and_ctx.data = data;
+
+    Ok(node_and_ctx)
 }
 
 /// This object is used within the [`EnforceSorting`] rule to track the closest
 /// [`CoalescePartitionsExec`] descendant(s) for every child of a plan. The data
 /// attribute stores whether the plan is a `CoalescePartitionsExec` or is
 /// connected to a `CoalescePartitionsExec` via its children.
+///
+/// The tracker halts at each [`SortExec`] (where the SPM will act to replace the coalesce).
+///
+/// This requires a bottom-up traversal was previously performed, updating the
+/// children previously.
 pub type PlanWithCorrespondingCoalescePartitions = PlanContext<bool>;
 
+/// Discovers the linked Coalesce->Sort cascades.
+///
+/// This linkage is used in [`remove_bottleneck_in_subplan`] to selectively
+/// remove the linked coalesces in the subplan. Then afterwards, an SPM is added
+/// at the root of the subplan (just after the sort) in order to parallelize sorts.
+/// Refer to the [`parallelize_sorts`] for more details on sort parallelization.
+///
+/// Example of linked Coalesce->Sort:
+/// ```text
+/// SortExec ctx.data=false, to halt remove_bottleneck_in_subplan)
+///   ...nodes...   ctx.data=true (e.g. are linked in cascade)
+///     Coalesce  ctx.data=true (e.g. is a coalesce)
+/// ```
+///
+/// The link should not be continued (and the coalesce not removed) if the distribution
+/// is changed between the Coalesce->Sort cascade. Example:
+/// ```text
+/// SortExec ctx.data=false, to halt remove_bottleneck_in_subplan)
+///   AggregateExec  ctx.data=false, to stop the link
+///     ...nodes...   ctx.data=true (e.g. are linked in cascade)
+///       Coalesce  ctx.data=true (e.g. is a coalesce)
+/// ```
 fn update_coalesce_ctx_children(
     coalesce_context: &mut PlanWithCorrespondingCoalescePartitions,
 ) {
@@ -151,10 +190,15 @@ fn update_coalesce_ctx_children(
     };
 }
 
-/// The boolean flag `repartition_sorts` defined in the config indicates
-/// whether we elect to transform [`CoalescePartitionsExec`] + [`SortExec`] cascades
-/// into [`SortExec`] + [`SortPreservingMergeExec`] cascades, which enables us to
-/// perform sorting in parallel.
+/// Performs optimizations based upon a series of subrules.
+///
+/// Refer to each subrule for detailed descriptions of the optimizations performed:
+/// [`ensure_sorting`], [`parallelize_sorts`], [`replace_with_order_preserving_variants()`],
+/// and [`pushdown_sorts`].
+///
+/// Subrule application is ordering dependent.
+///
+/// The subrule `parallelize_sorts` is only applied if `repartition_sorts` is enabled.
 impl PhysicalOptimizerRule for EnforceSorting {
     fn optimize(
         &self,
@@ -243,20 +287,77 @@ fn replace_with_partial_sort(
     Ok(plan)
 }
 
-/// This function turns plans of the form
+/// Transform [`CoalescePartitionsExec`] + [`SortExec`] into
+/// [`SortExec`] + [`SortPreservingMergeExec`] as illustrated below:
+///
+/// The [`CoalescePartitionsExec`] + [`SortExec`] cascades
+/// combine the partitions first, and then sort:
+/// ```text
+///   ┌ ─ ─ ─ ─ ─ ┐                                                                                   
+///    ┌─┬─┬─┐                                                                                        
+///   ││B│A│D│... ├──┐                                                                                
+///    └─┴─┴─┘       │                                                                                
+///   └ ─ ─ ─ ─ ─ ┘  │  ┌────────────────────────┐   ┌ ─ ─ ─ ─ ─ ─ ┐   ┌────────┐    ┌ ─ ─ ─ ─ ─ ─ ─ ┐
+///    Partition 1   │  │        Coalesce        │    ┌─┬─┬─┬─┬─┐      │        │     ┌─┬─┬─┬─┬─┐     
+///                  ├──▶(no ordering guarantees)│──▶││B│E│A│D│C│...───▶  Sort  ├───▶││A│B│C│D│E│... │
+///                  │  │                        │    └─┴─┴─┴─┴─┘      │        │     └─┴─┴─┴─┴─┘     
+///   ┌ ─ ─ ─ ─ ─ ┐  │  └────────────────────────┘   └ ─ ─ ─ ─ ─ ─ ┘   └────────┘    └ ─ ─ ─ ─ ─ ─ ─ ┘
+///    ┌─┬─┐         │                                 Partition                       Partition      
+///   ││E│C│ ...  ├──┘                                                                                
+///    └─┴─┘                                                                                          
+///   └ ─ ─ ─ ─ ─ ┘                                                                                   
+///    Partition 2                                                                                    
+/// ```                                                                                                 
+///
+///
+/// The [`SortExec`] + [`SortPreservingMergeExec`] cascades
+/// sorts each partition first, then merge partitions while retaining the sort:
+/// ```text
+///   ┌ ─ ─ ─ ─ ─ ┐   ┌────────┐   ┌ ─ ─ ─ ─ ─ ┐                                                 
+///    ┌─┬─┬─┐        │        │    ┌─┬─┬─┐                                                      
+///   ││B│A│D│... │──▶│  Sort  │──▶││A│B│D│... │──┐                                              
+///    └─┴─┴─┘        │        │    └─┴─┴─┘       │                                              
+///   └ ─ ─ ─ ─ ─ ┘   └────────┘   └ ─ ─ ─ ─ ─ ┘  │  ┌─────────────────────┐    ┌ ─ ─ ─ ─ ─ ─ ─ ┐
+///    Partition 1                  Partition 1   │  │                     │     ┌─┬─┬─┬─┬─┐     
+///                                               ├──▶ SortPreservingMerge ├───▶││A│B│C│D│E│... │
+///                                               │  │                     │     └─┴─┴─┴─┴─┘     
+///   ┌ ─ ─ ─ ─ ─ ┐   ┌────────┐   ┌ ─ ─ ─ ─ ─ ┐  │  └─────────────────────┘    └ ─ ─ ─ ─ ─ ─ ─ ┘
+///    ┌─┬─┐          │        │    ┌─┬─┐         │                               Partition      
+///   ││E│C│ ...  │──▶│  Sort  ├──▶││C│E│ ...  │──┘                                              
+///    └─┴─┘          │        │    └─┴─┘                                                        
+///   └ ─ ─ ─ ─ ─ ┘   └────────┘   └ ─ ─ ─ ─ ─ ┘                                                 
+///    Partition 2                  Partition 2                                                  
+/// ```
+///
+/// The latter [`SortExec`] + [`SortPreservingMergeExec`] cascade performs the
+/// sort first on a per-partition basis, thereby parallelizing the sort.
+///
+///
+/// The outcome is that plans of the form
 /// ```text
 ///      "SortExec: expr=\[a@0 ASC\]",
-///      "  CoalescePartitionsExec",
-///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+///      "  ...nodes..."
+///      "    CoalescePartitionsExec",
+///      "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
 /// ```
-/// to
+/// are transformed into
 /// ```text
 ///      "SortPreservingMergeExec: \[a@0 ASC\]",
 ///      "  SortExec: expr=\[a@0 ASC\]",
-///      "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+///      "    ...nodes..."
+///      "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
 /// ```
 /// by following connections from [`CoalescePartitionsExec`]s to [`SortExec`]s.
 /// By performing sorting in parallel, we can increase performance in some scenarios.
+///
+/// This requires that there are no nodes between the [`SortExec`] and [`CoalescePartitionsExec`]
+/// which require single partitioning. Do not parallelize when the following scenario occurs:
+/// ```text
+///      "SortExec: expr=\[a@0 ASC\]",
+///      "  ...nodes requiring single partitioning..."
+///      "    CoalescePartitionsExec",
+///      "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+/// ```
 pub fn parallelize_sorts(
     mut requirements: PlanWithCorrespondingCoalescePartitions,
 ) -> Result<Transformed<PlanWithCorrespondingCoalescePartitions>> {
@@ -318,11 +419,11 @@ pub fn parallelize_sorts(
 }
 
 /// This function enforces sorting requirements and makes optimizations without
-/// violating these requirements whenever possible.
+/// violating these requirements whenever possible. Requires a bottom-up traversal.
 pub fn ensure_sorting(
     mut requirements: PlanWithCorrespondingSort,
 ) -> Result<Transformed<PlanWithCorrespondingSort>> {
-    requirements = update_sort_ctx_children(requirements, false)?;
+    requirements = update_sort_ctx_children_data(requirements, false)?;
 
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
     if requirements.children.is_empty() {
@@ -353,7 +454,7 @@ pub fn ensure_sorting(
                     child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 }
                 child = add_sort_above(child, required, None);
-                child = update_sort_ctx_children(child, true)?;
+                child = update_sort_ctx_children_data(child, true)?;
             }
         } else if physical_ordering.is_none()
             || !plan.maintains_input_order()[idx]
@@ -366,21 +467,26 @@ pub fn ensure_sorting(
         updated_children.push(child);
     }
     requirements.children = updated_children;
+    requirements = requirements.update_plan_from_children()?;
     // For window expressions, we can remove some sorts when we can
     // calculate the result in reverse:
     let child_node = &requirements.children[0];
-    if is_window(plan) && child_node.data {
+    if is_window(&requirements.plan) && child_node.data {
         return adjust_window_sort_removal(requirements).map(Transformed::yes);
-    } else if is_sort_preserving_merge(plan)
+    } else if is_sort_preserving_merge(&requirements.plan)
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
         // This `SortPreservingMergeExec` is unnecessary, input already has a
-        // single partition.
-        let child_node = requirements.children.swap_remove(0);
+        // single partition and no fetch is required.
+        let mut child_node = requirements.children.swap_remove(0);
+        if let Some(fetch) = requirements.plan.fetch() {
+            // Add the limit exec if the original SPM had a fetch:
+            child_node.plan =
+                Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
+        }
         return Ok(Transformed::yes(child_node));
     }
-
-    update_sort_ctx_children(requirements, false).map(Transformed::yes)
+    update_sort_ctx_children_data(requirements, false).map(Transformed::yes)
 }
 
 /// Analyzes a given [`SortExec`] (`plan`) to determine whether its input
@@ -460,12 +566,12 @@ fn adjust_window_sort_removal(
         if let Some(exec) = plan.downcast_ref::<WindowAggExec>() {
             let window_expr = exec.window_expr();
             let new_window =
-                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys)?;
+                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
             (window_expr, new_window)
         } else if let Some(exec) = plan.downcast_ref::<BoundedWindowAggExec>() {
             let window_expr = exec.window_expr();
             let new_window =
-                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys)?;
+                get_best_fitting_window(window_expr, child_plan, &exec.partition_keys())?;
             (window_expr, new_window)
         } else {
             return plan_err!("Expected WindowAggExec or BoundedWindowAggExec");
@@ -493,14 +599,14 @@ fn adjust_window_sort_removal(
             Arc::new(BoundedWindowAggExec::try_new(
                 window_expr.to_vec(),
                 child_plan,
-                window_expr[0].partition_by().to_vec(),
                 InputOrderMode::Sorted,
+                !window_expr[0].partition_by().is_empty(),
             )?) as _
         } else {
             Arc::new(WindowAggExec::try_new(
                 window_expr.to_vec(),
                 child_plan,
-                window_expr[0].partition_by().to_vec(),
+                !window_expr[0].partition_by().is_empty(),
             )?) as _
         }
     };
@@ -604,8 +710,9 @@ fn remove_corresponding_sort_from_sub_plan(
                 }
             })
             .collect::<Result<_>>()?;
+        node = node.update_plan_from_children()?;
         if any_connection || node.children.is_empty() {
-            node = update_sort_ctx_children(node, false)?;
+            node = update_sort_ctx_children_data(node, false)?;
         }
 
         // Replace with variants that do not preserve order.
@@ -638,7 +745,7 @@ fn remove_corresponding_sort_from_sub_plan(
             Arc::new(CoalescePartitionsExec::new(plan)) as _
         };
         node = PlanWithCorrespondingSort::new(plan, false, vec![node]);
-        node = update_sort_ctx_children(node, false)?;
+        node = update_sort_ctx_children_data(node, false)?;
     }
     Ok(node)
 }

@@ -1807,24 +1807,6 @@ SELECT acos();
 statement error
 SELECT isnan();
 
-# turn off enable_ident_normalization
-statement ok
-set datafusion.sql_parser.enable_ident_normalization = false;
-
-query I
-SELECT LENGTH('str');
-----
-3
-
-query T
-SELECT CONCAT('Hello', 'World')
-----
-HelloWorld
-
-# turn on enable_ident_normalization
-statement ok
-set datafusion.sql_parser.enable_ident_normalization = true;
-
 query I
 SELECT LENGTH('str');
 ----
@@ -1854,7 +1836,7 @@ logical_plan
 02)--TableScan: simple_string projection=[letter]
 physical_plan
 01)ProjectionExec: expr=[letter@0 as letter, letter@0 = A as simple_string.letter = left(Utf8("APACHE"),Int64(1))]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TB
 SELECT letter, letter = LEFT('APACHE', 1) FROM simple_string;
@@ -1873,7 +1855,7 @@ logical_plan
 02)--TableScan: simple_string projection=[letter, letter2]
 physical_plan
 01)ProjectionExec: expr=[letter@0 as letter, letter@0 = left(letter2@1, 1) as simple_string.letter = left(simple_string.letter2,Int64(1))]
-02)--MemoryExec: partitions=1, partition_sizes=[1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TB
 SELECT letter, letter = LEFT(letter2, 1) FROM simple_string;
@@ -1945,7 +1927,7 @@ select position('' in '')
 ----
 1
 
-query error DataFusion error: Error during planning: The signature expected NativeType::String but received NativeType::Int64
+query error DataFusion error: Error during planning: Function 'strpos' expects NativeType::String but received NativeType::Int64
 select position(1 in 1)
 
 query I

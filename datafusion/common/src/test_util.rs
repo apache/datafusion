@@ -28,13 +28,13 @@ use std::{error::Error, path::PathBuf};
 ///
 /// Expects to be called about like this:
 ///
-/// `assert_batch_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
+/// `assert_batches_eq!(expected_lines: &[&str], batches: &[RecordBatch])`
 ///
 /// # Example
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::record_batch::RecordBatch;
-/// # use arrow_array::{ArrayRef, Int32Array};
+/// # use arrow::array::{ArrayRef, Int32Array};
 /// # use datafusion_common::assert_batches_eq;
 /// let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
 ///  let batch = RecordBatch::try_from_iter([("column", col)]).unwrap();
@@ -338,13 +338,13 @@ macro_rules! create_array {
 macro_rules! record_batch {
     ($(($name: expr, $type: ident, $values: expr)),*) => {
         {
-            let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+            let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
                 $(
-                    arrow_schema::Field::new($name, arrow_schema::DataType::$type, true),
+                    arrow::datatypes::Field::new($name, arrow::datatypes::DataType::$type, true),
                 )*
             ]));
 
-            let batch = arrow_array::RecordBatch::try_new(
+            let batch = arrow::array::RecordBatch::try_new(
                 schema,
                 vec![$(
                     $crate::create_array!($type, $values),
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_create_record_batch() -> Result<()> {
-        use arrow_array::Array;
+        use arrow::array::Array;
 
         let batch = record_batch!(
             ("a", Int32, vec![1, 2, 3, 4]),

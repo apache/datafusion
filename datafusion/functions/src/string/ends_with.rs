@@ -24,7 +24,7 @@ use arrow::datatypes::DataType;
 use crate::utils::make_scalar_function;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::{ColumnarValue, Documentation, Volatility};
-use datafusion_expr::{ScalarUDFImpl, Signature};
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -84,14 +84,10 @@ impl ScalarUDFImpl for EndsWithFunc {
         Ok(DataType::Boolean)
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args[0].data_type() {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args[0].data_type() {
             DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
-                make_scalar_function(ends_with, vec![])(args)
+                make_scalar_function(ends_with, vec![])(&args.args)
             }
             other => {
                 internal_err!("Unsupported data type {other:?} for function ends_with. Expected Utf8, LargeUtf8 or Utf8View")?

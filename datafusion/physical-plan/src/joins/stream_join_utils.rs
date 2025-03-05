@@ -26,11 +26,13 @@ use crate::joins::utils::{JoinFilter, JoinHashMapType};
 use crate::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
 use crate::{metrics, ExecutionPlan};
 
+use arrow::array::{
+    ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray, RecordBatch,
+};
 use arrow::compute::concat_batches;
-use arrow_array::{ArrowPrimitiveType, NativeAdapter, PrimitiveArray, RecordBatch};
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder};
-use arrow_schema::{Schema, SchemaRef};
+use arrow::datatypes::{ArrowNativeType, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     arrow_datafusion_err, DataFusionError, HashSet, JoinSide, Result, ScalarValue,
 };
@@ -41,7 +43,7 @@ use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use hashbrown::raw::RawTable;
+use hashbrown::HashTable;
 
 /// Implementation of `JoinHashMapType` for `PruningJoinHashMap`.
 impl JoinHashMapType for PruningJoinHashMap {
@@ -53,12 +55,12 @@ impl JoinHashMapType for PruningJoinHashMap {
     }
 
     /// Get mutable references to the hash map and the next.
-    fn get_mut(&mut self) -> (&mut RawTable<(u64, u64)>, &mut Self::NextType) {
+    fn get_mut(&mut self) -> (&mut HashTable<(u64, u64)>, &mut Self::NextType) {
         (&mut self.map, &mut self.next)
     }
 
     /// Get a reference to the hash map.
-    fn get_map(&self) -> &RawTable<(u64, u64)> {
+    fn get_map(&self) -> &HashTable<(u64, u64)> {
         &self.map
     }
 
@@ -105,7 +107,7 @@ impl JoinHashMapType for PruningJoinHashMap {
 /// ```
 pub struct PruningJoinHashMap {
     /// Stores hash value to last row index
-    pub map: RawTable<(u64, u64)>,
+    pub map: HashTable<(u64, u64)>,
     /// Stores indices in chained list data structure
     pub next: VecDeque<u64>,
 }
@@ -121,7 +123,7 @@ impl PruningJoinHashMap {
     /// A new instance of `PruningJoinHashMap`.
     pub(crate) fn with_capacity(capacity: usize) -> Self {
         PruningJoinHashMap {
-            map: RawTable::with_capacity(capacity),
+            map: HashTable::with_capacity(capacity),
             next: VecDeque::with_capacity(capacity),
         }
     }
@@ -154,7 +156,11 @@ impl PruningJoinHashMap {
     /// # Returns
     /// The size of the hash map in bytes.
     pub(crate) fn size(&self) -> usize {
-        self.map.allocation_info().1.size() + self.next.capacity() * size_of::<u64>()
+        let fixed_size = size_of::<PruningJoinHashMap>();
+
+        // TODO: switch to using [HashTable::allocation_size] when available after upgrading hashbrown to 0.15
+        estimate_memory_size::<(u64, u64)>(self.map.capacity(), fixed_size).unwrap()
+            + self.next.capacity() * size_of::<u64>()
     }
 
     /// Removes hash values from the map and the list based on the given pruning
@@ -176,20 +182,20 @@ impl PruningJoinHashMap {
         self.next.drain(0..prune_length);
 
         // Calculate the keys that should be removed from the map.
-        let removable_keys = unsafe {
-            self.map
-                .iter()
-                .map(|bucket| bucket.as_ref())
-                .filter_map(|(hash, tail_index)| {
-                    (*tail_index < prune_length as u64 + deleting_offset).then_some(*hash)
-                })
-                .collect::<Vec<_>>()
-        };
+        let removable_keys = self
+            .map
+            .iter()
+            .filter_map(|(hash, tail_index)| {
+                (*tail_index < prune_length as u64 + deleting_offset).then_some(*hash)
+            })
+            .collect::<Vec<_>>();
 
         // Remove the keys from the map.
         removable_keys.into_iter().for_each(|hash_value| {
             self.map
-                .remove_entry(hash_value, |(hash, _)| hash_value == *hash);
+                .find_entry(hash_value, |(hash, _)| hash_value == *hash)
+                .unwrap()
+                .remove();
         });
 
         // Shrink the map if necessary.
@@ -1093,7 +1099,7 @@ pub mod tests {
         let deleted_part = 3 * data_size / 4;
         // Add elements to the JoinHashMap
         for hash_value in 0..data_size {
-            join_hash_map.map.insert(
+            join_hash_map.map.insert_unique(
                 hash_value,
                 (hash_value, hash_value),
                 |(hash, _)| *hash,
@@ -1107,7 +1113,9 @@ pub mod tests {
         for hash_value in 0..deleted_part {
             join_hash_map
                 .map
-                .remove_entry(hash_value, |(hash, _)| hash_value == *hash);
+                .find_entry(hash_value, |(hash, _)| hash_value == *hash)
+                .unwrap()
+                .remove();
         }
 
         assert_eq!(join_hash_map.map.len(), (data_size - deleted_part) as usize);

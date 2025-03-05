@@ -108,6 +108,7 @@ use crate::{DataFusionError, Result};
 /// ```
 ///
 /// NB: Misplaced commas may result in nonsensical errors
+#[macro_export]
 macro_rules! config_namespace {
     (
         $(#[doc = $struct_d:tt])* // Struct-level documentation attributes
@@ -138,8 +139,8 @@ macro_rules! config_namespace {
             )*
         }
 
-        impl ConfigField for $struct_name {
-            fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        impl $crate::config::ConfigField for $struct_name {
+            fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
                 let (key, rem) = key.split_once('.').unwrap_or((key, ""));
                 match key {
                     $(
@@ -154,13 +155,13 @@ macro_rules! config_namespace {
                             }
                         },
                     )*
-                    _ => return _config_err!(
+                    _ => return $crate::error::_config_err!(
                         "Config value \"{}\" not found on {}", key, stringify!($struct_name)
                     )
                 }
             }
 
-            fn visit<V: Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
+            fn visit<V: $crate::config::Visit>(&self, v: &mut V, key_prefix: &str, _description: &'static str) {
                 $(
                     let key = format!(concat!("{}.", stringify!($field_name)), key_prefix);
                     let desc = concat!($($d),*).trim();
@@ -241,7 +242,7 @@ config_namespace! {
         pub enable_options_value_normalization: bool, warn = "`enable_options_value_normalization` is deprecated and ignored", default = false
 
         /// Configure the SQL dialect used by DataFusion's parser; supported values include: Generic,
-        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, and Ansi.
+        /// MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, MsSQL, ClickHouse, BigQuery, Ansi, DuckDB and Databricks.
         pub dialect: String, default = "generic".to_string()
         // no need to lowercase because `sqlparser::dialect_from_str`] is case-insensitive
 
@@ -255,6 +256,9 @@ config_namespace! {
         /// query (i.e. [`Span`](sqlparser::tokenizer::Span)) will be collected
         /// and recorded in the logical plan nodes.
         pub collect_spans: bool, default = false
+
+        /// Specifies the recursion depth limit when parsing complex SQL Queries
+        pub recursion_limit: usize, default = 50
     }
 }
 
@@ -501,6 +505,10 @@ config_namespace! {
 
         /// (writing) Sets column index truncate length
         pub column_index_truncate_length: Option<usize>, default = Some(64)
+
+        /// (writing) Sets statictics truncate length. If NULL, uses
+        /// default parquet writer setting
+        pub statistics_truncate_length: Option<usize>, default = None
 
         /// (writing) Sets best effort maximum number of rows in data page
         pub data_page_row_count_limit: usize, default = 20_000
@@ -1240,35 +1248,72 @@ macro_rules! extensions_options {
                 Box::new(self.clone())
             }
 
-            fn set(&mut self, key: &str, value: &str) -> $crate::Result<()> {
-                match key {
-                    $(
-                       stringify!($field_name) => {
-                        self.$field_name = value.parse().map_err(|e| {
-                            $crate::DataFusionError::Context(
-                                format!(concat!("Error parsing {} as ", stringify!($t),), value),
-                                Box::new($crate::DataFusionError::External(Box::new(e))),
-                            )
-                        })?;
-                        Ok(())
-                       }
-                    )*
-                    _ => Err($crate::DataFusionError::Configuration(
-                        format!(concat!("Config value \"{}\" not found on ", stringify!($struct_name)), key)
-                    ))
-                }
+            fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
+                $crate::config::ConfigField::set(self, key, value)
             }
 
             fn entries(&self) -> Vec<$crate::config::ConfigEntry> {
-                vec![
+                struct Visitor(Vec<$crate::config::ConfigEntry>);
+
+                impl $crate::config::Visit for Visitor {
+                    fn some<V: std::fmt::Display>(
+                        &mut self,
+                        key: &str,
+                        value: V,
+                        description: &'static str,
+                    ) {
+                        self.0.push($crate::config::ConfigEntry {
+                            key: key.to_string(),
+                            value: Some(value.to_string()),
+                            description,
+                        })
+                    }
+
+                    fn none(&mut self, key: &str, description: &'static str) {
+                        self.0.push($crate::config::ConfigEntry {
+                            key: key.to_string(),
+                            value: None,
+                            description,
+                        })
+                    }
+                }
+
+                let mut v = Visitor(vec![]);
+                // The prefix is not used for extensions.
+                // The description is generated in ConfigField::visit.
+                // We can just pass empty strings here.
+                $crate::config::ConfigField::visit(self, &mut v, "", "");
+                v.0
+            }
+        }
+
+        impl $crate::config::ConfigField for $struct_name {
+            fn set(&mut self, key: &str, value: &str) -> $crate::error::Result<()> {
+                let (key, rem) = key.split_once('.').unwrap_or((key, ""));
+                match key {
                     $(
-                        $crate::config::ConfigEntry {
-                            key: stringify!($field_name).to_owned(),
-                            value: (self.$field_name != $default).then(|| self.$field_name.to_string()),
-                            description: concat!($($d),*).trim(),
+                        stringify!($field_name) => {
+                            // Safely apply deprecated attribute if present
+                            // $(#[allow(deprecated)])?
+                            {
+                                #[allow(deprecated)]
+                                self.$field_name.set(rem, value.as_ref())
+                            }
                         },
                     )*
-                ]
+                    _ => return $crate::error::_config_err!(
+                        "Config value \"{}\" not found on {}", key, stringify!($struct_name)
+                    )
+                }
+            }
+
+            fn visit<V: $crate::config::Visit>(&self, v: &mut V, _key_prefix: &str, _description: &'static str) {
+                $(
+                    let key = stringify!($field_name).to_string();
+                    let desc = concat!($($d),*).trim();
+                    #[allow(deprecated)]
+                    self.$field_name.visit(v, key.as_str(), desc);
+                )*
             }
         }
     }

@@ -25,7 +25,7 @@ use crate::{
     DataFusionError, Result, _internal_datafusion_err,
 };
 
-use arrow_schema::Schema;
+use arrow::datatypes::Schema;
 // TODO: handle once deprecated
 #[allow(deprecated)]
 use parquet::{
@@ -219,6 +219,7 @@ impl ParquetOptions {
             max_row_group_size,
             created_by,
             column_index_truncate_length,
+            statistics_truncate_length,
             data_page_row_count_limit,
             encoding,
             bloom_filter_on_write,
@@ -255,6 +256,7 @@ impl ParquetOptions {
             .set_max_row_group_size(*max_row_group_size)
             .set_created_by(created_by.clone())
             .set_column_index_truncate_length(*column_index_truncate_length)
+            .set_statistics_truncate_length(*statistics_truncate_length)
             .set_data_page_row_count_limit(*data_page_row_count_limit)
             .set_bloom_filter_enabled(*bloom_filter_on_write);
 
@@ -491,6 +493,7 @@ mod tests {
             max_row_group_size: 42,
             created_by: "wordy".into(),
             column_index_truncate_length: Some(42),
+            statistics_truncate_length: Some(42),
             data_page_row_count_limit: 42,
             encoding: Some("BYTE_STREAM_SPLIT".into()),
             bloom_filter_on_write: !defaults.bloom_filter_on_write,
@@ -587,6 +590,7 @@ mod tests {
                 max_row_group_size: props.max_row_group_size(),
                 created_by: props.created_by().to_string(),
                 column_index_truncate_length: props.column_index_truncate_length(),
+                statistics_truncate_length: props.statistics_truncate_length(),
                 data_page_row_count_limit: props.data_page_row_count_limit(),
 
                 // global options which set the default column props

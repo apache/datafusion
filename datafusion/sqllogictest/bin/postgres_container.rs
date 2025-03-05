@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::Options;
-use datafusion_common::Result;
+use datafusion::common::Result;
 use log::info;
 use std::env::set_var;
 use std::future::Future;
@@ -123,8 +123,8 @@ async fn start_postgres(
         .await
         .unwrap();
     // uncomment this if you are running docker in docker
-    let host = "host.docker.internal".to_string();
-    // let host = container.get_host().await.unwrap().to_string();
+    // let host = "host.docker.internal".to_string();
+    let host = container.get_host().await.unwrap().to_string();
     let port = container.get_host_port_ipv4(5432).await.unwrap();
 
     let mut rx = in_channel.rx.lock().await;

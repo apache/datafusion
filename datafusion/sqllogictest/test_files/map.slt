@@ -115,7 +115,7 @@ logical_plan
 physical_plan
 01)CoalesceBatchesExec: target_batch_size=8192
 02)--FilterExec: int_field@0 > 0
-03)----MemoryExec: partitions=1, partition_sizes=[0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
 
 statement ok
 drop table table_with_map;
@@ -188,7 +188,7 @@ SELECT MAP([[1,2], [3,4]], ['a', 'b']);
 query error
 SELECT MAP()
 
-query error DataFusion error: Execution error: map requires exactly 2 arguments, got 1 instead
+query error DataFusion error: Execution error: map function requires 2 arguments, got 1
 SELECT MAP(['POST', 'HEAD'])
 
 query error DataFusion error: Execution error: Expected list, large_list or fixed_size_list, got Null
@@ -592,6 +592,43 @@ select map_extract(column1, 1), map_extract(column1, 5), map_extract(column1, 7)
 [NULL] [NULL] [[1, NULL, 3]]
 [NULL] [NULL] [NULL]
 
+query ?
+select column1[1] from map_array_table_1;
+----
+[1, NULL, 3]
+NULL
+NULL
+NULL
+
+query ?
+select column1[-1000 + 1001] from map_array_table_1;
+----
+[1, NULL, 3]
+NULL
+NULL
+NULL
+
+# test for negative scenario
+query ?
+SELECT column1[-1] FROM map_array_table_1;
+----
+NULL
+NULL
+NULL
+NULL
+
+query ?
+SELECT column1[1000] FROM map_array_table_1;
+----
+NULL
+NULL
+NULL
+NULL
+
+
+query error DataFusion error: Arrow error: Invalid argument error
+SELECT column1[NULL] FROM map_array_table_1;
+
 query ???
 select map_extract(column1, column2), map_extract(column1, column3), map_extract(column1, column4) from map_array_table_1;
 ----
@@ -722,3 +759,28 @@ drop table map_array_table_1;
 
 statement ok
 drop table map_array_table_2;
+
+
+statement ok
+create table tt as values(MAP{[1,2,3]:1}, MAP {{'a':1, 'b':2}:2}, MAP{true: 3});
+
+# accessing using an array
+query I
+select column1[make_array(1, 2, 3)] from tt;
+----
+1
+
+# accessing using a struct
+query I
+select column2[{a:1, b: 2}] from tt;
+----
+2
+
+# accessing using Bool
+query I
+select column3[true] from tt;
+----
+3
+
+statement ok
+drop table tt;

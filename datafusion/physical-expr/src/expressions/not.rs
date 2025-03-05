@@ -23,10 +23,12 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{cast::as_boolean_array, Result, ScalarValue};
+use datafusion_common::{cast::as_boolean_array, internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
+use datafusion_expr::statistics::Distribution::{self, Bernoulli};
 use datafusion_expr::ColumnarValue;
 
 /// Not expression
@@ -82,8 +84,7 @@ impl PhysicalExpr for NotExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let evaluate_arg = self.arg.evaluate(batch)?;
-        match evaluate_arg {
+        match self.arg.evaluate(batch)? {
             ColumnarValue::Array(array) => {
                 let array = as_boolean_array(&array)?;
                 Ok(ColumnarValue::Array(Arc::new(
@@ -95,9 +96,7 @@ impl PhysicalExpr for NotExpr {
                     return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
                 }
                 let bool_value: bool = scalar.try_into()?;
-                Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
-                    !bool_value,
-                ))))
+                Ok(ColumnarValue::Scalar(ScalarValue::from(!bool_value)))
             }
         }
     }
@@ -112,8 +111,69 @@ impl PhysicalExpr for NotExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(NotExpr::new(Arc::clone(&children[0]))))
     }
+
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         children[0].not()
+    }
+
+    fn propagate_constraints(
+        &self,
+        interval: &Interval,
+        children: &[&Interval],
+    ) -> Result<Option<Vec<Interval>>> {
+        let complemented_interval = interval.not()?;
+
+        Ok(children[0]
+            .intersect(complemented_interval)?
+            .map(|result| vec![result]))
+    }
+
+    fn evaluate_statistics(&self, children: &[&Distribution]) -> Result<Distribution> {
+        match children[0] {
+            Bernoulli(b) => {
+                let p_value = b.p_value();
+                if p_value.is_null() {
+                    Ok(children[0].clone())
+                } else {
+                    let one = ScalarValue::new_one(&p_value.data_type())?;
+                    Distribution::new_bernoulli(one.sub_checked(p_value)?)
+                }
+            }
+            _ => internal_err!("NotExpr can only operate on Boolean datatypes"),
+        }
+    }
+
+    fn propagate_statistics(
+        &self,
+        parent: &Distribution,
+        children: &[&Distribution],
+    ) -> Result<Option<Vec<Distribution>>> {
+        match (parent, children[0]) {
+            (Bernoulli(parent), Bernoulli(child)) => {
+                let parent_range = parent.range();
+                let result = if parent_range == Interval::CERTAINLY_TRUE {
+                    if child.range() == Interval::CERTAINLY_TRUE {
+                        None
+                    } else {
+                        Some(vec![Distribution::new_bernoulli(ScalarValue::new_zero(
+                            &child.data_type(),
+                        )?)?])
+                    }
+                } else if parent_range == Interval::CERTAINLY_FALSE {
+                    if child.range() == Interval::CERTAINLY_FALSE {
+                        None
+                    } else {
+                        Some(vec![Distribution::new_bernoulli(ScalarValue::new_one(
+                            &child.data_type(),
+                        )?)?])
+                    }
+                } else {
+                    Some(vec![])
+                };
+                Ok(result)
+            }
+            _ => internal_err!("NotExpr can only operate on Boolean datatypes"),
+        }
     }
 }
 
@@ -124,10 +184,12 @@ pub fn not(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::expressions::col;
-    use arrow::{array::BooleanArray, datatypes::*};
     use std::sync::LazyLock;
+
+    use super::*;
+    use crate::expressions::{col, Column};
+
+    use arrow::{array::BooleanArray, datatypes::*};
 
     #[test]
     fn neg_op() -> Result<()> {
@@ -182,10 +244,81 @@ mod tests {
         expected_interval: Interval,
     ) -> Result<()> {
         let not_expr = not(col("a", &schema())?)?;
+        assert_eq!(not_expr.evaluate_bounds(&[&interval])?, expected_interval);
+        Ok(())
+    }
+
+    #[test]
+    fn test_evaluate_statistics() -> Result<()> {
+        let _schema = &Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
+        let a = Arc::new(Column::new("a", 0)) as _;
+        let expr = not(a)?;
+
+        // Uniform with non-boolean bounds
+        assert!(expr
+            .evaluate_statistics(&[&Distribution::new_uniform(
+                Interval::make_unbounded(&DataType::Float64)?
+            )?])
+            .is_err());
+
+        // Exponential
+        assert!(expr
+            .evaluate_statistics(&[&Distribution::new_exponential(
+                ScalarValue::from(1.0),
+                ScalarValue::from(1.0),
+                true
+            )?])
+            .is_err());
+
+        // Gaussian
+        assert!(expr
+            .evaluate_statistics(&[&Distribution::new_gaussian(
+                ScalarValue::from(1.0),
+                ScalarValue::from(1.0),
+            )?])
+            .is_err());
+
+        // Bernoulli
         assert_eq!(
-            not_expr.evaluate_bounds(&[&interval]).unwrap(),
-            expected_interval
+            expr.evaluate_statistics(&[&Distribution::new_bernoulli(
+                ScalarValue::from(0.0),
+            )?])?,
+            Distribution::new_bernoulli(ScalarValue::from(1.))?
         );
+
+        assert_eq!(
+            expr.evaluate_statistics(&[&Distribution::new_bernoulli(
+                ScalarValue::from(1.0),
+            )?])?,
+            Distribution::new_bernoulli(ScalarValue::from(0.))?
+        );
+
+        assert_eq!(
+            expr.evaluate_statistics(&[&Distribution::new_bernoulli(
+                ScalarValue::from(0.25),
+            )?])?,
+            Distribution::new_bernoulli(ScalarValue::from(0.75))?
+        );
+
+        assert!(expr
+            .evaluate_statistics(&[&Distribution::new_generic(
+                ScalarValue::Null,
+                ScalarValue::Null,
+                ScalarValue::Null,
+                Interval::make_unbounded(&DataType::UInt8)?
+            )?])
+            .is_err());
+
+        // Unknown with non-boolean interval as range
+        assert!(expr
+            .evaluate_statistics(&[&Distribution::new_generic(
+                ScalarValue::Null,
+                ScalarValue::Null,
+                ScalarValue::Null,
+                Interval::make_unbounded(&DataType::Float64)?
+            )?])
+            .is_err());
+
         Ok(())
     }
 

@@ -18,12 +18,9 @@
 use std::sync::Arc;
 
 use abi_stable::{export_root_module, prefix_type::PrefixTypeTrait};
-use arrow_array::RecordBatch;
-use datafusion::{
-    arrow::datatypes::{DataType, Field, Schema},
-    common::record_batch,
-    datasource::MemTable,
-};
+use arrow::array::RecordBatch;
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::{common::record_batch, datasource::MemTable};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use ffi_module_interface::{TableProviderModule, TableProviderModuleRef};
 

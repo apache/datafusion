@@ -146,8 +146,8 @@ mod tests {
     use crate::utils::tests::TestScalarUDF;
     use crate::{PhysicalExprRef, ScalarFunctionExpr};
 
-    use arrow::datatypes::{DataType, Field, Schema};
-    use arrow_schema::{SortOptions, TimeUnit};
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_expr::{Operator, ScalarUDF};
 
     #[test]

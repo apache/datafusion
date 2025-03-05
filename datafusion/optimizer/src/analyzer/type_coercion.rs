@@ -33,8 +33,8 @@ use datafusion_common::{
     DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
 };
 use datafusion_expr::expr::{
-    self, Alias, Between, BinaryExpr, Case, Exists, InList, InSubquery, Like,
-    ScalarFunction, Sort, WindowFunction,
+    self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists, InList,
+    InSubquery, Like, ScalarFunction, Sort, WindowFunction,
 };
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::expr_schema::cast_subquery;
@@ -506,11 +506,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }
             Expr::AggregateFunction(expr::AggregateFunction {
                 func,
-                args,
-                distinct,
-                filter,
-                order_by,
-                null_treatment,
+                params:
+                    AggregateFunctionParams {
+                        args,
+                        distinct,
+                        filter,
+                        order_by,
+                        null_treatment,
+                    },
             }) => {
                 let new_expr = coerce_arguments_for_signature_with_aggregate_udf(
                     args,
@@ -530,11 +533,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             }
             Expr::WindowFunction(WindowFunction {
                 fun,
-                args,
-                partition_by,
-                order_by,
-                window_frame,
-                null_treatment,
+                params:
+                    expr::WindowFunctionParams {
+                        args,
+                        partition_by,
+                        order_by,
+                        window_frame,
+                        null_treatment,
+                    },
             }) => {
                 let window_frame =
                     coerce_window_frame(window_frame, self.schema, &order_by)?;
@@ -559,6 +565,8 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         .build()?,
                 ))
             }
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
             Expr::Alias(_)
             | Expr::Column(_)
             | Expr::ScalarVariable(_, _)
@@ -1015,6 +1023,7 @@ fn project_with_column_index(
                 spans: _,
             }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
             Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => {
                 plan_err!("Wildcard should be expanded before type coercion")
             }
@@ -1047,8 +1056,8 @@ mod test {
     use datafusion_expr::{
         cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
         BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
-        Operator, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF, Subquery,
-        Volatility,
+        Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        SimpleAggregateUDF, Subquery, Volatility,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
 
@@ -1266,11 +1275,7 @@ mod test {
             Ok(Utf8)
         }
 
-        fn invoke_batch(
-            &self,
-            _args: &[ColumnarValue],
-            _number_rows: usize,
-        ) -> Result<ColumnarValue> {
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             Ok(ColumnarValue::Scalar(ScalarValue::from("a")))
         }
     }
@@ -1372,7 +1377,7 @@ mod test {
 
         let err = Projection::try_new(vec![udaf], empty).err().unwrap();
         assert!(
-            err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to MY_AVG function: coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
+            err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'MY_AVG' function: coercion from [Utf8] to the signature Uniform(1, [Float64]) failed")
         );
         Ok(())
     }
@@ -1422,7 +1427,7 @@ mod test {
             .err()
             .unwrap()
             .strip_backtrace();
-        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to avg function: coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed."));
+        assert!(err.starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'avg' function: coercion from [Utf8] to the signature Uniform(1, [Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64, Float32, Float64]) failed"));
         Ok(())
     }
 

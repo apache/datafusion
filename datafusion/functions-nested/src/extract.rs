@@ -17,32 +17,32 @@
 
 //! [`ScalarUDFImpl`] definitions for array_element, array_slice, array_pop_front, array_pop_back, and array_any_value functions.
 
-use arrow::array::Array;
-use arrow::array::ArrayRef;
-use arrow::array::ArrowNativeTypeOp;
-use arrow::array::Capacities;
-use arrow::array::GenericListArray;
-use arrow::array::Int64Array;
-use arrow::array::MutableArrayData;
-use arrow::array::OffsetSizeTrait;
+use arrow::array::{
+    Array, ArrayRef, ArrowNativeTypeOp, Capacities, GenericListArray, Int64Array,
+    MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
+};
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
-use arrow_buffer::NullBufferBuilder;
-use arrow_schema::DataType::{FixedSizeList, LargeList, List};
-use arrow_schema::Field;
+use arrow::datatypes::{
+    DataType::{FixedSizeList, LargeList, List},
+    Field,
+};
 use datafusion_common::cast::as_int64_array;
 use datafusion_common::cast::as_large_list_array;
 use datafusion_common::cast::as_list_array;
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
-    exec_err, internal_datafusion_err, plan_err, DataFusionError, Result,
+    exec_err, internal_datafusion_err, plan_err, utils::take_function_args,
+    DataFusionError, Result,
 };
-use datafusion_expr::{ArrayFunctionSignature, Expr, TypeSignature};
 use datafusion_expr::{
-    ColumnarValue, Documentation, NullHandling, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, Expr, TypeSignature,
+};
+use datafusion_expr::{
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use crate::utils::make_scalar_function;
@@ -172,12 +172,11 @@ impl ScalarUDFImpl for ArrayElement {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_element_inner)(args)
+        make_scalar_function(array_element_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -197,24 +196,22 @@ impl ScalarUDFImpl for ArrayElement {
 /// For example:
 /// > array_element(\[1, 2, 3], 2) -> 2
 fn array_element_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 2 {
-        return exec_err!("array_element needs two arguments");
-    }
+    let [array, indexes] = take_function_args("array_element", args)?;
 
-    match &args[0].data_type() {
+    match &array.data_type() {
         List(_) => {
-            let array = as_list_array(&args[0])?;
-            let indexes = as_int64_array(&args[1])?;
+            let array = as_list_array(&array)?;
+            let indexes = as_int64_array(&indexes)?;
             general_array_element::<i32>(array, indexes)
         }
         LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
-            let indexes = as_int64_array(&args[1])?;
+            let array = as_large_list_array(&array)?;
+            let indexes = as_int64_array(&indexes)?;
             general_array_element::<i64>(array, indexes)
         }
         _ => exec_err!(
             "array_element does not support type: {:?}",
-            args[0].data_type()
+            array.data_type()
         ),
     }
 }
@@ -334,21 +331,23 @@ impl ArraySlice {
         Self {
             signature: Signature::one_of(
                 vec![
-                    TypeSignature::ArraySignature(
-                        ArrayFunctionSignature::ArrayAndIndexes(
-                            NonZeroUsize::new(1).expect("1 is non-zero"),
-                        ),
-                    ),
-                    TypeSignature::ArraySignature(
-                        ArrayFunctionSignature::ArrayAndIndexes(
-                            NonZeroUsize::new(2).expect("2 is non-zero"),
-                        ),
-                    ),
-                    TypeSignature::ArraySignature(
-                        ArrayFunctionSignature::ArrayAndIndexes(
-                            NonZeroUsize::new(3).expect("3 is non-zero"),
-                        ),
-                    ),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                            ArrayFunctionArgument::Index,
+                        ],
+                        array_coercion: None,
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                            ArrayFunctionArgument::Index,
+                            ArrayFunctionArgument::Index,
+                        ],
+                        array_coercion: None,
+                    }),
                 ],
                 Volatility::Immutable,
             ),
@@ -395,16 +394,11 @@ impl ScalarUDFImpl for ArraySlice {
         Ok(arg_types[0].clone())
     }
 
-    fn null_handling(&self) -> NullHandling {
-        NullHandling::Propagate
-    }
-
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_slice_inner)(args)
+        make_scalar_function(array_slice_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -487,7 +481,17 @@ where
         // 0 ~ len - 1
         let adjusted_zero_index = if index < 0 {
             if let Ok(index) = index.try_into() {
-                index + len
+                // When index < 0 and -index > length, index is clamped to the beginning of the list.
+                // Otherwise, when index < 0, the index is counted from the end of the list.
+                //
+                // Note, we actually test the contrapositive, index < -length, because negating a
+                // negative will panic if the negative is equal to the smallest representable value
+                // while negating a positive is always safe.
+                if index < (O::zero() - O::one()) * len {
+                    O::zero()
+                } else {
+                    index + len
+                }
             } else {
                 return exec_err!("array_slice got invalid index: {}", index);
             }
@@ -575,7 +579,7 @@ where
                     "array_slice got invalid stride: {:?}, it cannot be 0",
                     stride
                 );
-            } else if (from <= to && stride.is_negative())
+            } else if (from < to && stride.is_negative())
                 || (from > to && stride.is_positive())
             {
                 // return empty array
@@ -587,7 +591,7 @@ where
                 internal_datafusion_err!("array_slice got invalid stride: {}", stride)
             })?;
 
-            if from <= to {
+            if from <= to && stride > O::zero() {
                 assert!(start + to <= end);
                 if stride.eq(&O::one()) {
                     // stride is default to 1
@@ -637,7 +641,7 @@ where
     Ok(Arc::new(GenericListArray::<O>::try_new(
         Arc::new(Field::new_list_field(array.value_type(), true)),
         OffsetBuffer::<O>::new(offsets.into()),
-        arrow_array::make_array(data),
+        arrow::array::make_array(data),
         null_builder.finish(),
     )?))
 }
@@ -668,7 +672,15 @@ pub(super) struct ArrayPopFront {
 impl ArrayPopFront {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_pop_front")],
         }
     }
@@ -690,16 +702,11 @@ impl ScalarUDFImpl for ArrayPopFront {
         Ok(arg_types[0].clone())
     }
 
-    fn null_handling(&self) -> NullHandling {
-        NullHandling::Propagate
-    }
-
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_pop_front_inner)(args)
+        make_scalar_function(array_pop_front_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -772,7 +779,15 @@ pub(super) struct ArrayPopBack {
 impl ArrayPopBack {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![String::from("list_pop_back")],
         }
     }
@@ -794,16 +809,11 @@ impl ScalarUDFImpl for ArrayPopBack {
         Ok(arg_types[0].clone())
     }
 
-    fn null_handling(&self) -> NullHandling {
-        NullHandling::Propagate
-    }
-
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_pop_back_inner)(args)
+        make_scalar_function(array_pop_back_inner)(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -817,23 +827,20 @@ impl ScalarUDFImpl for ArrayPopBack {
 
 /// array_pop_back SQL function
 fn array_pop_back_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_pop_back needs one argument");
-    }
+    let [array] = take_function_args("array_pop_back", args)?;
 
-    let array_data_type = args[0].data_type();
-    match array_data_type {
+    match array.data_type() {
         List(_) => {
-            let array = as_list_array(&args[0])?;
+            let array = as_list_array(&array)?;
             general_pop_back_list::<i32>(array)
         }
         LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
+            let array = as_large_list_array(&array)?;
             general_pop_back_list::<i64>(array)
         }
         _ => exec_err!(
             "array_pop_back does not support type: {:?}",
-            array_data_type
+            array.data_type()
         ),
     }
 }
@@ -907,13 +914,13 @@ impl ScalarUDFImpl for ArrayAnyValue {
         }
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(array_any_value_inner)(args)
+        make_scalar_function(array_any_value_inner)(&args.args)
     }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
@@ -924,17 +931,15 @@ impl ScalarUDFImpl for ArrayAnyValue {
 }
 
 fn array_any_value_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.len() != 1 {
-        return exec_err!("array_any_value expects one argument");
-    }
+    let [array] = take_function_args("array_any_value", args)?;
 
-    match &args[0].data_type() {
+    match &array.data_type() {
         List(_) => {
-            let array = as_list_array(&args[0])?;
+            let array = as_list_array(&array)?;
             general_array_any_value::<i32>(array)
         }
         LargeList(_) => {
-            let array = as_large_list_array(&args[0])?;
+            let array = as_large_list_array(&array)?;
             general_array_any_value::<i64>(array)
         }
         data_type => exec_err!("array_any_value does not support type: {:?}", data_type),
@@ -994,7 +999,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::array_element_udf;
-    use arrow_schema::{DataType, Field};
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::{Column, DFSchema, ScalarValue};
     use datafusion_expr::expr::ScalarFunction;
     use datafusion_expr::{cast, Expr, ExprSchemable};

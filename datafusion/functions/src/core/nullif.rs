@@ -16,15 +16,15 @@
 // under the License.
 
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, Documentation};
+use datafusion_expr::{ColumnarValue, Documentation, ScalarFunctionArgs};
 
 use arrow::compute::kernels::cmp::eq;
 use arrow::compute::kernels::nullif::nullif;
-use datafusion_common::ScalarValue;
+use datafusion_common::{utils::take_function_args, Result, ScalarValue};
 use datafusion_expr::{ScalarUDFImpl, Signature, Volatility};
 use datafusion_macros::user_doc;
 use std::any::Any;
+
 #[user_doc(
     doc_section(label = "Conditional Functions"),
     description = "Returns _null_ if _expression1_ equals _expression2_; otherwise it returns _expression1_.
@@ -101,12 +101,8 @@ impl ScalarUDFImpl for NullIfFunc {
         Ok(arg_types[0].to_owned())
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        nullif_func(args)
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        nullif_func(&args.args)
     }
 
     fn documentation(&self) -> Option<&Documentation> {
@@ -119,14 +115,7 @@ impl ScalarUDFImpl for NullIfFunc {
 ///       1 - if the left is equal to this expr2, then the result is NULL, otherwise left value is passed.
 ///
 fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    if args.len() != 2 {
-        return exec_err!(
-            "{:?} args were supplied but NULLIF takes exactly two args",
-            args.len()
-        );
-    }
-
-    let (lhs, rhs) = (&args[0], &args[1]);
+    let [lhs, rhs] = take_function_args("nullif", args)?;
 
     match (lhs, rhs) {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {

@@ -25,22 +25,17 @@ use std::sync::Arc;
 
 use super::write::demux::DemuxedStreamReceiver;
 use super::write::{create_writer, SharedBuffer};
-use super::{
-    coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
-    transform_binary_to_string, transform_schema_to_view, FileFormat, FileFormatFactory,
-    FilePushdownSupport, FileScanConfig,
-};
+use super::{FileFormat, FileFormatFactory, FilePushdownSupport};
 use crate::arrow::array::RecordBatch;
 use crate::arrow::datatypes::{Fields, Schema, SchemaRef};
 use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::write::get_writer_schema;
-use crate::datasource::physical_plan::parquet::{
-    can_expr_be_pushed_down_with_schemas, ParquetExecBuilder,
-};
-use crate::datasource::physical_plan::{FileGroupDisplay, FileSink, FileSinkConfig};
+use crate::datasource::physical_plan::parquet::can_expr_be_pushed_down_with_schemas;
+use crate::datasource::physical_plan::parquet::source::ParquetSource;
+use crate::datasource::physical_plan::{FileSink, FileSinkConfig};
 use crate::datasource::statistics::{create_max_min_accs, get_col_stats};
 use crate::error::Result;
-use crate::execution::context::SessionState;
+use crate::execution::SessionState;
 use crate::physical_plan::insert::{DataSink, DataSinkExec};
 use crate::physical_plan::{
     Accumulator, DisplayAs, DisplayFormatType, ExecutionPlan, SendableRecordBatchStream,
@@ -48,6 +43,8 @@ use crate::physical_plan::{
 };
 
 use arrow::compute::sum;
+use arrow_schema::{DataType, Field, FieldRef};
+use datafusion_catalog::Session;
 use datafusion_common::config::{ConfigField, ConfigFileType, TableParquetOptions};
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
@@ -57,6 +54,9 @@ use datafusion_common::{
     DEFAULT_PARQUET_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
+use datafusion_datasource::display::FileGroupDisplay;
+use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::TaskContext;
 use datafusion_expr::dml::InsertOp;
@@ -121,9 +121,10 @@ impl ParquetFormatFactory {
 impl FileFormatFactory for ParquetFormatFactory {
     fn create(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         format_options: &std::collections::HashMap<String, String>,
     ) -> Result<Arc<dyn FileFormat>> {
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let parquet_options = match &self.options {
             None => {
                 let mut table_options = state.default_table_options();
@@ -325,7 +326,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_schema(
         &self,
-        state: &SessionState,
+        state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[ObjectMeta],
     ) -> Result<SchemaRef> {
@@ -378,7 +379,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_stats(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         table_schema: SchemaRef,
         object: &ObjectMeta,
@@ -395,32 +396,40 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        _state: &SessionState,
+        _state: &dyn Session,
         conf: FileScanConfig,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut builder =
-            ParquetExecBuilder::new_with_options(conf, self.options.clone());
+        let mut predicate = None;
+        let mut metadata_size_hint = None;
 
         // If enable pruning then combine the filters to build the predicate.
         // If disable pruning then set the predicate to None, thus readers
         // will not prune data based on the statistics.
         if self.enable_pruning() {
-            if let Some(predicate) = filters.cloned() {
-                builder = builder.with_predicate(predicate);
+            if let Some(pred) = filters.cloned() {
+                predicate = Some(pred);
             }
         }
-        if let Some(metadata_size_hint) = self.metadata_size_hint() {
-            builder = builder.with_metadata_size_hint(metadata_size_hint);
+        if let Some(metadata) = self.metadata_size_hint() {
+            metadata_size_hint = Some(metadata);
         }
 
-        Ok(builder.build_arc())
+        let mut source = ParquetSource::new(self.options.clone());
+
+        if let Some(predicate) = predicate {
+            source = source.with_predicate(Arc::clone(&conf.file_schema), predicate);
+        }
+        if let Some(metadata_size_hint) = metadata_size_hint {
+            source = source.with_metadata_size_hint(metadata_size_hint)
+        }
+        Ok(conf.with_source(Arc::new(source)).build())
     }
 
     async fn create_writer_physical_plan(
         &self,
         input: Arc<dyn ExecutionPlan>,
-        _state: &SessionState,
+        _state: &dyn Session,
         conf: FileSinkConfig,
         order_requirements: Option<LexRequirement>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -453,6 +462,157 @@ impl FileFormat for ParquetFormat {
             FilePushdownSupport::NotSupportedForFilter
         })
     }
+
+    fn file_source(&self) -> Arc<dyn FileSource> {
+        Arc::new(ParquetSource::default())
+    }
+}
+
+/// Coerces the file schema if the table schema uses a view type.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn coerce_file_schema_to_view_type(
+    table_schema: &Schema,
+    file_schema: &Schema,
+) -> Option<Schema> {
+    let mut transform = false;
+    let table_fields: HashMap<_, _> = table_schema
+        .fields
+        .iter()
+        .map(|f| {
+            let dt = f.data_type();
+            if dt.equals_datatype(&DataType::Utf8View)
+                || dt.equals_datatype(&DataType::BinaryView)
+            {
+                transform = true;
+            }
+            (f.name(), dt)
+        })
+        .collect();
+
+    if !transform {
+        return None;
+    }
+
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields
+        .iter()
+        .map(
+            |field| match (table_fields.get(field.name()), field.data_type()) {
+                (Some(DataType::Utf8View), DataType::Utf8 | DataType::LargeUtf8) => {
+                    field_with_new_type(field, DataType::Utf8View)
+                }
+                (
+                    Some(DataType::BinaryView),
+                    DataType::Binary | DataType::LargeBinary,
+                ) => field_with_new_type(field, DataType::BinaryView),
+                _ => Arc::clone(field),
+            },
+        )
+        .collect();
+
+    Some(Schema::new_with_metadata(
+        transformed_fields,
+        file_schema.metadata.clone(),
+    ))
+}
+
+/// If the table schema uses a string type, coerce the file schema to use a string type.
+///
+/// See [ParquetFormat::binary_as_string] for details
+#[cfg(not(target_arch = "wasm32"))]
+pub fn coerce_file_schema_to_string_type(
+    table_schema: &Schema,
+    file_schema: &Schema,
+) -> Option<Schema> {
+    let mut transform = false;
+    let table_fields: HashMap<_, _> = table_schema
+        .fields
+        .iter()
+        .map(|f| (f.name(), f.data_type()))
+        .collect();
+    let transformed_fields: Vec<Arc<Field>> = file_schema
+        .fields
+        .iter()
+        .map(
+            |field| match (table_fields.get(field.name()), field.data_type()) {
+                // table schema uses string type, coerce the file schema to use string type
+                (
+                    Some(DataType::Utf8),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                ) => {
+                    transform = true;
+                    field_with_new_type(field, DataType::Utf8)
+                }
+                // table schema uses large string type, coerce the file schema to use large string type
+                (
+                    Some(DataType::LargeUtf8),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                ) => {
+                    transform = true;
+                    field_with_new_type(field, DataType::LargeUtf8)
+                }
+                // table schema uses string view type, coerce the file schema to use view type
+                (
+                    Some(DataType::Utf8View),
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                ) => {
+                    transform = true;
+                    field_with_new_type(field, DataType::Utf8View)
+                }
+                _ => Arc::clone(field),
+            },
+        )
+        .collect();
+
+    if !transform {
+        None
+    } else {
+        Some(Schema::new_with_metadata(
+            transformed_fields,
+            file_schema.metadata.clone(),
+        ))
+    }
+}
+
+/// Create a new field with the specified data type, copying the other
+/// properties from the input field
+fn field_with_new_type(field: &FieldRef, new_type: DataType) -> FieldRef {
+    Arc::new(field.as_ref().clone().with_data_type(new_type))
+}
+
+/// Transform a schema to use view types for Utf8 and Binary
+///
+/// See [ParquetFormat::force_view_types] for details
+pub fn transform_schema_to_view(schema: &Schema) -> Schema {
+    let transformed_fields: Vec<Arc<Field>> = schema
+        .fields
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                field_with_new_type(field, DataType::Utf8View)
+            }
+            DataType::Binary | DataType::LargeBinary => {
+                field_with_new_type(field, DataType::BinaryView)
+            }
+            _ => Arc::clone(field),
+        })
+        .collect();
+    Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
+}
+
+/// Transform a schema so that any binary types are strings
+pub fn transform_binary_to_string(schema: &Schema) -> Schema {
+    let transformed_fields: Vec<Arc<Field>> = schema
+        .fields
+        .iter()
+        .map(|field| match field.data_type() {
+            DataType::Binary => field_with_new_type(field, DataType::Utf8),
+            DataType::LargeBinary => field_with_new_type(field, DataType::LargeUtf8),
+            DataType::BinaryView => field_with_new_type(field, DataType::Utf8View),
+            _ => Arc::clone(field),
+        })
+        .collect();
+    Schema::new_with_metadata(transformed_fields, schema.metadata.clone())
 }
 
 /// [`MetadataFetch`] adapter for reading bytes from an [`ObjectStore`]
@@ -1282,6 +1442,7 @@ pub(crate) mod test_util {
 mod tests {
     use super::super::test_util::scan_format;
     use crate::datasource::listing::{ListingTableUrl, PartitionedFile};
+    use crate::execution::SessionState;
     use crate::physical_plan::collect;
     use crate::test_util::bounded_stream;
     use std::fmt::{Display, Formatter};
@@ -1293,10 +1454,11 @@ mod tests {
     use crate::datasource::file_format::parquet::test_util::store_parquet;
     use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
-    use arrow::array::{Array, ArrayRef, StringArray};
-    use arrow_array::types::Int32Type;
-    use arrow_array::{DictionaryArray, Int32Array, Int64Array};
-    use arrow_schema::{DataType, Field};
+    use arrow::array::{
+        types::Int32Type, Array, ArrayRef, DictionaryArray, Int32Array, Int64Array,
+        StringArray,
+    };
+    use arrow::datatypes::{DataType, Field};
     use async_trait::async_trait;
     use datafusion_common::cast::{
         as_binary_array, as_binary_view_array, as_boolean_array, as_float32_array,
@@ -1772,6 +1934,7 @@ mod tests {
 
         // test metadata
         assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
 
         Ok(())
@@ -1814,6 +1977,7 @@ mod tests {
 
         // note: even if the limit is set, the executor rounds up to the batch size
         assert_eq!(exec.statistics()?.num_rows, Precision::Exact(8));
+        // TODO correct byte size: https://github.com/apache/datafusion/issues/14936
         assert_eq!(exec.statistics()?.total_byte_size, Precision::Exact(671));
         let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
@@ -2216,13 +2380,13 @@ mod tests {
     }
 
     async fn get_exec(
-        state: &SessionState,
+        state: &dyn Session,
         file_name: &str,
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
-
+        let state = state.as_any().downcast_ref::<SessionState>().unwrap();
         let format = state
             .get_file_format_factory("parquet")
             .map(|factory| factory.create(state, &Default::default()).unwrap())

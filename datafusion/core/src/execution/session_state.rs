@@ -35,7 +35,7 @@ use datafusion_catalog::information_schema::{
 };
 use datafusion_catalog::MemoryCatalogProviderList;
 
-use arrow_schema::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, SchemaRef};
 use datafusion_catalog::{Session, TableFunction, TableFunctionImpl};
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
@@ -68,7 +68,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_sql::parser::{DFParser, Statement};
+use datafusion_sql::parser::{DFParserBuilder, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 
 use async_trait::async_trait;
@@ -480,15 +480,24 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                      Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi."
+                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
-        let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
+
+        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+
+        let mut statements = DFParserBuilder::new(sql)
+            .with_dialect(dialect.as_ref())
+            .with_recursion_limit(recursion_limit)
+            .build()?
+            .parse_statements()?;
+
         if statements.len() > 1 {
             return not_impl_err!(
                 "The context currently only supports a single SQL statement"
             );
         }
+
         let statement = statements.pop_front().ok_or_else(|| {
             plan_datafusion_err!("No SQL statements were provided in the query string")
         })?;
@@ -518,11 +527,16 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                          Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                         MsSQL, ClickHouse, BigQuery, Ansi."
+                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
 
-        let expr = DFParser::parse_sql_into_expr_with_dialect(sql, dialect.as_ref())?;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let expr = DFParserBuilder::new(sql)
+            .with_dialect(dialect.as_ref())
+            .with_recursion_limit(recursion_limit)
+            .build()?
+            .parse_expr()?;
 
         Ok(expr)
     }
@@ -998,7 +1012,10 @@ pub struct SessionStateBuilder {
 }
 
 impl SessionStateBuilder {
-    /// Returns a new [`SessionStateBuilder`] with no options set.
+    /// Returns a new empty [`SessionStateBuilder`].
+    ///
+    /// See [`Self::with_default_features`] to install the default set of functions,
+    /// catalogs, etc.
     pub fn new() -> Self {
         Self {
             session_id: None,
@@ -1028,9 +1045,10 @@ impl SessionStateBuilder {
         }
     }
 
-    /// Returns a new [SessionStateBuilder] based on an existing [SessionState]
+    /// Returns a new [SessionStateBuilder] based on an existing [SessionState].
+    ///
     /// The session id for the new builder will be unset; all other fields will
-    /// be cloned from what is set in the provided session state. If the default
+    /// be cloned from `existing`. If the default
     /// catalog exists in existing session state, the new session state will not
     /// create default catalog and schema.
     pub fn new_from_existing(existing: SessionState) -> Self {
@@ -1990,8 +2008,8 @@ mod tests {
     use super::{SessionContextProvider, SessionStateBuilder};
     use crate::datasource::MemTable;
     use crate::execution::context::SessionState;
-    use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_catalog::MemoryCatalogProviderList;
     use datafusion_common::DFSchema;
     use datafusion_common::Result;

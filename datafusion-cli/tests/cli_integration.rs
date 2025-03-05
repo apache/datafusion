@@ -47,6 +47,10 @@ fn init() {
     "statements",
     ["--command", "select 1; select 2;", "-q"],
 )]
+#[case::exec_backslash(
+    "backslash",
+    ["--file", "tests/data/backslash.txt", "--format", "json", "-q"],
+)]
 #[case::exec_from_files(
     "files",
     ["--file", "tests/sql/select.sql", "-q"],

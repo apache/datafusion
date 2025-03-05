@@ -30,19 +30,3 @@ DataFusion CLI (`datafusion-cli`) is a small command line utility that runs SQL 
 ## Where can I find more information?
 
 See the [`datafusion-cli` documentation](https://datafusion.apache.org/user-guide/cli/index.html) for further information.
-
-## How do I make my IDE work with `datafusion-cli`?
-
-"open" the `datafusion/datafusion-cli` project as its own top level
-project in my IDE (rather than opening `datafusion`)
-
-The reason `datafusion-cli` is not part of the main workspace in
-[`datafusion Cargo.toml`] file is that `datafusion-cli` is a binary and has a
-checked in `Cargo.lock` file to ensure reproducible builds.
-
-However, the `datafusion` and sub crates are intended for use as libraries and
-thus do not have a `Cargo.lock` file checked in, as described in the [main
-README] file.
-
-[`datafusion cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml
-[main readme]: ../README.md

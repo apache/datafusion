@@ -537,8 +537,16 @@ fn type_union_resolution_coercion(
         }
         (DataType::Dictionary(index_type, value_type), other_type)
         | (other_type, DataType::Dictionary(index_type, value_type)) => {
-            let new_value_type = type_union_resolution_coercion(value_type, other_type);
-            new_value_type.map(|t| DataType::Dictionary(index_type.clone(), Box::new(t)))
+            match type_union_resolution_coercion(value_type, other_type) {
+                // Dict with View type is redundant, use value type instead
+                // TODO: Add binary view, list view with tests
+                Some(DataType::Utf8View) => Some(DataType::Utf8View),
+                Some(new_value_type) => Some(DataType::Dictionary(
+                    index_type.clone(),
+                    Box::new(new_value_type),
+                )),
+                None => None,
+            }
         }
         (DataType::Struct(lhs), DataType::Struct(rhs)) => {
             if lhs.len() != rhs.len() {
@@ -589,6 +597,7 @@ fn type_union_resolution_coercion(
                 .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
                 .or_else(|| string_coercion(lhs_type, rhs_type))
                 .or_else(|| numeric_string_coercion(lhs_type, rhs_type))
+                .or_else(|| binary_coercion(lhs_type, rhs_type))
         }
     }
 }
@@ -1247,7 +1256,7 @@ fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 /// Coercion rules for binary (Binary/LargeBinary) to string (Utf8/LargeUtf8):
 /// If one argument is binary and the other is a string then coerce to string
 /// (e.g. for `like`)
-fn binary_to_string_coercion(
+pub fn binary_to_string_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {

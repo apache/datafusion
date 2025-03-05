@@ -34,9 +34,19 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 enum GenSeriesArgs {
     /// ContainsNull signifies that at least one argument(start, end, step) was null, thus no series will be generated.
-    ContainsNull,
+    ContainsNull {
+        include_end: bool,
+        name: &'static str,
+    },
     /// AllNotNullArgs holds the start, end, and step values for generating the series when all arguments are not null.
-    AllNotNullArgs { start: i64, end: i64, step: i64 },
+    AllNotNullArgs {
+        start: i64,
+        end: i64,
+        step: i64,
+        /// Indicates whether the end value should be included in the series.
+        include_end: bool,
+        name: &'static str,
+    },
 }
 
 /// Table that generates a series of integers from `start`(inclusive) to `end`(inclusive), incrementing by step
@@ -57,15 +67,26 @@ struct GenerateSeriesState {
 
     /// Tracks current position when generating table
     current: i64,
+    /// Indicates whether the end value should be included in the series.
+    include_end: bool,
+    name: &'static str,
 }
 
 impl GenerateSeriesState {
     fn reach_end(&self, val: i64) -> bool {
         if self.step > 0 {
-            return val > self.end;
+            if self.include_end {
+                return val > self.end;
+            } else {
+                return val >= self.end;
+            }
         }
 
-        val < self.end
+        if self.include_end {
+            val < self.end
+        } else {
+            val <= self.end
+        }
     }
 }
 
@@ -74,8 +95,8 @@ impl fmt::Display for GenerateSeriesState {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "generate_series: start={}, end={}, batch_size={}",
-            self.start, self.end, self.batch_size
+            "{}: start={}, end={}, batch_size={}",
+            self.name, self.start, self.end, self.batch_size
         )
     }
 }
@@ -124,21 +145,31 @@ impl TableProvider for GenerateSeriesTable {
 
         let state = match self.args {
             // if args have null, then return 0 row
-            GenSeriesArgs::ContainsNull => GenerateSeriesState {
+            GenSeriesArgs::ContainsNull { include_end, name } => GenerateSeriesState {
                 schema: self.schema.clone(),
                 start: 0,
                 end: 0,
                 step: 1,
                 current: 1,
                 batch_size,
+                include_end,
+                name,
             },
-            GenSeriesArgs::AllNotNullArgs { start, end, step } => GenerateSeriesState {
+            GenSeriesArgs::AllNotNullArgs {
+                start,
+                end,
+                step,
+                include_end,
+                name,
+            } => GenerateSeriesState {
                 schema: self.schema.clone(),
                 start,
                 end,
                 step,
                 current: start,
                 batch_size,
+                include_end,
+                name,
             },
         };
 
@@ -150,12 +181,15 @@ impl TableProvider for GenerateSeriesTable {
 }
 
 #[derive(Debug)]
-pub struct GenerateSeriesFunc {}
+struct GenerateSeriesFuncImpl {
+    name: &'static str,
+    include_end: bool,
+}
 
-impl TableFunctionImpl for GenerateSeriesFunc {
+impl TableFunctionImpl for GenerateSeriesFuncImpl {
     fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
         if exprs.is_empty() || exprs.len() > 3 {
-            return plan_err!("generate_series function requires 1 to 3 arguments");
+            return plan_err!("{} function requires 1 to 3 arguments", self.name);
         }
 
         let mut normalize_args = Vec::new();
@@ -177,7 +211,10 @@ impl TableFunctionImpl for GenerateSeriesFunc {
             // contain null
             return Ok(Arc::new(GenerateSeriesTable {
                 schema,
-                args: GenSeriesArgs::ContainsNull,
+                args: GenSeriesArgs::ContainsNull {
+                    include_end: self.include_end,
+                    name: self.name,
+                },
             }));
         }
 
@@ -186,7 +223,7 @@ impl TableFunctionImpl for GenerateSeriesFunc {
             [start, end] => (*start, *end, 1),
             [start, end, step] => (*start, *end, *step),
             _ => {
-                return plan_err!("generate_series function requires 1 to 3 arguments");
+                return plan_err!("{} function requires 1 to 3 arguments", self.name);
             }
         };
 
@@ -204,7 +241,39 @@ impl TableFunctionImpl for GenerateSeriesFunc {
 
         Ok(Arc::new(GenerateSeriesTable {
             schema,
-            args: GenSeriesArgs::AllNotNullArgs { start, end, step },
+            args: GenSeriesArgs::AllNotNullArgs {
+                start,
+                end,
+                step,
+                include_end: self.include_end,
+                name: self.name,
+            },
         }))
+    }
+}
+
+#[derive(Debug)]
+pub struct GenerateSeriesFunc {}
+
+impl TableFunctionImpl for GenerateSeriesFunc {
+    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        let impl_func = GenerateSeriesFuncImpl {
+            name: "generate_series",
+            include_end: true,
+        };
+        impl_func.call(exprs)
+    }
+}
+
+#[derive(Debug)]
+pub struct RangeFunc {}
+
+impl TableFunctionImpl for RangeFunc {
+    fn call(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
+        let impl_func = GenerateSeriesFuncImpl {
+            name: "range",
+            include_end: false,
+        };
+        impl_func.call(exprs)
     }
 }

@@ -18,7 +18,7 @@
 //! [`StringAgg`] accumulator for the `string_agg` function
 
 use arrow::array::ArrayRef;
-use arrow_schema::DataType;
+use arrow::datatypes::DataType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::Result;
 use datafusion_common::{not_impl_err, ScalarValue};

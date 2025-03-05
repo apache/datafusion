@@ -28,8 +28,8 @@
 use std::{any::Any, fmt::Debug, sync::Arc};
 
 use crate::table_provider::FFI_TableProvider;
-use arrow_array::RecordBatch;
-use arrow_schema::Schema;
+use arrow::array::RecordBatch;
+use arrow::datatypes::Schema;
 use async_trait::async_trait;
 use datafusion::{
     catalog::{Session, TableProvider},
@@ -238,7 +238,7 @@ struct AsyncTestRecordBatchStream {
 }
 
 impl RecordBatchStream for AsyncTestRecordBatchStream {
-    fn schema(&self) -> arrow_schema::SchemaRef {
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
         super::create_test_schema()
     }
 }
