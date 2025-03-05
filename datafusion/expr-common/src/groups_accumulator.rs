@@ -271,5 +271,5 @@ pub struct GroupsAccumulatorMetadata {
     ///
     /// You can be sure that you will never get another group with index 1 or 2 (until call to [`GroupsAccumulator::state`]/[`GroupsAccumulator::evaluate`] which will shift the group indices).
     /// However, you might get another group with index 3 in the future.
-    pub group_indices_contiguous: bool,
+    pub contiguous_group_indices: bool,
 }

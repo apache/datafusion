@@ -485,7 +485,7 @@ impl GroupedHashAggregateStream {
         };
 
         let group_accumulator_metadata = GroupsAccumulatorMetadata {
-            group_indices_contiguous: agg.input_order_mode == InputOrderMode::Sorted,
+            contiguous_group_indices: agg.input_order_mode == InputOrderMode::Sorted,
         };
 
         // Instantiate the accumulators
