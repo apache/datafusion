@@ -437,7 +437,7 @@ fn get_valid_types(
             DataType::List(_) | DataType::LargeList(_) => Some(array_type.clone()),
             DataType::FixedSizeList(field, _) => Some(DataType::List(Arc::clone(field))),
             DataType::Null => Some(DataType::List(Arc::new(Field::new_list_field(
-                DataType::Null,
+                DataType::Int64,
                 true,
             )))),
             _ => None,

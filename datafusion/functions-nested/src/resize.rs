@@ -23,8 +23,8 @@ use arrow::array::{
     MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::DataType;
+use arrow::datatypes::{ArrowNativeType, Field};
 use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List},
     FieldRef,
@@ -127,7 +127,9 @@ impl ScalarUDFImpl for ArrayResize {
         match &arg_types[0] {
             List(field) | FixedSizeList(field, _) => Ok(List(Arc::clone(field))),
             LargeList(field) => Ok(LargeList(Arc::clone(field))),
-            DataType::Null => Ok(DataType::Null),
+            DataType::Null => {
+                Ok(List(Arc::new(Field::new_list_field(DataType::Int64, true))))
+            }
             _ => exec_err!(
                 "Not reachable, data_type should be List, LargeList or FixedSizeList"
             ),
@@ -163,7 +165,6 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
         let return_type = match array.data_type() {
             List(field) => List(Arc::clone(field)),
             LargeList(field) => LargeList(Arc::clone(field)),
-            DataType::Null => DataType::Null,
             _ => {
                 return exec_err!(
                     "array_resize does not support type '{:?}'.",
