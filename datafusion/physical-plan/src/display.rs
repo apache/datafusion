@@ -23,6 +23,8 @@ use std::fmt::Formatter;
 use std::{fmt, str::FromStr};
 
 use arrow::datatypes::SchemaRef;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 use datafusion_common::DataFusionError;
@@ -860,6 +862,7 @@ impl TreeRenderVisitor<'_, '_> {
             }
             for split in splits {
                 // TODO: check every line is less than MAX_LINE_RENDER_SIZE.
+                Self::split_string_buffer(&split, result);
                 result.push(split);
             }
             requires_padding = true;
@@ -913,6 +916,63 @@ impl TreeRenderVisitor<'_, '_> {
         }
 
         false
+    }
+
+    fn split_string_buffer(source: &str, result: &mut Vec<String>) {
+        // TODO: replace it with error
+        // debug_assert!(source.chars().all(|c| c.is_ascii()
+        //     || unicode_segmentation::UnicodeSegmentation::graphemes(
+        //         c.to_string().as_str(),
+        //         true
+        //     )
+        //     .count()
+        //         == 1));
+
+        let mut character_pos = 0;
+        let mut start_pos = 0;
+        let mut render_width = 0;
+        let mut last_possible_split = 0;
+
+        // Get grapheme clusters iterator
+        let graphemes: Vec<&str> = source.graphemes(true).collect();
+
+        while character_pos < graphemes.len() {
+            let char_render_width = graphemes[character_pos].width();
+
+            // Does the next character make us exceed the line length?
+            if render_width + char_render_width > Self::NODE_RENDER_WIDTH - 2 {
+                if start_pos + 8 > last_possible_split {
+                    // The last character we can split on is one of the first 8 characters of the line
+                    // to not create very small lines we instead split on the current character
+                    last_possible_split = character_pos;
+                }
+
+                result.push(source[start_pos..last_possible_split].to_string());
+                render_width = character_pos - last_possible_split;
+                start_pos = last_possible_split;
+                character_pos = last_possible_split;
+            }
+
+            // check if we can split on this character
+            if Self::can_split_on_this_char(
+                graphemes[character_pos].chars().next().unwrap(),
+            ) {
+                last_possible_split = character_pos;
+            }
+
+            character_pos += 1;
+            render_width += char_render_width;
+        }
+
+        if source.len() > start_pos {
+            // append the remainder of the input
+            result.push(source[start_pos..].to_string());
+        }
+    }
+
+    fn can_split_on_this_char(c: char) -> bool {
+        (!c.is_ascii_digit() && !c.is_ascii_uppercase() && !c.is_ascii_lowercase())
+            && c != '_'
     }
 }
 
