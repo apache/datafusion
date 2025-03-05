@@ -442,13 +442,16 @@ fn cast_between_timestamp(from: &DataType, to: &DataType, value: i128) -> Option
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
+    use crate::simplify_expressions::ExprSimplifier;
     use arrow::compute::{cast_with_options, CastOptions};
     use arrow::datatypes::Field;
-    use datafusion_common::tree_node::TransformedResult;
+    use datafusion_common::{DFSchema, DFSchemaRef};
+    use datafusion_expr::execution_props::ExecutionProps;
+    use datafusion_expr::simplify::SimplifyContext;
     use datafusion_expr::{cast, col, in_list, try_cast};
 
     #[test]
@@ -735,10 +738,12 @@ mod tests {
     }
 
     fn optimize_test(expr: Expr, schema: &DFSchemaRef) -> Expr {
-        let mut expr_rewriter = UnwrapCastExprRewriter {
-            schema: Arc::clone(schema),
-        };
-        expr.rewrite(&mut expr_rewriter).data().unwrap()
+        let props = ExecutionProps::new();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&props).with_schema(Arc::clone(schema)),
+        );
+
+        simplifier.simplify(expr).unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
