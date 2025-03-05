@@ -20,11 +20,12 @@ use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::datasource::physical_plan::parquet::opener::ParquetOpener;
-use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
-use crate::datasource::physical_plan::parquet::DefaultParquetFileReaderFactory;
-use crate::datasource::physical_plan::{FileOpener, ParquetFileReaderFactory};
-use crate::datasource::schema_adapter::{
+use crate::opener::ParquetOpener;
+use crate::page_filter::PagePruningAccessPlanFilter;
+use crate::DefaultParquetFileReaderFactory;
+use crate::ParquetFileReaderFactory;
+use datafusion_datasource::file_stream::FileOpener;
+use datafusion_datasource::schema_adapter::{
     DefaultSchemaAdapterFactory, SchemaAdapterFactory,
 };
 
@@ -75,12 +76,12 @@ use object_store::ObjectStore;
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion::datasource::physical_plan::FileScanConfig;
-/// # use datafusion::datasource::physical_plan::parquet::source::ParquetSource;
-/// # use datafusion::datasource::listing::PartitionedFile;
+/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource_parquet::source::ParquetSource;
+/// # use datafusion_datasource::PartitionedFile;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
 /// # use datafusion_physical_expr::expressions::lit;
-/// # use datafusion::datasource::source::DataSourceExec;
+/// # use datafusion_datasource::source::DataSourceExec;
 /// # use datafusion_common::config::TableParquetOptions;
 ///
 /// # let file_schema = Arc::new(Schema::empty());
@@ -157,9 +158,9 @@ use object_store::ObjectStore;
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::Schema;
-/// # use datafusion::datasource::physical_plan::FileScanConfig;
-/// # use datafusion::datasource::listing::PartitionedFile;
-/// # use datafusion::datasource::source::DataSourceExec;
+/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource::PartitionedFile;
+/// # use datafusion_datasource::source::DataSourceExec;
 ///
 /// # fn parquet_exec() -> DataSourceExec { unimplemented!() }
 /// // Split a single DataSourceExec into multiple DataSourceExecs, one for each file
@@ -196,12 +197,12 @@ use object_store::ObjectStore;
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow::datatypes::{Schema, SchemaRef};
-/// # use datafusion::datasource::listing::PartitionedFile;
-/// # use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
-/// # use datafusion::datasource::physical_plan::FileScanConfig;
-/// # use datafusion::datasource::physical_plan::parquet::source::ParquetSource;
+/// # use datafusion_datasource::PartitionedFile;
+/// # use datafusion_datasource_parquet::ParquetAccessPlan;
+/// # use datafusion_datasource::file_scan_config::FileScanConfig;
+/// # use datafusion_datasource_parquet::source::ParquetSource;
 /// # use datafusion_execution::object_store::ObjectStoreUrl;
-/// # use datafusion::datasource::source::DataSourceExec;
+/// # use datafusion_datasource::source::DataSourceExec;
 ///
 /// # fn schema() -> SchemaRef {
 /// #   Arc::new(Schema::empty())
@@ -247,7 +248,7 @@ use object_store::ObjectStore;
 ///   filled with nulls, but this can be customized via [`SchemaAdapterFactory`].
 ///
 /// [`RecordBatch`]: arrow::record_batch::RecordBatch
-/// [`SchemaAdapter`]: crate::datasource::schema_adapter::SchemaAdapter
+/// [`SchemaAdapter`]: datafusion_datasource::schema_adapter::SchemaAdapter
 /// [`ParquetMetadata`]: parquet::file::metadata::ParquetMetaData
 #[derive(Clone, Default, Debug)]
 pub struct ParquetSource {
@@ -553,7 +554,9 @@ impl FileSource for ParquetSource {
 
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+            DisplayFormatType::Default
+            | DisplayFormatType::Verbose
+            | DisplayFormatType::TreeRender => {
                 let predicate_string = self
                     .predicate()
                     .map(|p| format!(", predicate={p}"))

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::physical_plan::metrics::{
+use datafusion_physical_plan::metrics::{
     Count, ExecutionPlanMetricsSet, MetricBuilder, Time,
 };
 

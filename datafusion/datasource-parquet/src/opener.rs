@@ -19,18 +19,18 @@
 
 use std::sync::Arc;
 
-use crate::datasource::file_format::parquet::{
+use crate::file_format::{
     coerce_file_schema_to_string_type, coerce_file_schema_to_view_type,
 };
-use crate::datasource::physical_plan::parquet::page_filter::PagePruningAccessPlanFilter;
-use crate::datasource::physical_plan::parquet::row_group_filter::RowGroupAccessPlanFilter;
-use crate::datasource::physical_plan::parquet::{
-    row_filter, should_enable_page_index, ParquetAccessPlan,
+use crate::page_filter::PagePruningAccessPlanFilter;
+use crate::row_group_filter::RowGroupAccessPlanFilter;
+use crate::{
+    row_filter, should_enable_page_index, ParquetAccessPlan, ParquetFileMetrics,
+    ParquetFileReaderFactory,
 };
-use crate::datasource::physical_plan::{
-    FileMeta, FileOpenFuture, FileOpener, ParquetFileMetrics, ParquetFileReaderFactory,
-};
-use crate::datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_datasource::file_meta::FileMeta;
+use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;

@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::datasource::listing::ListingTableUrl;
 use datafusion_common::DataFusionError;
+use datafusion_datasource::ListingTableUrl;
 use datafusion_execution::TaskContext;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use futures::StreamExt;

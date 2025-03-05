@@ -36,6 +36,7 @@ jobs:
   linux-build-lib:
     name: linux build test
     runs-on: ubuntu-latest
+    # note: do not use amd/rust container to preserve disk space
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,7 +46,7 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source $HOME/.cargo/env
-          rustup default stable
+          rustup toolchain install
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
       - name: Prepare cargo build
@@ -58,6 +59,7 @@ jobs:
     name: cargo test 'extended_tests' (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
+    # note: do not use amd/rust container to preserve disk space
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,7 +70,7 @@ jobs:
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install stable
-          rustup default stable
+          rustup toolchain install
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
       - name: Setup Minio - S3-compatible storage

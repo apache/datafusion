@@ -194,26 +194,34 @@ impl DataSource for FileScanConfig {
     }
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let (schema, _, _, orderings) = self.project();
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let (schema, _, _, orderings) = self.project();
 
-        write!(f, "file_groups=")?;
-        FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+                write!(f, "file_groups=")?;
+                FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
 
-        if !schema.fields().is_empty() {
-            write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
+                if !schema.fields().is_empty() {
+                    write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
+                }
+
+                if let Some(limit) = self.limit {
+                    write!(f, ", limit={limit}")?;
+                }
+
+                display_orderings(f, &orderings)?;
+
+                if !self.constraints.is_empty() {
+                    write!(f, ", {}", self.constraints)?;
+                }
+
+                self.fmt_file_source(t, f)
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                Ok(())
+            }
         }
-
-        if let Some(limit) = self.limit {
-            write!(f, ", limit={limit}")?;
-        }
-
-        display_orderings(f, &orderings)?;
-
-        if !self.constraints.is_empty() {
-            write!(f, ", {}", self.constraints)?;
-        }
-
-        self.fmt_file_source(t, f)
     }
 
     /// If supported by the underlying [`FileSource`], redistribute files across partitions according to their size.
@@ -512,7 +520,6 @@ impl FileScanConfig {
         (schema, constraints, stats, output_ordering)
     }
 
-    #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
     pub fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()

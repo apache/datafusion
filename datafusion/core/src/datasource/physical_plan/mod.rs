@@ -18,32 +18,39 @@
 //! Execution plans that read file formats
 
 mod arrow_file;
-mod avro;
-mod csv;
-mod json;
+pub mod csv;
+pub mod json;
+
 #[cfg(feature = "parquet")]
 pub mod parquet;
 
-pub(crate) use self::csv::plan_to_csv;
-pub(crate) use self::json::plan_to_json;
+#[cfg(feature = "avro")]
+pub mod avro;
+
+#[allow(deprecated)]
+#[cfg(feature = "avro")]
+pub use avro::{AvroExec, AvroSource};
+
 #[cfg(feature = "parquet")]
-pub use self::parquet::source::ParquetSource;
+pub use datafusion_datasource_parquet::source::ParquetSource;
 #[cfg(feature = "parquet")]
 #[allow(deprecated)]
-pub use self::parquet::{
+pub use datafusion_datasource_parquet::{
     ParquetExec, ParquetExecBuilder, ParquetFileMetrics, ParquetFileReaderFactory,
 };
-use crate::datasource::listing::FileRange;
-use crate::error::Result;
-use crate::physical_plan::DisplayAs;
+
 #[allow(deprecated)]
 pub use arrow_file::ArrowExec;
 pub use arrow_file::ArrowSource;
+
 #[allow(deprecated)]
-pub use avro::AvroExec;
-pub use avro::AvroSource;
+pub use json::NdJsonExec;
+
+pub use json::{JsonOpener, JsonSource};
+
 #[allow(deprecated)]
 pub use csv::{CsvExec, CsvExecBuilder};
+
 pub use csv::{CsvOpener, CsvSource};
 pub use datafusion_datasource::file::FileSource;
 pub use datafusion_datasource::file_groups::FileGroupPartitioner;
@@ -56,121 +63,10 @@ pub use datafusion_datasource::file_sink_config::*;
 pub use datafusion_datasource::file_stream::{
     FileOpenFuture, FileOpener, FileStream, OnError,
 };
-use futures::StreamExt;
-#[allow(deprecated)]
-pub use json::NdJsonExec;
-pub use json::{JsonOpener, JsonSource};
-
-use object_store::{path::Path, GetOptions, GetRange, ObjectStore};
-use std::{ops::Range, sync::Arc};
-
-/// Represents the possible outcomes of a range calculation.
-///
-/// This enum is used to encapsulate the result of calculating the range of
-/// bytes to read from an object (like a file) in an object store.
-///
-/// Variants:
-/// - `Range(Option<Range<usize>>)`:
-///   Represents a range of bytes to be read. It contains an `Option` wrapping a
-///   `Range<usize>`. `None` signifies that the entire object should be read,
-///   while `Some(range)` specifies the exact byte range to read.
-/// - `TerminateEarly`:
-///   Indicates that the range calculation determined no further action is
-///   necessary, possibly because the calculated range is empty or invalid.
-enum RangeCalculation {
-    Range(Option<Range<usize>>),
-    TerminateEarly,
-}
-
-/// Calculates an appropriate byte range for reading from an object based on the
-/// provided metadata.
-///
-/// This asynchronous function examines the `FileMeta` of an object in an object store
-/// and determines the range of bytes to be read. The range calculation may adjust
-/// the start and end points to align with meaningful data boundaries (like newlines).
-///
-/// Returns a `Result` wrapping a `RangeCalculation`, which is either a calculated byte range or an indication to terminate early.
-///
-/// Returns an `Error` if any part of the range calculation fails, such as issues in reading from the object store or invalid range boundaries.
-async fn calculate_range(
-    file_meta: &FileMeta,
-    store: &Arc<dyn ObjectStore>,
-    terminator: Option<u8>,
-) -> Result<RangeCalculation> {
-    let location = file_meta.location();
-    let file_size = file_meta.object_meta.size;
-    let newline = terminator.unwrap_or(b'\n');
-
-    match file_meta.range {
-        None => Ok(RangeCalculation::Range(None)),
-        Some(FileRange { start, end }) => {
-            let (start, end) = (start as usize, end as usize);
-
-            let start_delta = if start != 0 {
-                find_first_newline(store, location, start - 1, file_size, newline).await?
-            } else {
-                0
-            };
-
-            let end_delta = if end != file_size {
-                find_first_newline(store, location, end - 1, file_size, newline).await?
-            } else {
-                0
-            };
-
-            let range = start + start_delta..end + end_delta;
-
-            if range.start == range.end {
-                return Ok(RangeCalculation::TerminateEarly);
-            }
-
-            Ok(RangeCalculation::Range(Some(range)))
-        }
-    }
-}
-
-/// Asynchronously finds the position of the first newline character in a specified byte range
-/// within an object, such as a file, in an object store.
-///
-/// This function scans the contents of the object starting from the specified `start` position
-/// up to the `end` position, looking for the first occurrence of a newline character.
-/// It returns the position of the first newline relative to the start of the range.
-///
-/// Returns a `Result` wrapping a `usize` that represents the position of the first newline character found within the specified range. If no newline is found, it returns the length of the scanned data, effectively indicating the end of the range.
-///
-/// The function returns an `Error` if any issues arise while reading from the object store or processing the data stream.
-///
-async fn find_first_newline(
-    object_store: &Arc<dyn ObjectStore>,
-    location: &Path,
-    start: usize,
-    end: usize,
-    newline: u8,
-) -> Result<usize> {
-    let options = GetOptions {
-        range: Some(GetRange::Bounded(start..end)),
-        ..Default::default()
-    };
-
-    let result = object_store.get_opts(location, options).await?;
-    let mut result_stream = result.into_stream();
-
-    let mut index = 0;
-
-    while let Some(chunk) = result_stream.next().await.transpose()? {
-        if let Some(position) = chunk.iter().position(|&byte| byte == newline) {
-            return Ok(index + position);
-        }
-
-        index += chunk.len();
-    }
-
-    Ok(index)
-}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
 
     use arrow::array::{
         cast::AsArray,
