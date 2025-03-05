@@ -51,6 +51,7 @@ use object_store::memory::InMemory;
 use object_store::ObjectStore;
 use rstest::rstest;
 use url::Url;
+use datafusion_common::sort::AdvSortOptions;
 
 /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
 /// the plan against the original and expected plans.
@@ -1141,7 +1142,7 @@ fn sort_expr_options(
 ) -> PhysicalSortExpr {
     PhysicalSortExpr {
         expr: col(name, schema).unwrap(),
-        options,
+        options: AdvSortOptions::with_default_ordering(options),
     }
 }
 

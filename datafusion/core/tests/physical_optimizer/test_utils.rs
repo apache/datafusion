@@ -30,6 +30,7 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::sort::AdvSortOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
@@ -199,7 +200,7 @@ pub fn sort_expr_options(
 ) -> PhysicalSortExpr {
     PhysicalSortExpr {
         expr: col(name, schema).unwrap(),
-        options,
+        options: AdvSortOptions::with_default_ordering(options),
     }
 }
 

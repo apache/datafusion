@@ -62,6 +62,7 @@ use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 
 use rstest::rstest;
+use datafusion_common::sort::AdvSortOptions;
 
 /// Create a csv exec for tests
 fn csv_exec_ordered(
@@ -3366,7 +3367,7 @@ async fn test_preserve_needed_coalesce() -> Result<()> {
     let schema = schema();
     let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
         expr: col("a", &schema).unwrap(),
-        options: SortOptions::default(),
+        options: AdvSortOptions::default(),
     }]);
     let plan: Arc<dyn ExecutionPlan> =
         single_partitioned_aggregate(plan, vec![("a".to_string(), "a1".to_string())]);

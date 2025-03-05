@@ -18,7 +18,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -58,6 +57,7 @@ use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
 use itertools::Itertools;
+use datafusion_common::sort::AdvSortOptions;
 
 /// Mocked UDF
 #[derive(Debug)]
@@ -510,16 +510,16 @@ fn test_streaming_table_after_projection() -> Result<()> {
             LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("e", 2)),
-                    options: SortOptions::default(),
+                    options: AdvSortOptions::default(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("a", 0)),
-                    options: SortOptions::default(),
+                    options: AdvSortOptions::default(),
                 },
             ]),
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::new(Column::new("d", 3)),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
         ]
         .into_iter(),
@@ -570,16 +570,16 @@ fn test_streaming_table_after_projection() -> Result<()> {
             LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("e", 1)),
-                    options: SortOptions::default(),
+                    options: AdvSortOptions::default(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("a", 2)),
-                    options: SortOptions::default(),
+                    options: AdvSortOptions::default(),
                 },
             ]),
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: Arc::new(Column::new("d", 0)),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
         ]
     );
@@ -644,7 +644,7 @@ fn test_output_req_after_projection() -> Result<()> {
         Some(LexRequirement::new(vec![
             PhysicalSortRequirement {
                 expr: Arc::new(Column::new("b", 1)),
-                options: Some(SortOptions::default()),
+                options: Some(AdvSortOptions::default()),
             },
             PhysicalSortRequirement {
                 expr: Arc::new(BinaryExpr::new(
@@ -652,7 +652,7 @@ fn test_output_req_after_projection() -> Result<()> {
                     Operator::Plus,
                     Arc::new(Column::new("a", 0)),
                 )),
-                options: Some(SortOptions::default()),
+                options: Some(AdvSortOptions::default()),
             },
         ])),
         Distribution::HashPartitioned(vec![
@@ -690,7 +690,7 @@ fn test_output_req_after_projection() -> Result<()> {
     let expected_reqs = LexRequirement::new(vec![
         PhysicalSortRequirement {
             expr: Arc::new(Column::new("b", 2)),
-            options: Some(SortOptions::default()),
+            options: Some(AdvSortOptions::default()),
         },
         PhysicalSortRequirement {
             expr: Arc::new(BinaryExpr::new(
@@ -698,7 +698,7 @@ fn test_output_req_after_projection() -> Result<()> {
                 Operator::Plus,
                 Arc::new(Column::new("new_a", 1)),
             )),
-            options: Some(SortOptions::default()),
+            options: Some(AdvSortOptions::default()),
         },
     ]);
     assert_eq!(
@@ -1249,7 +1249,7 @@ fn test_sort_after_projection() -> Result<()> {
         LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
             PhysicalSortExpr {
                 expr: Arc::new(BinaryExpr::new(
@@ -1257,7 +1257,7 @@ fn test_sort_after_projection() -> Result<()> {
                     Operator::Plus,
                     Arc::new(Column::new("a", 0)),
                 )),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
         ]),
         csv.clone(),
@@ -1299,7 +1299,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
         LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
             PhysicalSortExpr {
                 expr: Arc::new(BinaryExpr::new(
@@ -1307,7 +1307,7 @@ fn test_sort_preserving_after_projection() -> Result<()> {
                     Operator::Plus,
                     Arc::new(Column::new("a", 0)),
                 )),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
         ]),
         csv.clone(),

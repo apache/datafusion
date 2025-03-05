@@ -24,7 +24,6 @@ use std::sync::{Arc, LazyLock};
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
-use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
@@ -734,7 +733,7 @@ impl Scenario {
                 let sort_information = vec![LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("a", &schema).unwrap(),
-                        options,
+                        options: options.clone(),
                     },
                     PhysicalSortExpr {
                         expr: col("b", &schema).unwrap(),
