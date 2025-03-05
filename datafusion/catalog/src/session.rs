@@ -17,7 +17,6 @@
 
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::types::LogicalTypeRef;
 use datafusion_common::{DFSchema, Result};
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -29,6 +28,7 @@ use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
+use datafusion_expr::registry::MemoryExtensionTypeRegistry;
 
 /// Interface for accessing [`SessionState`] from the catalog.
 ///
@@ -115,7 +115,7 @@ pub trait Session: Send + Sync {
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>>;
 
     /// Return reference to extension types
-    fn extension_types(&self) -> &HashMap<String, LogicalTypeRef>;
+    fn extension_types(&self) -> &MemoryExtensionTypeRegistry;
 
     /// Return the runtime env
     fn runtime_env(&self) -> &Arc<RuntimeEnv>;

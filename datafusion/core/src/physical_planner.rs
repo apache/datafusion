@@ -26,7 +26,7 @@ use crate::datasource::listing::ListingTableUrl;
 use crate::datasource::physical_plan::FileSinkConfig;
 use crate::datasource::{source_as_provider, DefaultTableSource};
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::{ExecutionProps, SessionState};
+use crate::execution::context::SessionState;
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
     Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
@@ -90,7 +90,10 @@ use datafusion_physical_plan::unnest::ListUnnest;
 
 use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
+use datafusion_catalog::Session;
 use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
+use datafusion_expr::registry::ExtensionTypeRegistry;
 use futures::{StreamExt, TryStreamExt};
 use itertools::{multiunzip, Itertools};
 use log::{debug, trace};
@@ -608,13 +611,7 @@ impl DefaultPhysicalPlanner {
                 let logical_schema = node.schema();
                 let window_expr = window_expr
                     .iter()
-                    .map(|e| {
-                        create_window_expr(
-                            e,
-                            logical_schema,
-                            session_state.execution_props(),
-                        )
-                    })
+                    .map(|e| create_window_expr(session_state, e, logical_schema))
                     .collect::<Result<Vec<_>>>()?;
 
                 let can_repartition = session_state.config().target_partitions() > 1
@@ -706,10 +703,10 @@ impl DefaultPhysicalPlanner {
                     .iter()
                     .map(|e| {
                         create_aggregate_expr_and_maybe_filter(
+                            session_state,
                             e,
                             logical_input_schema,
                             &physical_input_schema,
-                            session_state.execution_props(),
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -819,11 +816,8 @@ impl DefaultPhysicalPlanner {
             }) => {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
-                let sort_expr = create_physical_sort_exprs(
-                    expr,
-                    input_dfschema,
-                    session_state.execution_props(),
-                )?;
+                let sort_expr =
+                    create_physical_sort_exprs(session_state, expr, input_dfschema)?;
                 let new_sort =
                     SortExec::new(sort_expr, physical_input).with_fetch(*fetch);
                 Arc::new(new_sort)
@@ -1508,10 +1502,10 @@ pub fn is_window_frame_bound_valid(window_frame: &WindowFrame) -> bool {
 
 /// Create a window expression with a name from a logical expression
 pub fn create_window_expr_with_name(
+    session_state: &SessionState,
     e: &Expr,
     name: impl Into<String>,
     logical_schema: &DFSchema,
-    execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     let name = name.into();
     let physical_schema: &Schema = &logical_schema.into();
@@ -1527,12 +1521,13 @@ pub fn create_window_expr_with_name(
                     null_treatment,
                 },
         }) => {
+            let execution_props = session_state.execution_props();
             let physical_args =
                 create_physical_exprs(args, logical_schema, execution_props)?;
             let partition_by =
                 create_physical_exprs(partition_by, logical_schema, execution_props)?;
             let order_by =
-                create_physical_sort_exprs(order_by, logical_schema, execution_props)?;
+                create_physical_sort_exprs(session_state, order_by, logical_schema)?;
 
             if !is_window_frame_bound_valid(window_frame) {
                 return plan_err!(
@@ -1561,16 +1556,16 @@ pub fn create_window_expr_with_name(
 
 /// Create a window expression from a logical expression or an alias
 pub fn create_window_expr(
+    session_state: &SessionState,
     e: &Expr,
     logical_schema: &DFSchema,
-    execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn WindowExpr>> {
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => (name.clone(), expr.as_ref()),
         _ => (e.schema_name().to_string(), e),
     };
-    create_window_expr_with_name(e, name, logical_schema, execution_props)
+    create_window_expr_with_name(session_state, e, name, logical_schema)
 }
 
 type AggregateExprWithOptionalArgs = (
@@ -1583,11 +1578,11 @@ type AggregateExprWithOptionalArgs = (
 
 /// Create an aggregate expression with a name from a logical expression
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
+    session: &dyn Session,
     e: &Expr,
     name: Option<String>,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
-    execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
     match e {
         Expr::AggregateFunction(AggregateFunction {
@@ -1607,6 +1602,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                 physical_name(e)?
             };
 
+            let execution_props = session.execution_props();
             let physical_args =
                 create_physical_exprs(args, logical_input_schema, execution_props)?;
             let filter = match filter {
@@ -1624,9 +1620,9 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
             let (agg_expr, filter, order_by) = {
                 let physical_sort_exprs = match order_by {
                     Some(exprs) => Some(create_physical_sort_exprs(
+                        session,
                         exprs,
                         logical_input_schema,
-                        execution_props,
                     )?),
                     None => None,
                 };
@@ -1655,10 +1651,10 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
 
 /// Create an aggregate expression from a logical expression or an alias
 pub fn create_aggregate_expr_and_maybe_filter(
+    session: &dyn Session,
     e: &Expr,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
-    execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
     let (name, e) = match e {
@@ -1668,28 +1664,42 @@ pub fn create_aggregate_expr_and_maybe_filter(
     };
 
     create_aggregate_expr_with_name_and_maybe_filter(
+        session,
         e,
         name,
         logical_input_schema,
         physical_input_schema,
-        execution_props,
     )
 }
 
 /// Create a physical sort expression from a logical expression
 pub fn create_physical_sort_expr(
+    session: &dyn Session,
     e: &SortExpr,
     input_dfschema: &DFSchema,
-    execution_props: &ExecutionProps,
 ) -> Result<PhysicalSortExpr> {
+    // TODO this is not a nice solution. Somewhat related to the discussion in #14247 as we would
+    // a field method for PhysicalExpr.
+    let extension_types = session.extension_types();
+    let ordering = match &e.expr {
+        Expr::Column(name) => input_dfschema
+            .field_from_column(name)?
+            .extension_type_name()
+            .and_then(|ext| extension_types.get(ext).ok())
+            .map(|ext| ext.planning_information().ordering.clone())
+            .unwrap_or_default(),
+        _ => SortOrdering::Default,
+    };
+
     let SortExpr {
         expr,
         asc,
         nulls_first,
     } = e;
     Ok(PhysicalSortExpr {
-        expr: create_physical_expr(expr, input_dfschema, execution_props)?,
+        expr: create_physical_expr(expr, input_dfschema, session.execution_props())?,
         options: AdvSortOptions {
+            ordering,
             descending: !asc,
             nulls_first: *nulls_first,
         },
@@ -1698,13 +1708,13 @@ pub fn create_physical_sort_expr(
 
 /// Create vector of physical sort expression from a vector of logical expression
 pub fn create_physical_sort_exprs(
+    session: &dyn Session,
     exprs: &[SortExpr],
     input_dfschema: &DFSchema,
-    execution_props: &ExecutionProps,
 ) -> Result<LexOrdering> {
     exprs
         .iter()
-        .map(|expr| create_physical_sort_expr(expr, input_dfschema, execution_props))
+        .map(|expr| create_physical_sort_expr(session, expr, input_dfschema))
         .collect::<Result<LexOrdering>>()
 }
 

@@ -85,7 +85,7 @@ impl TaskContext {
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         window_functions: HashMap<String, Arc<WindowUDF>>,
-        extension_types: HashMap<String, LogicalTypeRef>,
+        extension_types: MemoryExtensionTypeRegistry,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         Self {
@@ -95,7 +95,7 @@ impl TaskContext {
             scalar_functions,
             aggregate_functions,
             window_functions,
-            extension_types: MemoryExtensionTypeRegistry::from(extension_types),
+            extension_types,
             runtime,
         }
     }

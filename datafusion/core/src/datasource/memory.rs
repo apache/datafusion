@@ -243,9 +243,9 @@ impl TableProvider for MemTable {
                 .iter()
                 .map(|sort_exprs| {
                     create_physical_sort_exprs(
+                        state,
                         sort_exprs,
                         &df_schema,
-                        state.execution_props(),
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;

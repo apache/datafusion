@@ -52,7 +52,10 @@ use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::{ExprPlanner, TypePlanner};
-use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
+use datafusion_expr::registry::{
+    ExtensionTypeRegistry, FunctionRegistry, MemoryExtensionTypeRegistry,
+    SerializerRegistry,
+};
 use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
 use datafusion_expr::{
@@ -150,7 +153,7 @@ pub struct SessionState {
     /// Window functions registered in the context
     window_functions: HashMap<String, Arc<WindowUDF>>,
     /// Extension types registered in the context
-    extension_types: HashMap<String, LogicalTypeRef>,
+    extension_types: MemoryExtensionTypeRegistry,
     /// Deserializer registry for extensions.
     serializer_registry: Arc<dyn SerializerRegistry>,
     /// Holds registered external FileFormat implementations
@@ -250,7 +253,7 @@ impl Session for SessionState {
         &self.window_functions
     }
 
-    fn extension_types(&self) -> &HashMap<String, LogicalTypeRef> {
+    fn extension_types(&self) -> &MemoryExtensionTypeRegistry {
         &self.extension_types
     }
 
@@ -1407,7 +1410,7 @@ impl SessionStateBuilder {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             window_functions: HashMap::new(),
-            extension_types: HashMap::new(),
+            extension_types: MemoryExtensionTypeRegistry::new(),
             serializer_registry: serializer_registry
                 .unwrap_or(Arc::new(EmptySerializerRegistry)),
             file_formats: HashMap::new(),
@@ -1900,6 +1903,26 @@ impl FunctionRegistry for SessionState {
     ) -> datafusion_common::Result<()> {
         self.expr_planners.push(expr_planner);
         Ok(())
+    }
+}
+
+impl ExtensionTypeRegistry for SessionState {
+    fn get(&self, name: &str) -> datafusion_common::Result<LogicalTypeRef> {
+        self.extension_types.get(name)
+    }
+
+    fn register_type(
+        &mut self,
+        logical_type: LogicalTypeRef,
+    ) -> datafusion_common::Result<Option<LogicalTypeRef>> {
+        self.extension_types.register_type(logical_type)
+    }
+
+    fn deregister_type(
+        &mut self,
+        name: &str,
+    ) -> datafusion_common::Result<Option<LogicalTypeRef>> {
+        self.extension_types.deregister_type(name)
     }
 }
 

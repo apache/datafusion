@@ -56,6 +56,8 @@ use test_utils::AccessLogGenerator;
 use async_trait::async_trait;
 use futures::StreamExt;
 use tokio::fs::File;
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -724,7 +726,8 @@ impl Scenario {
                 .collect();
 
                 let schema = batches[0][0].schema();
-                let options = SortOptions {
+                let options = AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 };

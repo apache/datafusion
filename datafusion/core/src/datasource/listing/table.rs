@@ -59,6 +59,7 @@ use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use object_store::ObjectStore;
+use datafusion_expr::registry::EmptyExtensionTypeRegistry;
 
 /// Configuration for creating a [`ListingTable`]
 #[derive(Debug, Clone)]
@@ -809,7 +810,7 @@ impl ListingTable {
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
     fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
-        create_ordering(&self.table_schema, &self.options.file_sort_order)
+        create_ordering(&EmptyExtensionTypeRegistry::new(), &self.table_schema, &self.options.file_sort_order)
     }
 }
 

@@ -21,7 +21,9 @@ use crate::expr_rewriter::FunctionRewrite;
 use crate::planner::ExprPlanner;
 use crate::{AggregateUDF, ScalarUDF, UserDefinedLogicalNode, WindowUDF};
 use datafusion_common::types::{LogicalTypeRef, TypeSignature};
-use datafusion_common::{internal_err, not_impl_err, plan_datafusion_err, Result};
+use datafusion_common::{
+    internal_err, not_impl_err, plan_datafusion_err, plan_err, Result,
+};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -224,7 +226,7 @@ pub trait ExtensionTypeRegistry {
 }
 
 /// An [`ExtensionTypeRegistry`] that uses in memory [`HashMap`]s.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct MemoryExtensionTypeRegistry {
     /// Holds a mapping between the name of an extension type and its logical type.
     extension_types: HashMap<String, LogicalTypeRef>,
@@ -268,5 +270,32 @@ impl From<HashMap<String, LogicalTypeRef>> for MemoryExtensionTypeRegistry {
         Self {
             extension_types: value,
         }
+    }
+}
+
+/// Represents an [ExtensionTypeRegistry] with no registered extension types.
+pub struct EmptyExtensionTypeRegistry;
+
+impl EmptyExtensionTypeRegistry {
+    /// Creates a new [EmptyExtensionTypeRegistry].
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl ExtensionTypeRegistry for EmptyExtensionTypeRegistry {
+    fn get(&self, _name: &str) -> Result<LogicalTypeRef> {
+        plan_err!("Extension type not found.")
+    }
+
+    fn register_type(
+        &mut self,
+        _logical_type: LogicalTypeRef,
+    ) -> Result<Option<LogicalTypeRef>> {
+        plan_err!("Cannot register type.")
+    }
+
+    fn deregister_type(&mut self, _name: &str) -> Result<Option<LogicalTypeRef>> {
+        plan_err!("Cannot deregister type.")
     }
 }

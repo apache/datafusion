@@ -323,17 +323,18 @@ impl TableProvider for StreamTable {
 
     async fn scan(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let task_ctx = TaskContext::from(state);
         let projected_schema = match projection {
             Some(p) => {
                 let projected = self.0.source.schema().project(p)?;
-                create_ordering(&projected, &self.0.order)?
+                create_ordering(&task_ctx, &projected, &self.0.order)?
             }
-            None => create_ordering(self.0.source.schema(), &self.0.order)?,
+            None => create_ordering(&task_ctx, self.0.source.schema(), &self.0.order)?,
         };
 
         Ok(Arc::new(StreamingTableExec::try_new(
@@ -348,14 +349,15 @@ impl TableProvider for StreamTable {
 
     async fn insert_into(
         &self,
-        _state: &dyn Session,
+        state: &dyn Session,
         input: Arc<dyn ExecutionPlan>,
         _insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        let task_ctx = TaskContext::from(state);
         let ordering = match self.0.order.first() {
             Some(x) => {
                 let schema = self.0.source.schema();
-                let orders = create_ordering(schema, std::slice::from_ref(x))?;
+                let orders = create_ordering(&task_ctx, schema, std::slice::from_ref(x))?;
                 let ordering = orders.into_iter().next().unwrap();
                 Some(ordering.into_iter().map(Into::into).collect())
             }
