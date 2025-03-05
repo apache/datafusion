@@ -487,7 +487,7 @@ async fn test_external_sort_regression() {
     let ctx = SessionContext::new_with_config_rt(config, runtime);
 
     let query = "select * from generate_series(1,9000000) as t1(v1) order by v1;";
-    let df = ctx.sql(&query).await.unwrap();
+    let df = ctx.sql(query).await.unwrap();
 
     // Check not fail
     let _ = df.collect().await.unwrap();

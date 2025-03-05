@@ -497,8 +497,8 @@ impl ExternalSorter {
     /// # Arguments
     ///
     /// * `force_spill` - If true, the method will spill the in-memory batches
-    /// even if the memory usage has not dropped by a factor of 2. Otherwise it will
-    /// only spill when the memory usage has dropped by the pre-defined factor.
+    ///   even if the memory usage has not dropped by a factor of 2. Otherwise it will
+    ///   only spill when the memory usage has dropped by the pre-defined factor.
     ///
     async fn sort_or_spill_in_mem_batches(&mut self, force_spill: bool) -> Result<()> {
         // Release the memory reserved for merge back to the pool so
