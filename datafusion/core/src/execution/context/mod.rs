@@ -75,9 +75,11 @@ use chrono::{DateTime, Utc};
 use datafusion_catalog::{
     DynamicFileCatalog, SessionStore, TableFunction, TableFunctionImpl, UrlTableFactory,
 };
+use datafusion_common::types::LogicalTypeRef;
 pub use datafusion_execution::config::SessionConfig;
 pub use datafusion_execution::TaskContext;
 pub use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::registry::ExtensionTypeRegistry;
 use datafusion_optimizer::{AnalyzerRule, OptimizerRule};
 use object_store::ObjectStore;
 use parking_lot::RwLock;
@@ -1638,6 +1640,26 @@ impl FunctionRegistry for SessionContext {
         expr_planner: Arc<dyn ExprPlanner>,
     ) -> Result<()> {
         self.state.write().register_expr_planner(expr_planner)
+    }
+}
+
+impl ExtensionTypeRegistry for SessionContext {
+    fn get_extension_type(&self, name: &str) -> Result<LogicalTypeRef> {
+        self.state.read().get_extension_type(name)
+    }
+
+    fn register_extension_type(
+        &mut self,
+        logical_type: LogicalTypeRef,
+    ) -> Result<Option<LogicalTypeRef>> {
+        self.state.write().register_extension_type(logical_type)
+    }
+
+    fn deregister_extension_type(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<LogicalTypeRef>> {
+        self.state.write().deregister_extension_type(name)
     }
 }
 

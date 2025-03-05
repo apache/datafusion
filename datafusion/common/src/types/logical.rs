@@ -18,7 +18,7 @@
 use super::NativeType;
 use crate::error::Result;
 use crate::ScalarValue;
-use arrow::array::ArrayRef;
+use arrow::array::{make_comparator, Array, ArrayRef, DynComparator, UInt32Array};
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use core::fmt;
@@ -169,11 +169,44 @@ pub enum SortOrdering {
 }
 
 impl SortOrdering {
-    pub fn partial_cmp(&self, lhs: &ScalarValue, rhs: &ScalarValue) -> Option<Ordering> {
+    pub fn compare_scalars(
+        &self,
+        lhs: &ScalarValue,
+        rhs: &ScalarValue,
+    ) -> Option<Ordering> {
         match self {
             SortOrdering::Default => lhs.partial_cmp(rhs),
-            SortOrdering::Custom(_) => todo!("custom order"),
+            SortOrdering::Custom(c) => c.compare_scalars(lhs, rhs),
         }
+    }
+
+    pub fn sort_to_indices(
+        &self,
+        array: &dyn Array,
+        options: SortOptions,
+        fetch: Option<usize>,
+    ) -> Result<UInt32Array> {
+        match self {
+            SortOrdering::Default => Ok(arrow::compute::sort_to_indices(
+                array,
+                Some(options),
+                fetch,
+            )?),
+            SortOrdering::Custom(c) => c.sort_to_indices(array, options, fetch),
+        }
+    }
+
+    pub fn dyn_comparator(
+        &self,
+        array: ArrayRef,
+        options: SortOptions,
+    ) -> Result<DynComparator> {
+        Ok(match self {
+            SortOrdering::Default => {
+                make_comparator(array.as_ref(), array.as_ref(), options)?
+            }
+            SortOrdering::Custom(c) => c.dyn_comparator(array, options)?,
+        })
     }
 }
 
@@ -209,6 +242,20 @@ pub trait CustomOrdering: Debug + Send + Sync {
     fn ordering_id(&self) -> &str;
 
     /// TODO
-    fn execute(&self, array_ref: ArrayRef, sort_options: SortOptions)
-        -> Result<ArrayRef>;
+    fn compare_scalars(&self, lhs: &ScalarValue, rhs: &ScalarValue) -> Option<Ordering>;
+
+    /// TODO
+    fn sort_to_indices(
+        &self,
+        array: &dyn Array,
+        options: SortOptions,
+        fetch: Option<usize>,
+    ) -> Result<UInt32Array>;
+
+    /// TODO
+    fn dyn_comparator(
+        &self,
+        array: ArrayRef,
+        options: SortOptions,
+    ) -> Result<DynComparator>;
 }

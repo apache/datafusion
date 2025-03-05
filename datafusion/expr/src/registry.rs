@@ -207,12 +207,12 @@ impl FunctionRegistry for MemoryFunctionRegistry {
 
 pub trait ExtensionTypeRegistry {
     /// Returns a reference to the logical type named `name`.
-    fn get(&self, name: &str) -> Result<LogicalTypeRef>;
+    fn get_extension_type(&self, name: &str) -> Result<LogicalTypeRef>;
 
     /// Registers a new [LogicalTypeRef], returning any previously registered implementation.
     ///
     /// Returns an error if the type cannot be registered, for example if the registry is read only.
-    fn register_type(
+    fn register_extension_type(
         &mut self,
         logical_type: LogicalTypeRef,
     ) -> Result<Option<LogicalTypeRef>>;
@@ -222,7 +222,7 @@ pub trait ExtensionTypeRegistry {
     ///
     /// Returns an error if the type cannot be deregistered, for example if the registry is read
     /// only.
-    fn deregister_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>>;
+    fn deregister_extension_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>>;
 }
 
 /// An [`ExtensionTypeRegistry`] that uses in memory [`HashMap`]s.
@@ -240,14 +240,14 @@ impl MemoryExtensionTypeRegistry {
 }
 
 impl ExtensionTypeRegistry for MemoryExtensionTypeRegistry {
-    fn get(&self, name: &str) -> Result<LogicalTypeRef> {
+    fn get_extension_type(&self, name: &str) -> Result<LogicalTypeRef> {
         self.extension_types
             .get(name)
             .ok_or_else(|| plan_datafusion_err!("Extension type not found."))
             .cloned()
     }
 
-    fn register_type(
+    fn register_extension_type(
         &mut self,
         logical_type: LogicalTypeRef,
     ) -> Result<Option<LogicalTypeRef>> {
@@ -260,7 +260,7 @@ impl ExtensionTypeRegistry for MemoryExtensionTypeRegistry {
         Ok(self.extension_types.insert(signature.into(), logical_type))
     }
 
-    fn deregister_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>> {
+    fn deregister_extension_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>> {
         Ok(self.extension_types.remove(name))
     }
 }
@@ -284,18 +284,18 @@ impl EmptyExtensionTypeRegistry {
 }
 
 impl ExtensionTypeRegistry for EmptyExtensionTypeRegistry {
-    fn get(&self, _name: &str) -> Result<LogicalTypeRef> {
+    fn get_extension_type(&self, _name: &str) -> Result<LogicalTypeRef> {
         plan_err!("Extension type not found.")
     }
 
-    fn register_type(
+    fn register_extension_type(
         &mut self,
         _logical_type: LogicalTypeRef,
     ) -> Result<Option<LogicalTypeRef>> {
         plan_err!("Cannot register type.")
     }
 
-    fn deregister_type(&mut self, _name: &str) -> Result<Option<LogicalTypeRef>> {
+    fn deregister_extension_type(&mut self, _name: &str) -> Result<Option<LogicalTypeRef>> {
         plan_err!("Cannot deregister type.")
     }
 }

@@ -1685,7 +1685,7 @@ pub fn create_physical_sort_expr(
         Expr::Column(name) => input_dfschema
             .field_from_column(name)?
             .extension_type_name()
-            .and_then(|ext| extension_types.get(ext).ok())
+            .and_then(|ext| extension_types.get_extension_type(ext).ok())
             .map(|ext| ext.planning_information().ordering.clone())
             .unwrap_or_default(),
         _ => SortOrdering::Default,

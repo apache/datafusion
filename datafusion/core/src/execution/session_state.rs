@@ -1907,22 +1907,22 @@ impl FunctionRegistry for SessionState {
 }
 
 impl ExtensionTypeRegistry for SessionState {
-    fn get(&self, name: &str) -> datafusion_common::Result<LogicalTypeRef> {
-        self.extension_types.get(name)
+    fn get_extension_type(&self, name: &str) -> datafusion_common::Result<LogicalTypeRef> {
+        self.extension_types.get_extension_type(name)
     }
 
-    fn register_type(
+    fn register_extension_type(
         &mut self,
         logical_type: LogicalTypeRef,
     ) -> datafusion_common::Result<Option<LogicalTypeRef>> {
-        self.extension_types.register_type(logical_type)
+        self.extension_types.register_extension_type(logical_type)
     }
 
-    fn deregister_type(
+    fn deregister_extension_type(
         &mut self,
         name: &str,
     ) -> datafusion_common::Result<Option<LogicalTypeRef>> {
-        self.extension_types.deregister_type(name)
+        self.extension_types.deregister_extension_type(name)
     }
 }
 

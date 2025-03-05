@@ -72,7 +72,7 @@ fn create_ordering(
                         let ordering = schema
                             .field_with_name(&col.name)?
                             .extension_type_name()
-                            .and_then(|ext| extension_types.get(ext).ok())
+                            .and_then(|ext| extension_types.get_extension_type(ext).ok())
                             .map(|ext| ext.planning_information().ordering.clone())
                             .unwrap_or_default();
                         sort_exprs.push(PhysicalSortExpr {

@@ -18,13 +18,9 @@
 // Include tests in dataframe_functions
 mod dataframe_functions;
 mod describe;
+mod test_types;
 
-use arrow::array::{
-    record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
-    FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder,
-    Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray,
-    StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, UnionBuilder,
-};
+use arrow::array::{record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray, FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder, Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, UnionBuilder};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
     DataType, Field, Float32Type, Float64Type, Int32Type, Schema, SchemaRef, UInt64Type,
@@ -32,6 +28,7 @@ use arrow::datatypes::{
 };
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
+use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
 use datafusion_expr::utils::COUNT_STAR_EXPANSION;
 use datafusion_functions_aggregate::count::{count_all, count_udaf};
 use datafusion_functions_aggregate::expr_fn::{
@@ -48,6 +45,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
 
+use crate::dataframe::test_types::IntOrFloatType;
 use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
@@ -71,6 +69,7 @@ use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::expr::{GroupingSet, Sort, WindowFunction};
+use datafusion_expr::registry::ExtensionTypeRegistry;
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
@@ -2855,11 +2854,15 @@ async fn sort_on_union_with_logical_type() -> Result<()> {
     ]
     .into_iter()
     .collect();
-    let schema = Schema::new(vec![Field::new(
-        "my_union",
-        DataType::Union(fields, UnionMode::Dense),
-        false,
-    )]);
+
+    let my_extension_type = Arc::new(IntOrFloatType::new());
+    let union_type = DataType::Union(fields, UnionMode::Dense);
+    let field =
+        Field::new("my_union", union_type, false).with_metadata(HashMap::from([(
+            EXTENSION_TYPE_NAME_KEY.into(),
+            IntOrFloatType::name().into(),
+        )]));
+    let schema = Schema::new(vec![field]);
 
     let mut builder = UnionBuilder::new_dense();
     builder.append::<Int32Type>("A", 1)?;
@@ -2868,7 +2871,8 @@ async fn sort_on_union_with_logical_type() -> Result<()> {
     builder.append::<Float64Type>("B", 3.0)?;
     let union = builder.build()?;
 
-    let ctx = SessionContext::new();
+    let mut ctx = SessionContext::new();
+    ctx.register_extension_type(my_extension_type)?;
     ctx.register_table(
         "test_table",
         Arc::new(MemTable::try_new(

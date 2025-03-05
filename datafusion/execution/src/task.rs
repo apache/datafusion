@@ -211,19 +211,19 @@ impl FunctionRegistry for TaskContext {
 }
 
 impl ExtensionTypeRegistry for TaskContext {
-    fn get(&self, name: &str) -> Result<LogicalTypeRef> {
-        self.extension_types.get(name)
+    fn get_extension_type(&self, name: &str) -> Result<LogicalTypeRef> {
+        self.extension_types.get_extension_type(name)
     }
 
-    fn register_type(
+    fn register_extension_type(
         &mut self,
         logical_type: LogicalTypeRef,
     ) -> Result<Option<LogicalTypeRef>> {
-        self.extension_types.register_type(logical_type)
+        self.extension_types.register_extension_type(logical_type)
     }
 
-    fn deregister_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>> {
-        self.extension_types.deregister_type(name)
+    fn deregister_extension_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>> {
+        self.extension_types.deregister_extension_type(name)
     }
 }
 
