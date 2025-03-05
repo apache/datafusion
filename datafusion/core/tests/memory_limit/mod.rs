@@ -53,10 +53,10 @@ use rand::Rng;
 use test_utils::AccessLogGenerator;
 
 use async_trait::async_trait;
-use futures::StreamExt;
-use tokio::fs::File;
 use datafusion_common::sort::AdvSortOptions;
 use datafusion_common::types::SortOrdering;
+use futures::StreamExt;
+use tokio::fs::File;
 
 #[cfg(test)]
 #[ctor::ctor]

@@ -61,8 +61,8 @@ use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::min_max::{max_udaf, min_udaf};
 
-use rstest::rstest;
 use datafusion_common::sort::AdvSortOptions;
+use rstest::rstest;
 
 /// Create a csv exec for tests
 fn csv_exec_ordered(

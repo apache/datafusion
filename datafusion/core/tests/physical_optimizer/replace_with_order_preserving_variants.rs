@@ -47,11 +47,11 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_common::config::ConfigOptions;
 
+use datafusion_common::sort::AdvSortOptions;
 use object_store::memory::InMemory;
 use object_store::ObjectStore;
 use rstest::rstest;
 use url::Url;
-use datafusion_common::sort::AdvSortOptions;
 
 /// Runs the `replace_with_order_preserving_variants` sub-rule and asserts
 /// the plan against the original and expected plans.

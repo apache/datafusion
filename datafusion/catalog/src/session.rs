@@ -22,13 +22,13 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::registry::MemoryExtensionTypeRegistry;
 use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
-use datafusion_expr::registry::MemoryExtensionTypeRegistry;
 
 /// Interface for accessing [`SessionState`] from the catalog.
 ///

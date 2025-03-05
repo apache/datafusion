@@ -49,10 +49,10 @@ pub use datafusion_execution::object_store;
 pub use statistics::get_statistics_with_limit;
 
 use arrow::datatypes::Schema;
-use datafusion_common::{plan_err, Result};
 use datafusion_common::sort::AdvSortOptions;
-use datafusion_expr::{Expr, SortExpr};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::registry::ExtensionTypeRegistry;
+use datafusion_expr::{Expr, SortExpr};
 use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 
 fn create_ordering(
@@ -69,7 +69,8 @@ fn create_ordering(
             match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {
                     Ok(expr) => {
-                        let ordering = schema.field_with_name(&col.name)?
+                        let ordering = schema
+                            .field_with_name(&col.name)?
                             .extension_type_name()
                             .and_then(|ext| extension_types.get(ext).ok())
                             .map(|ext| ext.planning_information().ordering.clone())

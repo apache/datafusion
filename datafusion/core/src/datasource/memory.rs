@@ -242,11 +242,7 @@ impl TableProvider for MemTable {
             let file_sort_order = sort_order
                 .iter()
                 .map(|sort_exprs| {
-                    create_physical_sort_exprs(
-                        state,
-                        sort_exprs,
-                        &df_schema,
-                    )
+                    create_physical_sort_exprs(state, sort_exprs, &df_schema)
                 })
                 .collect::<Result<Vec<_>>>()?;
             source = source.try_with_sort_information(file_sort_order)?;

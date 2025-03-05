@@ -56,8 +56,8 @@ use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
-use itertools::Itertools;
 use datafusion_common::sort::AdvSortOptions;
+use itertools::Itertools;
 
 /// Mocked UDF
 #[derive(Debug)]
