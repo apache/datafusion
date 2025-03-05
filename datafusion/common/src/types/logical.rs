@@ -17,8 +17,7 @@
 
 use super::NativeType;
 use crate::error::Result;
-use crate::ScalarValue;
-use arrow::array::{make_comparator, Array, ArrayRef, DynComparator, UInt32Array};
+use arrow::array::{make_comparator, ArrayRef, DynComparator};
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use core::fmt;
@@ -169,33 +168,6 @@ pub enum SortOrdering {
 }
 
 impl SortOrdering {
-    pub fn compare_scalars(
-        &self,
-        lhs: &ScalarValue,
-        rhs: &ScalarValue,
-    ) -> Option<Ordering> {
-        match self {
-            SortOrdering::Default => lhs.partial_cmp(rhs),
-            SortOrdering::Custom(c) => c.compare_scalars(lhs, rhs),
-        }
-    }
-
-    pub fn sort_to_indices(
-        &self,
-        array: &dyn Array,
-        options: SortOptions,
-        fetch: Option<usize>,
-    ) -> Result<UInt32Array> {
-        match self {
-            SortOrdering::Default => Ok(arrow::compute::sort_to_indices(
-                array,
-                Some(options),
-                fetch,
-            )?),
-            SortOrdering::Custom(c) => c.sort_to_indices(array, options, fetch),
-        }
-    }
-
     pub fn dyn_comparator(
         &self,
         array: ArrayRef,
@@ -240,17 +212,6 @@ pub trait CustomOrdering: Debug + Send + Sync {
     ///
     /// The ordering id is used to establish equality between instances of [CustomOrdering].
     fn ordering_id(&self) -> &str;
-
-    /// TODO
-    fn compare_scalars(&self, lhs: &ScalarValue, rhs: &ScalarValue) -> Option<Ordering>;
-
-    /// TODO
-    fn sort_to_indices(
-        &self,
-        array: &dyn Array,
-        options: SortOptions,
-        fetch: Option<usize>,
-    ) -> Result<UInt32Array>;
 
     /// TODO
     fn dyn_comparator(

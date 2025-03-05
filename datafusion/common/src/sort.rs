@@ -163,20 +163,6 @@ pub fn lexsort_to_indices(
         };
     }
 
-    if columns.len() == 1 {
-        // fallback to non-lexical sort
-        let column = &columns[0];
-        let options = column
-            .options
-            .as_ref()
-            .expect("Otherwise fallback to arrow earlier");
-        return options.ordering.sort_to_indices(
-            &column.values,
-            SortOptions::new(options.descending, options.nulls_first),
-            fetch,
-        );
-    }
-
     let row_count = columns[0].values.len();
     if columns.iter().any(|item| item.values.len() != row_count) {
         return _exec_err!("lexical sort columns have different row counts");

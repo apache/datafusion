@@ -22,10 +22,7 @@ mod test_types;
 
 use arrow::array::{record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray, FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder, Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, UnionBuilder};
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{
-    DataType, Field, Float32Type, Float64Type, Int32Type, Schema, SchemaRef, UInt64Type,
-    UnionFields, UnionMode,
-};
+use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type, Int64Type, Schema, SchemaRef, UInt64Type, UnionFields, UnionMode};
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
@@ -2849,8 +2846,8 @@ async fn sort_on_ambiguous_column() -> Result<()> {
 #[tokio::test]
 async fn sort_on_union_with_logical_type() -> Result<()> {
     let fields = [
-        (0, Arc::new(Field::new("A", DataType::Int32, false))),
-        (1, Arc::new(Field::new("B", DataType::Float64, false))),
+        (0, Arc::new(Field::new("integer", DataType::Int64, false))),
+        (1, Arc::new(Field::new("float", DataType::Float64, false))),
     ]
     .into_iter()
     .collect();
@@ -2862,13 +2859,13 @@ async fn sort_on_union_with_logical_type() -> Result<()> {
             EXTENSION_TYPE_NAME_KEY.into(),
             IntOrFloatType::name().into(),
         )]));
-    let schema = Schema::new(vec![field]);
+    let schema = Arc::new(Schema::new(vec![field]));
 
     let mut builder = UnionBuilder::new_dense();
-    builder.append::<Int32Type>("A", 1)?;
-    builder.append::<Float64Type>("B", 3.0)?;
-    builder.append::<Int32Type>("A", 1)?;
-    builder.append::<Float64Type>("B", 3.0)?;
+    builder.append::<Int64Type>("integer", 1)?;
+    builder.append::<Int64Type>("integer", -1)?;
+    builder.append::<Float64Type>("float", 3.0)?;
+    builder.append::<Float64Type>("float", 6.0)?;
     let union = builder.build()?;
 
     let mut ctx = SessionContext::new();
@@ -2876,9 +2873,9 @@ async fn sort_on_union_with_logical_type() -> Result<()> {
     ctx.register_table(
         "test_table",
         Arc::new(MemTable::try_new(
-            Arc::new(schema.clone()),
+            schema.clone(),
             vec![vec![RecordBatch::try_new(
-                Arc::new(schema),
+                schema.clone(),
                 vec![Arc::new(union)],
             )?]],
         )?),
