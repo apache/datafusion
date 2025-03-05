@@ -68,7 +68,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_sql::parser::{DFParser, Statement};
+use datafusion_sql::parser::{DFParserBuilder, Statement};
 use datafusion_sql::planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel};
 
 use async_trait::async_trait;
@@ -257,6 +257,14 @@ impl Session for SessionState {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn table_options(&self) -> &TableOptions {
+        self.table_options()
+    }
+
+    fn table_options_mut(&mut self) -> &mut TableOptions {
+        self.table_options_mut()
     }
 }
 
@@ -480,15 +488,24 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                      Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                     MsSQL, ClickHouse, BigQuery, Ansi."
+                     MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
-        let mut statements = DFParser::parse_sql_with_dialect(sql, dialect.as_ref())?;
+
+        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+
+        let mut statements = DFParserBuilder::new(sql)
+            .with_dialect(dialect.as_ref())
+            .with_recursion_limit(recursion_limit)
+            .build()?
+            .parse_statements()?;
+
         if statements.len() > 1 {
             return not_impl_err!(
                 "The context currently only supports a single SQL statement"
             );
         }
+
         let statement = statements.pop_front().ok_or_else(|| {
             plan_datafusion_err!("No SQL statements were provided in the query string")
         })?;
@@ -518,11 +535,16 @@ impl SessionState {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: \
                          Generic, MySQL, PostgreSQL, Hive, SQLite, Snowflake, Redshift, \
-                         MsSQL, ClickHouse, BigQuery, Ansi."
+                         MsSQL, ClickHouse, BigQuery, Ansi, DuckDB, Databricks."
             )
         })?;
 
-        let expr = DFParser::parse_sql_into_expr_with_dialect(sql, dialect.as_ref())?;
+        let recursion_limit = self.config.options().sql_parser.recursion_limit;
+        let expr = DFParserBuilder::new(sql)
+            .with_dialect(dialect.as_ref())
+            .with_recursion_limit(recursion_limit)
+            .build()?
+            .parse_expr()?;
 
         Ok(expr)
     }
@@ -818,18 +840,17 @@ impl SessionState {
         self.config.options()
     }
 
-    /// return the TableOptions options with its extensions
-    pub fn default_table_options(&self) -> TableOptions {
-        self.table_options
-            .combine_with_session_config(self.config_options())
-    }
-
     /// Return the table options
     pub fn table_options(&self) -> &TableOptions {
         &self.table_options
     }
 
-    /// Return mutable table options
+    /// return the TableOptions options with its extensions
+    pub fn default_table_options(&self) -> TableOptions {
+        Session::default_table_options(self)
+    }
+
+    /// Returns a mutable reference to [`TableOptions`]
     pub fn table_options_mut(&mut self) -> &mut TableOptions {
         &mut self.table_options
     }
@@ -998,7 +1019,10 @@ pub struct SessionStateBuilder {
 }
 
 impl SessionStateBuilder {
-    /// Returns a new [`SessionStateBuilder`] with no options set.
+    /// Returns a new empty [`SessionStateBuilder`].
+    ///
+    /// See [`Self::with_default_features`] to install the default set of functions,
+    /// catalogs, etc.
     pub fn new() -> Self {
         Self {
             session_id: None,
@@ -1028,9 +1052,10 @@ impl SessionStateBuilder {
         }
     }
 
-    /// Returns a new [SessionStateBuilder] based on an existing [SessionState]
+    /// Returns a new [SessionStateBuilder] based on an existing [SessionState].
+    ///
     /// The session id for the new builder will be unset; all other fields will
-    /// be cloned from what is set in the provided session state. If the default
+    /// be cloned from `existing`. If the default
     /// catalog exists in existing session state, the new session state will not
     /// create default catalog and schema.
     pub fn new_from_existing(existing: SessionState) -> Self {
@@ -1079,16 +1104,44 @@ impl SessionStateBuilder {
         }
     }
 
-    /// Create default builder with defaults for table_factories, file formats, expr_planners and builtin
+    /// Adds defaults for table_factories, file formats, expr_planners and builtin
     /// scalar, aggregate and windows functions.
-    pub fn with_default_features(self) -> Self {
-        self.with_table_factories(SessionStateDefaults::default_table_factories())
-            .with_file_formats(SessionStateDefaults::default_file_formats())
-            .with_expr_planners(SessionStateDefaults::default_expr_planners())
-            .with_scalar_functions(SessionStateDefaults::default_scalar_functions())
-            .with_aggregate_functions(SessionStateDefaults::default_aggregate_functions())
-            .with_window_functions(SessionStateDefaults::default_window_functions())
-            .with_table_function_list(SessionStateDefaults::default_table_functions())
+    ///
+    /// Note overwrites any previously registered items with the same name.
+    pub fn with_default_features(mut self) -> Self {
+        self.table_factories
+            .get_or_insert_with(HashMap::new)
+            .extend(SessionStateDefaults::default_table_factories());
+
+        self.file_formats
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_file_formats());
+
+        self.expr_planners
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_expr_planners());
+
+        self.scalar_functions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_scalar_functions());
+
+        self.aggregate_functions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_aggregate_functions());
+
+        self.window_functions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_window_functions());
+
+        self.table_functions
+            .get_or_insert_with(HashMap::new)
+            .extend(
+                SessionStateDefaults::default_table_functions()
+                    .into_iter()
+                    .map(|f| (f.name().to_string(), f)),
+            );
+
+        self
     }
 
     /// Set the session id.
@@ -2139,6 +2192,21 @@ mod tests {
         let table_factories = state.table_factories();
         assert_eq!(table_factories.len(), 1);
         assert!(table_factories.contains_key("employee"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_with_default_features_not_override() -> Result<()> {
+        use crate::test_util::TestTableFactory;
+
+        // Test whether the table_factory has been overridden.
+        let table_factory = Arc::new(TestTableFactory {});
+        let session_state = SessionStateBuilder::new()
+            .with_table_factory("test".to_string(), table_factory)
+            .with_default_features()
+            .build();
+        assert!(session_state.table_factories().get("test").is_some());
+
         Ok(())
     }
 }

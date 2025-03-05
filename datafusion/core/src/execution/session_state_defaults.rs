@@ -18,6 +18,7 @@
 use crate::catalog::{CatalogProvider, TableProviderFactory};
 use crate::catalog_common::listing_schema::ListingSchemaProvider;
 use crate::datasource::file_format::arrow::ArrowFormatFactory;
+#[cfg(feature = "avro")]
 use crate::datasource::file_format::avro::AvroFormatFactory;
 use crate::datasource::file_format::csv::CsvFormatFactory;
 use crate::datasource::file_format::json::JsonFormatFactory;
@@ -94,6 +95,8 @@ impl SessionStateDefaults {
                 feature = "unicode_expressions"
             ))]
             Arc::new(functions::planner::UserDefinedFunctionPlanner),
+            Arc::new(functions_aggregate::planner::AggregateFunctionPlanner),
+            Arc::new(functions_window::planner::WindowFunctionPlanner),
         ];
 
         expr_planners
@@ -133,6 +136,7 @@ impl SessionStateDefaults {
             Arc::new(JsonFormatFactory::new()),
             Arc::new(CsvFormatFactory::new()),
             Arc::new(ArrowFormatFactory::new()),
+            #[cfg(feature = "avro")]
             Arc::new(AvroFormatFactory::new()),
         ];
 

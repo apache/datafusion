@@ -582,6 +582,8 @@ impl<'a> ConstEvaluator<'a> {
         // added they can be checked for their ability to be evaluated
         // at plan time
         match expr {
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
             Expr::AggregateFunction { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
@@ -940,6 +942,27 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                 op: And,
                 right,
             }) if is_op_with(Or, &left, &right) => Transformed::yes(*right),
+            // A >= constant AND constant <= A --> A = constant
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: And,
+                right,
+            }) if can_reduce_to_equal_statement(&left, &right) => {
+                if let Expr::BinaryExpr(BinaryExpr {
+                    left: left_left,
+                    right: left_right,
+                    ..
+                }) = *left
+                {
+                    Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                        left: left_left,
+                        op: Eq,
+                        right: left_right,
+                    }))
+                } else {
+                    return internal_err!("can_reduce_to_equal_statement should only be called with a BinaryExpr");
+                }
+            }
 
             //
             // Rules for Multiply

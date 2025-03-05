@@ -2141,6 +2141,7 @@ impl Projection {
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
+        #[expect(deprecated)]
         if !expr.iter().any(|e| matches!(e, Expr::Wildcard { .. }))
             && expr.len() != schema.fields().len()
         {
@@ -2869,7 +2870,11 @@ fn intersect_maps<'a>(
     let mut inputs = inputs.into_iter();
     let mut merged: HashMap<String, String> = inputs.next().cloned().unwrap_or_default();
     for input in inputs {
-        merged.retain(|k, v| input.get(k) == Some(v));
+        // The extra dereference below (`&*v`) is a workaround for https://github.com/rkyv/rkyv/issues/434.
+        // When this crate is used in a workspace that enables the `rkyv-64` feature in the `chrono` crate,
+        // this triggers a Rust compilation error:
+        // error[E0277]: can't compare `Option<&std::string::String>` with `Option<&mut std::string::String>`.
+        merged.retain(|k, v| input.get(k) == Some(&*v));
     }
     merged
 }
@@ -3447,6 +3452,7 @@ fn calc_func_dependencies_for_project(
     let proj_indices = exprs
         .iter()
         .map(|expr| match expr {
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => {
                 let wildcard_fields = exprlist_to_fields(
                     vec![&Expr::Wildcard {

@@ -59,7 +59,7 @@ use arrow::compute::{
 };
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use arrow::ipc::reader::FileReader;
+use arrow::ipc::reader::StreamReader;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, HashSet, JoinSide,
     JoinType, Result,
@@ -368,6 +368,10 @@ impl DisplayAs for SortMergeJoinExec {
                         f.expression()
                     ))
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -1394,7 +1398,7 @@ impl SortMergeJoinStream {
 
                 if let Some(batch) = buffered_batch.batch {
                     spill_record_batches(
-                        vec![batch],
+                        &[batch],
                         spill_file.path().into(),
                         Arc::clone(&self.buffered_schema),
                     )?;
@@ -2270,7 +2274,7 @@ fn fetch_right_columns_from_batch_by_idxs(
                 Vec::with_capacity(buffered_indices.len());
 
             let file = BufReader::new(File::open(spill_file.path())?);
-            let reader = FileReader::try_new(file, None)?;
+            let reader = StreamReader::try_new(file, None)?;
 
             for batch in reader {
                 batch?.columns().iter().for_each(|column| {
@@ -2547,7 +2551,7 @@ mod tests {
     use crate::joins::sort_merge_join::{get_corrected_filter_mask, JoinedRecordBatches};
     use crate::joins::utils::{ColumnIndex, JoinFilter, JoinOn};
     use crate::joins::SortMergeJoinExec;
-    use crate::memory::MemorySourceConfig;
+    use crate::test::TestMemoryExec;
     use crate::test::{build_table_i32, build_table_i32_two_cols};
     use crate::{common, ExecutionPlan};
 
@@ -2558,12 +2562,12 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     fn build_table_from_batches(batches: Vec<RecordBatch>) -> Arc<dyn ExecutionPlan> {
         let schema = batches.first().unwrap().schema();
-        MemorySourceConfig::try_new_exec(&[batches], schema, None).unwrap()
+        TestMemoryExec::try_new_exec(&[batches], schema, None).unwrap()
     }
 
     fn build_date_table(
@@ -2588,7 +2592,7 @@ mod tests {
         .unwrap();
 
         let schema = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     fn build_date64_table(
@@ -2613,7 +2617,7 @@ mod tests {
         .unwrap();
 
         let schema = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     /// returns a table with 3 columns of i32 in memory
@@ -2636,7 +2640,7 @@ mod tests {
             ],
         )
         .unwrap();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     pub fn build_table_two_cols(
@@ -2645,7 +2649,7 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32_two_cols(a, b);
         let schema = batch.schema();
-        MemorySourceConfig::try_new_exec(&[vec![batch]], schema, None).unwrap()
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
     }
 
     fn join(

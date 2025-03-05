@@ -23,9 +23,11 @@ use arrow::array::{
     ArrayRef, ArrowPrimitiveType, AsArray, PrimitiveArray, StringArrayType,
 };
 use arrow::datatypes::{ArrowNativeType, DataType, Int32Type, Int64Type};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::types::logical_string;
+use datafusion_common::{exec_err, internal_err, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    Coercion, ColumnarValue, Documentation, ScalarUDFImpl, Signature, TypeSignatureClass,
+    Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -60,7 +62,13 @@ impl Default for StrposFunc {
 impl StrposFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::string(2, Volatility::Immutable),
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec![String::from("instr"), String::from("position")],
         }
     }
@@ -79,16 +87,24 @@ impl ScalarUDFImpl for StrposFunc {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        utf8_to_int_type(&arg_types[0], "strpos/instr/position")
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        internal_err!("return_type_from_args should be used instead")
     }
 
-    fn invoke_batch(
+    fn return_type_from_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ReturnTypeArgs,
+    ) -> Result<datafusion_expr::ReturnInfo> {
+        utf8_to_int_type(&args.arg_types[0], "strpos/instr/position").map(|data_type| {
+            datafusion_expr::ReturnInfo::new(data_type, args.nullables.iter().any(|x| *x))
+        })
+    }
+
+    fn invoke_with_args(
+        &self,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        make_scalar_function(strpos, vec![])(args)
+        make_scalar_function(strpos, vec![])(&args.args)
     }
 
     fn aliases(&self) -> &[String] {
@@ -107,6 +123,11 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
             let substring_array = args[1].as_string::<i32>();
             calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
         }
+        (DataType::Utf8, DataType::Utf8View) => {
+            let string_array = args[0].as_string::<i32>();
+            let substring_array = args[1].as_string_view();
+            calculate_strpos::<_, _, Int32Type>(string_array, substring_array)
+        }
         (DataType::Utf8, DataType::LargeUtf8) => {
             let string_array = args[0].as_string::<i32>();
             let substring_array = args[1].as_string::<i64>();
@@ -115,6 +136,11 @@ fn strpos(args: &[ArrayRef]) -> Result<ArrayRef> {
         (DataType::LargeUtf8, DataType::Utf8) => {
             let string_array = args[0].as_string::<i64>();
             let substring_array = args[1].as_string::<i32>();
+            calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
+        }
+        (DataType::LargeUtf8, DataType::Utf8View) => {
+            let string_array = args[0].as_string::<i64>();
+            let substring_array = args[1].as_string_view();
             calculate_strpos::<_, _, Int64Type>(string_array, substring_array)
         }
         (DataType::LargeUtf8, DataType::LargeUtf8) => {
@@ -202,6 +228,7 @@ mod tests {
     use arrow::array::{Array, Int32Array, Int64Array};
     use arrow::datatypes::DataType::{Int32, Int64};
 
+    use arrow::datatypes::DataType;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -288,5 +315,28 @@ mod tests {
         test_strpos!("", "a" -> 0; Utf8View LargeUtf8 i32 Int32 Int32Array);
         test_strpos!("", "" -> 1; Utf8View LargeUtf8 i32 Int32 Int32Array);
         test_strpos!("ДатаФусион数据融合📊🔥", "📊" -> 15; Utf8View LargeUtf8 i32 Int32 Int32Array);
+    }
+
+    #[test]
+    fn nullable_return_type() {
+        fn get_nullable(string_array_nullable: bool, substring_nullable: bool) -> bool {
+            let strpos = StrposFunc::new();
+            let args = datafusion_expr::ReturnTypeArgs {
+                arg_types: &[DataType::Utf8, DataType::Utf8],
+                nullables: &[string_array_nullable, substring_nullable],
+                scalar_arguments: &[None::<&ScalarValue>, None::<&ScalarValue>],
+            };
+
+            let (_, nullable) = strpos.return_type_from_args(args).unwrap().into_parts();
+
+            nullable
+        }
+
+        assert!(!get_nullable(false, false));
+
+        // If any of the arguments is nullable, the result is nullable
+        assert!(get_nullable(true, false));
+        assert!(get_nullable(false, true));
+        assert!(get_nullable(true, true));
     }
 }

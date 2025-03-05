@@ -109,4 +109,4 @@ Welcome to the Apache DataFusion Google Summer of Code (GSoC) 2025 project ideas
 
 ## Contact Us
 
-You can join our [mailing list](mailto:dev%40datafusion.apache.org) and [Discord](https://discord.gg/Q9eh6S2T) to introduce yourself and ask questions.
+You can join our [mailing list](mailto:dev%40datafusion.apache.org) and [Discord](https://discord.gg/jHzkpK4em5) to introduce yourself and ask questions.

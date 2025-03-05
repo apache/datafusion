@@ -138,8 +138,35 @@ fn update_sort_ctx_children_data(
 /// [`CoalescePartitionsExec`] descendant(s) for every child of a plan. The data
 /// attribute stores whether the plan is a `CoalescePartitionsExec` or is
 /// connected to a `CoalescePartitionsExec` via its children.
+///
+/// The tracker halts at each [`SortExec`] (where the SPM will act to replace the coalesce).
+///
+/// This requires a bottom-up traversal was previously performed, updating the
+/// children previously.
 pub type PlanWithCorrespondingCoalescePartitions = PlanContext<bool>;
 
+/// Discovers the linked Coalesce->Sort cascades.
+///
+/// This linkage is used in [`remove_bottleneck_in_subplan`] to selectively
+/// remove the linked coalesces in the subplan. Then afterwards, an SPM is added
+/// at the root of the subplan (just after the sort) in order to parallelize sorts.
+/// Refer to the [`parallelize_sorts`] for more details on sort parallelization.
+///
+/// Example of linked Coalesce->Sort:
+/// ```text
+/// SortExec ctx.data=false, to halt remove_bottleneck_in_subplan)
+///   ...nodes...   ctx.data=true (e.g. are linked in cascade)
+///     Coalesce  ctx.data=true (e.g. is a coalesce)
+/// ```
+///
+/// The link should not be continued (and the coalesce not removed) if the distribution
+/// is changed between the Coalesce->Sort cascade. Example:
+/// ```text
+/// SortExec ctx.data=false, to halt remove_bottleneck_in_subplan)
+///   AggregateExec  ctx.data=false, to stop the link
+///     ...nodes...   ctx.data=true (e.g. are linked in cascade)
+///       Coalesce  ctx.data=true (e.g. is a coalesce)
+/// ```
 fn update_coalesce_ctx_children(
     coalesce_context: &mut PlanWithCorrespondingCoalescePartitions,
 ) {
@@ -316,8 +343,19 @@ fn replace_with_partial_sort(
 /// are transformed into
 /// ```text
 ///      "SortPreservingMergeExec: \[a@0 ASC\]",
-///      "  ...nodes..."
-///      "    SortExec: expr=\[a@0 ASC\]",
+///      "  SortExec: expr=\[a@0 ASC\]",
+///      "    ...nodes..."
+///      "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+/// ```
+/// by following connections from [`CoalescePartitionsExec`]s to [`SortExec`]s.
+/// By performing sorting in parallel, we can increase performance in some scenarios.
+///
+/// This requires that there are no nodes between the [`SortExec`] and [`CoalescePartitionsExec`]
+/// which require single partitioning. Do not parallelize when the following scenario occurs:
+/// ```text
+///      "SortExec: expr=\[a@0 ASC\]",
+///      "  ...nodes requiring single partitioning..."
+///      "    CoalescePartitionsExec",
 ///      "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
 /// ```
 pub fn parallelize_sorts(
@@ -385,9 +423,6 @@ pub fn parallelize_sorts(
 pub fn ensure_sorting(
     mut requirements: PlanWithCorrespondingSort,
 ) -> Result<Transformed<PlanWithCorrespondingSort>> {
-    // Before starting, making requirements' children's ExecutionPlan be same as the requirements' plan's children's ExecutionPlan.
-    // It should be guaranteed by previous code, but we need to make sure to avoid any potential missing.
-    requirements = requirements.update_plan_from_children()?;
     requirements = update_sort_ctx_children_data(requirements, false)?;
 
     // Perform naive analysis at the beginning -- remove already-satisfied sorts:
@@ -419,7 +454,6 @@ pub fn ensure_sorting(
                     child = update_child_to_remove_unnecessary_sort(idx, child, plan)?;
                 }
                 child = add_sort_above(child, required, None);
-                child = child.update_plan_from_children()?;
                 child = update_sort_ctx_children_data(child, true)?;
             }
         } else if physical_ordering.is_none()
@@ -433,25 +467,24 @@ pub fn ensure_sorting(
         updated_children.push(child);
     }
     requirements.children = updated_children;
+    requirements = requirements.update_plan_from_children()?;
     // For window expressions, we can remove some sorts when we can
     // calculate the result in reverse:
     let child_node = &requirements.children[0];
-    if is_window(plan) && child_node.data {
+    if is_window(&requirements.plan) && child_node.data {
         return adjust_window_sort_removal(requirements).map(Transformed::yes);
-    } else if is_sort_preserving_merge(plan)
+    } else if is_sort_preserving_merge(&requirements.plan)
         && child_node.plan.output_partitioning().partition_count() <= 1
     {
         // This `SortPreservingMergeExec` is unnecessary, input already has a
         // single partition and no fetch is required.
         let mut child_node = requirements.children.swap_remove(0);
-        if let Some(fetch) = plan.fetch() {
-            // Add the limit exec if the spm has a fetch
+        if let Some(fetch) = requirements.plan.fetch() {
+            // Add the limit exec if the original SPM had a fetch:
             child_node.plan =
                 Arc::new(LocalLimitExec::new(Arc::clone(&child_node.plan), fetch));
         }
         return Ok(Transformed::yes(child_node));
-    } else {
-        requirements = requirements.update_plan_from_children()?;
     }
     update_sort_ctx_children_data(requirements, false).map(Transformed::yes)
 }
@@ -712,7 +745,6 @@ fn remove_corresponding_sort_from_sub_plan(
             Arc::new(CoalescePartitionsExec::new(plan)) as _
         };
         node = PlanWithCorrespondingSort::new(plan, false, vec![node]);
-        node = node.update_plan_from_children()?;
         node = update_sort_ctx_children_data(node, false)?;
     }
     Ok(node)

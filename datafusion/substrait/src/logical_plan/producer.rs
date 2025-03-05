@@ -1366,6 +1366,7 @@ pub fn to_substrait_rex(
         Expr::ScalarSubquery(expr) => {
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
+        #[expect(deprecated)]
         Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
@@ -2552,13 +2553,14 @@ mod test {
     use datafusion::common::DFSchema;
     use datafusion::execution::{SessionState, SessionStateBuilder};
     use datafusion::prelude::SessionContext;
-    use std::sync::OnceLock;
+    use std::sync::LazyLock;
 
-    static TEST_SESSION_STATE: OnceLock<SessionState> = OnceLock::new();
-    static TEST_EXTENSIONS: OnceLock<Extensions> = OnceLock::new();
+    static TEST_SESSION_STATE: LazyLock<SessionState> =
+        LazyLock::new(|| SessionContext::default().state());
+    static TEST_EXTENSIONS: LazyLock<Extensions> = LazyLock::new(Extensions::default);
     fn test_consumer() -> DefaultSubstraitConsumer<'static> {
-        let extensions = TEST_EXTENSIONS.get_or_init(Extensions::default);
-        let state = TEST_SESSION_STATE.get_or_init(|| SessionContext::default().state());
+        let extensions = &TEST_EXTENSIONS;
+        let state = &TEST_SESSION_STATE;
         DefaultSubstraitConsumer::new(extensions, state)
     }
 

@@ -235,7 +235,7 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use std::sync::OnceLock;
+/// # use std::sync::LazyLock;
 /// # use arrow::datatypes::{DataType, Field};
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, Signature, Volatility, PartitionEvaluator, WindowFrame, ExprFunctionExt, Documentation};
@@ -257,14 +257,14 @@ where
 ///   }
 /// }
 ///
-/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
+/// static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
+///     Documentation::builder(DOC_SECTION_ANALYTICAL, "smooths the windows", "smooth_it(2)")
+///         .with_argument("arg1", "The int32 number to smooth by")
+///         .build()
+/// });
 ///
 /// fn get_doc() -> &'static Documentation {
-///     DOCUMENTATION.get_or_init(|| {
-///         Documentation::builder(DOC_SECTION_ANALYTICAL, "smooths the windows", "smooth_it(2)")
-///             .with_argument("arg1", "The int32 number to smooth by")
-///             .build()
-///     })
+///     &DOCUMENTATION
 /// }
 ///
 /// /// Implement the WindowUDFImpl trait for SmoothIt

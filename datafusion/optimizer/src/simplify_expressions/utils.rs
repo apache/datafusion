@@ -214,6 +214,25 @@ pub fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
     matches!(haystack, Expr::BinaryExpr(BinaryExpr { left, op, right }) if op == &target_op && (needle == left.as_ref() || needle == right.as_ref()) && !needle.is_volatile())
 }
 
+pub fn can_reduce_to_equal_statement(haystack: &Expr, needle: &Expr) -> bool {
+    match (haystack, needle) {
+        // a >= constant and constant <= a => a = constant
+        (
+            Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::GtEq,
+                right,
+            }),
+            Expr::BinaryExpr(BinaryExpr {
+                left: n_left,
+                op: Operator::LtEq,
+                right: n_right,
+            }),
+        ) if left == n_left && right == n_right => true,
+        _ => false,
+    }
+}
+
 /// returns true if `not_expr` is !`expr` (not)
 pub fn is_not_of(not_expr: &Expr, expr: &Expr) -> bool {
     matches!(not_expr, Expr::Not(inner) if expr == inner.as_ref())

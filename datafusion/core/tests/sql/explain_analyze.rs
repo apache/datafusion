@@ -71,8 +71,8 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "ProjectionExec: expr=[count(*)",
-        "metrics=[output_rows=1, elapsed_compute="
+        "ProjectionExec: expr=[]",
+        "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(
         &formatted,
@@ -687,7 +687,7 @@ async fn csv_explain_analyze() {
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
     // in greater depth
-    let needle = "AggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[count(*)], metrics=[output_rows=5";
+    let needle = "ProjectionExec: expr=[count(Int64(1))@1 as count(*), c1@0 as c1], metrics=[output_rows=5";
     assert_contains!(&formatted, needle);
 
     let verbose_needle = "Output Rows";
@@ -778,13 +778,11 @@ async fn explain_logical_plan_only() {
     let actual = normalize_vec_for_explain(actual);
 
     let expected = vec![
-        vec![
-            "logical_plan",
-            "Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]\
-            \n  SubqueryAlias: t\
-            \n    Projection: \
-            \n      Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"
-        ]];
+        vec!["logical_plan", "Projection: count(Int64(1)) AS count(*)\
+        \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
+        \n    SubqueryAlias: t\
+        \n      Projection: \
+        \n        Values: (Utf8(\"a\"), Int64(1), Int64(100)), (Utf8(\"a\"), Int64(2), Int64(150))"]];
     assert_eq!(expected, actual);
 }
 
