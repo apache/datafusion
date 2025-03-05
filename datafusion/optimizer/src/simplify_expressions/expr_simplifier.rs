@@ -1774,7 +1774,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
                     return internal_err!("Expect cast expr, but got {:?}", left)?;
                 };
 
-                let expr_type = info.get_data_type(&left_expr)?;
+                let expr_type = info.get_data_type(left_expr)?;
                 let right_exprs = list
                     .into_iter()
                     .map(|right| {
@@ -1851,7 +1851,7 @@ fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary<S: SimplifyInfo
             }),
             Expr::Literal(lit_val),
         ) => {
-            let Ok(expr_type) = info.get_data_type(&left_expr) else {
+            let Ok(expr_type) = info.get_data_type(left_expr) else {
                 return false;
             };
 
@@ -1859,11 +1859,9 @@ fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary<S: SimplifyInfo
                 return false;
             };
 
-            if let Some(_) = try_cast_literal_to_type(lit_val, &expr_type) {
-                return is_supported_type(&expr_type) && is_supported_type(&lit_type);
-            }
-
-            false
+            try_cast_literal_to_type(lit_val, &expr_type).is_some()
+                && is_supported_type(&expr_type)
+                && is_supported_type(&lit_type)
         }
         _ => false,
     }
@@ -1884,7 +1882,7 @@ fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist<S: SimplifyInfo
         return false;
     };
 
-    let Ok(expr_type) = info.get_data_type(&left_expr) else {
+    let Ok(expr_type) = info.get_data_type(left_expr) else {
         return false;
     };
 
@@ -1902,12 +1900,8 @@ fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist<S: SimplifyInfo
         }
 
         match right {
-            Expr::Literal(lit_val) => {
-                if let Some(_) = try_cast_literal_to_type(lit_val, &expr_type) {
-                    continue;
-                }
-                return false;
-            }
+            Expr::Literal(lit_val)
+                if try_cast_literal_to_type(lit_val, &expr_type).is_some() => {}
             _ => return false,
         }
     }
