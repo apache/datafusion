@@ -468,14 +468,14 @@ async fn test_stringview_external_sort() {
     let _ = df.collect().await.expect("Query execution failed");
 }
 
-/// This test case is for the regression case:
+/// This test case is for a previously detected bug:
 /// When `ExternalSorter` has read all input batches
 /// - It has spilled many sorted runs to disk
 /// - Its in-memory buffer for batches is almost full
-/// The regression implementation will try to merge the spills and in-memory batches
-/// right away, without spilling the in-memory batches first, caused OOM.
+/// The previous implementation will try to merge the spills and in-memory batches
+/// together, without spilling the in-memory batches first, causing OOM.
 #[tokio::test]
-async fn test_external_sort_regression() {
+async fn test_in_mem_buffer_almost_full() {
     let config = SessionConfig::new()
         .with_sort_spill_reservation_bytes(3000000)
         .with_target_partitions(1);
