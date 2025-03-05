@@ -1726,7 +1726,7 @@ impl<S: SimplifyInfo> TreeNodeRewriter for Simplifier<'_, S> {
             }
 
             // =======================================
-            // Unwrap cast in comparison
+            // unwrap_cast_in_comparison
             // =======================================
             //
             // For case:
@@ -1917,14 +1917,14 @@ fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist<S: SimplifyInfo
     true
 }
 
-/// Returns true if [UnwrapCastExprRewriter] supports this data type
+/// Returns true if unwrap_cast_in_comparison supports this data type
 fn is_supported_type(data_type: &DataType) -> bool {
     is_supported_numeric_type(data_type)
         || is_supported_string_type(data_type)
         || is_supported_dictionary_type(data_type)
 }
 
-/// Returns true if [[UnwrapCastExprRewriter]] support this numeric type
+/// Returns true if unwrap_cast_in_comparison support this numeric type
 fn is_supported_numeric_type(data_type: &DataType) -> bool {
     matches!(
         data_type,
@@ -1941,14 +1941,14 @@ fn is_supported_numeric_type(data_type: &DataType) -> bool {
     )
 }
 
-/// Returns true if [UnwrapCastExprRewriter] supports casting this value as a string
+/// Returns true if unwrap_cast_in_comparison supports casting this value as a string
 fn is_supported_string_type(data_type: &DataType) -> bool {
     // TODO: Support Utf8View type
     // https://github.com/apache/datafusion/issues/12180
     matches!(data_type, DataType::Utf8 | DataType::LargeUtf8)
 }
 
-/// Returns true if [UnwrapCastExprRewriter] supports casting this value as a dictionary
+/// Returns true if unwrap_cast_in_comparison supports casting this value as a dictionary
 fn is_supported_dictionary_type(data_type: &DataType) -> bool {
     matches!(data_type,
                     DataType::Dictionary(_, inner) if is_supported_type(inner))
