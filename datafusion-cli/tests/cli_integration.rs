@@ -134,6 +134,17 @@ fn init() {
     "v1\n5\n4\n3\n"
 )]
 
+/// Add case for limiting the number of rows to be printed for json format
+#[case::exec_from_commands(
+    [
+        "--command", "SELECT * FROM generate_series(1, 5) t1(v1) ORDER BY v1 DESC;",
+        "--format", "json",
+        "--maxrows", "3",
+        "-q"
+    ],
+    "[{\"v1\":5},{\"v1\":4},{\"v1\":3}]\n"
+)]
+
 /// Add case for explain table format printing
 #[case::exec_explain_simple(
     ["--command", "explain select 1;", "--format", "table", "-q"],
