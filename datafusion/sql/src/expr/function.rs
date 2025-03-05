@@ -148,6 +148,9 @@ impl FunctionArgs {
                 }
                 FunctionArgumentClause::OrderBy(oby) => {
                     if order_by.is_some() {
+                        if !within_group.is_empty() {
+                            return plan_err!("ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used");
+                        }
                         return not_impl_err!("Calling {name}: Duplicated ORDER BY clause in function arguments");
                     }
                     order_by = Some(oby);
@@ -180,13 +183,9 @@ impl FunctionArgs {
             }
         }
 
-        if !within_group.is_empty() && order_by.is_some() {
-            return plan_err!("ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used");
-        }
-
         if within_group.len() > 1 {
             return not_impl_err!(
-                "Multiple column ordering in WITHIN GROUP clause is not supported"
+                "Only a single ordering expression is permitted in a WITHIN GROUP clause"
             );
         }
 

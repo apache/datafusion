@@ -295,8 +295,6 @@ pub enum Expr {
     /// See also [`ExprFunctionExt`] to set these fields.
     ///
     /// [`ExprFunctionExt`]: crate::expr_fn::ExprFunctionExt
-    ///
-    /// cf. `WITHIN GROUP` is converted to `ORDER BY` internally in `datafusion/sql/src/expr/function.rs`
     AggregateFunction(AggregateFunction),
     /// Represents the call of a window function with arguments.
     WindowFunction(WindowFunction),
