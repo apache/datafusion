@@ -1283,6 +1283,7 @@ impl Unparser<'_> {
             ScalarValue::Map(_) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Union(..) => not_impl_err!("Unsupported scalar: {v:?}"),
             ScalarValue::Dictionary(_k, v) => self.scalar_to_sql(v),
+            ScalarValue::Extension(_, _, _) => not_impl_err!("Unsupported scalar: {v:?}")
         }
     }
 

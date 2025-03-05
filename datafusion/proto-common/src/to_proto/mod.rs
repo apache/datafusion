@@ -635,6 +635,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     ))),
                 })
             }
+            ScalarValue::Extension(_, _, _) => Err(Error::General(format!(
+                "Proto serialization error: {val} not yet supported"
+            ))),
         }
     }
 }
