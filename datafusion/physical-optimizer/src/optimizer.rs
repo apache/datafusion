@@ -110,7 +110,7 @@ impl PhysicalOptimizer {
             Arc::new(OptimizeAggregateOrder::new()),
             // TODO: `try_embed_to_hash_join` in the ProjectionPushdown rule would be block by the CoalesceBatches, so add it before CoalesceBatches. Maybe optimize it in the future.
             Arc::new(ProjectionPushdown::new()),
-            // The CoalesceBatches rule will not influence the distribution and ordering of the
+            // The CoalesceBatches/UnCoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
             Arc::new(UnCoalesceBatches::new()),

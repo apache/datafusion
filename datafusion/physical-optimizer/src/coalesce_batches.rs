@@ -26,7 +26,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::{
-    aggregates::AggregateExec, coalesce_batches::CoalesceBatchesExec, filter::FilterExec,
+    aggregates::{AggregateExec, AggregateMode}, coalesce_batches::CoalesceBatchesExec, filter::FilterExec,
     joins::HashJoinExec, repartition::RepartitionExec, ExecutionPlan,
 };
 
@@ -118,16 +118,18 @@ impl PhysicalOptimizerRule for UnCoalesceBatches {
             if let Some(aggregate) = plan.as_any().downcast_ref::<AggregateExec>() {
                 let agg_input = aggregate.input();
 
-                if let Some(coalesce) =
-                    plan.as_any().downcast_ref::<CoalesceBatchesExec>()
-                {
-                    let coalesce_input = coalesce.input();
+                if aggregate.mode() != &AggregateMode::Partial {
+                    if let Some(coalesce) =
+                        plan.as_any().downcast_ref::<CoalesceBatchesExec>()
+                    {
+                        let coalesce_input = coalesce.input();
 
-                    return Ok(Transformed::yes(
-                        agg_input
-                            .clone()
-                            .with_new_children(vec![coalesce_input.clone()])?,
-                    ));
+                        return Ok(Transformed::yes(
+                            agg_input
+                                .clone()
+                                .with_new_children(vec![coalesce_input.clone()])?,
+                        ));
+                    }
                 }
             }
 
