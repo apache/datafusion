@@ -253,7 +253,7 @@ config_namespace! {
         pub support_varchar_with_length: bool, default = true
 
         /// When set to true, the source locations relative to the original SQL
-        /// query (i.e. [`Span`](sqlparser::tokenizer::Span)) will be collected
+        /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
         /// and recorded in the logical plan nodes.
         pub collect_spans: bool, default = false
 
@@ -711,6 +711,10 @@ config_namespace! {
 
         /// When set to true, the explain statement will print schema information
         pub show_schema: bool, default = false
+
+        /// Display format of explain. Default is "indent".
+        /// When set to "tree", it will print the plan in a tree-rendered format.
+        pub format: String, default = "indent".to_string()
     }
 }
 

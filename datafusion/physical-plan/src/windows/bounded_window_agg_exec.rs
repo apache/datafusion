@@ -252,6 +252,10 @@ impl DisplayAs for BoundedWindowAggExec {
                 let mode = &self.input_order_mode;
                 write!(f, "wdw=[{}], mode=[{:?}]", g.join(", "), mode)?;
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")?;
+            }
         }
         Ok(())
     }
