@@ -21,7 +21,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
-use crate::coalesce_batches::CoalesceBatches;
+use crate::coalesce_batches::{CoalesceBatches, UnCoalesceBatches};
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::enforce_distribution::EnforceDistribution;
 use crate::enforce_sorting::EnforceSorting;
@@ -113,6 +113,7 @@ impl PhysicalOptimizer {
             // The CoalesceBatches rule will not influence the distribution and ordering of the
             // whole plan tree. Therefore, to avoid influencing other rules, it should run last.
             Arc::new(CoalesceBatches::new()),
+            Arc::new(UnCoalesceBatches::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
             Arc::new(OutputRequirements::new_remove_mode()),
