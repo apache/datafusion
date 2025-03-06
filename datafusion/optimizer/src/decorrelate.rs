@@ -56,10 +56,14 @@ pub struct PullUpCorrelatedExpr {
     /// Indicates if we encounter any correlated expression that can not be pulled up
     /// above a aggregation without changing the meaning of the query.
     can_pull_over_aggregation: bool,
-    /// Do we need to handle [the Count bug] during the pull up process.
-    /// TODO this parameter should be removed or renamed semantically
+    /// Do we need to handle the [count bug] during the pull up process.
     ///
-    /// [the Count bug]: https://github.com/apache/datafusion/issues/10553
+    /// The "count bug" was described in [Optimization of Nested SQL
+    /// Queries Revisited](https://dl.acm.org/doi/pdf/10.1145/38714.38723). This bug is
+    /// not specific to the COUNT function, and it can occur with any aggregate function,
+    /// such as SUM, AVG, etc. The anomaly arises because aggregates fail to distinguish
+    /// between an empty set and null values when optimizing a correlated query as a join.
+    /// Here, we use "the count bug" to refer to all such cases.
     pub need_handle_count_bug: bool,
     /// mapping from the plan to its expressions' evaluation result on empty batch
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
