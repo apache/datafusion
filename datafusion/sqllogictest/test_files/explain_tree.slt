@@ -259,12 +259,12 @@ physical_plan
 
 # Query with filter on csv
 query TT
-explain SELECT int_col FROM table2 WHERE string_col != 'foo';
+explain SELECT int_col FROM table1 WHERE string_col != 'foo';
 ----
 logical_plan
-01)Projection: table2.int_col
-02)--Filter: table2.string_col != Utf8View("foo")
-03)----TableScan: table2 projection=[int_col, string_col], partial_filters=[table2.string_col != Utf8View("foo")]
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8("foo")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("foo")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -282,11 +282,8 @@ physical_plan
 14)│       DataSourceExec      │
 15)│    --------------------   │
 16)│          files: 1         │
-17)│      format: parquet      │
-18)│                           │
-19)│         predicate:        │
-20)│    string_col@1 != foo    │
-21)└───────────────────────────┘
+17)│        format: csv        │
+18)└───────────────────────────┘
 
 
 # Query with filter on parquet
@@ -401,8 +398,6 @@ physical_plan
 16)│          files: 1         │
 17)│       format: arrow       │
 18)└───────────────────────────┘
-
-
 
 # cleanup
 statement ok
