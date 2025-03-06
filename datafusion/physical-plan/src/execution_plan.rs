@@ -263,11 +263,9 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// To enable timely cancellation, the [`Stream`] that is returned must not
     /// pin the CPU and must yield back to the tokio runtime regularly. This can
     /// be achieved by manually returning [`Poll::Pending`] in regular intervals,
-    /// or the use of [`tokio::task::yield_now()`]. Cooperative scheduling may also
-    /// be a way to achieve this goal, as [tokio support for it improves][coop].
-    /// Determination for "regularly" may be made using a timer (being careful with
-    /// the overhead-heavy syscall needed to take the time) or by counting rows or
-    /// batches.
+    /// or the use of [`tokio::task::yield_now()`]. Determination for "regularly"
+    /// may be made using a timer (being careful with the overhead-heavy syscall
+    /// needed to take the time) or by counting rows or batches.
     ///
     /// The goal is for `datafusion`-provided operator implementation to
     /// strive for [the guideline of not spending a long time without reaching
@@ -282,7 +280,6 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
     /// [`Poll::Pending`]: std::task::Poll::Pending
-    /// [coop]: https://github.com/tokio-rs/tokio/pull/7116
     /// [async-guideline]: https://ryhl.io/blog/async-what-is-blocking/
     ///
     /// # Implementation Examples
