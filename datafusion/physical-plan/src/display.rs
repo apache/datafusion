@@ -892,7 +892,6 @@ impl TreeRenderVisitor<'_, '_> {
                 splits = truncated_splits;
             }
             for split in splits {
-                // TODO: check every line is less than MAX_LINE_RENDER_SIZE.
                 Self::split_string_buffer(&split, result);
             }
             requires_padding = true;
@@ -949,15 +948,6 @@ impl TreeRenderVisitor<'_, '_> {
     }
 
     fn split_string_buffer(source: &str, result: &mut Vec<String>) {
-        // TODO: replace it with error
-        // debug_assert!(source.chars().all(|c| c.is_ascii()
-        //     || unicode_segmentation::UnicodeSegmentation::graphemes(
-        //         c.to_string().as_str(),
-        //         true
-        //     )
-        //     .count()
-        //         == 1));
-
         let mut character_pos = 0;
         let mut start_pos = 0;
         let mut render_width = 0;
