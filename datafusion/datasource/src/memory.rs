@@ -426,7 +426,12 @@ impl DataSource for MemorySourceConfig {
             }
             DisplayFormatType::TreeRender => {
                 let total_rows = self.partitions.iter().map(|b| b.len()).sum::<usize>();
-                let total_bytes: usize = self.partitions.iter().flatten().map(|batch| batch.get_array_memory_size()).sum();
+                let total_bytes: usize = self
+                    .partitions
+                    .iter()
+                    .flatten()
+                    .map(|batch| batch.get_array_memory_size())
+                    .sum();
                 writeln!(f, "format=memory")?;
                 writeln!(f, "rows={total_rows}")?;
                 writeln!(f, "bytes={total_bytes}")?;
