@@ -45,8 +45,8 @@ use datafusion_expr::{
 
 use indexmap::IndexMap;
 use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr, OrderByExpr, VisitMut,
-    VisitorMut, WildcardAdditionalOptions, WindowType,
+    visit_expressions_mut, Distinct, Expr as SQLExpr, GroupByExpr, NamedWindowExpr,
+    OrderByExpr, WildcardAdditionalOptions, WindowType,
 };
 use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
 
@@ -850,60 +850,46 @@ fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()
     Ok(())
 }
 
-// Visit the expression to find all window functions
-struct WindowFunctionVisitor<'a> {
-    named_windows: &'a [NamedWindowDefinition],
-}
-
-impl VisitorMut for WindowFunctionVisitor<'_> {
-    fn pre_visit_expr(&mut self, expr: &mut SQLExpr) -> ControlFlow<Self::Break> {
-        if let SQLExpr::Function(f) = expr {
-            if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                let ident = ident.clone();
-                for NamedWindowDefinition(window_ident, window_expr) in
-                    self.named_windows.iter()
-                {
-                    if ident.eq(window_ident) {
-                        f.over = Some(match window_expr {
-                            NamedWindowExpr::NamedWindow(ident) => {
-                                WindowType::NamedWindow(ident.clone())
-                            }
-                            NamedWindowExpr::WindowSpec(spec) => {
-                                WindowType::WindowSpec(spec.clone())
-                            }
-                        })
-                    }
-                }
-                // All named windows must be defined with a WindowSpec.
-                if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                    return ControlFlow::Break(DataFusionError::Plan(format!(
-                        "The window {ident} is not defined!"
-                    )));
-                }
-            }
-        }
-        ControlFlow::Continue(())
-    }
-
-    type Break = DataFusionError;
-}
-
 // If the projection is done over a named window, that window
 // name must be defined. Otherwise, it gives an error.
 fn match_window_definitions(
     projection: &mut [SelectItem],
     named_windows: &[NamedWindowDefinition],
 ) -> Result<()> {
-    if named_windows.is_empty() {
-        return Ok(());
-    }
     for proj in projection.iter_mut() {
         if let SelectItem::ExprWithAlias { expr, alias: _ }
         | SelectItem::UnnamedExpr(expr) = proj
         {
-            let mut visitor = WindowFunctionVisitor { named_windows };
-
-            match VisitMut::visit(expr, &mut visitor) {
+            let result = visit_expressions_mut(expr, |expr| {
+                if let SQLExpr::Function(f) = expr {
+                    if let Some(WindowType::NamedWindow(_)) = &f.over {
+                        for NamedWindowDefinition(window_ident, window_expr) in
+                            named_windows
+                        {
+                            if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                                if ident.eq(window_ident) {
+                                    f.over = Some(match window_expr {
+                                        NamedWindowExpr::NamedWindow(ident) => {
+                                            WindowType::NamedWindow(ident.clone())
+                                        }
+                                        NamedWindowExpr::WindowSpec(spec) => {
+                                            WindowType::WindowSpec(spec.clone())
+                                        }
+                                    })
+                                }
+                            }
+                        }
+                        // All named windows must be defined with a WindowSpec.
+                        if let Some(WindowType::NamedWindow(ident)) = &f.over {
+                            return ControlFlow::Break(DataFusionError::Plan(format!(
+                                "The window {ident} is not defined!"
+                            )));
+                        }
+                    }
+                }
+                ControlFlow::Continue(())
+            });
+            match result {
                 ControlFlow::Continue(_) => (),
                 ControlFlow::Break(err) => return Err(err),
             };
