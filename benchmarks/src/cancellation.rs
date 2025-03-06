@@ -97,7 +97,7 @@ impl RunOpt {
         println!("Done loading data into in-memory object store");
 
         let mut rundata = BenchmarkRun::new();
-        rundata.start_new_case("Arglebargle");
+        rundata.start_new_case("Cancellation");
 
         for i in 0..self.common.iterations {
             let elapsed = run_test(self.wait_time, Arc::clone(&store))?;
