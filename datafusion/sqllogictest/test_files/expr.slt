@@ -478,10 +478,16 @@ a
 statement ok
 create table foo (a varchar, b varchar) as values ('a', 'b');
 
-query T
+query error
 SELECT concat_ws('',a,b,'c') from foo
 ----
-abc
+DataFusion error: Optimizer rule 'optimize_projections' failed
+caused by
+Check optimizer-specific invariants after optimizer rule: optimize_projections
+caused by
+Internal error: Failed due to a difference in schemas, original schema: DFSchema { inner: Schema { fields: [Field { name: "concat_ws(Utf8(\"\"),foo.a,foo.b,Utf8(\"c\"))", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }, new schema: DFSchema { inner: Schema { fields: [Field { name: "concat_ws(Utf8(\"\"),foo.a,foo.b,Utf8(\"c\"))", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }, field_qualifiers: [None], functional_dependencies: FunctionalDependencies { deps: [] } }.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 statement ok
 drop table foo

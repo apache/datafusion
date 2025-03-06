@@ -2411,6 +2411,12 @@ async fn write_table_with_order() -> Result<()> {
     write_df = write_df
         .with_column_renamed("column1", "tablecol1")
         .unwrap();
+
+    // Support datatype cast for insert api same as insert into sql
+    // TODO https://github.com/apache/datafusion/issues/15015
+    write_df =
+        write_df.with_column("tablecol1", cast(col("tablecol1"), DataType::Utf8View))?;
+
     let sql_str =
         "create external table data(tablecol1 varchar) stored as parquet location '"
             .to_owned()

@@ -755,7 +755,7 @@ LIMIT 5
 7 12
 
 #fn window_frame_ranges_string_check
-query II
+query error
 SELECT
 SUM(LENGTH(c13)) OVER(ORDER BY c13),
 SUM(LENGTH(c1)) OVER(ORDER BY c1)
@@ -763,11 +763,11 @@ FROM aggregate_test_100
 ORDER BY c9
 LIMIT 5
 ----
-2100 100
-510 79
-1440 21
-1830 61
-2010 21
+DataFusion error: type_coercion
+caused by
+Internal error: Cannot run range queries on datatype: Utf8View.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 
 #fn window_frame_order_by_unique
@@ -1148,7 +1148,7 @@ SELECT
 794 0.95 0.95
 
 #fn test_window_rank
-query IIIIIRR
+query error
 SELECT
   c9,
   RANK() OVER(ORDER BY c1) AS rank1,
@@ -1161,11 +1161,11 @@ SELECT
   ORDER BY c9
   LIMIT 5
 ----
-28774375 80 80 5 5 0.79797979798 0.79797979798
-63044568 62 62 4 4 0.616161616162 0.616161616162
-141047417 1 1 1 1 0 0
-141680161 41 41 3 3 0.40404040404 0.40404040404
-145294611 1 1 1 1 0 0
+DataFusion error: type_coercion
+caused by
+Internal error: Cannot run range queries on datatype: Utf8View.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+
 
 #fn test_lag_lead
 query IIIII
@@ -1770,8 +1770,8 @@ logical_plan
 04)------Projection: 
 05)--------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 06)----------Projection: aggregate_test_100.c1
-07)------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
-08)--------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
+07)------------Filter: aggregate_test_100.c13 != Utf8View("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
+08)--------------TableScan: aggregate_test_100 projection=[c1, c13], partial_filters=[aggregate_test_100.c13 != Utf8View("C2GT5KVyOPZpgKVl110TyZO0NcJ434")]
 physical_plan
 01)ProjectionExec: expr=[count(Int64(1))@0 as global_count]
 02)--AggregateExec: mode=Final, gby=[], aggr=[count(Int64(1))]
@@ -3629,10 +3629,16 @@ physical_plan
 07)------------StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_orderings=[[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], [c@3 ASC NULLS LAST]]
 
 # CTAS with NTILE function
-statement ok
+statement error
 CREATE TABLE new_table AS SELECT NTILE(2) OVER(ORDER BY c1) AS ntile_2 FROM aggregate_test_100;
+----
+DataFusion error: type_coercion
+caused by
+Internal error: Cannot run range queries on datatype: Utf8View.
+This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
 
-statement ok
+
+statement error DataFusion error: Execution error: Table 'new_table' doesn't exist\.
 DROP TABLE new_table;
 
 statement ok

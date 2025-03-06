@@ -558,7 +558,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Varchar(length) => {
                 match (length, self.options.support_varchar_with_length) {
                     (Some(_), false) => plan_err!("does not support Varchar with length, please set `support_varchar_with_length` to be true"),
-                    _ => Ok(DataType::Utf8),
+                    _ => Ok(DataType::Utf8View),
                 }
             }
             SQLDataType::UnsignedBigInt(_) | SQLDataType::UnsignedInt8(_) => Ok(DataType::UInt64),

@@ -184,6 +184,10 @@ async fn write_out(ctx: &SessionContext) -> std::result::Result<(), DataFusionEr
     // Ensure the column names and types match the target table
     df = df.with_column_renamed("column1", "tablecol1").unwrap();
 
+    // Support datatype cast for insert api same as insert into sql
+    // TODO https://github.com/apache/datafusion/issues/15015
+    df = df.with_column("tablecol1", cast(col("tablecol1"), DataType::Utf8View))?;
+
     ctx.sql(
         "create external table
     test(tablecol1 varchar)

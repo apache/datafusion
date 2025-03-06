@@ -1067,9 +1067,9 @@ LEFT JOIN join_t2 on join_t1.t1_id = join_t2.t2_id
 WHERE join_t2.t2_int < 10 or (join_t1.t1_int > 2 and join_t2.t2_name != 'w')
 ----
 logical_plan
-01)Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int < UInt32(10) OR join_t1.t1_int > UInt32(2) AND join_t2.t2_name != Utf8("w")
+01)Inner Join: join_t1.t1_id = join_t2.t2_id Filter: join_t2.t2_int < UInt32(10) OR join_t1.t1_int > UInt32(2) AND join_t2.t2_name != Utf8View("w")
 02)--TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-03)--Filter: join_t2.t2_int < UInt32(10) OR join_t2.t2_name != Utf8("w")
+03)--Filter: join_t2.t2_int < UInt32(10) OR join_t2.t2_name != Utf8View("w")
 04)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 # Reduce left join 3 (to inner join)
@@ -1153,7 +1153,7 @@ WHERE join_t1.t1_name != 'b'
 ----
 logical_plan
 01)Left Join: join_t1.t1_id = join_t2.t2_id
-02)--Filter: join_t1.t1_name != Utf8("b")
+02)--Filter: join_t1.t1_name != Utf8View("b")
 03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
 04)--TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
@@ -1168,9 +1168,9 @@ WHERE join_t1.t1_name != 'b' and join_t2.t2_name = 'x'
 ----
 logical_plan
 01)Inner Join: join_t1.t1_id = join_t2.t2_id
-02)--Filter: join_t1.t1_name != Utf8("b")
+02)--Filter: join_t1.t1_name != Utf8View("b")
 03)----TableScan: join_t1 projection=[t1_id, t1_name, t1_int]
-04)--Filter: join_t2.t2_name = Utf8("x")
+04)--Filter: join_t2.t2_name = Utf8View("x")
 05)----TableScan: join_t2 projection=[t2_id, t2_name, t2_int]
 
 ###
@@ -4146,7 +4146,7 @@ logical_plan
 07)------------TableScan: sales_global projection=[ts, sn, amount, currency]
 08)----------SubqueryAlias: e
 09)------------Projection: exchange_rates.ts, exchange_rates.currency_from, exchange_rates.rate
-10)--------------Filter: exchange_rates.currency_to = Utf8("USD")
+10)--------------Filter: exchange_rates.currency_to = Utf8View("USD")
 11)----------------TableScan: exchange_rates projection=[ts, currency_from, currency_to, rate]
 physical_plan
 01)SortExec: expr=[sn@1 ASC NULLS LAST], preserve_partitioning=[false]
