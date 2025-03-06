@@ -25,7 +25,6 @@ use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::utils::expr_to_columns;
 use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
@@ -35,7 +34,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
+    Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
@@ -1090,11 +1089,6 @@ impl PlannedReplaceSelectItem {
 }
 
 impl Expr {
-    #[deprecated(since = "40.0.0", note = "use schema_name instead")]
-    pub fn display_name(&self) -> Result<String> {
-        Ok(self.schema_name().to_string())
-    }
-
     /// The name of the column (field) that this `Expr` will produce.
     ///
     /// For example, for a projection (e.g. `SELECT <expr>`) the resulting arrow
@@ -1444,15 +1438,6 @@ impl Expr {
             Box::new(high),
         ))
     }
-
-    #[deprecated(since = "39.0.0", note = "use try_as_col instead")]
-    pub fn try_into_col(&self) -> Result<Column> {
-        match self {
-            Expr::Column(it) => Ok(it.clone()),
-            _ => plan_err!("Could not coerce '{self}' into Column!"),
-        }
-    }
-
     /// Return a reference to the inner `Column` if any
     ///
     /// returns `None` if the expression is not a `Column`
@@ -1493,15 +1478,6 @@ impl Expr {
             },
             _ => None,
         }
-    }
-
-    /// Return all referenced columns of this expression.
-    #[deprecated(since = "40.0.0", note = "use Expr::column_refs instead")]
-    pub fn to_columns(&self) -> Result<HashSet<Column>> {
-        let mut using_columns = HashSet::new();
-        expr_to_columns(self, &mut using_columns)?;
-
-        Ok(using_columns)
     }
 
     /// Return all references to columns in this expression.

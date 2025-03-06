@@ -802,21 +802,6 @@ fn get_col_stats(
         .collect()
 }
 
-/// Deprecated
-/// Use [`statistics_from_parquet_meta_calc`] instead.
-/// This method was deprecated because it didn't need to be async so a new method was created
-/// that exposes a synchronous API.
-#[deprecated(
-    since = "40.0.0",
-    note = "please use `statistics_from_parquet_meta_calc` instead"
-)]
-pub async fn statistics_from_parquet_meta(
-    metadata: &ParquetMetaData,
-    table_schema: SchemaRef,
-) -> Result<Statistics> {
-    statistics_from_parquet_meta_calc(metadata, table_schema)
-}
-
 fn summarize_min_max_null_counts(
     min_accs: &mut [Option<MinAccumulator>],
     max_accs: &mut [Option<MaxAccumulator>],
