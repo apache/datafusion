@@ -425,25 +425,17 @@ impl DataSource for MemorySourceConfig {
                 }
             }
             DisplayFormatType::TreeRender => {
-                let partition_sizes: Vec<_> =
-                    self.partitions.iter().map(|b| b.len()).collect();
-                writeln!(f, "partition_sizes={:?}", partition_sizes)?;
-
-                if let Some(output_ordering) = self.sort_information.first() {
-                    writeln!(f, "output_ordering={}", output_ordering)?;
-                }
-
-                let eq_properties = self.eq_properties();
-                let constraints = eq_properties.constraints();
-                if !constraints.is_empty() {
-                    writeln!(f, "constraints={}", constraints)?;
-                }
-
-                if let Some(limit) = self.fetch {
-                    writeln!(f, "fetch={}", limit)?;
-                }
-
-                write!(f, "partitions={}", partition_sizes.len())
+                let total_rows = self.partitions.iter().map(|b| b.len()).sum::<usize>();
+                let total_bytes: usize = self
+                    .partitions
+                    .iter()
+                    .flatten()
+                    .map(|batch| batch.get_array_memory_size())
+                    .sum();
+                writeln!(f, "format=memory")?;
+                writeln!(f, "rows={total_rows}")?;
+                writeln!(f, "bytes={total_bytes}")?;
+                Ok(())
             }
         }
     }
