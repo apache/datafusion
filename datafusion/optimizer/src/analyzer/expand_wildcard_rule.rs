@@ -20,7 +20,8 @@ use std::sync::Arc;
 use crate::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult};
-use datafusion_common::{Column, Result};
+use datafusion_common::DataFusionError;
+use datafusion_common::{Column, DataFusionError::SchemaError, Result};
 use datafusion_expr::builder::validate_unique_names;
 use datafusion_expr::expr::PlannedReplaceSelectItem;
 use datafusion_expr::utils::{
@@ -86,12 +87,13 @@ fn expand_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 
 fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
     let mut projected_expr = vec![];
+    let (has_group_by, group_by_columns, aggregate_columns) = check_group_by_info(&input);
     let input = find_base_plan(input);
     for e in expr {
         match e {
             #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => {
-                if let Some(qualifier) = qualifier {
+                let expanded = if let Some(qualifier) = qualifier {
                     let expanded = expand_qualified_wildcard(
                         &qualifier,
                         input.schema(),
@@ -99,24 +101,31 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
                     )?;
                     // If there is a REPLACE statement, replace that column with the given
                     // replace expression. Column name remains the same.
-                    let replaced = if let Some(replace) = options.replace {
+                    if let Some(replace) = options.replace {
                         replace_columns(expanded, &replace)?
                     } else {
                         expanded
-                    };
-                    projected_expr.extend(replaced);
+                    }
                 } else {
                     let expanded =
                         expand_wildcard(input.schema(), input, Some(&options))?;
                     // If there is a REPLACE statement, replace that column with the given
                     // replace expression. Column name remains the same.
-                    let replaced = if let Some(replace) = options.replace {
+                    if let Some(replace) = options.replace {
                         replace_columns(expanded, &replace)?
                     } else {
                         expanded
-                    };
-                    projected_expr.extend(replaced);
-                }
+                    }
+                };
+                // check if the columns in the SELECT list are in the GROUP BY clause
+                // or are part of an aggregate function, if not, throw an error.
+                validate_columns_in_group_by_or_aggregate(
+                    has_group_by,
+                    &expanded,
+                    &group_by_columns,
+                    &aggregate_columns,
+                )?;
+                projected_expr.extend(expanded);
             }
             // A workaround to handle the case when the column name is "*".
             // We transform the expression to a Expr::Column through [Column::from_name] in many places.
@@ -128,20 +137,27 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
                 spans: _,
             }) => {
                 if name.eq("*") {
-                    if let Some(qualifier) = relation {
-                        projected_expr.extend(expand_qualified_wildcard(
-                            qualifier,
-                            input.schema(),
-                            None,
-                        )?);
+                    let expanded = if let Some(qualifier) = relation {
+                        expand_qualified_wildcard(qualifier, input.schema(), None)?
                     } else {
-                        projected_expr.extend(expand_wildcard(
-                            input.schema(),
-                            input,
-                            None,
-                        )?);
-                    }
+                        expand_wildcard(input.schema(), input, None)?
+                    };
+
+                    validate_columns_in_group_by_or_aggregate(
+                        has_group_by,
+                        &expanded,
+                        &group_by_columns,
+                        &aggregate_columns,
+                    )?;
+
+                    projected_expr.extend(expanded);
                 } else {
+                    validate_columns_in_group_by_or_aggregate(
+                        has_group_by,
+                        &vec![e.clone()],
+                        &group_by_columns,
+                        &aggregate_columns,
+                    )?;
                     projected_expr.push(e.clone());
                 }
             }
@@ -149,6 +165,73 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
         }
     }
     Ok(projected_expr)
+}
+
+/// This function is for checking if query has a GROUP BY clause
+/// If it does, extract the columns in the GROUP BY clause
+/// and the columns in the aggregate functions for future use.
+/// This function is return a tuple of three values:
+/// 1. A boolean value indicating if the query has a GROUP BY clause
+/// 2. A vector of columns in the GROUP BY clause
+/// 3. A vector of columns in the aggregate functions
+fn check_group_by_info(input: &LogicalPlan) -> (bool, Vec<Expr>, Vec<Expr>) {
+    // check if the input plan has a GROUP BY clause
+    let has_group_by = if let LogicalPlan::Aggregate(agg) = input {
+        !agg.group_expr.is_empty()
+    } else {
+        false
+    };
+    // get the columns that are in the GROUP BY clause
+    let group_by_columns = if let LogicalPlan::Aggregate(agg) = input {
+        agg.group_expr.clone()
+    } else {
+        vec![]
+    };
+    // get the columns that are in the Aggregare functions
+    let mut aggregate_columns = vec![];
+    if let LogicalPlan::Aggregate(agg) = input {
+        for expr in &agg.aggr_expr {
+            if let Expr::AggregateFunction(agg_func) = expr {
+                for arg in &agg_func.params.args {
+                    if let Expr::Column(_) = arg {
+                        aggregate_columns.push(arg.clone());
+                    }
+                }
+            } else {
+                aggregate_columns.push(expr.clone());
+            }
+        }
+    }
+
+    (has_group_by, group_by_columns, aggregate_columns)
+}
+
+/// This function is for checking if the columns in the SELECT list are
+/// in the GROUP BY clause or are part of an aggregate function.
+/// If not, throw an SchemaError::GroupByColumnInvalid and return an error.
+///
+fn validate_columns_in_group_by_or_aggregate(
+    has_group_by: bool,
+    expanded: &Vec<Expr>,
+    group_by_columns: &Vec<Expr>,
+    aggregate_columns: &Vec<Expr>,
+) -> Result<(), DataFusionError> {
+    if has_group_by {
+        for e in expanded {
+            if let Expr::Column(col) = e {
+                let name = &col.name;
+                if !group_by_columns.contains(e) && !aggregate_columns.contains(e) {
+                    return Err(SchemaError(
+                        datafusion_common::SchemaError::GroupByColumnInvalid {
+                            column: (name.clone().to_string()),
+                        },
+                        Box::new(None),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// If there is a REPLACE statement in the projected expression in the form of
@@ -177,6 +260,7 @@ fn replace_columns(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_functions_aggregate::sum::sum;
 
     use crate::test::{assert_analyzed_plan_eq_display_indent, test_table_scan};
     use crate::Analyzer;
@@ -327,6 +411,84 @@ mod tests {
         \n    TableScan: t1\
         \n    TableScan: t2";
         assert_eq!(expected, format!("{analyzed_plan}"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_wildcard_with_group_by_error_message() -> Result<()> {
+        // Create a simple schema
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int8, false),
+        ]);
+
+        // Build a plan with GROUP BY and wildcard projection
+        let plan = table_scan(Some("foo"), &schema, None)?
+            .aggregate(
+                vec![Expr::Column(Column::from_name("a"))],
+                vec![] as Vec<Expr>,
+            )? // GROUP BY a
+            .project(vec![wildcard()])? // SELECT *
+            .build()?;
+
+        // Set up the analyzer with our rule
+        let analyzer = Analyzer::with_rules(vec![Arc::new(ExpandWildcardRule::new())]);
+        let options = ConfigOptions::default();
+
+        // Run the analyzer and expect an error
+        let result = analyzer.execute_and_check(plan, &options, |_, _| {});
+
+        // Check that it fails with the right error message
+        assert!(result.is_err());
+        let error_message = result.unwrap_err().to_string();
+        println!("Actual error message: {}", &error_message);
+        let expected_msg = "expand_wildcard_rule\ncaused by\nSchema error: While expanding wildcard, column 'b' must appear in the GROUP BY clause or must be part of an aggregate function";
+        assert_eq!(
+            expected_msg, error_message,
+            "Error message didn't match. Got: {}",
+            error_message
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_columns_in_group_by_and_aggregates() -> Result<()> {
+        // Schema with multiple columns
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int8, false),
+        ]);
+
+        // Some columns in GROUP BY, others in aggregate functions
+        let plan = table_scan(Some("foo"), &schema, None)?
+            .aggregate(
+                // test group by a with sum b and max c
+                // we can use new_udf to create a custom aggregate function
+                vec![Expr::Column(Column::from_name("a"))],
+                vec![sum(col("c"))],
+            )?
+            .project(vec![wildcard()])? // SELECT *
+            .build()?;
+
+        let analyzer = Analyzer::with_rules(vec![Arc::new(ExpandWildcardRule::new())]);
+        let options = ConfigOptions::default();
+
+        // Should succeed as all columns are properly handled
+        let result = analyzer.execute_and_check(plan, &options, |_, _| {});
+        assert!(result.is_err());
+        let error_message = result.unwrap_err().to_string();
+        // Print the actual error message for debugging
+        println!("Actual error message: {}", &error_message);
+        let expected_msg = "expand_wildcard_rule\ncaused by\nSchema error: While expanding wildcard, column 'b' must appear in the GROUP BY clause or must be part of an aggregate function";
+        assert_eq!(
+            expected_msg, error_message,
+            "Error message didn't match. Got: {}",
+            error_message
+        );
 
         Ok(())
     }
