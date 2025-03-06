@@ -19,12 +19,12 @@
 use super::basic::{sha256, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    types::{logical_binary, logical_string, NativeType},
+    types::{logical_binary, logical_string},
     Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignature, Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -57,12 +57,15 @@ impl Default for SHA256Func {
 impl SHA256Func {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![Coercion::new_implicit(
-                    TypeSignatureClass::Native(logical_binary()),
-                    vec![TypeSignatureClass::Native(logical_string())],
-                    NativeType::Binary,
-                )],
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Native(logical_string()),
+                    )]),
+                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                        TypeSignatureClass::Native(logical_binary()),
+                    )]),
+                ],
                 Volatility::Immutable,
             ),
         }
