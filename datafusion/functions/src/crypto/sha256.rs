@@ -24,7 +24,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -57,12 +57,12 @@ impl Default for SHA256Func {
 impl SHA256Func {
     pub fn new() -> Self {
         Self {
-            signature: Signature::new(
-                TypeSignature::Coercible(vec![Coercion::new_implicit(
-                    TypeSignatureClass::Native(logical_string()),
-                    vec![TypeSignatureClass::Native(logical_binary())],
+            signature: Signature::coercible(
+                vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_binary()),
+                    vec![TypeSignatureClass::Native(logical_string())],
                     NativeType::Binary,
-                )]),
+                )],
                 Volatility::Immutable,
             ),
         }
