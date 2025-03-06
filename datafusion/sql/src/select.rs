@@ -332,6 +332,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     });
                 }
                 Expr::Alias(alias) => {
+                    // in `Expr::Alias`, we also need to add alias columns
+                    let expr = alias.expr.as_ref();
+                    expr_columns.extend(expr.column_refs());
+
                     let column = Column::new(alias.relation.clone(), alias.name.clone());
                     wildcard_columns.push(column);
                 }
