@@ -4682,13 +4682,13 @@ digraph {
 
         {
             let join = create_test_join(vec![(col("t1.a"), (col("t2.a")))], None);
-            let join = join
+            let LogicalPlan::Join(join) = join
                 .with_new_exprs(
                     join.expressions(),
                     join.inputs().into_iter().map(|x| x.clone()).collect(),
                 )
-                .unwrap();
-            let LogicalPlan::Join(join) = join else {
+                .unwrap()
+            else {
                 unreachable!()
             };
             assert_eq!(join.on, vec![(col("t1.a"), (col("t2.a")))]);
@@ -4697,13 +4697,13 @@ digraph {
 
         {
             let join = create_test_join(vec![], Some(col("t1.a").gt(col("t2.a"))));
-            let join = join
+            let LogicalPlan::Join(join) = join
                 .with_new_exprs(
                     join.expressions(),
                     join.inputs().into_iter().map(|x| x.clone()).collect(),
                 )
-                .unwrap();
-            let LogicalPlan::Join(join) = join else {
+                .unwrap()
+            else {
                 unreachable!()
             };
             assert_eq!(join.on, vec![]);
@@ -4715,13 +4715,13 @@ digraph {
                 vec![(col("t1.a"), (col("t2.a")))],
                 Some(col("t1.b").gt(col("t2.b"))),
             );
-            let join = join
+            let LogicalPlan::Join(join) = join
                 .with_new_exprs(
                     join.expressions(),
                     join.inputs().into_iter().map(|x| x.clone()).collect(),
                 )
-                .unwrap();
-            let LogicalPlan::Join(join) = join else {
+                .unwrap()
+            else {
                 unreachable!()
             };
             assert_eq!(join.on, vec![(col("t1.a"), (col("t2.a")))]);
@@ -4733,7 +4733,7 @@ digraph {
                 vec![(col("t1.a"), (col("t2.a"))), (col("t1.b"), (col("t2.b")))],
                 None,
             );
-            let join = join
+            let LogicalPlan::Join(join) = join
                 .with_new_exprs(
                     vec![
                         col("t1.a").eq(col("t2.a")),
@@ -4743,8 +4743,8 @@ digraph {
                     ],
                     join.inputs().into_iter().map(|x| x.clone()).collect(),
                 )
-                .unwrap();
-            let LogicalPlan::Join(join) = join else {
+                .unwrap()
+            else {
                 unreachable!()
             };
             assert_eq!(
