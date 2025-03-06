@@ -62,8 +62,7 @@ impl OptimizerRule for SimplifyExpressions {
         true
     }
 
-    /// if supports_owned returns true, the Optimizer calls
-    /// [`Self::rewrite`] instead of [`Self::try_optimize`]
+    /// if supports_owned returns true, the Optimizer calls [`Self::rewrite`]
     fn rewrite(
         &self,
         plan: LogicalPlan,

@@ -69,24 +69,6 @@ use crate::utils::log_plan;
 /// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
 /// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_optimizer_rule
 pub trait OptimizerRule: Debug {
-    /// Try and rewrite `plan` to an optimized form, returning None if the plan
-    /// cannot be optimized by this rule.
-    ///
-    /// Note this API will be deprecated in the future as it requires `clone`ing
-    /// the input plan, which can be expensive. OptimizerRules should implement
-    /// [`Self::rewrite`] instead.
-    #[deprecated(
-        since = "40.0.0",
-        note = "please implement supports_rewrite and rewrite instead"
-    )]
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called rewrite")
-    }
-
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
 
@@ -107,7 +89,7 @@ pub trait OptimizerRule: Debug {
     /// if the plan was rewritten and `Transformed::no` if it was not.
     ///
     /// Note: this function is only called if [`Self::supports_rewrite`] returns
-    /// true. Otherwise the Optimizer calls  [`Self::try_optimize`]
+    /// true.
     fn rewrite(
         &self,
         _plan: LogicalPlan,
@@ -326,19 +308,10 @@ fn optimize_plan_node(
     config: &dyn OptimizerConfig,
 ) -> Result<Transformed<LogicalPlan>> {
     if rule.supports_rewrite() {
-        return rule.rewrite(plan, config);
+        rule.rewrite(plan, config)
+    } else {
+        Ok(Transformed::no(plan))
     }
-
-    #[allow(deprecated)]
-    rule.try_optimize(&plan, config).map(|maybe_plan| {
-        match maybe_plan {
-            Some(new_plan) => {
-                // if the node was rewritten by the optimizer, replace the node
-                Transformed::yes(new_plan)
-            }
-            None => Transformed::no(plan),
-        }
-    })
 }
 
 impl Optimizer {
