@@ -92,7 +92,7 @@ impl AggregateExprBuilder {
     }
 
     /// Constructs an `AggregateFunctionExpr` from the builder
-    /// 
+    ///
     /// Note that an [`Self::alias`] must be provided before calling this method.
     pub fn build(self) -> Result<AggregateFunctionExpr> {
         let Self {
@@ -202,7 +202,7 @@ impl AggregateExprBuilder {
 }
 
 /// Physical aggregate expression of a UDAF.
-/// 
+///
 /// Instances are constructed via [`AggregateExprBuilder`].
 #[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
