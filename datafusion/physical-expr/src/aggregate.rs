@@ -91,6 +91,9 @@ impl AggregateExprBuilder {
         }
     }
 
+    /// Constructs an `AggregateFunctionExpr` from the builder
+    /// 
+    /// Note that an [`Self::alias`] must be provided before calling this method.
     pub fn build(self) -> Result<AggregateFunctionExpr> {
         let Self {
             fun,
