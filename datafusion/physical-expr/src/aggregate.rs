@@ -134,10 +134,13 @@ impl AggregateExprBuilder {
 
         let data_type = fun.return_type(&input_exprs_types)?;
         let is_nullable = fun.is_nullable();
-        let name = match alias {
-            None => return internal_err!("alias should be provided"),
-            Some(alias) => alias,
-        };
+        let name =
+            match alias {
+                None => return internal_err!(
+                    "AggregateExprBuilder::alias must be provided prior to calling build"
+                ),
+                Some(alias) => alias,
+            };
 
         Ok(AggregateFunctionExpr {
             fun: Arc::unwrap_or_clone(fun),
