@@ -270,8 +270,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// overhead-heavy syscall needed to take the time) or by counting rows
     /// or batches.
     ///
-    /// Progress towards this goal is tracked partially by the cancellation
-    /// benchmark.
+    /// The cancellation benchmark tracks some cases of how quickly queries can
+    /// be cancelled.
     ///
     /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
     /// for structures to help ensure all background tasks are cancelled.
