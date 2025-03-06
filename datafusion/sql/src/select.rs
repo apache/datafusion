@@ -894,6 +894,9 @@ fn match_window_definitions(
     projection: &mut [SelectItem],
     named_windows: &[NamedWindowDefinition],
 ) -> Result<()> {
+    if named_windows.is_empty() {
+        return Ok(());
+    }
     for proj in projection.iter_mut() {
         if let SelectItem::ExprWithAlias { expr, alias: _ }
         | SelectItem::UnnamedExpr(expr) = proj
