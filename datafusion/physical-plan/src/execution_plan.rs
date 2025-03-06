@@ -261,7 +261,7 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Thus, [`spawn`] is disallowed, and instead use [`SpawnedTask`].
     ///
     /// To enable timely cancellation, the [`Stream`] that is returned must not
-    /// pin the CPU and must yield back to the tokio runtime regularly.
+    /// block the CPU and must yield back to the tokio runtime regularly.
     /// [`ExecutionPlan`] implementations should follow [the guideline of not
     /// spending a long time without reaching an `await`/yield point][async-guideline].
     /// This can be achieved by manually returning [`Poll::Pending`] in regular
