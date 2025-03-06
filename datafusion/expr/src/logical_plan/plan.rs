@@ -4685,7 +4685,7 @@ digraph {
             let LogicalPlan::Join(join) = join
                 .with_new_exprs(
                     join.expressions(),
-                    join.inputs().into_iter().map(|x| x.clone()).collect(),
+                    join.inputs().into_iter().cloned().collect(),
                 )
                 .unwrap()
             else {
@@ -4700,7 +4700,7 @@ digraph {
             let LogicalPlan::Join(join) = join
                 .with_new_exprs(
                     join.expressions(),
-                    join.inputs().into_iter().map(|x| x.clone()).collect(),
+                    join.inputs().into_iter().cloned().collect(),
                 )
                 .unwrap()
             else {
@@ -4718,7 +4718,7 @@ digraph {
             let LogicalPlan::Join(join) = join
                 .with_new_exprs(
                     join.expressions(),
-                    join.inputs().into_iter().map(|x| x.clone()).collect(),
+                    join.inputs().into_iter().cloned().collect(),
                 )
                 .unwrap()
             else {
@@ -4741,7 +4741,7 @@ digraph {
                         col("t2.b"),
                         lit(true),
                     ],
-                    join.inputs().into_iter().map(|x| x.clone()).collect(),
+                    join.inputs().into_iter().cloned().collect(),
                 )
                 .unwrap()
             else {
@@ -4761,7 +4761,7 @@ digraph {
             );
             let res = join.with_new_exprs(
                 vec![col("t1.a").eq(col("t2.a")), col("t1.b")],
-                join.inputs().into_iter().map(|x| x.clone()).collect(),
+                join.inputs().into_iter().cloned().collect(),
             );
             assert!(res.is_err());
         }
