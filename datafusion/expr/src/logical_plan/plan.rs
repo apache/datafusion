@@ -4647,7 +4647,7 @@ digraph {
     }
 
     #[test]
-    fn test_join_with_new_exprs() -> Result<()> {
+    fn test_join_with_new_exprs() {
         fn create_test_join(on: Vec<(Expr, Expr)>, filter: Option<Expr>) -> LogicalPlan {
             let schema = Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
@@ -4765,7 +4765,5 @@ digraph {
             );
             assert!(res.is_err());
         }
-
-        Ok(())
     }
 }
