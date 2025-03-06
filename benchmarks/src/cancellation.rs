@@ -47,6 +47,9 @@ use tokio_util::sync::CancellationToken;
 
 /// Test performance of cancelling queries
 ///
+/// Queries in DataFusion should stop executing "quickly" after they are
+/// cancelled (the output stream is dropped).
+///
 /// The queries are executed on a synthetic dataset generated during
 /// the benchmark execution that is an anonymized version of a
 /// real-world data set.
