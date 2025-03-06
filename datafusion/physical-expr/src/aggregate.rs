@@ -199,6 +199,8 @@ impl AggregateExprBuilder {
 }
 
 /// Physical aggregate expression of a UDAF.
+/// 
+/// Instances are constructed via [`AggregateExprBuilder`].
 #[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
