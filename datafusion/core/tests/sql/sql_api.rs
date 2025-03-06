@@ -33,7 +33,6 @@ async fn test_window_function() {
         w AS (ORDER BY t1.v1 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW);"#,
         )
         .await;
-    println!("{:?}", df);
     assert!(df.is_ok());
 }
 
