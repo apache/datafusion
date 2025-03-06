@@ -166,6 +166,7 @@ impl ScalarUDFImpl for ArrayElement {
             List(field)
             | LargeList(field)
             | FixedSizeList(field, _) => Ok(field.data_type().clone()),
+            DataType::Null => Ok(List(Arc::new(Field::new_list_field(DataType::Int64, true)))),
             _ => plan_err!(
                 "ArrayElement can only accept List, LargeList or FixedSizeList as the first argument"
             ),
