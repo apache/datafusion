@@ -265,10 +265,10 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`ExecutionPlan`] implementations should follow [the guideline of not
     /// spending a long time without reaching an `await`/yield point][async-guideline].
     /// This can be achieved by manually returning [`Poll::Pending`] in regular
-    /// intervals, or the use of [`tokio::task::yield_now()`]. Determination
-    /// for "regularly" may be made using a timer (being careful with the
-    /// overhead-heavy syscall needed to take the time) or by counting rows
-    /// or batches.
+    /// intervals, or the use of [`tokio::task::yield_now()`] (as appropriate).
+    /// Determination for "regularly" may be made using a timer (being careful
+    /// with the  overhead-heavy syscall needed to take the time) or by
+    /// counting rows or batches.
     ///
     /// The cancellation benchmark tracks some cases of how quickly queries can
     /// be cancelled.
