@@ -23,8 +23,6 @@ use std::fmt::Formatter;
 use std::{fmt, str::FromStr};
 
 use arrow::datatypes::SchemaRef;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 use datafusion_common::DataFusionError;
@@ -894,6 +892,11 @@ impl TreeRenderVisitor<'_, '_> {
             for split in splits {
                 Self::split_string_buffer(&split, result);
             }
+            if result.len() > max_lines {
+                result.truncate(max_lines);
+                result.push("...".to_string());
+            }
+
             requires_padding = true;
             was_inlined = is_inlined;
         }
@@ -953,14 +956,14 @@ impl TreeRenderVisitor<'_, '_> {
         let mut render_width = 0;
         let mut last_possible_split = 0;
 
-        // Get grapheme clusters iterator
-        let graphemes: Vec<&str> = source.graphemes(true).collect();
+        let chars: Vec<char> = source.chars().collect();
 
-        while character_pos < graphemes.len() {
-            let char_render_width = graphemes[character_pos].width();
+        while character_pos < chars.len() {
+            // Treating each char as width 1 for simplification
+            let char_width = 1;
 
             // Does the next character make us exceed the line length?
-            if render_width + char_render_width > Self::NODE_RENDER_WIDTH - 2 {
+            if render_width + char_width > Self::NODE_RENDER_WIDTH - 2 {
                 if start_pos + 8 > last_possible_split {
                     // The last character we can split on is one of the first 8 characters of the line
                     // to not create very small lines we instead split on the current character
@@ -974,14 +977,12 @@ impl TreeRenderVisitor<'_, '_> {
             }
 
             // check if we can split on this character
-            if Self::can_split_on_this_char(
-                graphemes[character_pos].chars().next().unwrap(),
-            ) {
+            if Self::can_split_on_this_char(chars[character_pos]) {
                 last_possible_split = character_pos;
             }
 
             character_pos += 1;
-            render_width += char_render_width;
+            render_width += char_width;
         }
 
         if source.len() > start_pos {
