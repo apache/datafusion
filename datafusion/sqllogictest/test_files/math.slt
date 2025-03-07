@@ -623,12 +623,12 @@ select
 1 1 1
 
 # gcd with columns and expresions
-query II rowsort
+query II
 select gcd(a, b), gcd(c*d + 1, abs(e)) + f from signed_integers;
 ----
 1 11
-1 13
 2 -10
+1 13
 NULL NULL
 
 # gcd(i64::MIN, i64::MIN)

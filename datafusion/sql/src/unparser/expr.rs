@@ -429,6 +429,7 @@ impl Unparser<'_> {
                 })
             }
             // TODO: unparsing wildcard addition options
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, .. } => {
                 let attached_token = AttachedToken::empty();
                 if let Some(qualifier) = qualifier {
@@ -729,6 +730,7 @@ impl Unparser<'_> {
     ) -> Result<Vec<ast::FunctionArg>> {
         args.iter()
             .map(|e| {
+                #[expect(deprecated)]
                 if matches!(
                     e,
                     Expr::Wildcard {
@@ -946,8 +948,8 @@ impl Unparser<'_> {
             Operator::BitwiseShiftRight => Ok(BinaryOperator::PGBitwiseShiftRight),
             Operator::BitwiseShiftLeft => Ok(BinaryOperator::PGBitwiseShiftLeft),
             Operator::StringConcat => Ok(BinaryOperator::StringConcat),
-            Operator::AtArrow => not_impl_err!("unsupported operation: {op:?}"),
-            Operator::ArrowAt => not_impl_err!("unsupported operation: {op:?}"),
+            Operator::AtArrow => Ok(BinaryOperator::AtArrow),
+            Operator::ArrowAt => Ok(BinaryOperator::ArrowAt),
         }
     }
 
@@ -1585,9 +1587,7 @@ impl Unparser<'_> {
             DataType::Duration(_) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Interval(_) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
+            DataType::Interval(_) => Ok(ast::DataType::Interval),
             DataType::Binary => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
@@ -1624,9 +1624,7 @@ impl Unparser<'_> {
             DataType::Union(_, _) => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
             }
-            DataType::Dictionary(_, _) => {
-                not_impl_err!("Unsupported DataType: conversion: {data_type:?}")
-            }
+            DataType::Dictionary(_, val) => self.arrow_dtype_to_ast_dtype(val),
             DataType::Decimal128(precision, scale)
             | DataType::Decimal256(precision, scale) => {
                 let mut new_precision = *precision as u64;
@@ -1719,6 +1717,7 @@ mod tests {
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
         let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        #[expect(deprecated)]
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
             .project(vec![Expr::Wildcard {
                 qualifier: None,
@@ -2113,6 +2112,22 @@ mod tests {
                     )]),
                 ))),
                 "[1, 2, 3]",
+            ),
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col("a")),
+                    op: Operator::ArrowAt,
+                    right: Box::new(col("b")),
+                }),
+                "(a <@ b)",
+            ),
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col("a")),
+                    op: Operator::AtArrow,
+                    right: Box::new(col("b")),
+                }),
+                "(a @> b)",
             ),
         ];
 
@@ -2801,6 +2816,22 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_dictionary_to_sql() -> Result<()> {
+        let dialect = CustomDialectBuilder::new().build();
+
+        let unparser = Unparser::new(&dialect);
+
+        let ast_dtype = unparser.arrow_dtype_to_ast_dtype(&DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Utf8),
+        ))?;
+
+        assert_eq!(ast_dtype, ast::DataType::Varchar(None));
+
         Ok(())
     }
 

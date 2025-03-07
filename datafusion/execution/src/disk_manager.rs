@@ -250,7 +250,8 @@ mod tests {
 
     #[test]
     fn test_disk_manager_create_spill_folder() {
-        let config = DiskManagerConfig::new_specified(vec!["DOESNT_EXIST".into()]);
+        let dir = TempDir::new().unwrap();
+        let config = DiskManagerConfig::new_specified(vec![dir.path().to_owned()]);
 
         DiskManager::try_new(config)
             .unwrap()

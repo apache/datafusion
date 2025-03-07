@@ -26,6 +26,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
     assert_batches_sorted_eq,
     datasource::{
@@ -43,7 +44,6 @@ use datafusion_common::ScalarValue;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::{col, lit, Expr, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
-use datafusion_physical_plan::source::DataSourceExec;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -85,9 +85,12 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
         Expr::gt(col("id"), lit(1)),
     ];
     let exec = table.scan(&ctx.state(), None, &filters, None).await?;
-    let data_source = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
-    let source = data_source.source();
-    let file_source = source.as_any().downcast_ref::<FileScanConfig>().unwrap();
+    let data_source_exec = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source = data_source_exec.data_source();
+    let file_source = data_source
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap();
     let parquet_config = file_source
         .file_source()
         .as_any()

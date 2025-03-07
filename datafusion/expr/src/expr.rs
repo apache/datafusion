@@ -25,7 +25,6 @@ use std::sync::Arc;
 
 use crate::expr_fn::binary_expr;
 use crate::logical_plan::Subquery;
-use crate::utils::expr_to_columns;
 use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
@@ -35,7 +34,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    plan_err, Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
+    Column, DFSchema, HashMap, Result, ScalarValue, Spans, TableReference,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use sqlparser::ast::{
@@ -311,6 +310,10 @@ pub enum Expr {
     ///
     /// This expr has to be resolved to a list of columns before translating logical
     /// plan into physical plan.
+    #[deprecated(
+        since = "46.0.0",
+        note = "A wildcard needs to be resolved to concrete expressions when constructing the logical plan. See https://github.com/apache/datafusion/issues/7765"
+    )]
     Wildcard {
         qualifier: Option<TableReference>,
         options: Box<WildcardOptions>,
@@ -1099,11 +1102,6 @@ impl PlannedReplaceSelectItem {
 }
 
 impl Expr {
-    #[deprecated(since = "40.0.0", note = "use schema_name instead")]
-    pub fn display_name(&self) -> Result<String> {
-        Ok(self.schema_name().to_string())
-    }
-
     /// The name of the column (field) that this `Expr` will produce.
     ///
     /// For example, for a projection (e.g. `SELECT <expr>`) the resulting arrow
@@ -1188,6 +1186,7 @@ impl Expr {
             Expr::ScalarVariable(..) => "ScalarVariable",
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => "Wildcard",
             Expr::Unnest { .. } => "Unnest",
         }
@@ -1472,15 +1471,6 @@ impl Expr {
             Box::new(high),
         ))
     }
-
-    #[deprecated(since = "39.0.0", note = "use try_as_col instead")]
-    pub fn try_into_col(&self) -> Result<Column> {
-        match self {
-            Expr::Column(it) => Ok(it.clone()),
-            _ => plan_err!("Could not coerce '{self}' into Column!"),
-        }
-    }
-
     /// Return a reference to the inner `Column` if any
     ///
     /// returns `None` if the expression is not a `Column`
@@ -1521,15 +1511,6 @@ impl Expr {
             },
             _ => None,
         }
-    }
-
-    /// Return all referenced columns of this expression.
-    #[deprecated(since = "40.0.0", note = "use Expr::column_refs instead")]
-    pub fn to_columns(&self) -> Result<HashSet<Column>> {
-        let mut using_columns = HashSet::new();
-        expr_to_columns(self, &mut using_columns)?;
-
-        Ok(using_columns)
     }
 
     /// Return all references to columns in this expression.
@@ -1681,6 +1662,8 @@ impl Expr {
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
             Expr::AggregateFunction(..)
             | Expr::Alias(..)
             | Expr::Between(..)
@@ -2262,6 +2245,7 @@ impl HashNode for Expr {
             Expr::ScalarSubquery(subquery) => {
                 subquery.hash(state);
             }
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => {
                 qualifier.hash(state);
                 options.hash(state);
@@ -2321,13 +2305,14 @@ impl Display for SchemaDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
             // The same as Display
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
             Expr::Column(_)
             | Expr::Literal(_)
             | Expr::ScalarVariable(..)
             | Expr::OuterReferenceColumn(..)
             | Expr::Placeholder(_)
             | Expr::Wildcard { .. } => write!(f, "{}", self.0),
-
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.schema_name(params) {
                     Ok(name) => {
@@ -2792,6 +2777,7 @@ impl Display for Expr {
                     write!(f, "{expr} IN ([{}])", expr_vec_fmt!(list))
                 }
             }
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => match qualifier {
                 Some(qualifier) => write!(f, "{qualifier}.*{options}"),
                 None => write!(f, "*{options}"),

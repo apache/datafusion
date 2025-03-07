@@ -38,7 +38,7 @@ use datafusion_expr::{
 use std::any::Any;
 use std::fmt::Debug;
 use std::mem::size_of_val;
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 macro_rules! make_regr_udaf_expr_and_func {
     ($EXPR_FN:ident, $AGGREGATE_UDF_FN:ident, $REGR_TYPE:expr) => {
@@ -132,11 +132,9 @@ impl RegrType {
     }
 }
 
-static DOCUMENTATION: OnceLock<HashMap<RegrType, Documentation>> = OnceLock::new();
-fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
-    DOCUMENTATION.get_or_init(|| {
-        let mut hash_map = HashMap::new();
-        hash_map.insert(
+static DOCUMENTATION: LazyLock<HashMap<RegrType, Documentation>> = LazyLock::new(|| {
+    let mut hash_map = HashMap::new();
+    hash_map.insert(
             RegrType::Slope,
             Documentation::builder(
                 DOC_SECTION_STATISTICAL,
@@ -149,7 +147,7 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .build()
         );
 
-        hash_map.insert(
+    hash_map.insert(
             RegrType::Intercept,
             Documentation::builder(
                 DOC_SECTION_STATISTICAL,
@@ -162,19 +160,19 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .build()
         );
 
-        hash_map.insert(
-            RegrType::Count,
-            Documentation::builder(
-                DOC_SECTION_STATISTICAL,
-                    "Counts the number of non-null paired data points.",
+    hash_map.insert(
+        RegrType::Count,
+        Documentation::builder(
+            DOC_SECTION_STATISTICAL,
+            "Counts the number of non-null paired data points.",
+            "regr_count(expression_y, expression_x)",
+        )
+        .with_standard_argument("expression_y", Some("Dependent variable"))
+        .with_standard_argument("expression_x", Some("Independent variable"))
+        .build(),
+    );
 
-                "regr_count(expression_y, expression_x)")
-                .with_standard_argument("expression_y", Some("Dependent variable"))
-                .with_standard_argument("expression_x", Some("Independent variable"))
-                .build()
-        );
-
-        hash_map.insert(
+    hash_map.insert(
             RegrType::R2,
             Documentation::builder(
                 DOC_SECTION_STATISTICAL,
@@ -186,7 +184,7 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .build()
         );
 
-        hash_map.insert(
+    hash_map.insert(
             RegrType::AvgX,
             Documentation::builder(
                 DOC_SECTION_STATISTICAL,
@@ -198,7 +196,7 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .build()
         );
 
-        hash_map.insert(
+    hash_map.insert(
             RegrType::AvgY,
             Documentation::builder(
                 DOC_SECTION_STATISTICAL,
@@ -210,43 +208,45 @@ fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
                 .build()
         );
 
-        hash_map.insert(
-            RegrType::SXX,
-            Documentation::builder(
-                DOC_SECTION_STATISTICAL,
-                    "Computes the sum of squares of the independent variable.",
+    hash_map.insert(
+        RegrType::SXX,
+        Documentation::builder(
+            DOC_SECTION_STATISTICAL,
+            "Computes the sum of squares of the independent variable.",
+            "regr_sxx(expression_y, expression_x)",
+        )
+        .with_standard_argument("expression_y", Some("Dependent variable"))
+        .with_standard_argument("expression_x", Some("Independent variable"))
+        .build(),
+    );
 
-                "regr_sxx(expression_y, expression_x)")
-                .with_standard_argument("expression_y", Some("Dependent variable"))
-                .with_standard_argument("expression_x", Some("Independent variable"))
-                .build()
-        );
+    hash_map.insert(
+        RegrType::SYY,
+        Documentation::builder(
+            DOC_SECTION_STATISTICAL,
+            "Computes the sum of squares of the dependent variable.",
+            "regr_syy(expression_y, expression_x)",
+        )
+        .with_standard_argument("expression_y", Some("Dependent variable"))
+        .with_standard_argument("expression_x", Some("Independent variable"))
+        .build(),
+    );
 
-        hash_map.insert(
-            RegrType::SYY,
-            Documentation::builder(
-                DOC_SECTION_STATISTICAL,
-                    "Computes the sum of squares of the dependent variable.",
-
-                "regr_syy(expression_y, expression_x)")
-                .with_standard_argument("expression_y", Some("Dependent variable"))
-                .with_standard_argument("expression_x", Some("Independent variable"))
-                .build()
-        );
-
-        hash_map.insert(
-            RegrType::SXY,
-            Documentation::builder(
-                DOC_SECTION_STATISTICAL,
-                    "Computes the sum of products of paired data points.",
-
-                "regr_sxy(expression_y, expression_x)")
-                .with_standard_argument("expression_y", Some("Dependent variable"))
-                .with_standard_argument("expression_x", Some("Independent variable"))
-                .build()
-        );
-        hash_map
-    })
+    hash_map.insert(
+        RegrType::SXY,
+        Documentation::builder(
+            DOC_SECTION_STATISTICAL,
+            "Computes the sum of products of paired data points.",
+            "regr_sxy(expression_y, expression_x)",
+        )
+        .with_standard_argument("expression_y", Some("Dependent variable"))
+        .with_standard_argument("expression_x", Some("Independent variable"))
+        .build(),
+    );
+    hash_map
+});
+fn get_regr_docs() -> &'static HashMap<RegrType, Documentation> {
+    &DOCUMENTATION
 }
 
 impl AggregateUDFImpl for Regr {

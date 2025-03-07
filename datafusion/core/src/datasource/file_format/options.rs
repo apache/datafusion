@@ -19,16 +19,17 @@
 
 use std::sync::Arc;
 
-use crate::datasource::file_format::arrow::ArrowFormat;
-use crate::datasource::file_format::file_compression_type::FileCompressionType;
+#[cfg(feature = "avro")]
+use crate::datasource::file_format::avro::AvroFormat;
+
 #[cfg(feature = "parquet")]
 use crate::datasource::file_format::parquet::ParquetFormat;
+
+use crate::datasource::file_format::arrow::ArrowFormat;
+use crate::datasource::file_format::file_compression_type::FileCompressionType;
 use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::listing::ListingTableUrl;
-use crate::datasource::{
-    file_format::{avro::AvroFormat, csv::CsvFormat, json::JsonFormat},
-    listing::ListingOptions,
-};
+use crate::datasource::{file_format::csv::CsvFormat, listing::ListingOptions};
 use crate::error::Result;
 use crate::execution::context::{SessionConfig, SessionState};
 
@@ -40,6 +41,7 @@ use datafusion_common::{
 };
 
 use async_trait::async_trait;
+use datafusion_datasource_json::file_format::JsonFormat;
 use datafusion_expr::SortExpr;
 
 /// Options that control the reading of CSV files.
@@ -629,6 +631,7 @@ impl ReadOptions<'_> for NdJsonReadOptions<'_> {
     }
 }
 
+#[cfg(feature = "avro")]
 #[async_trait]
 impl ReadOptions<'_> for AvroReadOptions<'_> {
     fn to_listing_options(

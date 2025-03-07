@@ -100,6 +100,7 @@ impl fmt::Display for AggregateUDF {
 }
 
 /// Arguments passed to [`AggregateUDFImpl::value_from_stats`]
+#[derive(Debug)]
 pub struct StatisticsArgs<'a> {
     /// The statistics of the aggregate input
     pub statistics: &'a Statistics,
@@ -338,7 +339,7 @@ where
 /// # Basic Example
 /// ```
 /// # use std::any::Any;
-/// # use std::sync::OnceLock;
+/// # use std::sync::LazyLock;
 /// # use arrow::datatypes::DataType;
 /// # use datafusion_common::{DataFusionError, plan_err, Result};
 /// # use datafusion_expr::{col, ColumnarValue, Signature, Volatility, Expr, Documentation};
@@ -360,14 +361,14 @@ where
 ///   }
 /// }
 ///
-/// static DOCUMENTATION: OnceLock<Documentation> = OnceLock::new();
-///
-/// fn get_doc() -> &'static Documentation {
-///     DOCUMENTATION.get_or_init(|| {
+/// static DOCUMENTATION: LazyLock<Documentation> = LazyLock::new(|| {
 ///         Documentation::builder(DOC_SECTION_AGGREGATE, "calculates a geometric mean", "geo_mean(2.0)")
 ///             .with_argument("arg1", "The Float64 number for the geometric mean")
 ///             .build()
-///     })
+///     });
+///
+/// fn get_doc() -> &'static Documentation {
+///     &DOCUMENTATION
 /// }
 ///    
 /// /// Implement the AggregateUDFImpl trait for GeoMeanUdf
@@ -515,9 +516,9 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
             null_treatment,
         } = params;
 
-        let mut schema_name = String::new();
+        let mut display_name = String::new();
 
-        schema_name.write_fmt(format_args!(
+        display_name.write_fmt(format_args!(
             "{}({}{})",
             self.name(),
             if *distinct { "DISTINCT " } else { "" },
@@ -525,17 +526,22 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         ))?;
 
         if let Some(nt) = null_treatment {
-            schema_name.write_fmt(format_args!(" {}", nt))?;
+            display_name.write_fmt(format_args!(" {}", nt))?;
         }
         if let Some(fe) = filter {
-            schema_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
+            display_name.write_fmt(format_args!(" FILTER (WHERE {fe})"))?;
         }
-        if let Some(order_by) = order_by {
-            schema_name
-                .write_fmt(format_args!(" ORDER BY [{}]", expr_vec_fmt!(order_by)))?;
+        if let Some(ob) = order_by {
+            display_name.write_fmt(format_args!(
+                " ORDER BY [{}]",
+                ob.iter()
+                    .map(|o| format!("{o}"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ))?;
         }
 
-        Ok(schema_name)
+        Ok(display_name)
     }
 
     /// Returns the user-defined display name of function, given the arguments

@@ -329,6 +329,9 @@ impl DisplayAs for FilterExec {
                 };
                 write!(f, "FilterExec: {}{}", self.predicate, display_projections)
             }
+            DisplayFormatType::TreeRender => {
+                write!(f, "predicate={}", self.predicate)
+            }
         }
     }
 }
@@ -624,7 +627,6 @@ mod tests {
     use crate::expressions::*;
     use crate::test;
     use crate::test::exec::StatisticsExec;
-
     use arrow::datatypes::{Field, Schema, UnionFields, UnionMode};
     use datafusion_common::ScalarValue;
 

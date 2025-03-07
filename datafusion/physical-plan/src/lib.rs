@@ -15,8 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 // Make cheap clones clear: https://github.com/apache/datafusion/issues/11143
-
 #![deny(clippy::clone_on_ref_ptr)]
 
 //! Traits for physical query plan, supporting parallel execution for partitioned relations.
@@ -47,6 +51,7 @@ pub use crate::topk::TopK;
 pub use crate::visitor::{accept, visit_execution_plan, ExecutionPlanVisitor};
 
 mod ordering;
+mod render_tree;
 mod topk;
 mod visitor;
 
@@ -79,13 +84,11 @@ pub mod unnest;
 pub mod values;
 pub mod windows;
 pub mod work_table;
-
 pub mod udaf {
     pub use datafusion_expr::StatisticsArgs;
     pub use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 }
 
 pub mod coalesce;
-pub mod source;
 #[cfg(test)]
 pub mod test;

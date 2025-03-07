@@ -2057,3 +2057,16 @@ select 1 where null between null and 2;
 query T
 select 'A' where null between 2 and null;
 ----
+
+### Demonstrate use of E literals for escaping
+# should not have literal tab
+query T
+select 'foo\t\tbar';
+----
+foo\t\tbar
+
+# should have literal tab
+query T
+select E'foo\t\tbar';
+----
+foo		bar

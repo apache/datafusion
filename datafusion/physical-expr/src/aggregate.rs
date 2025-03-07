@@ -91,6 +91,9 @@ impl AggregateExprBuilder {
         }
     }
 
+    /// Constructs an `AggregateFunctionExpr` from the builder
+    ///
+    /// Note that an [`Self::alias`] must be provided before calling this method.
     pub fn build(self) -> Result<AggregateFunctionExpr> {
         let Self {
             fun,
@@ -132,7 +135,11 @@ impl AggregateExprBuilder {
         let data_type = fun.return_type(&input_exprs_types)?;
         let is_nullable = fun.is_nullable();
         let name = match alias {
-            None => return internal_err!("alias should be provided"),
+            None => {
+                return internal_err!(
+                    "AggregateExprBuilder::alias must be provided prior to calling build"
+                )
+            }
             Some(alias) => alias,
         };
 
@@ -199,6 +206,8 @@ impl AggregateExprBuilder {
 }
 
 /// Physical aggregate expression of a UDAF.
+///
+/// Instances are constructed via [`AggregateExprBuilder`].
 #[derive(Debug, Clone)]
 pub struct AggregateFunctionExpr {
     fun: AggregateUDF,
