@@ -286,7 +286,9 @@ impl TreeNodeRewriter for Rewriter<'_> {
 
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         if self.apply_order == ApplyOrder::TopDown {
-            optimize_plan_node(node, self.rule, self.config)
+            {
+                self.rule.rewrite(node, self.config)
+            }
         } else {
             Ok(Transformed::no(node))
         }
@@ -294,23 +296,12 @@ impl TreeNodeRewriter for Rewriter<'_> {
 
     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         if self.apply_order == ApplyOrder::BottomUp {
-            optimize_plan_node(node, self.rule, self.config)
+            {
+                self.rule.rewrite(node, self.config)
+            }
         } else {
             Ok(Transformed::no(node))
         }
-    }
-}
-
-/// Invokes the Optimizer rule to rewrite the LogicalPlan in place.
-fn optimize_plan_node(
-    plan: LogicalPlan,
-    rule: &dyn OptimizerRule,
-    config: &dyn OptimizerConfig,
-) -> Result<Transformed<LogicalPlan>> {
-    if rule.supports_rewrite() {
-        rule.rewrite(plan, config)
-    } else {
-        Ok(Transformed::no(plan))
     }
 }
 
@@ -359,7 +350,9 @@ impl Optimizer {
                         &mut Rewriter::new(apply_order, rule.as_ref(), config),
                     ),
                     // rule handles recursion itself
-                    None => optimize_plan_node(new_plan, rule.as_ref(), config),
+                    None => {
+                        rule.rewrite(new_plan, config)
+                    },
                 }
                 .and_then(|tnr| {
                     // run checks optimizer invariant checks, per optimizer rule applied
