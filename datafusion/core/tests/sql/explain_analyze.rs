@@ -355,7 +355,8 @@ async fn csv_explain_verbose() {
 async fn csv_explain_inlist_verbose() {
     let ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&ctx).await;
-    let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 in (1,2,4)";
+    // Inlist len <=3 case will be transformed to OR List so we test with len=4
+    let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 in (1,2,4,5)";
     let actual = execute(&ctx, sql).await;
 
     // Optimized by PreCastLitInComparisonExpressions rule
@@ -368,12 +369,12 @@ async fn csv_explain_inlist_verbose() {
     // before optimization (Int64 literals)
     assert_contains!(
         &actual,
-        "aggregate_test_100.c2 IN ([Int64(1), Int64(2), Int64(4)])"
+        "aggregate_test_100.c2 IN ([Int64(1), Int64(2), Int64(4), Int64(5)])"
     );
     // after optimization (casted to Int8)
     assert_contains!(
         &actual,
-        "aggregate_test_100.c2 IN ([Int8(1), Int8(2), Int8(4)])"
+        "aggregate_test_100.c2 IN ([Int8(1), Int8(2), Int8(4), Int8(5)])"
     );
 }
 

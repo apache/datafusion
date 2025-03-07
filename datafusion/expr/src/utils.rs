@@ -48,16 +48,6 @@ pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 ///  `COUNT(<constant>)` expressions
 pub use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 
-/// Recursively walk a list of expression trees, collecting the unique set of columns
-/// referenced in the expression
-#[deprecated(since = "40.0.0", note = "Expr::add_column_refs instead")]
-pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result<()> {
-    for e in expr {
-        expr_to_columns(e, accum)?;
-    }
-    Ok(())
-}
-
 /// Count the number of distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
