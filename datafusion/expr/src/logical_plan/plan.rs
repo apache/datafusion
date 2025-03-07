@@ -4647,47 +4647,41 @@ digraph {
     }
 
     #[test]
-    fn test_join_with_new_exprs() {
-        fn create_test_join(on: Vec<(Expr, Expr)>, filter: Option<Expr>) -> LogicalPlan {
+    fn test_join_with_new_exprs() -> Result<()> {
+        fn create_test_join(
+            on: Vec<(Expr, Expr)>,
+            filter: Option<Expr>,
+        ) -> Result<LogicalPlan> {
             let schema = Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
                 Field::new("b", DataType::Int32, false),
             ]);
 
-            let left_schema = DFSchema::try_from_qualified_schema("t1", &schema).unwrap();
-            let right_schema =
-                DFSchema::try_from_qualified_schema("t2", &schema).unwrap();
+            let left_schema = DFSchema::try_from_qualified_schema("t1", &schema)?;
+            let right_schema = DFSchema::try_from_qualified_schema("t2", &schema)?;
 
-            LogicalPlan::Join(Join {
+            Ok(LogicalPlan::Join(Join {
                 left: Arc::new(
-                    table_scan(Some("t1"), left_schema.as_arrow(), None)
-                        .unwrap()
-                        .build()
-                        .unwrap(),
+                    table_scan(Some("t1"), left_schema.as_arrow(), None)?.build()?,
                 ),
                 right: Arc::new(
-                    table_scan(Some("t2"), right_schema.as_arrow(), None)
-                        .unwrap()
-                        .build()
-                        .unwrap(),
+                    table_scan(Some("t2"), right_schema.as_arrow(), None)?.build()?,
                 ),
                 on,
                 filter,
                 join_type: JoinType::Inner,
                 join_constraint: JoinConstraint::On,
-                schema: Arc::new(left_schema.join(&right_schema).unwrap()),
+                schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equals_null: false,
-            })
+            }))
         }
 
         {
-            let join = create_test_join(vec![(col("t1.a"), (col("t2.a")))], None);
-            let LogicalPlan::Join(join) = join
-                .with_new_exprs(
-                    join.expressions(),
-                    join.inputs().into_iter().cloned().collect(),
-                )
-                .unwrap()
+            let join = create_test_join(vec![(col("t1.a"), (col("t2.a")))], None)?;
+            let LogicalPlan::Join(join) = join.with_new_exprs(
+                join.expressions(),
+                join.inputs().into_iter().cloned().collect(),
+            )?
             else {
                 unreachable!()
             };
@@ -4696,13 +4690,11 @@ digraph {
         }
 
         {
-            let join = create_test_join(vec![], Some(col("t1.a").gt(col("t2.a"))));
-            let LogicalPlan::Join(join) = join
-                .with_new_exprs(
-                    join.expressions(),
-                    join.inputs().into_iter().cloned().collect(),
-                )
-                .unwrap()
+            let join = create_test_join(vec![], Some(col("t1.a").gt(col("t2.a"))))?;
+            let LogicalPlan::Join(join) = join.with_new_exprs(
+                join.expressions(),
+                join.inputs().into_iter().cloned().collect(),
+            )?
             else {
                 unreachable!()
             };
@@ -4714,13 +4706,11 @@ digraph {
             let join = create_test_join(
                 vec![(col("t1.a"), (col("t2.a")))],
                 Some(col("t1.b").gt(col("t2.b"))),
-            );
-            let LogicalPlan::Join(join) = join
-                .with_new_exprs(
-                    join.expressions(),
-                    join.inputs().into_iter().cloned().collect(),
-                )
-                .unwrap()
+            )?;
+            let LogicalPlan::Join(join) = join.with_new_exprs(
+                join.expressions(),
+                join.inputs().into_iter().cloned().collect(),
+            )?
             else {
                 unreachable!()
             };
@@ -4732,18 +4722,16 @@ digraph {
             let join = create_test_join(
                 vec![(col("t1.a"), (col("t2.a"))), (col("t1.b"), (col("t2.b")))],
                 None,
-            );
-            let LogicalPlan::Join(join) = join
-                .with_new_exprs(
-                    vec![
-                        col("t1.a").eq(col("t2.a")),
-                        col("t1.b"),
-                        col("t2.b"),
-                        lit(true),
-                    ],
-                    join.inputs().into_iter().cloned().collect(),
-                )
-                .unwrap()
+            )?;
+            let LogicalPlan::Join(join) = join.with_new_exprs(
+                vec![
+                    col("t1.a").eq(col("t2.a")),
+                    col("t1.b"),
+                    col("t2.b"),
+                    lit(true),
+                ],
+                join.inputs().into_iter().cloned().collect(),
+            )?
             else {
                 unreachable!()
             };
@@ -4758,12 +4746,14 @@ digraph {
             let join = create_test_join(
                 vec![(col("t1.a"), (col("t2.a"))), (col("t1.b"), (col("t2.b")))],
                 None,
-            );
+            )?;
             let res = join.with_new_exprs(
                 vec![col("t1.a").eq(col("t2.a")), col("t1.b")],
                 join.inputs().into_iter().cloned().collect(),
             );
             assert!(res.is_err());
         }
+
+        Ok(())
     }
 }
