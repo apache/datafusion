@@ -226,15 +226,21 @@ fn _to_char_scalar(
     };
 
     let formatter = ArrayFormatter::try_new(array.as_ref(), &format_options)?;
-    let formatted: Result<Vec<_>, ArrowError> = (0..array.len())
-        .map(|i| formatter.value(i).try_to_string())
+    let formatted: Result<Vec<Option<String>>, ArrowError> = (0..array.len())
+        .map(|i| {
+            if array.is_null(i) {
+                Ok(None)
+            } else {
+                formatter.value(i).try_to_string().map(Some)
+            }
+        })
         .collect();
 
     if let Ok(formatted) = formatted {
         if is_scalar_expression {
-            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(
-                formatted.first().unwrap().to_string(),
-            ))))
+            Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
+                formatted.first().unwrap().clone(),
+            )))
         } else {
             Ok(ColumnarValue::Array(
                 Arc::new(StringArray::from(formatted)) as ArrayRef

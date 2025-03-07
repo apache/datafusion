@@ -247,7 +247,7 @@ impl MemoryExec {
 
     fn memory_source_config(&self) -> MemorySourceConfig {
         self.inner
-            .source()
+            .data_source()
             .as_any()
             .downcast_ref::<MemorySourceConfig>()
             .unwrap()
@@ -346,7 +346,7 @@ impl MemoryExec {
 }
 
 /// Data source configuration for reading in-memory batches of data
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemorySourceConfig {
     /// The partitions to query
     partitions: Vec<Vec<RecordBatch>>,
@@ -412,10 +412,10 @@ impl DataSource for MemorySourceConfig {
                     .map_or(String::new(), |limit| format!(", fetch={}", limit));
                 if self.show_sizes {
                     write!(
-                        f,
-                        "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
-                        partition_sizes.len(),
-                    )
+                                f,
+                                "partitions={}, partition_sizes={partition_sizes:?}{limit}{output_ordering}{constraints}",
+                                partition_sizes.len(),
+                            )
                 } else {
                     write!(
                         f,
@@ -423,6 +423,19 @@ impl DataSource for MemorySourceConfig {
                         partition_sizes.len(),
                     )
                 }
+            }
+            DisplayFormatType::TreeRender => {
+                let total_rows = self.partitions.iter().map(|b| b.len()).sum::<usize>();
+                let total_bytes: usize = self
+                    .partitions
+                    .iter()
+                    .flatten()
+                    .map(|batch| batch.get_array_memory_size())
+                    .sum();
+                writeln!(f, "format=memory")?;
+                writeln!(f, "rows={total_rows}")?;
+                writeln!(f, "bytes={total_bytes}")?;
+                Ok(())
             }
         }
     }

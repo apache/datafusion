@@ -528,6 +528,15 @@ impl LogicalPlanBuilder {
         project(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
     }
 
+    /// Apply a projection without alias with optional validation
+    /// (true to validate, false to not validate)
+    pub fn project_with_validation(
+        self,
+        expr: Vec<(impl Into<Expr>, bool)>,
+    ) -> Result<Self> {
+        project_with_validation(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
+    }
+
     /// Select the given column indices
     pub fn select(self, indices: impl IntoIterator<Item = usize>) -> Result<Self> {
         let exprs: Vec<_> = indices
@@ -1648,12 +1657,33 @@ pub fn project(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = impl Into<Expr>>,
 ) -> Result<LogicalPlan> {
+    project_with_validation(plan, expr.into_iter().map(|e| (e, true)))
+}
+
+/// Create Projection. Similar to project except that the expressions
+/// passed in have a flag to indicate if that expression requires
+/// validation (normalize & columnize) (true) or not (false)
+/// # Errors
+/// This function errors under any of the following conditions:
+/// * Two or more expressions have the same name
+/// * An invalid expression is used (e.g. a `sort` expression)
+fn project_with_validation(
+    plan: LogicalPlan,
+    expr: impl IntoIterator<Item = (impl Into<Expr>, bool)>,
+) -> Result<LogicalPlan> {
     let mut projected_expr = vec![];
-    for e in expr {
+    for (e, validate) in expr {
         let e = e.into();
         match e {
+            #[expect(deprecated)]
             Expr::Wildcard { .. } => projected_expr.push(e),
-            _ => projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?),
+            _ => {
+                if validate {
+                    projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                } else {
+                    projected_expr.push(e)
+                }
+            }
         }
     }
     validate_unique_names("Projections", projected_expr.iter())?;

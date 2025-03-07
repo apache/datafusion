@@ -59,7 +59,7 @@ use arrow::compute::{
 };
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
-use arrow::ipc::reader::FileReader;
+use arrow::ipc::reader::StreamReader;
 use datafusion_common::{
     exec_err, internal_err, not_impl_err, plan_err, DataFusionError, HashSet, JoinSide,
     JoinType, Result,
@@ -368,6 +368,10 @@ impl DisplayAs for SortMergeJoinExec {
                         f.expression()
                     ))
                 )
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -1394,7 +1398,7 @@ impl SortMergeJoinStream {
 
                 if let Some(batch) = buffered_batch.batch {
                     spill_record_batches(
-                        vec![batch],
+                        &[batch],
                         spill_file.path().into(),
                         Arc::clone(&self.buffered_schema),
                     )?;
@@ -2270,7 +2274,7 @@ fn fetch_right_columns_from_batch_by_idxs(
                 Vec::with_capacity(buffered_indices.len());
 
             let file = BufReader::new(File::open(spill_file.path())?);
-            let reader = FileReader::try_new(file, None)?;
+            let reader = StreamReader::try_new(file, None)?;
 
             for batch in reader {
                 batch?.columns().iter().for_each(|column| {

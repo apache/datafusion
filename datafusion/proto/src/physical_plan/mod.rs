@@ -29,9 +29,11 @@ use datafusion::datasource::file_format::file_compression_type::FileCompressionT
 use datafusion::datasource::file_format::json::JsonSink;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::file_format::parquet::ParquetSink;
+#[cfg(feature = "avro")]
+use datafusion::datasource::physical_plan::AvroSource;
 #[cfg(feature = "parquet")]
 use datafusion::datasource::physical_plan::ParquetSource;
-use datafusion::datasource::physical_plan::{AvroSource, CsvSource, FileScanConfig};
+use datafusion::datasource::physical_plan::{CsvSource, FileScanConfig};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
@@ -285,14 +287,20 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                 #[cfg(not(feature = "parquet"))]
                 panic!("Unable to process a Parquet PhysicalPlan when `parquet` feature is not enabled")
             }
+            #[cfg_attr(not(feature = "avro"), allow(unused_variables))]
             PhysicalPlanType::AvroScan(scan) => {
-                let conf = parse_protobuf_file_scan_config(
-                    scan.base_conf.as_ref().unwrap(),
-                    registry,
-                    extension_codec,
-                    Arc::new(AvroSource::new()),
-                )?;
-                Ok(conf.build())
+                #[cfg(feature = "avro")]
+                {
+                    let conf = parse_protobuf_file_scan_config(
+                        scan.base_conf.as_ref().unwrap(),
+                        registry,
+                        extension_codec,
+                        Arc::new(AvroSource::new()),
+                    )?;
+                    Ok(conf.build())
+                }
+                #[cfg(not(feature = "avro"))]
+                panic!("Unable to process a Avro PhysicalPlan when `avro` feature is not enabled")
             }
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan(
@@ -1630,9 +1638,10 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             });
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_csv) = source.as_any().downcast_ref::<FileScanConfig>() {
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(maybe_csv) = data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
                 let source = maybe_csv.file_source();
                 if let Some(csv_config) = source.as_any().downcast_ref::<CsvSource>() {
                     return Ok(protobuf::PhysicalPlanNode {
@@ -1677,8 +1686,9 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
 
         #[cfg(feature = "parquet")]
         if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_parquet) = source.as_any().downcast_ref::<FileScanConfig>()
+            let data_source_exec = exec.data_source();
+            if let Some(maybe_parquet) =
+                data_source_exec.as_any().downcast_ref::<FileScanConfig>()
             {
                 let source = maybe_parquet.file_source();
                 if let Some(conf) = source.as_any().downcast_ref::<ParquetSource>() {
@@ -1704,9 +1714,12 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
             }
         }
 
-        if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
-            let source = exec.source();
-            if let Some(maybe_avro) = source.as_any().downcast_ref::<FileScanConfig>() {
+        #[cfg(feature = "avro")]
+        if let Some(data_source_exec) = plan.downcast_ref::<DataSourceExec>() {
+            let data_source = data_source_exec.data_source();
+            if let Some(maybe_avro) =
+                data_source.as_any().downcast_ref::<FileScanConfig>()
+            {
                 let source = maybe_avro.file_source();
                 if source.as_any().downcast_ref::<AvroSource>().is_some() {
                     return Ok(protobuf::PhysicalPlanNode {
