@@ -66,6 +66,7 @@ tokio-postgres = { version = "0.7.12", optional = true }
 
 [features]
 avro = ["datafusion/avro"]
+backtrace = ["datafusion/backtrace"]
 postgres = [
     "bytes",
     "chrono",

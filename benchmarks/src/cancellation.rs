@@ -47,6 +47,9 @@ use tokio_util::sync::CancellationToken;
 
 /// Test performance of cancelling queries
 ///
+/// Queries in DataFusion should stop executing "quickly" after they are
+/// cancelled (the output stream is dropped).
+///
 /// The queries are executed on a synthetic dataset generated during
 /// the benchmark execution that is an anonymized version of a
 /// real-world data set.
@@ -97,7 +100,7 @@ impl RunOpt {
         println!("Done loading data into in-memory object store");
 
         let mut rundata = BenchmarkRun::new();
-        rundata.start_new_case("Arglebargle");
+        rundata.start_new_case("Cancellation");
 
         for i in 0..self.common.iterations {
             let elapsed = run_test(self.wait_time, Arc::clone(&store))?;

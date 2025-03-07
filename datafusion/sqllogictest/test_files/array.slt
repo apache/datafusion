@@ -1435,6 +1435,93 @@ NULL 23
 NULL 43
 5 NULL
 
+
+## array_max
+# array_max scalar function #1 (with positive index)
+query I
+select array_max(make_array(5, 3, 6, 4));
+----
+6
+
+query I
+select array_max(make_array(5, 3, 4, NULL, 6, NULL));
+----
+6
+
+query I
+select array_max(make_array(NULL, NULL));
+----
+NULL
+
+query T
+select array_max(make_array('h', 'e', 'o', 'l', 'l'));
+----
+o
+
+query T
+select array_max(make_array('h', 'e', 'l', NULL, 'l', 'o', NULL));
+----
+o
+
+query B
+select array_max(make_array(false, true, false, true));
+----
+true
+
+query B
+select array_max(make_array(false, true, NULL, false, true));
+----
+true
+
+query D
+select array_max(make_array(DATE '1992-09-01', DATE '1993-03-01', DATE '1999-05-01', DATE '1985-11-01'));
+----
+1999-05-01
+
+query D
+select array_max(make_array(DATE '1995-09-01', DATE '1999-05-01', DATE '1993-03-01', NULL));
+----
+1999-05-01
+
+query P
+select array_max(make_array(TIMESTAMP '1992-09-01', TIMESTAMP '1995-06-01', TIMESTAMP '1984-10-01'));
+----
+1995-06-01T00:00:00
+
+query P
+select array_max(make_array(NULL, TIMESTAMP '1996-10-01', TIMESTAMP '1995-06-01'));
+----
+1996-10-01T00:00:00
+
+query R
+select array_max(make_array(5.1, -3.2, 6.3, 4.9));
+----
+6.3
+
+query ?I
+select input, array_max(input) from (select make_array(d - 1, d, d + 1) input from (values (0), (10), (20), (30), (NULL)) t(d))
+----
+[-1, 0, 1] 1
+[9, 10, 11] 11
+[19, 20, 21] 21
+[29, 30, 31] 31
+[NULL, NULL, NULL] NULL
+
+query II
+select array_max(arrow_cast(make_array(1, 2, 3), 'FixedSizeList(3, Int64)')), array_max(arrow_cast(make_array(1), 'FixedSizeList(1, Int64)'));
+----
+3 1
+
+query I
+select array_max(make_array());
+----
+NULL
+
+# Testing with empty arguments should result in an error
+query error DataFusion error: Error during planning: 'array_max' does not support zero arguments
+select array_max();
+
+
 ## array_pop_back (aliases: `list_pop_back`)
 
 # array_pop_back scalar function with null
