@@ -202,14 +202,14 @@ large_futures = "warn"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
 unused_qualifications = "deny"
 
-[patch.crates-io]
-arrow = { path = "../arrow-rs/arrow" }
-arrow-array = { path = "../arrow-rs/arrow-array" }
-arrow-cast = { path = "../arrow-rs/arrow-cast" }
-arrow-data = { path = "../arrow-rs/arrow-data" }
-arrow-buffer = { path = "../arrow-rs/arrow-buffer" }
-arrow-flight = { path = "../arrow-rs/arrow-flight" }
-arrow-ipc = { path = "../arrow-rs/arrow-ipc" }
-arrow-ord = { path = "../arrow-rs/arrow-ord" }
-arrow-schema = { path = "../arrow-rs/arrow-schema" }
-arrow-select = { path = "../arrow-rs/arrow-select" }
+# [patch.crates-io]
+# arrow = { path = "../arrow-rs/arrow" }
+# arrow-array = { path = "../arrow-rs/arrow-array" }
+# arrow-cast = { path = "../arrow-rs/arrow-cast" }
+# arrow-data = { path = "../arrow-rs/arrow-data" }
+# arrow-buffer = { path = "../arrow-rs/arrow-buffer" }
+# arrow-flight = { path = "../arrow-rs/arrow-flight" }
+# arrow-ipc = { path = "../arrow-rs/arrow-ipc" }
+# arrow-ord = { path = "../arrow-rs/arrow-ord" }
+# arrow-schema = { path = "../arrow-rs/arrow-schema" }
+# arrow-select = { path = "../arrow-rs/arrow-select" }

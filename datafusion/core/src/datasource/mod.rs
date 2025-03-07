@@ -33,9 +33,9 @@ mod statistics;
 pub mod stream;
 pub mod view;
 
+pub use datafusion_datasource::filter_expr_rewriter;
 pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::source;
-pub use datafusion_datasource::filter_expr_rewriter;
 
 // backwards compatibility
 pub use self::default_table_source::{

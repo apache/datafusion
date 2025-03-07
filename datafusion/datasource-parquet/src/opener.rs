@@ -30,8 +30,8 @@ use crate::{
 };
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
-use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 use datafusion_datasource::filter_expr_rewriter::FilterExpressionRewriterFactory;
+use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
@@ -179,7 +179,9 @@ impl FileOpener for ParquetOpener {
             if let Some(mut predicate) = pushdown_filters.then_some(predicate).flatten() {
                 // Try to rewrite the predicate using our filter expression rewriter
                 if let Some(filter_rewriter) = filter_rewriter {
-                    if let Ok(rewritten) = filter_rewriter.rewrite_physical_expr(predicate.clone()) {
+                    if let Ok(rewritten) =
+                        filter_rewriter.rewrite_physical_expr(predicate.clone())
+                    {
                         predicate = rewritten;
                     }
                 }

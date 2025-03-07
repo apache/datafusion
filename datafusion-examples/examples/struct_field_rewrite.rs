@@ -229,7 +229,9 @@ impl TableProvider for ExampleTableProvider {
         let parquet_source = ParquetSource::default()
             .with_predicate(self.schema.clone(), filter)
             .with_pushdown_filters(true)
-            .with_filter_expression_rewriter_factory(Arc::new(StructFieldRewriterFactory) as _);
+            .with_filter_expression_rewriter_factory(
+                Arc::new(StructFieldRewriterFactory) as _,
+            );
 
         let object_store_url = ObjectStoreUrl::parse("memory://")?;
 
@@ -332,7 +334,7 @@ impl FilterExpressionRewriter for StructFieldRewriter {
                                         &expected_flattened_column_name,
                                         &self.file_schema,
                                     )?;
-                                    return Ok(rewritten_expr)
+                                    return Ok(rewritten_expr);
                                 }
                             }
                         }
