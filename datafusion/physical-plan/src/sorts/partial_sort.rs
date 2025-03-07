@@ -227,8 +227,18 @@ impl DisplayAs for PartialSortExec {
                 }
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                let common_prefix_length = self.common_prefix_length;
+                match self.fetch {
+                    Some(fetch) => {
+                        writeln!(f, "TopK fetch={fetch}")?;
+                        writeln!(f, "expr=[{}]", self.expr)?;
+                        writeln!(f, "common_prefix_length=[{common_prefix_length}]")
+                    }
+                    None => {
+                        writeln!(f, "expr=[{}]", self.expr)?;
+                        writeln!(f, "common_prefix_length=[{common_prefix_length}]")
+                    }
+                }
             }
         }
     }
