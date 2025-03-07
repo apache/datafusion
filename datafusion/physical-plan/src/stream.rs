@@ -223,6 +223,10 @@ impl RecordBatchReceiverStreamBuilder {
     }
 
     /// Get a handle for sending [`RecordBatch`] to the output
+    ///
+    /// If the stream is dropped / canceled, the sender will be closed and
+    /// calling `tx().send()` will return an error. Producers should stop
+    /// producing in this case and return control.
     pub fn tx(&self) -> Sender<Result<RecordBatch>> {
         self.inner.tx()
     }
@@ -241,17 +245,21 @@ impl RecordBatchReceiverStreamBuilder {
         self.inner.spawn(task)
     }
 
-    /// Spawns a blocking task that attempts to send `RecordBatch` data to this stream.
+    /// Spawn a blocking task tied to the builder and stream.
     ///
-    /// If this builder (or the stream built from it) is dropped **before** the task starts,  
-    /// the task will never execute.  
+    /// # Drop / Cancel Behavior
     ///
-    /// **Note:** Once the blocking task has started, it **will not** be forcibly stopped,  
-    /// as Rust does not allow forcing a running thread to terminate. The task will continue  
-    /// running until it completes or encounters an error.  
+    /// If this builder (or the stream built from it) is dropped **before** the
+    /// task starts, the task is also dropped and will never start execute.
     ///
-    /// Users should ensure that their blocking function checks for errors from  
-    /// `tx.blocking_send` and exits cleanly when the receiver is dropped.
+    /// **Note:** Once the blocking task has started, it **will not** be
+    /// forcibly stopped on drop as Rust does not allow forcing a running thread
+    /// to terminate. The task will continue running until it completes or
+    /// encounters an error.
+    ///
+    /// Users should ensure that their blocking function periodically checks for
+    /// errors calling `tx.blocking_send`. An error signals that the stream has
+    /// been dropped / cancelled and the blocking task should exit.
     ///
     /// This is often used to spawn tasks that write to the sender
     /// retrieved from [`Self::tx`], for examples, see the document
