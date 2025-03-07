@@ -81,15 +81,13 @@ pub trait OptimizerRule: Debug {
     }
 
     /// Does this rule support rewriting owned plans (rather than by reference)?
+    #[deprecated(since = "47.0.0", note = "This method is no longer used")]
     fn supports_rewrite(&self) -> bool {
         true
     }
 
     /// Try to rewrite `plan` to an optimized form, returning `Transformed::yes`
     /// if the plan was rewritten and `Transformed::no` if it was not.
-    ///
-    /// Note: this function is only called if [`Self::supports_rewrite`] returns
-    /// true.
     fn rewrite(
         &self,
         _plan: LogicalPlan,
