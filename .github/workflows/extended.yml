@@ -68,8 +68,7 @@ jobs:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install
+        run: rustup toolchain install
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
       # For debugging, test binaries can be large.
