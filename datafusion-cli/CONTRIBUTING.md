@@ -32,7 +32,7 @@ cargo test
 By default, storage integration tests are not run. To run them you will need to set `TEST_STORAGE_INTEGRATION=1` and
 then provide the necessary configuration for that object store.
 
-For some of the tests, [snapshots](https://datafusion.apache.org/contributor-guide/testing.html#snapshot-testing) are used. 
+For some of the tests, [snapshots](https://datafusion.apache.org/contributor-guide/testing.html#snapshot-testing) are used.
 
 ### AWS
 
