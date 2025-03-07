@@ -440,14 +440,11 @@ fn array_has_all_and_any_dispatch<O: OffsetSizeTrait>(
     let haystack = as_generic_list_array::<O>(haystack)?;
     let needle = as_generic_list_array::<O>(needle)?;
     if needle.values().len() == 0 {
-        return match comparison_type {
-            ComparisonType::All => Ok(Arc::new(BooleanArray::from(
-                BooleanBuffer::new_set(haystack.len()),
-            ))),
-            ComparisonType::Any => Ok(Arc::new(BooleanArray::from(
-                BooleanBuffer::new_unset(haystack.len()),
-            ))),
+        let buffer = match comparison_type {
+            ComparisonType::All => BooleanBuffer::new_set(haystack.len()),
+            ComparisonType::Any => BooleanBuffer::new_unset(haystack.len()),
         };
+        return Ok(Arc::new(BooleanArray::from(buffer)));
     }
     match needle.data_type() {
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
