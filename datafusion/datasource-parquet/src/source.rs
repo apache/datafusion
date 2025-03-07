@@ -503,9 +503,10 @@ impl FileSource for ParquetSource {
             self.parquet_file_reader_factory.clone().unwrap_or_else(|| {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
-
-        let filter_expression_rewriter_factory =
-            self.filter_expression_rewriter_factory.clone();
+        
+        let filter_expression_rewriter_factory = self
+            .filter_expression_rewriter_factory
+            .clone();
 
         Arc::new(ParquetOpener {
             partition_index: partition,
