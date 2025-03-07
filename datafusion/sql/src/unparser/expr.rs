@@ -429,6 +429,7 @@ impl Unparser<'_> {
                 })
             }
             // TODO: unparsing wildcard addition options
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, .. } => {
                 let attached_token = AttachedToken::empty();
                 if let Some(qualifier) = qualifier {
@@ -729,6 +730,7 @@ impl Unparser<'_> {
     ) -> Result<Vec<ast::FunctionArg>> {
         args.iter()
             .map(|e| {
+                #[expect(deprecated)]
                 if matches!(
                     e,
                     Expr::Wildcard {
@@ -946,8 +948,8 @@ impl Unparser<'_> {
             Operator::BitwiseShiftRight => Ok(BinaryOperator::PGBitwiseShiftRight),
             Operator::BitwiseShiftLeft => Ok(BinaryOperator::PGBitwiseShiftLeft),
             Operator::StringConcat => Ok(BinaryOperator::StringConcat),
-            Operator::AtArrow => not_impl_err!("unsupported operation: {op:?}"),
-            Operator::ArrowAt => not_impl_err!("unsupported operation: {op:?}"),
+            Operator::AtArrow => Ok(BinaryOperator::AtArrow),
+            Operator::ArrowAt => Ok(BinaryOperator::ArrowAt),
         }
     }
 
@@ -1715,6 +1717,7 @@ mod tests {
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
         let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        #[expect(deprecated)]
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
             .project(vec![Expr::Wildcard {
                 qualifier: None,
@@ -2109,6 +2112,22 @@ mod tests {
                     )]),
                 ))),
                 "[1, 2, 3]",
+            ),
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col("a")),
+                    op: Operator::ArrowAt,
+                    right: Box::new(col("b")),
+                }),
+                "(a <@ b)",
+            ),
+            (
+                Expr::BinaryExpr(BinaryExpr {
+                    left: Box::new(col("a")),
+                    op: Operator::AtArrow,
+                    right: Box::new(col("b")),
+                }),
+                "(a @> b)",
             ),
         ];
 

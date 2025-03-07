@@ -81,9 +81,12 @@ clickbench_1:           ClickBench queries against a single parquet file
 clickbench_partitioned: ClickBench queries against a partitioned (100 files) parquet
 clickbench_extended:    ClickBench \"inspired\" queries against a single parquet (DataFusion specific)
 external_aggr:          External aggregation benchmark
-h2o_small:              h2oai benchmark with small dataset (1e7 rows),  default file format is csv
-h2o_medium:             h2oai benchmark with medium dataset (1e8 rows), default file format is csv
-h2o_big:                h2oai benchmark with large dataset (1e9 rows),  default file format is csv
+h2o_small:              h2oai benchmark with small dataset (1e7 rows) for groupby,  default file format is csv
+h2o_medium:             h2oai benchmark with medium dataset (1e8 rows) for groupby, default file format is csv
+h2o_big:                h2oai benchmark with large dataset (1e9 rows) for groupby,  default file format is csv
+h2o_small_join:         h2oai benchmark with small dataset (1e7 rows) for join,  default file format is csv
+h2o_medium_join:        h2oai benchmark with medium dataset (1e8 rows) for join, default file format is csv
+h2o_big_join:           h2oai benchmark with large dataset (1e9 rows) for join,  default file format is csv
 imdb:                   Join Order Benchmark (JOB) using the IMDB dataset converted to parquet
 
 **********
@@ -150,6 +153,9 @@ main() {
                     data_h2o "SMALL"
                     data_h2o "MEDIUM"
                     data_h2o "BIG"
+                    data_h2o_join "SMALL"
+                    data_h2o_join "MEDIUM"
+                    data_h2o_join "BIG"
                     data_clickbench_1
                     data_clickbench_partitioned
                     data_imdb
@@ -188,6 +194,15 @@ main() {
                     ;;
                 h2o_big)
                     data_h2o "BIG" "CSV"
+                    ;;
+                h2o_small_join)
+                    data_h2o_join "SMALL" "CSV"
+                    ;;
+                h2o_medium_join)
+                    data_h2o_join "MEDIUM" "CSV"
+                    ;;
+                h2o_big_join)
+                    data_h2o_join "BIG" "CSV"
                     ;;
                 external_aggr)
                     # same data as for tpch
@@ -242,6 +257,9 @@ main() {
                     run_h2o "SMALL" "PARQUET" "groupby"
                     run_h2o "MEDIUM" "PARQUET" "groupby"
                     run_h2o "BIG" "PARQUET" "groupby"
+                    run_h2o_join "SMALL" "PARQUET" "join"
+                    run_h2o_join "MEDIUM" "PARQUET" "join"
+                    run_h2o_join "BIG" "PARQUET" "join"
                     run_imdb
                     run_external_aggr
                     ;;
@@ -286,6 +304,15 @@ main() {
                     ;;
                 h2o_big)
                     run_h2o "BIG" "CSV" "groupby"
+                    ;;
+                h2o_small_join)
+                    run_h2o_join "SMALL" "CSV" "join"
+                    ;;
+                h2o_medium_join)
+                    run_h2o_join "MEDIUM" "CSV" "join"
+                    ;;
+                h2o_big_join)
+                    run_h2o_join "BIG" "CSV" "join"
                     ;;
                 external_aggr)
                     run_external_aggr
@@ -687,7 +714,82 @@ data_h2o() {
     deactivate
 }
 
-## todo now only support groupby, after https://github.com/mrpowers-io/falsa/issues/21 done, we can add support for join
+data_h2o_join() {
+    # Default values for size and data format
+    SIZE=${1:-"SMALL"}
+    DATA_FORMAT=${2:-"CSV"}
+
+    # Function to compare Python versions
+    version_ge() {
+        [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$2" ]
+    }
+
+    export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+
+    # Find the highest available Python version (3.10 or higher)
+    REQUIRED_VERSION="3.10"
+    PYTHON_CMD=$(command -v python3 || true)
+
+    if [ -n "$PYTHON_CMD" ]; then
+        PYTHON_VERSION=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+        if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
+            echo "Found Python version $PYTHON_VERSION, which is suitable."
+        else
+            echo "Python version $PYTHON_VERSION found, but version $REQUIRED_VERSION or higher is required."
+            PYTHON_CMD=""
+        fi
+    fi
+
+   # Search for suitable Python versions if the default is unsuitable
+   if [ -z "$PYTHON_CMD" ]; then
+       # Loop through all available Python3 commands on the system
+       for CMD in $(compgen -c | grep -E '^python3(\.[0-9]+)?$'); do
+           if command -v "$CMD" &> /dev/null; then
+               PYTHON_VERSION=$($CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+               if version_ge "$PYTHON_VERSION" "$REQUIRED_VERSION"; then
+                   PYTHON_CMD="$CMD"
+                   echo "Found suitable Python version: $PYTHON_VERSION ($CMD)"
+                   break
+               fi
+           fi
+       done
+   fi
+
+    # If no suitable Python version found, exit with an error
+    if [ -z "$PYTHON_CMD" ]; then
+        echo "Python 3.10 or higher is required. Please install it."
+        return 1
+    fi
+
+    echo "Using Python command: $PYTHON_CMD"
+
+    # Install falsa and other dependencies
+    echo "Installing falsa..."
+
+    # Set virtual environment directory
+    VIRTUAL_ENV="${PWD}/venv"
+
+    # Create a virtual environment using the detected Python command
+    $PYTHON_CMD -m venv "$VIRTUAL_ENV"
+
+    # Activate the virtual environment and install dependencies
+    source "$VIRTUAL_ENV/bin/activate"
+
+    # Ensure 'falsa' is installed (avoid unnecessary reinstall)
+    pip install --quiet --upgrade falsa
+
+    # Create directory if it doesn't exist
+    H2O_DIR="${DATA_DIR}/h2o"
+    mkdir -p "${H2O_DIR}"
+
+    # Generate h2o test data
+    echo "Generating h2o test data in ${H2O_DIR} with size=${SIZE} and format=${DATA_FORMAT}"
+    falsa join --path-prefix="${H2O_DIR}" --size "${SIZE}" --data-format "${DATA_FORMAT}"
+
+    # Deactivate virtual environment after completion
+    deactivate
+}
+
 run_h2o() {
     # Default values for size and data format
     SIZE=${1:-"SMALL"}
@@ -700,7 +802,7 @@ run_h2o() {
     RESULTS_FILE="${RESULTS_DIR}/h2o.json"
 
     echo "RESULTS_FILE: ${RESULTS_FILE}"
-    echo "Running h2o benchmark..."
+    echo "Running h2o groupby benchmark..."
 
     # Set the file name based on the size
     case "$SIZE" in
@@ -726,6 +828,56 @@ run_h2o() {
     $CARGO_COMMAND --bin dfbench -- h2o \
         --iterations 3 \
         --path "${H2O_DIR}/${FILE_NAME}" \
+        --queries-path "${QUERY_FILE}" \
+        -o "${RESULTS_FILE}"
+}
+
+run_h2o_join() {
+    # Default values for size and data format
+    SIZE=${1:-"SMALL"}
+    DATA_FORMAT=${2:-"CSV"}
+    DATA_FORMAT=$(echo "$DATA_FORMAT" | tr '[:upper:]' '[:lower:]')
+    RUN_Type=${3:-"join"}
+
+    # Data directory and results file path
+    H2O_DIR="${DATA_DIR}/h2o"
+    RESULTS_FILE="${RESULTS_DIR}/h2o_join.json"
+
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running h2o join benchmark..."
+
+    # Set the file name based on the size
+    case "$SIZE" in
+        "SMALL")
+            X_TABLE_FILE_NAME="J1_1e7_NA_0.${DATA_FORMAT}"
+            SMALL_TABLE_FILE_NAME="J1_1e7_1e1_0.${DATA_FORMAT}"
+            MEDIUM_TABLE_FILE_NAME="J1_1e7_1e4_0.${DATA_FORMAT}"
+            LARGE_TABLE_FILE_NAME="J1_1e7_1e7_NA.${DATA_FORMAT}"
+            ;;
+        "MEDIUM")
+            X_TABLE_FILE_NAME="J1_1e8_NA_0.${DATA_FORMAT}"
+            SMALL_TABLE_FILE_NAME="J1_1e8_1e2_0.${DATA_FORMAT}"
+            MEDIUM_TABLE_FILE_NAME="J1_1e8_1e5_0.${DATA_FORMAT}"
+            LARGE_TABLE_FILE_NAME="J1_1e8_1e8_NA.${DATA_FORMAT}"
+            ;;
+        "BIG")
+            X_TABLE_FILE_NAME="J1_1e9_NA_0.${DATA_FORMAT}"
+            SMALL_TABLE_FILE_NAME="J1_1e9_1e3_0.${DATA_FORMAT}"
+            MEDIUM_TABLE_FILE_NAME="J1_1e9_1e6_0.${DATA_FORMAT}"
+            LARGE_TABLE_FILE_NAME="J1_1e9_1e9_NA.${DATA_FORMAT}"
+            ;;
+        *)
+            echo "Invalid size. Valid options are SMALL, MEDIUM, or BIG."
+            return 1
+            ;;
+    esac
+
+     # Set the query file name based on the RUN_Type
+    QUERY_FILE="${SCRIPT_DIR}/queries/h2o/${RUN_Type}.sql"
+
+    $CARGO_COMMAND --bin dfbench -- h2o \
+        --iterations 3 \
+        --join-paths "${H2O_DIR}/${X_TABLE_FILE_NAME},${H2O_DIR}/${SMALL_TABLE_FILE_NAME},${H2O_DIR}/${MEDIUM_TABLE_FILE_NAME},${H2O_DIR}/${LARGE_TABLE_FILE_NAME}" \
         --queries-path "${QUERY_FILE}" \
         -o "${RESULTS_FILE}"
 }

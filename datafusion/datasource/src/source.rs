@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`DataSource`] and [`DataSourceExec`]
+
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -34,9 +36,15 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 /// Common behaviors in Data Sources for both from Files and Memory.
-/// See `DataSourceExec` for physical plan implementation
 ///
+/// # See Also
+/// * [`DataSourceExec`] for physical plan implementation
+/// * [`FileSource`] for file format implementations (Parquet, Json, etc)
+///
+/// # Notes
 /// Requires `Debug` to assist debugging
+///
+/// [`FileSource`]: crate::file::FileSource
 pub trait DataSource: Send + Sync + Debug {
     fn open(
         &self,
@@ -44,6 +52,7 @@ pub trait DataSource: Send + Sync + Debug {
         context: Arc<TaskContext>,
     ) -> datafusion_common::Result<SendableRecordBatchStream>;
     fn as_any(&self) -> &dyn Any;
+    /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 
     /// Return a copy of this DataSource with a new partitioning scheme
@@ -71,16 +80,32 @@ pub trait DataSource: Send + Sync + Debug {
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>>;
 }
 
-/// Unified data source for file formats like JSON, CSV, AVRO, ARROW, PARQUET
+/// [`ExecutionPlan`] handles different file formats like JSON, CSV, AVRO, ARROW, PARQUET
+///
+/// `DataSourceExec` implements common functionality such as applying projections,
+/// and caching plan properties.
+///
+/// The [`DataSource`] trait describes where to find the data for this data
+/// source (for example what files or what in memory partitions). Format
+/// specifics are implemented with the [`FileSource`] trait.
+///
+/// [`FileSource`]: crate::file::FileSource
 #[derive(Clone, Debug)]
 pub struct DataSourceExec {
+    /// The source of the data -- for example, `FileScanConfig` or `MemorySourceConfig`
     data_source: Arc<dyn DataSource>,
+    /// Cached plan properties such as sort order
     cache: PlanProperties,
 }
 
 impl DisplayAs for DataSourceExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
-        write!(f, "DataSourceExec: ")?;
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, "DataSourceExec: ")?;
+            }
+            DisplayFormatType::TreeRender => {}
+        }
         self.data_source.fmt_as(t, f)
     }
 }

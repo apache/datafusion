@@ -311,6 +311,10 @@ impl DisplayAs for MemSink {
                 let partition_count = self.batches.len();
                 write!(f, "MemoryTable (partitions={partition_count})")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }

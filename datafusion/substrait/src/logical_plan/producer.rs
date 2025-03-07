@@ -1039,7 +1039,7 @@ fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
             .map(|f| to_substrait_type(f.data_type(), f.is_nullable()))
             .collect::<Result<_>>()?,
         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-        nullability: r#type::Nullability::Unspecified as i32,
+        nullability: r#type::Nullability::Required as i32,
     };
 
     Ok(NamedStruct {
@@ -1366,6 +1366,7 @@ pub fn to_substrait_rex(
         Expr::ScalarSubquery(expr) => {
             not_impl_err!("Cannot convert {expr:?} to Substrait")
         }
+        #[expect(deprecated)]
         Expr::Wildcard { .. } => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::GroupingSet(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),
         Expr::Placeholder(expr) => not_impl_err!("Cannot convert {expr:?} to Substrait"),

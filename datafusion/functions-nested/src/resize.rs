@@ -23,16 +23,18 @@ use arrow::array::{
     MutableArrayData, NullBufferBuilder, OffsetSizeTrait,
 };
 use arrow::buffer::OffsetBuffer;
-use arrow::datatypes::ArrowNativeType;
 use arrow::datatypes::DataType;
+use arrow::datatypes::{ArrowNativeType, Field};
 use arrow::datatypes::{
     DataType::{FixedSizeList, LargeList, List},
     FieldRef,
 };
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -83,7 +85,26 @@ impl Default for ArrayResize {
 impl ArrayResize {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::one_of(
+                vec![
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    }),
+                    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+                        arguments: vec![
+                            ArrayFunctionArgument::Array,
+                            ArrayFunctionArgument::Index,
+                            ArrayFunctionArgument::Element,
+                        ],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    }),
+                ],
+                Volatility::Immutable,
+            ),
             aliases: vec!["list_resize".to_string()],
         }
     }
@@ -106,6 +127,9 @@ impl ScalarUDFImpl for ArrayResize {
         match &arg_types[0] {
             List(field) | FixedSizeList(field, _) => Ok(List(Arc::clone(field))),
             LargeList(field) => Ok(LargeList(Arc::clone(field))),
+            DataType::Null => {
+                Ok(List(Arc::new(Field::new_list_field(DataType::Int64, true))))
+            }
             _ => exec_err!(
                 "Not reachable, data_type should be List, LargeList or FixedSizeList"
             ),
@@ -137,7 +161,7 @@ pub(crate) fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let array = &arg[0];
 
     // Checks if entire array is null
-    if array.null_count() == array.len() {
+    if array.logical_null_count() == array.len() {
         let return_type = match array.data_type() {
             List(field) => List(Arc::clone(field)),
             LargeList(field) => LargeList(Arc::clone(field)),

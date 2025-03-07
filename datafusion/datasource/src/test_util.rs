@@ -15,21 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use arrow::datatypes::SchemaRef;
-use datafusion_common::Statistics;
-use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
-use object_store::ObjectStore;
-
 use crate::{
     file::FileSource, file_scan_config::FileScanConfig, file_stream::FileOpener,
 };
-use datafusion_common::Result;
 
-/// Minimal [`FileSource`] implementation for use in tests.
+use std::sync::Arc;
+
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{Result, Statistics};
+use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
+use object_store::ObjectStore;
+
+/// Minimal [`crate::file::FileSource`] implementation for use in tests.
 #[derive(Clone, Default)]
-pub struct MockSource {
+pub(crate) struct MockSource {
     metrics: ExecutionPlanMetricsSet,
     projected_statistics: Option<Statistics>,
 }

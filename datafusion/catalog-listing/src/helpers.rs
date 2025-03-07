@@ -103,6 +103,8 @@ pub fn expr_applicable_for_cols(col_names: &[&str], expr: &Expr) -> bool {
         // - AGGREGATE and WINDOW should not end up in filter conditions, except maybe in some edge cases
         // - Can `Wildcard` be considered as a `Literal`?
         // - ScalarVariable could be `applicable`, but that would require access to the context
+        // TODO: remove the next line after `Expr::Wildcard` is removed
+        #[expect(deprecated)]
         Expr::AggregateFunction { .. }
         | Expr::WindowFunction { .. }
         | Expr::Wildcard { .. }
@@ -532,6 +534,7 @@ pub fn describe_partition(partition: &Partition) -> (&str, usize, Vec<&str>) {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
+    use datafusion_common::config::TableOptions;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::FutureExt;
@@ -1066,6 +1069,14 @@ mod tests {
         }
 
         fn as_any(&self) -> &dyn Any {
+            unimplemented!()
+        }
+
+        fn table_options(&self) -> &TableOptions {
+            unimplemented!()
+        }
+
+        fn table_options_mut(&mut self) -> &mut TableOptions {
             unimplemented!()
         }
     }
