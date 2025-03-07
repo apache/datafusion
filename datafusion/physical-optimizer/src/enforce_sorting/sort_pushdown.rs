@@ -109,7 +109,7 @@ fn pushdown_sorts_helper(
         let parent_is_stricter = plan
             .equivalence_properties()
             .requirements_compatible(&parent_reqs, &current_plan_reqs);
-        let child_is_stricter = plan
+        let current_is_stricter = plan
             .equivalence_properties()
             .requirements_compatible(&current_plan_reqs, &parent_reqs);
 
@@ -134,7 +134,7 @@ fn pushdown_sorts_helper(
             //
             // Remove this redundant sort by not pushing down.
             let is_orthogonal_sort =
-                !satisfy_parent && !parent_is_stricter && !child_is_stricter;
+                !satisfy_parent && !parent_is_stricter && !current_is_stricter;
 
             // make pushdown requirements be the new ones.
             if !is_orthogonal_sort || current_sort_fetch.is_some() {
@@ -155,7 +155,7 @@ fn pushdown_sorts_helper(
             sort_push_down.data.fetch = min_fetch(current_sort_fetch, parent_req_fetch);
 
             // set the stricter ordering
-            if child_is_stricter {
+            if current_is_stricter {
                 sort_push_down.data.ordering_requirement = Some(current_plan_reqs);
             } else {
                 sort_push_down.data.ordering_requirement = Some(parent_reqs);
