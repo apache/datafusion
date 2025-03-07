@@ -617,8 +617,13 @@ impl FileSource for CsvSource {
     fn file_type(&self) -> &str {
         "csv"
     }
-    fn fmt_extra(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, ", has_header={}", self.has_header)
+    fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                write!(f, ", has_header={}", self.has_header)
+            }
+            DisplayFormatType::TreeRender => Ok(()),
+        }
     }
 }
 

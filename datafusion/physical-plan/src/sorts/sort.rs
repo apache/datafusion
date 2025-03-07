@@ -307,7 +307,7 @@ impl ExternalSorter {
 
         let size = get_reserved_byte_for_record_batch(&input);
         if self.reservation.try_grow(size).is_err() {
-            self.sort_or_spill_in_mem_batches().await?;
+            self.sort_or_spill_in_mem_batches(false).await?;
             // We've already freed more than half of reserved memory,
             // so we can grow the reservation again. There's nothing we can do
             // if this try_grow fails.
@@ -332,7 +332,7 @@ impl ExternalSorter {
     ///
     /// 2. A combined streaming merge incorporating both in-memory
     ///    batches and data from spill files on disk.
-    fn sort(&mut self) -> Result<SendableRecordBatchStream> {
+    async fn sort(&mut self) -> Result<SendableRecordBatchStream> {
         // Release the memory reserved for merge back to the pool so
         // there is some left when `in_mem_sort_stream` requests an
         // allocation.
@@ -340,10 +340,12 @@ impl ExternalSorter {
 
         if self.spilled_before() {
             let mut streams = vec![];
+
+            // Sort `in_mem_batches` and spill it first. If there are many
+            // `in_mem_batches` and the memory limit is almost reached, merging
+            // them with the spilled files at the same time might cause OOM.
             if !self.in_mem_batches.is_empty() {
-                let in_mem_stream =
-                    self.in_mem_sort_stream(self.metrics.baseline.intermediate())?;
-                streams.push(in_mem_stream);
+                self.sort_or_spill_in_mem_batches(true).await?;
             }
 
             for spill in self.spills.drain(..) {
@@ -488,11 +490,17 @@ impl ExternalSorter {
     /// the memory usage has dropped by a factor of 2, then we don't have
     /// to spill. Otherwise, we spill to free up memory for inserting
     /// more batches.
-    ///
     /// The factor of 2 aims to avoid a degenerate case where the
     /// memory required for `fetch` is just under the memory available,
-    // causing repeated re-sorting of data
-    async fn sort_or_spill_in_mem_batches(&mut self) -> Result<()> {
+    /// causing repeated re-sorting of data
+    ///
+    /// # Arguments
+    ///
+    /// * `force_spill` - If true, the method will spill the in-memory batches
+    ///   even if the memory usage has not dropped by a factor of 2. Otherwise it will
+    ///   only spill when the memory usage has dropped by the pre-defined factor.
+    ///
+    async fn sort_or_spill_in_mem_batches(&mut self, force_spill: bool) -> Result<()> {
         // Release the memory reserved for merge back to the pool so
         // there is some left when `in_mem_sort_stream` requests an
         // allocation. At the end of this function, memory will be
@@ -529,7 +537,7 @@ impl ExternalSorter {
         // Sorting may free up some memory especially when fetch is `Some`. If we have
         // not freed more than 50% of the memory, then we have to spill to free up more
         // memory for inserting more batches.
-        if self.reservation.size() > before / 2 {
+        if (self.reservation.size() > before / 2) || force_spill {
             // We have not freed more than 50% of the memory, so we have to spill to
             // free up more memory
             self.spill().await?;
@@ -1114,7 +1122,7 @@ impl ExecutionPlan for SortExec {
                             let batch = batch?;
                             sorter.insert_batch(batch).await?;
                         }
-                        sorter.sort()
+                        sorter.sort().await
                     })
                     .try_flatten(),
                 )))
@@ -1409,7 +1417,7 @@ mod tests {
         // bytes. We leave a little wiggle room for the actual numbers.
         assert!((3..=10).contains(&spill_count));
         assert!((9000..=10000).contains(&spilled_rows));
-        assert!((36000..=40000).contains(&spilled_bytes));
+        assert!((38000..=42000).contains(&spilled_bytes));
 
         let columns = result[0].columns();
 
@@ -1482,7 +1490,7 @@ mod tests {
         //  `number_of_batches / (sort_spill_reservation_bytes / batch_size)`
         assert!((12..=18).contains(&spill_count));
         assert!((15000..=20000).contains(&spilled_rows));
-        assert!((700000..=900000).contains(&spilled_bytes));
+        assert!((900000..=1000000).contains(&spilled_bytes));
 
         // Verify that the result is sorted
         let concated_result = concat_batches(&schema, &result)?;

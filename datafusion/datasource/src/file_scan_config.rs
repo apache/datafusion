@@ -218,7 +218,10 @@ impl DataSource for FileScanConfig {
                 self.fmt_file_source(t, f)
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
+                writeln!(f, "format={}", self.file_source.file_type())?;
+                self.file_source.fmt_extra(t, f)?;
+                let num_files = self.file_groups.iter().map(Vec::len).sum::<usize>();
+                writeln!(f, "files={num_files}")?;
                 Ok(())
             }
         }
