@@ -73,6 +73,8 @@ tempfile = { workspace = true }
 test-utils = { path = "../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot"] }
 tonic = "0.12.1"
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3" }
 url = { workspace = true }
 uuid = "1.15"
 
