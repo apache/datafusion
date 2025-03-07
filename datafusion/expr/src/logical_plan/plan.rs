@@ -903,15 +903,12 @@ impl LogicalPlan {
                 let (left, right) = self.only_two_inputs(inputs)?;
                 let schema = build_join_schema(left.schema(), right.schema(), join_type)?;
 
-                let equi_expr_count = on.len();
+                let equi_expr_count = on.len() * 2;
                 assert!(expr.len() >= equi_expr_count);
-
-                let col_pair_count =
-                    expr.iter().filter(|e| matches!(e, Expr::Column(_))).count() / 2;
 
                 // Assume that the last expr, if any,
                 // is the filter_expr (non equality predicate from ON clause)
-                let filter_expr = if expr.len() - col_pair_count > equi_expr_count {
+                let filter_expr = if expr.len() > equi_expr_count {
                     expr.pop()
                 } else {
                     None
@@ -919,29 +916,16 @@ impl LogicalPlan {
 
                 // The first part of expr is equi-exprs,
                 // and the struct of each equi-expr is like `left-expr = right-expr`.
-                assert_eq!(expr.len() - col_pair_count, equi_expr_count);
+                assert_eq!(expr.len(), equi_expr_count);
                 let mut new_on = Vec::new();
                 let mut iter = expr.into_iter();
-                while let Some(equi_expr) = iter.next() {
-                    // SimplifyExpression rule may add alias to the equi_expr.
-                    let unalias_expr = equi_expr.clone().unalias();
-                    match unalias_expr {
-                        Expr::BinaryExpr(BinaryExpr {
-                            left,
-                            op: Operator::Eq,
-                            right,
-                        }) => new_on.push((*left, *right)),
-                        left @ Expr::Column(_) => {
-                            let Some(right) = iter.next() else {
-                                internal_err!("Expected a pair of columns to construct the join on expression")?
-                            };
+                while let Some(left) = iter.next() {
+                    let Some(right) = iter.next() else {
+                        internal_err!("Expected a pair of expressions to construct the join on expression")?
+                    };
 
-                            new_on.push((left, right));
-                        }
-                        _ => internal_err!(
-                            "The front part expressions should be a binary equality expression or a column expression, actual:{equi_expr}"
-                        )?
-                    }
+                    // SimplifyExpression rule may add alias to the equi_expr.
+                    new_on.push((left.unalias(), right.unalias()));
                 }
 
                 Ok(LogicalPlan::Join(Join {
@@ -3793,7 +3777,8 @@ mod tests {
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
     use crate::{
-        col, exists, in_subquery, lit, placeholder, scalar_subquery, GroupingSet,
+        binary_expr, col, exists, in_subquery, lit, placeholder, scalar_subquery,
+        GroupingSet,
     };
 
     use datafusion_common::tree_node::{
@@ -4725,7 +4710,8 @@ digraph {
             )?;
             let LogicalPlan::Join(join) = join.with_new_exprs(
                 vec![
-                    col("t1.a").eq(col("t2.a")),
+                    binary_expr(col("t1.a"), Operator::Plus, lit(1)),
+                    binary_expr(col("t2.a"), Operator::Plus, lit(2)),
                     col("t1.b"),
                     col("t2.b"),
                     lit(true),
@@ -4737,21 +4723,15 @@ digraph {
             };
             assert_eq!(
                 join.on,
-                vec![(col("t1.a"), (col("t2.a"))), (col("t1.b"), (col("t2.b")))]
+                vec![
+                    (
+                        binary_expr(col("t1.a"), Operator::Plus, lit(1)),
+                        binary_expr(col("t2.a"), Operator::Plus, lit(2))
+                    ),
+                    (col("t1.b"), (col("t2.b")))
+                ]
             );
             assert_eq!(join.filter, Some(lit(true)));
-        }
-
-        {
-            let join = create_test_join(
-                vec![(col("t1.a"), (col("t2.a"))), (col("t1.b"), (col("t2.b")))],
-                None,
-            )?;
-            let res = join.with_new_exprs(
-                vec![col("t1.a").eq(col("t2.a")), col("t1.b")],
-                join.inputs().into_iter().cloned().collect(),
-            );
-            assert!(res.is_err());
         }
 
         Ok(())
