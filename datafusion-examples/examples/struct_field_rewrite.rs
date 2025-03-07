@@ -23,6 +23,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow_schema::Fields;
 use async_trait::async_trait;
 
+use datafusion::assert_batches_eq;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{DFSchema, Result};
 use datafusion::datasource::filter_expr_rewriter::{
@@ -91,9 +92,9 @@ async fn main() -> Result<()> {
         Arc::new(store),
     );
 
-    // println!("\n=== Showing all data ===");
-    // let batches = ctx.sql("SELECT * FROM structs").await?.collect().await?;
-    // arrow::util::pretty::print_batches(&batches)?;
+    println!("\n=== Showing all data ===");
+    let batches = ctx.sql("SELECT * FROM structs").await?.collect().await?;
+    arrow::util::pretty::print_batches(&batches)?;
 
     println!("\n=== Running query with struct field access and filter < 30 ===");
     println!("Query: SELECT user_info['name'] FROM structs WHERE user_info['age'] < 30");
@@ -103,17 +104,29 @@ async fn main() -> Result<()> {
         .await?
         .collect()
         .await?;
+
+    #[rustfmt::skip]
+    let expected = vec![
+        "+--------------------------+",
+        "| user_info                |",
+        "+--------------------------+",
+        "| {name: Alice, age: 30}   |",
+        "| {name: Bob, age: 25}     |",
+        "| {name: Charlie, age: 35} |",
+        "| {name: Dave, age: 22}    |",
+        "+--------------------------+",
+    ];
+    assert_batches_eq!(expected, &batches);
+
+    println!("\n=== Running query with struct field access and filter > 130 ===");
+    println!("Query: SELECT user_info['name'] FROM structs WHERE user_info['age'] > 100 and user_info['age'] < 130");
+
+    let batches = ctx
+        .sql("SELECT * FROM structs WHERE user_info['age'] > 100 and user_info['age'] < 130")
+        .await?
+        .collect()
+        .await?;
     arrow::util::pretty::print_batches(&batches)?;
-
-    // println!("\n=== Running query with struct field access and filter > 130 ===");
-    // println!("Query: SELECT user_info['name'] FROM structs WHERE user_info['age'] > 100 and user_info['age'] < 130");
-
-    // let batches = ctx
-    //     .sql("SELECT * FROM structs WHERE user_info['age'] > 100 and user_info['age'] < 130")
-    //     .await?
-    //     .collect()
-    //     .await?;
-    // arrow::util::pretty::print_batches(&batches)?;
 
     Ok(())
 }
@@ -205,11 +218,11 @@ impl TableProvider for ExampleTableProvider {
         &self,
         filters: &[&Expr],
     ) -> Result<Vec<TableProviderFilterPushDown>> {
-        // For simplicity, we'll mark all filters as Inexact to ensure the filter is
-        // double-checked after scanning.
-        // A real implementation can choose to mark filters as Exact if it's sure it can handle them properly with no false positives
-        // and doesn't need the ability to fall back to upstream filter handlnig at runtime.
-        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+        // Implementers can choose to mark these filters as exact or inexact.
+        // If marked as exact they cannot have false positives and must always be applied.
+        // If marked as Inexact they can have false positives and at runtime the rewriter
+        // can decide to not rewrite / ignore some filters since they will be re-evaluated upstream.
+        Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 
     async fn scan(

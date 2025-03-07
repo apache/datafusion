@@ -136,13 +136,15 @@ impl DatafusionArrowPredicate {
             2.. => remap_projection(&candidate.projection),
         };
 
+        let projection_mask = ProjectionMask::roots(
+            metadata.file_metadata().schema_descr(),
+            candidate.projection,
+        );
+
         Ok(Self {
             physical_expr,
             projection,
-            projection_mask: ProjectionMask::roots(
-                metadata.file_metadata().schema_descr(),
-                candidate.projection,
-            ),
+            projection_mask,
             rows_pruned,
             rows_matched,
             time,

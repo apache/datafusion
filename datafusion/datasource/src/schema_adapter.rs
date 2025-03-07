@@ -395,24 +395,24 @@ impl SchemaMapper for SchemaMapping {
             .fields()
             .iter()
             .zip(batch_cols.iter())
-            .flat_map(|(field, batch_col)| {
+            .map(|(field, batch_col)| {
                 self.table_schema
-                    // try to get the same field from the table schema that we have stored in self
+                    // Try to get the same field from the table schema that we have stored in self
                     .field_with_name(field.name())
-                    // and if we don't have it, that's fine, ignore it. This may occur when we've
-                    // created an external table whose fields are a subset of the fields in this
-                    // file, then tried to read data from the file into this table. If that is the
-                    // case here, it's fine to ignore because we don't care about this field
-                    // anyways
+                    // And if we don't have it pass the column through as is without any casting
+                    // This happens if a filter requests a column that is not in the table schema,
+                    // e.g. to evaluate a shredded variant or a pre-computed expression.
                     .ok()
-                    // but if we do have it,
-                    .map(|table_field| {
-                        // try to cast it into the correct output type. we don't want to ignore this
-                        // error, though, so it's propagated.
-                        cast(batch_col, table_field.data_type())
-                            // and if that works, return the field and column.
-                            .map(|new_col| (new_col, table_field.clone()))
-                    })
+                    .map_or(
+                        Ok((batch_col.clone(), Arc::unwrap_or_clone(field.clone()))),
+                        |table_field| {
+                            // try to cast it into the correct output type. we don't want to ignore this
+                            // error, though, so it's propagated.
+                            cast(batch_col, table_field.data_type())
+                                // and if that works, return the field and column.
+                                .map(|new_col| (new_col, table_field.clone()))
+                        },
+                    )
             })
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()

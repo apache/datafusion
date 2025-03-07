@@ -177,8 +177,11 @@ impl FileOpener for ParquetOpener {
 
             // Filter pushdown: evaluate predicates during scan
             if let Some(mut predicate) = pushdown_filters.then_some(predicate).flatten() {
-                // Try to rewrite the predicate using our filter expression rewriter
+                // First check if any filter rewriters are available
                 if let Some(filter_rewriter) = filter_rewriter {
+                    // Try to rewrite the predicate using our filter expression rewriter
+                    // This MUST happen BEFORE the pushdown checking in build_row_filter
+                    // so that struct field accesses can be rewritten to flat column references
                     if let Ok(rewritten) =
                         filter_rewriter.rewrite_physical_expr(predicate.clone())
                     {
