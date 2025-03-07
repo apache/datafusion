@@ -1,4 +1,4 @@
-use arrow::array::{ArrayRef, AsArray, DynComparator, UnionArray};
+use arrow::array::{Array, ArrayRef, AsArray, DynComparator, UnionArray};
 use arrow::datatypes::{Float64Type, Int64Type};
 use arrow_schema::{DataType, SortOptions};
 use datafusion_common::cast::as_union_array;
@@ -84,15 +84,36 @@ impl CustomOrdering for IntOrFloatTypeOrdering {
 
         Ok(Box::new(move |lhs, rhs| {
             let array = as_union_array(array.as_ref()).expect("should be union");
-            let result = compare_impl(array, lhs, rhs);
-            match options.descending {
-                true => result.reverse(),
-                false => result,
+
+            match (array.is_null(lhs), array.is_null(rhs)) {
+                (true, true) => Ordering::Equal,
+                (true, false) => {
+                    if options.nulls_first {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    }
+                }
+                (false, true) => {
+                    if options.nulls_first {
+                        Ordering::Greater
+                    } else {
+                        Ordering::Less
+                    }
+                }
+                (false, false) => {
+                    let result = compare_impl(array, lhs, rhs);
+                    match options.descending {
+                        true => result.reverse(),
+                        false => result,
+                    }
+                }
             }
         }))
     }
 }
 
+/// Default comparison between two (`lhs` & `rhs`) non-null [IntOrFloat] elements.
 fn compare_impl(array: &UnionArray, lhs: usize, rhs: usize) -> Ordering {
     let type_lhs = array.type_ids()[lhs];
     let type_rhs = array.type_ids()[rhs];

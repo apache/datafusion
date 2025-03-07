@@ -20,9 +20,12 @@ mod dataframe_functions;
 mod describe;
 mod test_types;
 
-use arrow::array::{record_batch, Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray, FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder, Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, UnionBuilder};
+use arrow::array::{as_union_array, record_batch, Array, ArrayRef, AsArray, BooleanArray, DictionaryArray, FixedSizeListArray, FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder, Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, UnionBuilder};
 use arrow::buffer::ScalarBuffer;
-use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type, Int64Type, Schema, SchemaRef, UInt64Type, UnionFields, UnionMode};
+use arrow::datatypes::{
+    DataType, Field, Float32Type, Float64Type, Int32Type, Int64Type, Schema, SchemaRef,
+    UInt64Type, UnionFields, UnionMode,
+};
 use arrow::error::ArrowError;
 use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
@@ -3079,28 +3082,21 @@ async fn sort_on_ambiguous_column() -> Result<()> {
 
 #[tokio::test]
 async fn sort_on_union_with_logical_type() -> Result<()> {
-    let fields = [
-        (0, Arc::new(Field::new("integer", DataType::Int64, false))),
-        (1, Arc::new(Field::new("float", DataType::Float64, false))),
-    ]
-    .into_iter()
-    .collect();
-
-    let my_extension_type = Arc::new(IntOrFloatType::new());
-    let union_type = DataType::Union(fields, UnionMode::Dense);
-    let field =
-        Field::new("my_union", union_type, false).with_metadata(HashMap::from([(
-            EXTENSION_TYPE_NAME_KEY.into(),
-            IntOrFloatType::name().into(),
-        )]));
-    let schema = Arc::new(Schema::new(vec![field]));
-
     let mut builder = UnionBuilder::new_dense();
     builder.append::<Int64Type>("integer", 1)?;
+    builder.append::<Float64Type>("float", 6.0)?;
     builder.append::<Int64Type>("integer", -1)?;
     builder.append::<Float64Type>("float", 3.0)?;
-    builder.append::<Float64Type>("float", 6.0)?;
     let union = builder.build()?;
+
+    let my_extension_type = Arc::new(IntOrFloatType::new());
+    let field = Field::new("my_union", union.data_type().clone(), false).with_metadata(
+        HashMap::from([(
+            EXTENSION_TYPE_NAME_KEY.into(),
+            IntOrFloatType::name().into(),
+        )]),
+    );
+    let schema = Arc::new(Schema::new(vec![field]));
 
     let mut ctx = SessionContext::new();
     ctx.register_extension_type(my_extension_type)?;
@@ -3115,16 +3111,19 @@ async fn sort_on_union_with_logical_type() -> Result<()> {
         )?),
     )?;
 
-    ctx.table("test_table")
+    let record_batch = ctx.table("test_table")
         .await?
-        .sort_by(vec![Expr::from(datafusion::common::Column::from(
-            "my_union",
-        ))])?
+        .sort_by(vec![col("my_union")])?
         .execute_stream()
         .await?
         .next()
         .await
         .unwrap()?;
+
+    let result = as_union_array(record_batch.column_by_name("my_union").unwrap());
+    assert_eq!(result.type_ids(), &[0, 0, 1, 1]);
+    assert_eq!(result.child(0).as_primitive::<Int64Type>().values(), &[-1, 1]);
+    assert_eq!(result.child(1).as_primitive::<Float64Type>().values(), &[3.0, 6.0]);
 
     Ok(())
 }
