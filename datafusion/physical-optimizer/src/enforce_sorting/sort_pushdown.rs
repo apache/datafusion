@@ -153,7 +153,8 @@ fn pushdown_sorts_helper(
             // recursive call to helper, so it doesn't transform_down and miss the new node (previous child of sort)
             return pushdown_sorts_helper(sort_push_down);
         }
-    } else if satisfy_parent && parent_reqs.is_empty() {
+    } else if parent_reqs.is_empty() {
+        // note: this `satisfy_parent`, but we don't want to push down anything.
         // Nothing to do.
         return Ok(Transformed::no(sort_push_down));
     } else if satisfy_parent {
