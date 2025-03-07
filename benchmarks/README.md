@@ -329,7 +329,37 @@ Your benchmark should create and use an instance of `BenchmarkRun` defined in `b
 
 # Benchmarks
 
-The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience
+The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience.
+
+## Cancellation
+
+Test performance of cancelling queries
+Queries in DataFusion should stop executing "quickly" after they are
+cancelled (the output stream is dropped).
+
+The queries are executed on a synthetic dataset generated during
+the benchmark execution that is an anonymized version of a
+real-world data set.
+
+The query is an anonymized version of a real-world query, and the
+test starts the query then cancels it and reports how long it takes
+for the runtime to fully exit.
+
+Example output:
+
+```
+Using 7 files found on disk
+Starting to load data into in-memory object store
+Done loading data into in-memory object store
+in main, sleeping
+Starting spawned
+Creating logical plan...
+Creating physical plan...
+Executing physical plan...
+Getting results...
+cancelling thread
+done dropping runtime in 83.531417ms
+```
 
 ## ClickBench
 

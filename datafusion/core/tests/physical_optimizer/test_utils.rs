@@ -296,8 +296,16 @@ pub fn sort_exec(
     sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
     input: Arc<dyn ExecutionPlan>,
 ) -> Arc<dyn ExecutionPlan> {
+    sort_exec_with_fetch(sort_exprs, None, input)
+}
+
+pub fn sort_exec_with_fetch(
+    sort_exprs: impl IntoIterator<Item = PhysicalSortExpr>,
+    fetch: Option<usize>,
+    input: Arc<dyn ExecutionPlan>,
+) -> Arc<dyn ExecutionPlan> {
     let sort_exprs = sort_exprs.into_iter().collect();
-    Arc::new(SortExec::new(sort_exprs, input))
+    Arc::new(SortExec::new(sort_exprs, input).with_fetch(fetch))
 }
 
 /// A test [`ExecutionPlan`] whose requirements can be configured.
