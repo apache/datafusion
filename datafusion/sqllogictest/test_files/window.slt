@@ -765,8 +765,7 @@ LIMIT 5
 ----
 DataFusion error: type_coercion
 caused by
-Internal error: Cannot run range queries on datatype: Utf8View.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+Internal error: Cannot run range queries on datatype: Utf8View
 
 
 
@@ -1163,8 +1162,7 @@ SELECT
 ----
 DataFusion error: type_coercion
 caused by
-Internal error: Cannot run range queries on datatype: Utf8View.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+Internal error: Cannot run range queries on datatype: Utf8View
 
 
 #fn test_lag_lead
@@ -3634,8 +3632,7 @@ CREATE TABLE new_table AS SELECT NTILE(2) OVER(ORDER BY c1) AS ntile_2 FROM aggr
 ----
 DataFusion error: type_coercion
 caused by
-Internal error: Cannot run range queries on datatype: Utf8View.
-This was likely caused by a bug in DataFusion's code and we would welcome that you file an bug report in our issue tracker
+Internal error: Cannot run range queries on datatype: Utf8View
 
 
 statement error DataFusion error: Execution error: Table 'new_table' doesn't exist\.

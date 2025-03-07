@@ -135,52 +135,19 @@ SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_
 statement error
 SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100
 ----
-DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from [Utf8View, Int8, Float64] to the signature OneOf([Exact([Int8, Int8, Float64]), Exact([Int16, Int16, Float64]), Exact([Int32, Int32, Float64]), Exact([Int64, Int64, Float64]), Exact([UInt8, UInt8, Float64]), Exact([UInt16, UInt16, Float64]), Exact([UInt32, UInt32, Float64]), Exact([UInt64, UInt64, Float64]), Exact([Float32, Float32, Float64]), Exact([Float64, Float64, Float64])]) failed No function matches the given name and argument types 'approx_percentile_cont_with_weight(Utf8View, Int8, Float64)'. You might need to add explicit type casts.
-	Candidate functions:
-	approx_percentile_cont_with_weight(Int8, Int8, Float64)
-	approx_percentile_cont_with_weight(Int16, Int16, Float64)
-	approx_percentile_cont_with_weight(Int32, Int32, Float64)
-	approx_percentile_cont_with_weight(Int64, Int64, Float64)
-	approx_percentile_cont_with_weight(UInt8, UInt8, Float64)
-	approx_percentile_cont_with_weight(UInt16, UInt16, Float64)
-	approx_percentile_cont_with_weight(UInt32, UInt32, Float64)
-	approx_percentile_cont_with_weight(UInt64, UInt64, Float64)
-	approx_percentile_cont_with_weight(Float32, Float32, Float64)
-	approx_percentile_cont_with_weight(Float64, Float64, Float64)
+DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from [Utf8View, Int8, Float64] to the signature OneOf([Exact([Int8, Int8, Float64]), Exact([Int16, Int16, Float64]), Exact([Int32, Int32, Float64]), Exact([Int64, Int64, Float64]), Exact([UInt8, UInt8, Float64]), Exact([UInt16, UInt16, Float64]), Exact([UInt32, UInt32, Float64]), Exact([UInt64, UInt64, Float64]), Exact([Float32, Float32, Float64]), Exact([Float64, Float64, Float64])]) failed
 
 
 statement error
 SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100
 ----
-DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from [Int16, Utf8View, Float64] to the signature OneOf([Exact([Int8, Int8, Float64]), Exact([Int16, Int16, Float64]), Exact([Int32, Int32, Float64]), Exact([Int64, Int64, Float64]), Exact([UInt8, UInt8, Float64]), Exact([UInt16, UInt16, Float64]), Exact([UInt32, UInt32, Float64]), Exact([UInt64, UInt64, Float64]), Exact([Float32, Float32, Float64]), Exact([Float64, Float64, Float64])]) failed No function matches the given name and argument types 'approx_percentile_cont_with_weight(Int16, Utf8View, Float64)'. You might need to add explicit type casts.
-	Candidate functions:
-	approx_percentile_cont_with_weight(Int8, Int8, Float64)
-	approx_percentile_cont_with_weight(Int16, Int16, Float64)
-	approx_percentile_cont_with_weight(Int32, Int32, Float64)
-	approx_percentile_cont_with_weight(Int64, Int64, Float64)
-	approx_percentile_cont_with_weight(UInt8, UInt8, Float64)
-	approx_percentile_cont_with_weight(UInt16, UInt16, Float64)
-	approx_percentile_cont_with_weight(UInt32, UInt32, Float64)
-	approx_percentile_cont_with_weight(UInt64, UInt64, Float64)
-	approx_percentile_cont_with_weight(Float32, Float32, Float64)
-	approx_percentile_cont_with_weight(Float64, Float64, Float64)
+DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from [Int16, Utf8View, Float64] to the signature OneOf([Exact([Int8, Int8, Float64]), Exact([Int16, Int16, Float64]), Exact([Int32, Int32, Float64]), Exact([Int64, Int64, Float64]), Exact([UInt8, UInt8, Float64]), Exact([UInt16, UInt16, Float64]), Exact([UInt32, UInt32, Float64]), Exact([UInt64, UInt64, Float64]), Exact([Float32, Float32, Float64]), Exact([Float64, Float64, Float64])]) failed
 
 
 statement error
 SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100
 ----
-DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from [Int16, Int8, Utf8View] to the signature OneOf([Exact([Int8, Int8, Float64]), Exact([Int16, Int16, Float64]), Exact([Int32, Int32, Float64]), Exact([Int64, Int64, Float64]), Exact([UInt8, UInt8, Float64]), Exact([UInt16, UInt16, Float64]), Exact([UInt32, UInt32, Float64]), Exact([UInt64, UInt64, Float64]), Exact([Float32, Float32, Float64]), Exact([Float64, Float64, Float64])]) failed No function matches the given name and argument types 'approx_percentile_cont_with_weight(Int16, Int8, Utf8View)'. You might need to add explicit type casts.
-	Candidate functions:
-	approx_percentile_cont_with_weight(Int8, Int8, Float64)
-	approx_percentile_cont_with_weight(Int16, Int16, Float64)
-	approx_percentile_cont_with_weight(Int32, Int32, Float64)
-	approx_percentile_cont_with_weight(Int64, Int64, Float64)
-	approx_percentile_cont_with_weight(UInt8, UInt8, Float64)
-	approx_percentile_cont_with_weight(UInt16, UInt16, Float64)
-	approx_percentile_cont_with_weight(UInt32, UInt32, Float64)
-	approx_percentile_cont_with_weight(UInt64, UInt64, Float64)
-	approx_percentile_cont_with_weight(Float32, Float32, Float64)
-	approx_percentile_cont_with_weight(Float64, Float64, Float64)
+DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont_with_weight' function: coercion from [Int16, Int8, Utf8View] to the signature OneOf([Exact([Int8, Int8, Float64]), Exact([Int16, Int16, Float64]), Exact([Int32, Int32, Float64]), Exact([Int64, Int64, Float64]), Exact([UInt8, UInt8, Float64]), Exact([UInt16, UInt16, Float64]), Exact([UInt32, UInt32, Float64]), Exact([UInt64, UInt64, Float64]), Exact([Float32, Float32, Float64]), Exact([Float64, Float64, Float64])]) failed
 
 
 # csv_query_approx_percentile_cont_with_histogram_bins
@@ -190,98 +157,7 @@ SELECT c1, approx_percentile_cont(c3, 0.95, -1000) AS c3_p95 FROM aggregate_test
 statement error
 SELECT approx_percentile_cont(c3, 0.95, c1) FROM aggregate_test_100
 ----
-DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from [Int16, Float64, Utf8View] to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed No function matches the given name and argument types 'approx_percentile_cont(Int16, Float64, Utf8View)'. You might need to add explicit type casts.
-	Candidate functions:
-	approx_percentile_cont(Int8, Float64)
-	approx_percentile_cont(Int8, Float64, Int8)
-	approx_percentile_cont(Int8, Float64, Int16)
-	approx_percentile_cont(Int8, Float64, Int32)
-	approx_percentile_cont(Int8, Float64, Int64)
-	approx_percentile_cont(Int8, Float64, UInt8)
-	approx_percentile_cont(Int8, Float64, UInt16)
-	approx_percentile_cont(Int8, Float64, UInt32)
-	approx_percentile_cont(Int8, Float64, UInt64)
-	approx_percentile_cont(Int16, Float64)
-	approx_percentile_cont(Int16, Float64, Int8)
-	approx_percentile_cont(Int16, Float64, Int16)
-	approx_percentile_cont(Int16, Float64, Int32)
-	approx_percentile_cont(Int16, Float64, Int64)
-	approx_percentile_cont(Int16, Float64, UInt8)
-	approx_percentile_cont(Int16, Float64, UInt16)
-	approx_percentile_cont(Int16, Float64, UInt32)
-	approx_percentile_cont(Int16, Float64, UInt64)
-	approx_percentile_cont(Int32, Float64)
-	approx_percentile_cont(Int32, Float64, Int8)
-	approx_percentile_cont(Int32, Float64, Int16)
-	approx_percentile_cont(Int32, Float64, Int32)
-	approx_percentile_cont(Int32, Float64, Int64)
-	approx_percentile_cont(Int32, Float64, UInt8)
-	approx_percentile_cont(Int32, Float64, UInt16)
-	approx_percentile_cont(Int32, Float64, UInt32)
-	approx_percentile_cont(Int32, Float64, UInt64)
-	approx_percentile_cont(Int64, Float64)
-	approx_percentile_cont(Int64, Float64, Int8)
-	approx_percentile_cont(Int64, Float64, Int16)
-	approx_percentile_cont(Int64, Float64, Int32)
-	approx_percentile_cont(Int64, Float64, Int64)
-	approx_percentile_cont(Int64, Float64, UInt8)
-	approx_percentile_cont(Int64, Float64, UInt16)
-	approx_percentile_cont(Int64, Float64, UInt32)
-	approx_percentile_cont(Int64, Float64, UInt64)
-	approx_percentile_cont(UInt8, Float64)
-	approx_percentile_cont(UInt8, Float64, Int8)
-	approx_percentile_cont(UInt8, Float64, Int16)
-	approx_percentile_cont(UInt8, Float64, Int32)
-	approx_percentile_cont(UInt8, Float64, Int64)
-	approx_percentile_cont(UInt8, Float64, UInt8)
-	approx_percentile_cont(UInt8, Float64, UInt16)
-	approx_percentile_cont(UInt8, Float64, UInt32)
-	approx_percentile_cont(UInt8, Float64, UInt64)
-	approx_percentile_cont(UInt16, Float64)
-	approx_percentile_cont(UInt16, Float64, Int8)
-	approx_percentile_cont(UInt16, Float64, Int16)
-	approx_percentile_cont(UInt16, Float64, Int32)
-	approx_percentile_cont(UInt16, Float64, Int64)
-	approx_percentile_cont(UInt16, Float64, UInt8)
-	approx_percentile_cont(UInt16, Float64, UInt16)
-	approx_percentile_cont(UInt16, Float64, UInt32)
-	approx_percentile_cont(UInt16, Float64, UInt64)
-	approx_percentile_cont(UInt32, Float64)
-	approx_percentile_cont(UInt32, Float64, Int8)
-	approx_percentile_cont(UInt32, Float64, Int16)
-	approx_percentile_cont(UInt32, Float64, Int32)
-	approx_percentile_cont(UInt32, Float64, Int64)
-	approx_percentile_cont(UInt32, Float64, UInt8)
-	approx_percentile_cont(UInt32, Float64, UInt16)
-	approx_percentile_cont(UInt32, Float64, UInt32)
-	approx_percentile_cont(UInt32, Float64, UInt64)
-	approx_percentile_cont(UInt64, Float64)
-	approx_percentile_cont(UInt64, Float64, Int8)
-	approx_percentile_cont(UInt64, Float64, Int16)
-	approx_percentile_cont(UInt64, Float64, Int32)
-	approx_percentile_cont(UInt64, Float64, Int64)
-	approx_percentile_cont(UInt64, Float64, UInt8)
-	approx_percentile_cont(UInt64, Float64, UInt16)
-	approx_percentile_cont(UInt64, Float64, UInt32)
-	approx_percentile_cont(UInt64, Float64, UInt64)
-	approx_percentile_cont(Float32, Float64)
-	approx_percentile_cont(Float32, Float64, Int8)
-	approx_percentile_cont(Float32, Float64, Int16)
-	approx_percentile_cont(Float32, Float64, Int32)
-	approx_percentile_cont(Float32, Float64, Int64)
-	approx_percentile_cont(Float32, Float64, UInt8)
-	approx_percentile_cont(Float32, Float64, UInt16)
-	approx_percentile_cont(Float32, Float64, UInt32)
-	approx_percentile_cont(Float32, Float64, UInt64)
-	approx_percentile_cont(Float64, Float64)
-	approx_percentile_cont(Float64, Float64, Int8)
-	approx_percentile_cont(Float64, Float64, Int16)
-	approx_percentile_cont(Float64, Float64, Int32)
-	approx_percentile_cont(Float64, Float64, Int64)
-	approx_percentile_cont(Float64, Float64, UInt8)
-	approx_percentile_cont(Float64, Float64, UInt16)
-	approx_percentile_cont(Float64, Float64, UInt32)
-	approx_percentile_cont(Float64, Float64, UInt64)
+DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from [Int16, Float64, Utf8View] to the signature OneOf([Exact([Int8, Float64]), Exact([Int8, Float64, Int8]), Exact([Int8, Float64, Int16]), Exact([Int8, Float64, Int32]), Exact([Int8, Float64, Int64]), Exact([Int8, Float64, UInt8]), Exact([Int8, Float64, UInt16]), Exact([Int8, Float64, UInt32]), Exact([Int8, Float64, UInt64]), Exact([Int16, Float64]), Exact([Int16, Float64, Int8]), Exact([Int16, Float64, Int16]), Exact([Int16, Float64, Int32]), Exact([Int16, Float64, Int64]), Exact([Int16, Float64, UInt8]), Exact([Int16, Float64, UInt16]), Exact([Int16, Float64, UInt32]), Exact([Int16, Float64, UInt64]), Exact([Int32, Float64]), Exact([Int32, Float64, Int8]), Exact([Int32, Float64, Int16]), Exact([Int32, Float64, Int32]), Exact([Int32, Float64, Int64]), Exact([Int32, Float64, UInt8]), Exact([Int32, Float64, UInt16]), Exact([Int32, Float64, UInt32]), Exact([Int32, Float64, UInt64]), Exact([Int64, Float64]), Exact([Int64, Float64, Int8]), Exact([Int64, Float64, Int16]), Exact([Int64, Float64, Int32]), Exact([Int64, Float64, Int64]), Exact([Int64, Float64, UInt8]), Exact([Int64, Float64, UInt16]), Exact([Int64, Float64, UInt32]), Exact([Int64, Float64, UInt64]), Exact([UInt8, Float64]), Exact([UInt8, Float64, Int8]), Exact([UInt8, Float64, Int16]), Exact([UInt8, Float64, Int32]), Exact([UInt8, Float64, Int64]), Exact([UInt8, Float64, UInt8]), Exact([UInt8, Float64, UInt16]), Exact([UInt8, Float64, UInt32]), Exact([UInt8, Float64, UInt64]), Exact([UInt16, Float64]), Exact([UInt16, Float64, Int8]), Exact([UInt16, Float64, Int16]), Exact([UInt16, Float64, Int32]), Exact([UInt16, Float64, Int64]), Exact([UInt16, Float64, UInt8]), Exact([UInt16, Float64, UInt16]), Exact([UInt16, Float64, UInt32]), Exact([UInt16, Float64, UInt64]), Exact([UInt32, Float64]), Exact([UInt32, Float64, Int8]), Exact([UInt32, Float64, Int16]), Exact([UInt32, Float64, Int32]), Exact([UInt32, Float64, Int64]), Exact([UInt32, Float64, UInt8]), Exact([UInt32, Float64, UInt16]), Exact([UInt32, Float64, UInt32]), Exact([UInt32, Float64, UInt64]), Exact([UInt64, Float64]), Exact([UInt64, Float64, Int8]), Exact([UInt64, Float64, Int16]), Exact([UInt64, Float64, Int32]), Exact([UInt64, Float64, Int64]), Exact([UInt64, Float64, UInt8]), Exact([UInt64, Float64, UInt16]), Exact([UInt64, Float64, UInt32]), Exact([UInt64, Float64, UInt64]), Exact([Float32, Float64]), Exact([Float32, Float64, Int8]), Exact([Float32, Float64, Int16]), Exact([Float32, Float64, Int32]), Exact([Float32, Float64, Int64]), Exact([Float32, Float64, UInt8]), Exact([Float32, Float64, UInt16]), Exact([Float32, Float64, UInt32]), Exact([Float32, Float64, UInt64]), Exact([Float64, Float64]), Exact([Float64, Float64, Int8]), Exact([Float64, Float64, Int16]), Exact([Float64, Float64, Int32]), Exact([Float64, Float64, Int64]), Exact([Float64, Float64, UInt8]), Exact([Float64, Float64, UInt16]), Exact([Float64, Float64, UInt32]), Exact([Float64, Float64, UInt64])]) failed
 
 
 statement error DataFusion error: Error during planning: Failed to coerce arguments to satisfy a call to 'approx_percentile_cont' function: coercion from \[Int16, Float64, Float64\] to the signature OneOf(.*) failed(.|\n)*
