@@ -5818,12 +5818,14 @@ false false false false
 false false false false
 false false false false
 
-query BB
+query BBBB
 select array_has_all(make_array(1,2,3), []),
-       array_has_any(make_array(1,2,3), [])
+       array_has_any(make_array(1,2,3), []),
+       array_has_all(make_array('aa','bb','cc'), []),
+       array_has_any(make_array('aa','bb','cc'), []),
 ;
 ----
-true false
+true false true false
 
 query BBBBBBBBBBBBB
 select array_has_all(make_array(1,2,3), make_array(1,3)),
