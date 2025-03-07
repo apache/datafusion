@@ -51,7 +51,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         let f64_args = vec![ColumnarValue::Array(f64_array)];
         c.bench_function(&format!("iszero f64 array: {}", size), |b| {
             b.iter(|| {
-                // TODO use invoke_with_args
                 black_box(
                     iszero
                         .invoke_with_args(ScalarFunctionArgs {
