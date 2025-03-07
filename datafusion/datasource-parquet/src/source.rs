@@ -34,6 +34,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::filter_expr_rewriter::FilterExpressionRewriterFactory;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
@@ -266,6 +267,9 @@ pub struct ParquetSource {
     pub(crate) parquet_file_reader_factory: Option<Arc<dyn ParquetFileReaderFactory>>,
     /// Optional user defined schema adapter
     pub(crate) schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
+    /// Optional user defined filter expression rewriter factory
+    pub(crate) filter_expression_rewriter_factory:
+        Option<Arc<dyn FilterExpressionRewriterFactory>>,
     /// Batch size configuration
     pub(crate) batch_size: Option<usize>,
     /// Optional hint for the size of the parquet metadata
@@ -394,6 +398,26 @@ impl ParquetSource {
         self
     }
 
+    /// Return the optional filter expression rewriter factory
+    pub fn filter_expression_rewriter_factory(
+        &self,
+    ) -> Option<&Arc<dyn FilterExpressionRewriterFactory>> {
+        self.filter_expression_rewriter_factory.as_ref()
+    }
+
+    /// Set optional filter expression rewriter factory.
+    ///
+    /// [`FilterExpressionRewriterFactory`] allows users to specify how filter
+    /// expressions should be rewritten based on table schema and file schema differences.
+    /// This enables more sophisticated filter pushdown to the file level.
+    pub fn with_filter_expression_rewriter_factory(
+        mut self,
+        factory: Arc<dyn FilterExpressionRewriterFactory>,
+    ) -> Self {
+        self.filter_expression_rewriter_factory = Some(factory);
+        self
+    }
+
     /// If true, the predicate will be used during the parquet scan.
     /// Defaults to false
     ///
@@ -480,6 +504,9 @@ impl FileSource for ParquetSource {
                 Arc::new(DefaultParquetFileReaderFactory::new(object_store)) as _
             });
 
+        let filter_expression_rewriter_factory =
+            self.filter_expression_rewriter_factory.clone();
+
         Arc::new(ParquetOpener {
             partition_index: partition,
             projection: Arc::from(projection),
@@ -499,6 +526,7 @@ impl FileSource for ParquetSource {
             enable_page_index: self.enable_page_index(),
             enable_bloom_filter: self.bloom_filter_on_read(),
             schema_adapter_factory,
+            filter_expression_rewriter_factory,
         })
     }
 
