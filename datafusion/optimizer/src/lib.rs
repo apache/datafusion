@@ -60,7 +60,6 @@ pub mod replace_distinct_aggregate;
 pub mod scalar_subquery_to_join;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
-pub mod unwrap_cast_in_comparison;
 pub mod utils;
 
 #[cfg(test)]
@@ -70,8 +69,6 @@ pub use analyzer::{Analyzer, AnalyzerRule};
 pub use optimizer::{
     ApplyOrder, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
 };
-#[allow(deprecated)]
-pub use utils::optimize_children;
 
 pub(crate) mod join_key_set;
 mod plan_signature;

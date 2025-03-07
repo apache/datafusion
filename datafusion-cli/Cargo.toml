@@ -30,10 +30,14 @@ rust-version = { workspace = true }
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+default = []
+backtrace = ["datafusion/backtrace"]
+
 [dependencies]
 arrow = { workspace = true }
 async-trait = { workspace = true }
-aws-config = "1.5.17"
+aws-config = "1.5.18"
 aws-credential-types = "1.2.0"
 clap = { version = "4.5.30", features = ["derive", "cargo"] }
 datafusion = { workspace = true, features = [
