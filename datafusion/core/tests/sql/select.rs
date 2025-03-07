@@ -17,6 +17,7 @@
 
 use super::*;
 use datafusion_common::ScalarValue;
+use datafusion_sql::unparser::plan_to_sql;
 
 #[tokio::test]
 async fn test_list_query_parameters() -> Result<()> {
@@ -349,4 +350,49 @@ async fn test_version_function() {
     assert_eq!(version.len(), 1);
 
     assert_eq!(version.value(0), expected_version);
+}
+
+#[tokio::test]
+async fn test_unparse_subqueryalias() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = r#"
+SELECT
+  customer_view.c_custkey,
+  customer_view.c_name,
+  customer_view.custkey_plus
+FROM
+  (
+    SELECT
+      customer.c_custkey,
+      customer.c_name,
+      customer.custkey_plus
+    FROM
+      (
+        SELECT
+          customer.c_custkey,
+          CAST(customer.c_custkey AS BIGINT) + 1 AS custkey_plus,
+          customer.c_name
+        FROM
+          (
+            SELECT
+              customer.c_custkey AS c_custkey,
+              customer.c_name AS c_name
+            FROM
+              customer
+          ) AS customer
+      ) AS customer
+  ) AS customer_view
+    "#;
+    /// Return a RecordBatch with made up data about customer
+    fn customer() -> RecordBatch {
+        let custkey: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        let name: ArrayRef = Arc::new(StringArray::from_iter_values([""]));
+        RecordBatch::try_from_iter(vec![("c_custkey", custkey), ("c_name", name)])
+            .unwrap()
+    }
+    ctx.register_batch("customer", customer())?;
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let sql = plan_to_sql(&plan)?;
+    assert_eq!(sql.to_string(), "SELECT customer_view.c_custkey, customer_view.c_name, customer_view.custkey_plus FROM (SELECT customer.c_custkey, (CAST(customer.c_custkey AS BIGINT) + 1) AS custkey_plus, customer.c_name FROM (SELECT customer.c_custkey, customer.c_name FROM customer AS customer) AS customer) AS customer_view");
+    Ok(())
 }
