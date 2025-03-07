@@ -321,12 +321,41 @@ physical_plan
 # Check exactly the render width.
 query TT
 explain SELECT int_col FROM table1
-WHERE string_col != 'aaaaaaaaaaaaaa';
+WHERE string_col != 'aaaaaaaaaaa';
 ----
 logical_plan
 01)Projection: table1.int_col
-02)--Filter: table1.string_col != Utf8("aaaaaaaaaaaaaa")
-03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("aaaaaaaaaaaaaa")]
+02)--Filter: table1.string_col != Utf8("aaaaaaaaaaa")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("aaaaaaaaaaa")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│string_col@1 != aaaaaaaaaaa│
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│        format: csv        │
+18)└───────────────────────────┘
+
+# Check with the render witdth + 1.
+query TT
+explain SELECT int_col FROM table1
+WHERE string_col != 'aaaaaaaaaaaa';
+----
+logical_plan
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8("aaaaaaaaaaaa")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("aaaaaaaaaaaa")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -336,7 +365,7 @@ physical_plan
 06)│    --------------------   │
 07)│         predicate:        │
 08)│      string_col@1 !=      │
-09)│       aaaaaaaaaaaaaa      │
+09)│        aaaaaaaaaaaa       │
 10)└─────────────┬─────────────┘
 11)┌─────────────┴─────────────┐
 12)│      RepartitionExec      │
@@ -347,37 +376,6 @@ physical_plan
 17)│          files: 1         │
 18)│        format: csv        │
 19)└───────────────────────────┘
-
-# Check with the render witdth + 1.
-query TT
-explain SELECT int_col FROM table1
-WHERE string_col != 'aaaaaaaaaaaaaaa';
-----
-logical_plan
-01)Projection: table1.int_col
-02)--Filter: table1.string_col != Utf8("aaaaaaaaaaaaaaa")
-03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("aaaaaaaaaaaaaaa")]
-physical_plan
-01)┌───────────────────────────┐
-02)│    CoalesceBatchesExec    │
-03)└─────────────┬─────────────┘
-04)┌─────────────┴─────────────┐
-05)│         FilterExec        │
-06)│    --------------------   │
-07)│         predicate:        │
-08)│      string_col@1 !=      │
-09)│       aaaaaaaaaaaaaa      │
-10)│             a             │
-11)└─────────────┬─────────────┘
-12)┌─────────────┴─────────────┐
-13)│      RepartitionExec      │
-14)└─────────────┬─────────────┘
-15)┌─────────────┴─────────────┐
-16)│       DataSourceExec      │
-17)│    --------------------   │
-18)│          files: 1         │
-19)│        format: csv        │
-20)└───────────────────────────┘
 
 # Query with filter on csv
 query TT
