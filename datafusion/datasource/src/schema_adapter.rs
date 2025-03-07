@@ -105,7 +105,7 @@ pub trait SchemaMapper: Debug + Send + Sync {
     /// is enabled.
     ///
     /// This method is slower than `map_batch` as it looks up columns by name.
-    /// 
+    ///
     /// Any columns in the record batch that are not present in the table schema are preserved as is
     /// so that they can be used by filter pushdown.
     fn map_partial_batch(
