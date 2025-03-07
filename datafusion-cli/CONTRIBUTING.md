@@ -27,21 +27,12 @@ Tests can be run using `cargo`
 cargo test
 ```
 
-## Snapshot testing
-
-To test CLI output, [Insta](https://github.com/mitsuhiko/insta) is used for snapshot testing. Snapshots are generated
-and compared on each test run. If the output changes, tests will fail.
-To review the changes, you can use Insta CLI:
-
-```shell
-cargo install cargo-insta
-cargo insta review
-```
-
 ## Running Storage Integration Tests
 
 By default, storage integration tests are not run. To run them you will need to set `TEST_STORAGE_INTEGRATION=1` and
 then provide the necessary configuration for that object store.
+
+For some of the tests, [snapshots](https://datafusion.apache.org/contributor-guide/testing.html#snapshot-testing) are used. 
 
 ### AWS
 
