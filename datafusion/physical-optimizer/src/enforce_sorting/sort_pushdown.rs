@@ -127,22 +127,11 @@ fn pushdown_sorts_helper(
             sort_push_down =
                 add_sort_above(sort_push_down, parent_reqs, parent_req_fetch);
 
-            // If we have totally orthogonal sort, (2 different sorts in a row), that means the child sort
-            // gets immdiately re-sorted.
-            // e.g.  Sort col1 ASC
-            //         Sort col1 DESC
-            //
-            // Remove this redundant sort by not pushing down.
-            let is_orthogonal_sort =
-                !satisfy_parent && !parent_is_stricter && !current_is_stricter;
-
             // make pushdown requirements be the new ones.
-            if !is_orthogonal_sort || current_sort_fetch.is_some() {
-                sort_push_down.children[0].data = ParentRequirements {
-                    ordering_requirement: Some(new_reqs),
-                    fetch: current_sort_fetch,
-                };
-            }
+            sort_push_down.children[0].data = ParentRequirements {
+                ordering_requirement: Some(new_reqs),
+                fetch: current_sort_fetch,
+            };
         } else {
             // Don't add a SortExec
             // Do update what sort requirements to keep pushing down
