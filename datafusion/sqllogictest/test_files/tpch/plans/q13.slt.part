@@ -50,8 +50,8 @@ logical_plan
 08)--------------Left Join: customer.c_custkey = orders.o_custkey
 09)----------------TableScan: customer projection=[c_custkey]
 10)----------------Projection: orders.o_orderkey, orders.o_custkey
-11)------------------Filter: orders.o_comment NOT LIKE Utf8("%special%requests%")
-12)--------------------TableScan: orders projection=[o_orderkey, o_custkey, o_comment], partial_filters=[orders.o_comment NOT LIKE Utf8("%special%requests%")]
+11)------------------Filter: orders.o_comment NOT LIKE Utf8View("%special%requests%")
+12)--------------------TableScan: orders projection=[o_orderkey, o_custkey, o_comment], partial_filters=[orders.o_comment NOT LIKE Utf8View("%special%requests%")]
 physical_plan
 01)SortPreservingMergeExec: [custdist@1 DESC, c_count@0 DESC], fetch=10
 02)--SortExec: TopK(fetch=10), expr=[custdist@1 DESC, c_count@0 DESC], preserve_partitioning=[true]
