@@ -31,6 +31,7 @@ use crate::{
 use datafusion_datasource::file_meta::FileMeta;
 use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::schema_adapter::SchemaAdapterFactory;
+use datafusion_datasource::filter_expr_rewriter::FilterExpressionRewriterFactory;
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
@@ -83,6 +84,9 @@ pub(super) struct ParquetOpener {
     pub enable_bloom_filter: bool,
     /// Schema adapter factory
     pub schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    /// Filter expression rewriter factory
+    pub filter_expression_rewriter_factory:
+        Option<Arc<dyn FilterExpressionRewriterFactory>>,
 }
 
 impl FileOpener for ParquetOpener {
@@ -114,6 +118,8 @@ impl FileOpener for ParquetOpener {
         let pruning_predicate = self.pruning_predicate.clone();
         let page_pruning_predicate = self.page_pruning_predicate.clone();
         let table_schema = Arc::clone(&self.table_schema);
+        let filter_expression_rewriter_factory =
+            self.filter_expression_rewriter_factory.clone();
         let reorder_predicates = self.reorder_filters;
         let pushdown_filters = self.pushdown_filters;
         let enable_page_index = should_enable_page_index(
@@ -156,6 +162,11 @@ impl FileOpener for ParquetOpener {
 
             let file_schema = Arc::clone(builder.schema());
 
+            // Create a filter expression rewriter for this specific file
+            let filter_rewriter = filter_expression_rewriter_factory.map(|factory| {
+                factory.create(Arc::clone(&table_schema), Arc::clone(&file_schema))
+            });
+
             let (schema_mapping, adapted_projections) =
                 schema_adapter.map_schema(&file_schema)?;
 
@@ -165,7 +176,14 @@ impl FileOpener for ParquetOpener {
             );
 
             // Filter pushdown: evaluate predicates during scan
-            if let Some(predicate) = pushdown_filters.then_some(predicate).flatten() {
+            if let Some(mut predicate) = pushdown_filters.then_some(predicate).flatten() {
+                // Try to rewrite the predicate using our filter expression rewriter
+                if let Some(filter_rewriter) = filter_rewriter {
+                    if let Ok(rewritten) = filter_rewriter.rewrite_physical_expr(predicate.clone()) {
+                        predicate = rewritten;
+                    }
+                }
+
                 let row_filter = row_filter::build_row_filter(
                     &predicate,
                     &file_schema,
@@ -183,8 +201,7 @@ impl FileOpener for ParquetOpener {
                     Ok(None) => {}
                     Err(e) => {
                         debug!(
-                            "Ignoring error building row filter for '{:?}': {}",
-                            predicate, e
+                            "Ignoring error building row filter for '{predicate:?}': {e}"
                         );
                     }
                 };

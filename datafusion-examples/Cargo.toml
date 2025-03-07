@@ -59,6 +59,7 @@ arrow-flight = { workspace = true }
 arrow-schema = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 dashmap = { workspace = true }
 # note only use main datafusion crate for examples
 datafusion = { workspace = true, default-features = true }
