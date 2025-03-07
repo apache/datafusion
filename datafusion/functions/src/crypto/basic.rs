@@ -201,7 +201,6 @@ pub fn utf8_or_binary_to_binary_type(
     arg_type: &DataType,
     name: &str,
 ) -> Result<DataType> {
-    dbg!(arg_type);
     Ok(match arg_type {
         DataType::Utf8View
         | DataType::LargeUtf8
@@ -270,30 +269,6 @@ impl DigestAlgorithm {
             }
         };
         Ok(ColumnarValue::Array(array))
-        // let input_value = as_generic_binary_array::<T>(value)?;
-        // let array: ArrayRef = match self {
-        //     Self::Md5 => digest_to_array!(Md5, input_value),
-        //     Self::Sha224 => digest_to_array!(Sha224, input_value),
-        //     Self::Sha256 => digest_to_array!(Sha256, input_value),
-        //     Self::Sha384 => digest_to_array!(Sha384, input_value),
-        //     Self::Sha512 => digest_to_array!(Sha512, input_value),
-        //     Self::Blake2b => digest_to_array!(Blake2b512, input_value),
-        //     Self::Blake2s => digest_to_array!(Blake2s256, input_value),
-        //     Self::Blake3 => {
-        //         let binary_array: BinaryArray = input_value
-        //             .iter()
-        //             .map(|opt| {
-        //                 opt.map(|x| {
-        //                     let mut digest = Blake3::default();
-        //                     digest.update(x);
-        //                     Blake3::finalize(&digest).as_bytes().to_vec()
-        //                 })
-        //             })
-        //             .collect();
-        //         Arc::new(binary_array)
-        //     }
-        // };
-        // Ok(ColumnarValue::Array(array))
     }
 
     /// digest a string array to their hash values
