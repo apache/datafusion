@@ -20,7 +20,6 @@ extern crate criterion;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
-use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use datafusion_common::ScalarValue;
 use rand::rngs::ThreadRng;
