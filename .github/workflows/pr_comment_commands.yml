@@ -55,6 +55,23 @@ jobs:
               ref: branchName,
             });
 
+            // Create a check run that links to the Actions tab so the run will be visible in GitHub UI
+            const headSha = pullRequest.head.sha;
+            const workflowRunsUrl = `https://github.com/${repoOwner}/${repoName}/actions?query=workflow%3A%22Datafusion+extended+tests%22+branch%3A${pr.head.ref}`;
+            
+            await github.rest.checks.create({
+              owner: repoOwner,
+              repo: repoName,
+              name: 'Extended Tests',
+              head_sha: headSha,
+              status: 'in_progress',
+              output: {
+                title: 'Extended Tests Running',
+                summary: `Extended tests have been triggered for this PR.\n\n[View workflow runs](${workflowRunsUrl})`
+              },
+              details_url: workflowRunsUrl
+            });
+
       - name: Add reaction to comment 
         uses: actions/github-script@v7
         with:
