@@ -912,3 +912,262 @@ drop table table4;
 
 statement ok
 drop table table5;
+
+# Test on StreamingTableExec
+# prepare table
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE data (
+    "date"   DATE, 
+    "ticker" VARCHAR, 
+    "time"   TIMESTAMP,
+) STORED AS CSV
+WITH ORDER ("date", "ticker", "time")
+LOCATION './a.parquet';
+
+
+# query
+query TT
+explain SELECT * FROM data 
+WHERE ticker = 'A' 
+ORDER BY "date", "time";
+----
+logical_plan
+01)Sort: data.date ASC NULLS LAST, data.time ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A")
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)┌───────────────────────────┐
+02)│  SortPreservingMergeExec  │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│    CoalesceBatchesExec    │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│         FilterExec        │
+09)│    --------------------   │
+10)│         predicate:        │
+11)│        ticker@1 = A       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│      RepartitionExec      │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│     StreamingTableExec    │
+18)│    --------------------   │
+19)│    StreamingTableExec:    │
+20)│      partition_sizes:     │
+21)│    1, projection=[date,   │
+22)│       ticker, time],      │
+23)│    infinite_source=true   │
+24)│ , output_ordering=[date@0 │
+25)│  ASC NULLS LAST, ticker@1 │
+26)│   ASC NULLS LAST, time@2  │
+27)│       ASC NULLS LAST]     │
+28)└───────────────────────────┘
+
+
+# constant ticker, CAST(time AS DATE) = time, order by time
+query TT
+explain SELECT * FROM data
+WHERE ticker = 'A' AND CAST(time AS DATE) = date
+ORDER BY "time"
+----
+logical_plan
+01)Sort: data.time ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)┌───────────────────────────┐
+02)│  SortPreservingMergeExec  │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│    CoalesceBatchesExec    │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│         FilterExec        │
+09)│    --------------------   │
+10)│         predicate:        │
+11)│ ticker@1 = A AND CAST(time│
+12)│   @2 AS Date32) = date@0  │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│      RepartitionExec      │
+16)└─────────────┬─────────────┘
+17)┌─────────────┴─────────────┐
+18)│     StreamingTableExec    │
+19)│    --------------------   │
+20)│    StreamingTableExec:    │
+21)│      partition_sizes:     │
+22)│    1, projection=[date,   │
+23)│       ticker, time],      │
+24)│    infinite_source=true   │
+25)│ , output_ordering=[date@0 │
+26)│  ASC NULLS LAST, ticker@1 │
+27)│   ASC NULLS LAST, time@2  │
+28)│       ASC NULLS LAST]     │
+29)└───────────────────────────┘
+
+# same thing but order by date
+query TT
+explain SELECT * FROM data
+WHERE ticker = 'A' AND CAST(time AS DATE) = date
+ORDER BY "date"
+----
+logical_plan
+01)Sort: data.date ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)┌───────────────────────────┐
+02)│  SortPreservingMergeExec  │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│    CoalesceBatchesExec    │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│         FilterExec        │
+09)│    --------------------   │
+10)│         predicate:        │
+11)│ ticker@1 = A AND CAST(time│
+12)│   @2 AS Date32) = date@0  │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│      RepartitionExec      │
+16)└─────────────┬─────────────┘
+17)┌─────────────┴─────────────┐
+18)│     StreamingTableExec    │
+19)│    --------------------   │
+20)│    StreamingTableExec:    │
+21)│      partition_sizes:     │
+22)│    1, projection=[date,   │
+23)│       ticker, time],      │
+24)│    infinite_source=true   │
+25)│ , output_ordering=[date@0 │
+26)│  ASC NULLS LAST, ticker@1 │
+27)│   ASC NULLS LAST, time@2  │
+28)│       ASC NULLS LAST]     │
+29)└───────────────────────────┘
+
+# same thing but order by ticker
+query TT
+explain SELECT * FROM data
+WHERE ticker = 'A' AND CAST(time AS DATE) = date
+ORDER BY "ticker"
+----
+logical_plan
+01)Sort: data.ticker ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)┌───────────────────────────┐
+02)│   CoalescePartitionsExec  │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│    CoalesceBatchesExec    │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│         FilterExec        │
+09)│    --------------------   │
+10)│         predicate:        │
+11)│ ticker@1 = A AND CAST(time│
+12)│   @2 AS Date32) = date@0  │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│      RepartitionExec      │
+16)└─────────────┬─────────────┘
+17)┌─────────────┴─────────────┐
+18)│     StreamingTableExec    │
+19)│    --------------------   │
+20)│    StreamingTableExec:    │
+21)│      partition_sizes:     │
+22)│    1, projection=[date,   │
+23)│       ticker, time],      │
+24)│    infinite_source=true   │
+25)│ , output_ordering=[date@0 │
+26)│  ASC NULLS LAST, ticker@1 │
+27)│   ASC NULLS LAST, time@2  │
+28)│       ASC NULLS LAST]     │
+29)└───────────────────────────┘
+
+# same thing but order by time, date
+query TT
+explain SELECT * FROM data 
+WHERE ticker = 'A' AND CAST(time AS DATE) = date
+ORDER BY "time", "date";
+----
+logical_plan
+01)Sort: data.time ASC NULLS LAST, data.date ASC NULLS LAST
+02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)┌───────────────────────────┐
+02)│  SortPreservingMergeExec  │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│    CoalesceBatchesExec    │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│         FilterExec        │
+09)│    --------------------   │
+10)│         predicate:        │
+11)│ ticker@1 = A AND CAST(time│
+12)│   @2 AS Date32) = date@0  │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│      RepartitionExec      │
+16)└─────────────┬─────────────┘
+17)┌─────────────┴─────────────┐
+18)│     StreamingTableExec    │
+19)│    --------------------   │
+20)│    StreamingTableExec:    │
+21)│      partition_sizes:     │
+22)│    1, projection=[date,   │
+23)│       ticker, time],      │
+24)│    infinite_source=true   │
+25)│ , output_ordering=[date@0 │
+26)│  ASC NULLS LAST, ticker@1 │
+27)│   ASC NULLS LAST, time@2  │
+28)│       ASC NULLS LAST]     │
+29)└───────────────────────────┘
+
+
+
+# query
+query TT
+explain SELECT * FROM data 
+WHERE date = '2006-01-02' 
+ORDER BY "ticker", "time";
+----
+logical_plan
+01)Sort: data.ticker ASC NULLS LAST, data.time ASC NULLS LAST
+02)--Filter: data.date = Date32("2006-01-02")
+03)----TableScan: data projection=[date, ticker, time]
+physical_plan
+01)┌───────────────────────────┐
+02)│  SortPreservingMergeExec  │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│    CoalesceBatchesExec    │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│         FilterExec        │
+09)│    --------------------   │
+10)│         predicate:        │
+11)│    date@0 = 2006-01-02    │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│      RepartitionExec      │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│     StreamingTableExec    │
+18)│    --------------------   │
+19)│    StreamingTableExec:    │
+20)│      partition_sizes:     │
+21)│    1, projection=[date,   │
+22)│       ticker, time],      │
+23)│    infinite_source=true   │
+24)│ , output_ordering=[date@0 │
+25)│  ASC NULLS LAST, ticker@1 │
+26)│   ASC NULLS LAST, time@2  │
+27)│       ASC NULLS LAST]     │
+28)└───────────────────────────┘
