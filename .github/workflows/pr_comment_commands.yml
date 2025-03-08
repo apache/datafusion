@@ -57,7 +57,7 @@ jobs:
 
             // Create a check run that links to the Actions tab so the run will be visible in GitHub UI
             const headSha = pullRequest.head.sha;
-            const workflowRunsUrl = `https://github.com/${repoOwner}/${repoName}/actions?query=workflow%3A%22Datafusion+extended+tests%22+branch%3A${pr.head.ref}`;
+            const workflowRunsUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions?query=workflow%3A%22Datafusion+extended+tests%22+branch%3A${branchName}`;
             
             await github.rest.checks.create({
               owner: context.repo.owner,
