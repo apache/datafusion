@@ -2388,7 +2388,7 @@ fn repartition_transitively_past_sort_with_projection() -> Result<()> {
     );
 
     let expected = &[
-        "SortExec: expr=[c@2 ASC], preserve_partitioning=[true]",
+        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
         // Since this projection is trivial, increasing parallelism is not beneficial
         "  ProjectionExec: expr=[a@0 as a, b@1 as b, c@2 as c]",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",

@@ -516,11 +516,11 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.18"
+version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df895a515f70646414f4b45c0b79082783b80552b373a68283012928df56f522"
+checksum = "06575e6a9673580f52661c92107baabffbf41e2141373441cbcdc47cb733003c"
 dependencies = [
- "bzip2 0.4.4",
+ "bzip2 0.5.1",
  "flate2",
  "futures-core",
  "memchr",
@@ -5693,9 +5693,9 @@ dependencies = [
 
 [[package]]
 name = "sqllogictest"
-version = "0.27.2"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f1c93848602f92e5925690d4805ccbc1ccdb61bee7d4ae79ad6862b542a539c"
+checksum = "17b2f0b80fc250ed3fdd82fc88c0ada5ad62ee1ed5314ac5474acfa52082f518"
 dependencies = [
  "async-trait",
  "educe",

@@ -55,7 +55,7 @@ postgres-types = { version = "0.2.8", features = ["derive", "with-chrono-0_4"], 
 rust_decimal = { version = "1.36.0", features = ["tokio-pg"] }
 # When updating the following dependency verify that sqlite test file regeneration works correctly
 # by running the regenerate_sqlite_files.sh script.
-sqllogictest = "0.27.2"
+sqllogictest = "0.28.0"
 sqlparser = { workspace = true }
 tempfile = { workspace = true }
 testcontainers = { version = "0.23", features = ["default"], optional = true }
@@ -66,6 +66,7 @@ tokio-postgres = { version = "0.7.12", optional = true }
 
 [features]
 avro = ["datafusion/avro"]
+backtrace = ["datafusion/backtrace"]
 postgres = [
     "bytes",
     "chrono",
