@@ -536,18 +536,17 @@ physical_plan
 05)│       WindowAggExec       │
 06)│    --------------------   │
 07)│        select_list:       │
-08)│   [count(Int64(1)) ROWS   │
+08)│    count(Int64(1)) ROWS   │
 09)│      BETWEEN UNBOUNDED    │
-10)│        PRECEDING AND      │
-11)│          UNBOUNDED        │
-12)│         FOLLOWING]        │
-13)└─────────────┬─────────────┘
-14)┌─────────────┴─────────────┐
-15)│       DataSourceExec      │
-16)│    --------------------   │
-17)│          files: 1         │
-18)│        format: csv        │
-19)└───────────────────────────┘
+10)│   PRECEDING AND UNBOUNDED │
+11)│          FOLLOWING        │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│        format: csv        │
+18)└───────────────────────────┘
 
 # Query with bounded window agg.
 query TT
@@ -569,24 +568,23 @@ physical_plan
 04)┌─────────────┴─────────────┐
 05)│    BoundedWindowAggExec   │
 06)│    --------------------   │
-07)│       mode: [Sorted]      │
+07)│        mode: Sorted       │
 08)│                           │
 09)│        select_list:       │
-10)│  [sum(t1.v1) ORDER BY [t1 │
-11)│    .v1 ASC NULLS LAST]    │
-12)│       ROWS BETWEEN 1      │
-13)│        PRECEDING AND      │
-14)│        CURRENT ROW]       │
-15)└─────────────┬─────────────┘
-16)┌─────────────┴─────────────┐
-17)│          SortExec         │
-18)└─────────────┬─────────────┘
-19)┌─────────────┴─────────────┐
-20)│       ProjectionExec      │
-21)└─────────────┬─────────────┘
-22)┌─────────────┴─────────────┐
-23)│       LazyMemoryExec      │
-24)└───────────────────────────┘
+10)│ sum(t1.v1) ORDER BY [t1.v1│
+11)│    ASC NULLS LAST] ROWS   │
+12)│     BETWEEN 1 PRECEDING   │
+13)│       AND CURRENT ROW     │
+14)└─────────────┬─────────────┘
+15)┌─────────────┴─────────────┐
+16)│          SortExec         │
+17)└─────────────┬─────────────┘
+18)┌─────────────┴─────────────┐
+19)│       ProjectionExec      │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│       LazyMemoryExec      │
+23)└───────────────────────────┘
 
 query TT
 explain select 
@@ -606,23 +604,20 @@ physical_plan
 05)│       WindowAggExec       │
 06)│    --------------------   │
 07)│        select_list:       │
-08)│   [count(Int64(1)) ROWS   │
+08)│    count(Int64(1)) ROWS   │
 09)│      BETWEEN UNBOUNDED    │
-10)│        PRECEDING AND      │
-11)│          UNBOUNDED        │
-12)│         FOLLOWING,        │
-13)│        row_number()       │
-14)│        ROWS BETWEEN       │
-15)│          UNBOUNDED        │
-16)│        PRECEDING AND      │
-17)│    UNBOUNDED FOLLOWING]   │
-18)└─────────────┬─────────────┘
-19)┌─────────────┴─────────────┐
-20)│       DataSourceExec      │
-21)│    --------------------   │
-22)│          files: 1         │
-23)│        format: csv        │
-24)└───────────────────────────┘
+10)│   PRECEDING AND UNBOUNDED │
+11)│   FOLLOWING, row_number() │
+12)│   ROWS BETWEEN UNBOUNDED  │
+13)│   PRECEDING AND UNBOUNDED │
+14)│          FOLLOWING        │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)│    --------------------   │
+19)│          files: 1         │
+20)│        format: csv        │
+21)└───────────────────────────┘
 
 query TT
 explain select 
@@ -642,15 +637,15 @@ physical_plan
 04)┌─────────────┴─────────────┐
 05)│    BoundedWindowAggExec   │
 06)│    --------------------   │
-07)│       mode: [Sorted]      │
+07)│        mode: Sorted       │
 08)│                           │
 09)│        select_list:       │
-10)│  [row_number() ORDER BY   │
+10)│   row_number() ORDER BY   │
 11)│    [table1.int_col ASC    │
 12)│      NULLS LAST] RANGE    │
 13)│      BETWEEN UNBOUNDED    │
 14)│    PRECEDING AND CURRENT  │
-15)│            ROW]           │
+15)│             ROW           │
 16)└─────────────┬─────────────┘
 17)┌─────────────┴─────────────┐
 18)│          SortExec         │
@@ -658,14 +653,14 @@ physical_plan
 20)┌─────────────┴─────────────┐
 21)│    BoundedWindowAggExec   │
 22)│    --------------------   │
-23)│       mode: [Sorted]      │
+23)│        mode: Sorted       │
 24)│                           │
 25)│        select_list:       │
-26)│  [rank() ORDER BY [table1 │
+26)│  rank() ORDER BY [table1  │
 27)│    .int_col DESC NULLS    │
 28)│    FIRST] RANGE BETWEEN   │
 29)│   UNBOUNDED PRECEDING AND │
-30)│        CURRENT ROW]       │
+30)│         CURRENT ROW       │
 31)└─────────────┬─────────────┘
 32)┌─────────────┴─────────────┐
 33)│          SortExec         │

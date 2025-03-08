@@ -187,7 +187,7 @@ impl DisplayAs for WindowAggExec {
                     .iter()
                     .map(|e| e.name().to_owned().to_string())
                     .collect();
-                writeln!(f, "select_list=[{}]", g.join(", "))?;
+                writeln!(f, "select_list={}", g.join(", "))?;
             }
         }
         Ok(())
