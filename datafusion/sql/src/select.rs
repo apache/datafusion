@@ -34,7 +34,8 @@ use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
 use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs
+    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
+    find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
     qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
@@ -635,18 +636,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                     options,
                 )?;
-                // Ok(vec![wildcard_with_options(planned_options)])
 
                 let expanded =
-                        expand_wildcard(plan.schema(), plan, Some(&planned_options))?;
+                    expand_wildcard(plan.schema(), plan, Some(&planned_options))?;
 
-                let replaced = if let Some(replace) = planned_options.replace {
-                            replace_columns(expanded, &replace)?
-                        } else {
-                            expanded
-                        };
-
-                Ok(replaced)
+                if let Some(replace) = planned_options.replace {
+                    replace_columns(expanded, &replace)
+                } else {
+                    Ok(expanded)
+                }
             }
             SelectItem::QualifiedWildcard(object_name, options) => {
                 Self::check_wildcard_options(&options)?;
@@ -665,15 +663,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?;
                 // If there is a REPLACE statement, replace that column with the given
                 // replace expression. Column name remains the same.
-                let replaced = if let Some(replace) = planned_options.replace {
-                    replace_columns(expanded, &replace)?
+                if let Some(replace) = planned_options.replace {
+                    replace_columns(expanded, &replace)
                 } else {
-                    expanded
-                };
-
-                Ok(replaced)
-                
-                // Ok(vec![qualified_wildcard_with_options(qualifier, planned_options)])
+                    Ok(expanded)
+                }
             }
         }
     }
