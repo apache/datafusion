@@ -36,15 +36,12 @@ on:
     inputs:
       pr_number:
         description: 'Pull request number'
-        required: false
         type: string
       check_run_id:
         description: 'Check run ID for status updates'
-        required: false
         type: string
       pr_head_sha:
         description: 'PR head SHA'
-        required: false
         type: string
 
 permissions:
@@ -150,9 +147,7 @@ jobs:
 
   # If the workflow was triggered by the PR comment we need to manually update check status to display in UI
   update-check-status:
-    # Uncomment proper needs once testing is done
-    # needs: [linux-build-lib, linux-test-extended, hash-collisions, sqllogictest-sqlite]
-    needs: [linux-build-lib]
+    needs: [linux-build-lib, linux-test-extended, hash-collisions, sqllogictest-sqlite]
     runs-on: ubuntu-latest
     if: ${{ always() && github.event_name == 'workflow_dispatch' }}
     steps:
