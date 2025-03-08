@@ -45,7 +45,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'extended.yml',
-              ref: 'refs/pull/${context.payload.issue.number}/head',
+              ref: 'refs/pull/${{ github.event.issue.number }}/head',
             });
 
       - name: Add reaction to comment 
