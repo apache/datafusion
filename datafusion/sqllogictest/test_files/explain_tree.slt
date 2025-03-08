@@ -519,6 +519,36 @@ physical_plan
 17)│       format: arrow       │
 18)└───────────────────────────┘
 
+
+# Query with window agg.
+query TT
+explain select count(*) over() from table1;
+----
+logical_plan
+01)Projection: count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+02)--WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: table1 projection=[]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│       WindowAggExec       │
+06)│    --------------------   │
+07)│        select_list:       │
+08)│   [count(Int64(1)) ROWS   │
+09)│      BETWEEN UNBOUNDED    │
+10)│        PRECEDING AND      │
+11)│          UNBOUNDED        │
+12)│         FOLLOWING]        │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│       DataSourceExec      │
+16)│    --------------------   │
+17)│          files: 1         │
+18)│        format: csv        │
+19)└───────────────────────────┘
+
 # cleanup
 statement ok
 drop table table1;
