@@ -150,7 +150,9 @@ jobs:
 
   # If the workflow was triggered by the PR comment we need to manually update check status to display in UI
   update-check-status:
-    needs: [linux-build-lib, linux-test-extended, hash-collisions, sqllogictest-sqlite]
+    # Uncomment proper needs once testing is done
+    # needs: [linux-build-lib, linux-test-extended, hash-collisions, sqllogictest-sqlite]
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     if: ${{ always() && github.event_name == 'workflow_dispatch' }}
     steps:
