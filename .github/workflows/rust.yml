@@ -178,7 +178,9 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
-      - name: Run tests (excluding doctests)
+      - name: Install Protobuf Compiler
+        run: sudo apt-get install -y protobuf-compiler
+      - name: Run tests (excluding doctests and datafusion-cli)
         run: |
           cargo test \
             --profile ci \
@@ -206,8 +208,6 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
-      #- name: Install Protobuf Compiler
-      #  run: sudo apt-get install -y protobuf-compiler
       - name: Setup Minio - S3-compatible storage
         run: |
           docker run -d --name minio-container \
