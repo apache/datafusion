@@ -377,8 +377,10 @@ impl DisplayAs for SortMergeJoinExec {
                     .collect::<Vec<String>>()
                     .join(", ");
 
-                writeln!(f, "join_type={:?}", self.join_type)?;
-                writeln!(f, "on=[{}]", on)
+                if self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)?;
+                }
+                writeln!(f, "on={}", on)
             }
         }
     }

@@ -389,7 +389,9 @@ impl DisplayAs for SymmetricHashJoinExec {
                     .join(", ");
 
                 writeln!(f, "mode={:?}", self.mode)?;
-                writeln!(f, "join_type={:?}", self.join_type)?;
+                if *self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)?;
+                }
                 writeln!(f, "on={}", on)
             }
         }
