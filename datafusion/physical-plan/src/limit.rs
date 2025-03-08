@@ -109,8 +109,12 @@ impl DisplayAs for GlobalLimitExec {
                 )
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                writeln!(f, "skip={}", self.skip)?;
+                write!(
+                    f,
+                    "fetch={}",
+                    self.fetch.map_or("None".to_string(), |x| x.to_string())
+                )
             }
         }
     }

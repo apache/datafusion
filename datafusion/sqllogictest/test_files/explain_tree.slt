@@ -144,6 +144,27 @@ physical_plan
 20)│        format: csv        │
 21)└───────────────────────────┘
 
+# Limit
+query TT
+explain SELECT int_col FROM table1 LIMIT 3,2;
+----
+logical_plan
+01)Limit: skip=3, fetch=2
+02)--TableScan: table1 projection=[int_col], fetch=5
+physical_plan
+01)┌───────────────────────────┐
+02)│      GlobalLimitExec      │
+03)│    --------------------   │
+04)│          fetch: 2         │
+05)│          skip: 3          │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│       DataSourceExec      │
+09)│    --------------------   │
+10)│          files: 1         │
+11)│        format: csv        │
+12)└───────────────────────────┘
+
 # 2 Joins
 query TT
 explain SELECT table1.string_col, table2.date_col FROM table1 JOIN table2 ON table1.int_col = table2.int_col;
