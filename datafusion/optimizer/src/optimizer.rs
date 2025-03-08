@@ -53,7 +53,6 @@ use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
-use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::utils::log_plan;
 
 /// `OptimizerRule`s transforms one [`LogicalPlan`] into another which
@@ -240,7 +239,6 @@ impl Optimizer {
             // Filters can't be pushed down past Limits, we should do PushDownFilter after PushDownLimit
             Arc::new(PushDownLimit::new()),
             Arc::new(PushDownFilter::new()),
-            Arc::new(SingleDistinctToGroupBy::new()),
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
             Arc::new(SimplifyExpressions::new()),
