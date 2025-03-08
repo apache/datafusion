@@ -672,7 +672,7 @@ impl DisplayAs for HashJoinExec {
                 let on = self
                     .on
                     .iter()
-                    .map(|(c1, c2)| format!("({}, {})", c1, c2))
+                    .map(|(c1, c2)| format!("({} = {})", c1, c2))
                     .collect::<Vec<String>>()
                     .join(", ");
 
