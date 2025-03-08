@@ -195,13 +195,13 @@ metadata (number of cores, DataFusion version, etc.).
 $ git checkout main
 # generate an output script in /tmp/output_main
 $ mkdir -p /tmp/output_main
-$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_main
+$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_main/tpch.json
 # generate an output script in /tmp/output_branch
 $ mkdir -p /tmp/output_branch
 $ git checkout my_branch
-$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch
+$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch/tpch.json
 # compare the results:
-./compare.py /tmp/output_main/tpch-summary--1679330119.json  /tmp/output_branch/tpch-summary--1679328405.json
+./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
 ```
 
 This will produce output like:
