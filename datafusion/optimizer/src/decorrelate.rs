@@ -94,10 +94,9 @@ impl PullUpCorrelatedExpr {
         }
     }
 
-    /// Set if we need to handle [the Count bug] during the pull up process
-    /// TODO this should be removed or renamed semantically
+    /// Set if we need to handle [the count bug] during the pull up process
     ///
-    /// [the Count bug]: https://github.com/apache/datafusion/issues/10553
+    /// [the count bug]: https://github.com/apache/datafusion/issues/10553
     pub fn with_need_handle_count_bug(mut self, need_handle_count_bug: bool) -> Self {
         self.need_handle_count_bug = need_handle_count_bug;
         self
