@@ -588,6 +588,95 @@ physical_plan
 23)│       LazyMemoryExec      │
 24)└───────────────────────────┘
 
+query TT
+explain select 
+  count(*) over(),
+  row_number() over ()
+from table1
+----
+logical_plan
+01)Projection: count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+02)--WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: table1 projection=[]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│       WindowAggExec       │
+06)│    --------------------   │
+07)│        select_list:       │
+08)│   [count(Int64(1)) ROWS   │
+09)│      BETWEEN UNBOUNDED    │
+10)│        PRECEDING AND      │
+11)│          UNBOUNDED        │
+12)│         FOLLOWING,        │
+13)│        row_number()       │
+14)│        ROWS BETWEEN       │
+15)│          UNBOUNDED        │
+16)│        PRECEDING AND      │
+17)│    UNBOUNDED FOLLOWING]   │
+18)└─────────────┬─────────────┘
+19)┌─────────────┴─────────────┐
+20)│       DataSourceExec      │
+21)│    --------------------   │
+22)│          files: 1         │
+23)│        format: csv        │
+24)└───────────────────────────┘
+
+query TT
+explain select 
+  rank() over(ORDER BY int_col DESC),
+  row_number() over (ORDER BY int_col ASC)
+from table1
+----
+logical_plan
+01)Projection: rank() ORDER BY [table1.int_col DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, row_number() ORDER BY [table1.int_col ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--WindowAggr: windowExpr=[[row_number() ORDER BY [table1.int_col ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----WindowAggr: windowExpr=[[rank() ORDER BY [table1.int_col DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: table1 projection=[int_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│    BoundedWindowAggExec   │
+06)│    --------------------   │
+07)│       mode: [Sorted]      │
+08)│                           │
+09)│        select_list:       │
+10)│  [row_number() ORDER BY   │
+11)│    [table1.int_col ASC    │
+12)│      NULLS LAST] RANGE    │
+13)│      BETWEEN UNBOUNDED    │
+14)│    PRECEDING AND CURRENT  │
+15)│            ROW]           │
+16)└─────────────┬─────────────┘
+17)┌─────────────┴─────────────┐
+18)│          SortExec         │
+19)└─────────────┬─────────────┘
+20)┌─────────────┴─────────────┐
+21)│    BoundedWindowAggExec   │
+22)│    --------------------   │
+23)│       mode: [Sorted]      │
+24)│                           │
+25)│        select_list:       │
+26)│  [rank() ORDER BY [table1 │
+27)│    .int_col DESC NULLS    │
+28)│    FIRST] RANGE BETWEEN   │
+29)│   UNBOUNDED PRECEDING AND │
+30)│        CURRENT ROW]       │
+31)└─────────────┬─────────────┘
+32)┌─────────────┴─────────────┐
+33)│          SortExec         │
+34)└─────────────┬─────────────┘
+35)┌─────────────┴─────────────┐
+36)│       DataSourceExec      │
+37)│    --------------------   │
+38)│          files: 1         │
+39)│        format: csv        │
+40)└───────────────────────────┘
+
 # cleanup
 statement ok
 drop table table1;
