@@ -169,7 +169,19 @@ impl DisplayAs for ProjectionExec {
             }
             DisplayFormatType::TreeRender => {
                 // TODO: collect info
-                write!(f, "")
+                let expr: Vec<String> = self
+                    .expr
+                    .iter()
+                    .map(|(e, alias)| {
+                        let e = e.to_string();
+                        if &e != alias {
+                            format!("{e} as {alias}")
+                        } else {
+                            e
+                        }
+                    })
+                    .collect();
+                write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
             }
         }
     }

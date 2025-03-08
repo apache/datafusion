@@ -472,6 +472,32 @@ physical_plan
 15)│          rows: 1          │
 16)└───────────────────────────┘
 
+# Query with projection on memory
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table3;
+----
+logical_plan
+01)Projection: table3.int_col, table3.bigint_col, CAST(table3.int_col AS Int64) + table3.bigint_col AS sum_col
+02)--TableScan: table3 projection=[int_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│   ProjectionExec: expr:   │
+05)│   [int_col@0 as int_col,  │
+06)│       bigint_col@1 as     │
+07)│      bigint_col, CAST     │
+08)│   (int_col@0 AS Int64) +  │
+09)│  bigint_col@1 as sum_col] │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│       DataSourceExec      │
+13)│    --------------------   │
+14)│        bytes: 1560        │
+15)│       format: memory      │
+16)│          rows: 1          │
+17)└───────────────────────────┘
+
 # Query with filter on json
 query TT
 explain SELECT int_col FROM table4 WHERE string_col != 'foo';
