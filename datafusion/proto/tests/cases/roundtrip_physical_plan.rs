@@ -24,6 +24,7 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_expr::dml::InsertOp;
@@ -94,7 +95,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
+    internal_err, not_impl_err, Constraints, DataFusionError, Result, UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -762,7 +763,7 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         output_ordering: vec![],
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
-        file_source: source,
+        file_source: file_source,
     };
     scan_config = scan_config.with_statistics(statistics);
 
@@ -829,7 +830,7 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
         output_ordering: vec![],
         file_compression_type: FileCompressionType::UNCOMPRESSED,
         new_lines_in_values: false,
-        file_source: source,
+        file_source: file_source,
     };
     scan_config = scan_config.with_statistics(statistics);
 
