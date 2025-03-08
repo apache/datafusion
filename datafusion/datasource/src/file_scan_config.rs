@@ -422,7 +422,7 @@ impl From<FileScanConfig> for FileScanConfigBuilder {
         Self {
             object_store_url: config.object_store_url,
             file_schema: config.file_schema,
-            file_source: config.file_source.clone(),
+            file_source: Arc::<dyn FileSource>::clone(&config.file_source),
             file_groups: config.file_groups,
             statistics: config.file_source.statistics().ok(),
             output_ordering: config.output_ordering,
@@ -2157,10 +2157,21 @@ mod tests {
         assert!(config.constraints.is_empty());
 
         // Verify statistics are set to unknown
-        assert_eq!(config.file_source.statistics().unwrap().num_rows, Precision::Absent);
-        assert_eq!(config.file_source.statistics().unwrap().total_byte_size, Precision::Absent);
         assert_eq!(
-            config.file_source.statistics().unwrap().column_statistics.len(),
+            config.file_source.statistics().unwrap().num_rows,
+            Precision::Absent
+        );
+        assert_eq!(
+            config.file_source.statistics().unwrap().total_byte_size,
+            Precision::Absent
+        );
+        assert_eq!(
+            config
+                .file_source
+                .statistics()
+                .unwrap()
+                .column_statistics
+                .len(),
             file_schema.fields().len()
         );
         for stat in config.file_source.statistics().unwrap().column_statistics {
