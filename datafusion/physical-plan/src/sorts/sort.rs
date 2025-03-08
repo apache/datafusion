@@ -1007,11 +1007,11 @@ impl DisplayAs for SortExec {
             }
             DisplayFormatType::TreeRender => match self.fetch {
                 Some(fetch) => {
-                    writeln!(f, "fetch={fetch}")?;
-                    writeln!(f, "sort=[{}]", self.expr)
+                    writeln!(f, "limit={fetch}")?;
+                    writeln!(f, "sort keys=[{}]", self.expr)
                 }
                 None => {
-                    writeln!(f, "sort=[{}]", self.expr)
+                    writeln!(f, "sort keys=[{}]", self.expr)
                 }
             },
         }
