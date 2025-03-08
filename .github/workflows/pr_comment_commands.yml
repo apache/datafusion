@@ -32,27 +32,27 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'Run extended tests') }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: refs/pull/${{ github.event.issue.number }}/head
-      - name: Get branch name
-        id: get-branch
-        run: |
-            BRANCH_NAME=$(git branch --show-current)
-            echo "Branch name: $BRANCH_NAME"
-            echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
-
       - name: Dispatch extended tests for a PR branch with comment
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            // Get PR details to fetch the branch name
+            const { data: pullRequest } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.issue.number
+            });
+            
+            // Extract the branch name
+            const branchName = pullRequest.head.ref;
+            
+            // Dispatch the workflow with the PR branch name
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'extended.yml',
-              ref: '${{ steps.get-branch.outputs.branch }}',
+              ref: branchName,
             });
 
       - name: Add reaction to comment 
