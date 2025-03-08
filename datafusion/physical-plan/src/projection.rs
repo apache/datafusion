@@ -150,38 +150,24 @@ impl DisplayAs for ProjectionExec {
         t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
+        let expr: Vec<String> = self
+            .expr
+            .iter()
+            .map(|(e, alias)| {
+                let e = e.to_string();
+                if &e != alias {
+                    format!("{e} as {alias}")
+                } else {
+                    e
+                }
+            })
+            .collect();
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self
-                    .expr
-                    .iter()
-                    .map(|(e, alias)| {
-                        let e = e.to_string();
-                        if &e != alias {
-                            format!("{e} as {alias}")
-                        } else {
-                            e
-                        }
-                    })
-                    .collect();
-
                 write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                let expr: Vec<String> = self
-                    .expr
-                    .iter()
-                    .map(|(e, alias)| {
-                        let e = e.to_string();
-                        if &e != alias {
-                            format!("{e} as {alias}")
-                        } else {
-                            e
-                        }
-                    })
-                    .collect();
-                write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
+                write!(f, "expr=[{}]", expr.join(", "))
             }
         }
     }
