@@ -38,7 +38,7 @@ use datafusion_expr::utils::{
     find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    qualified_wildcard_with_options, wildcard_with_options, Aggregate, Expr, Filter,
+    Aggregate, Expr, Filter,
     GroupingSet, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
     Partitioning,
 };
@@ -92,6 +92,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             empty_from,
             planner_context,
         )?;
+
+        // TOOD: remove this after Expr::Wildcard is removed
+        #[allow(deprecated)]
+        for expr in &select_exprs {
+            debug_assert!(!matches!(expr, Expr::Wildcard { .. }));
+        }
 
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
