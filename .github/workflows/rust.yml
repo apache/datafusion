@@ -179,17 +179,18 @@ jobs:
       - name: Setup Rust toolchain
         run: rustup toolchain install stable
       - name: Run tests (excluding doctests)
-        run: cargo test \
-          --profile ci \
-          --exclude datafusion-examples \
-          --exclude ffi_example_table_provider \
-          --exclude datafusion-benchmarks \
-          --exclude datafusion-cli \
-          --workspace \
-          --lib \
-          --tests \
-          --bins \ 
-          --features avro,json,backtrace,integration-tests
+        run: |
+          cargo test \
+            --profile ci \
+            --exclude datafusion-examples \
+            --exclude ffi_example_table_provider \
+            --exclude datafusion-benchmarks \
+            --exclude datafusion-cli \
+            --workspace \
+            --lib \
+            --tests \
+            --bins \ 
+            --features avro,json,backtrace,integration-tests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
