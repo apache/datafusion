@@ -1820,6 +1820,9 @@ query I
 select a from t;
 ----
 
+query
+drop table t;
+
 statement ok
 set datafusion.optimizer.max_passes=3;
 

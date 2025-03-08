@@ -4541,3 +4541,116 @@ DROP TABLE test
 
 statement ok
 set datafusion.execution.target_partitions = 1;
+
+# test using_join_multiple_keys_subquery
+statement count 0
+create table person(id int, age int, state int);
+
+statement count 0
+create table lineitem(c1 int);
+
+query TT
+explain SELECT * FROM person a join person b using (id, age);
+----
+logical_plan
+01)Projection: a.id, a.age, a.state, b.state
+02)--Inner Join: a.id = b.id, a.age = b.age
+03)----SubqueryAlias: a
+04)------TableScan: person projection=[id, age, state]
+05)----SubqueryAlias: b
+06)------TableScan: person projection=[id, age, state]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1)], projection=[id@0, age@1, state@2, state@5]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT age FROM (SELECT * FROM person a join person b using (id, age, state));
+----
+logical_plan
+01)Projection: a.age
+02)--Inner Join: a.id = b.id, a.age = b.age, a.state = b.state
+03)----SubqueryAlias: a
+04)------TableScan: person projection=[id, age, state]
+05)----SubqueryAlias: b
+06)------TableScan: person projection=[id, age, state]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1), (state@2, state@2)], projection=[age@1]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT a.* FROM person a join person b using (id, age);
+----
+logical_plan
+01)Projection: a.id, a.age, a.state
+02)--Inner Join: a.id = b.id, a.age = b.age
+03)----SubqueryAlias: a
+04)------TableScan: person projection=[id, age, state]
+05)----SubqueryAlias: b
+06)------TableScan: person projection=[id, age]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1)], projection=[id@0, age@1, state@2]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT a.*, b.* FROM person a join person b using (id, age);
+----
+logical_plan
+01)Inner Join: a.id = b.id, a.age = b.age
+02)--SubqueryAlias: a
+03)----TableScan: person projection=[id, age, state]
+04)--SubqueryAlias: b
+05)----TableScan: person projection=[id, age, state]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1)]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT * FROM person a join person b using (id, age, state) join person c using (id, age, state);
+----
+logical_plan
+01)Projection: a.id, a.age, a.state
+02)--Inner Join: a.id = c.id, a.age = c.age, a.state = c.state
+03)----Projection: a.id, a.age, a.state
+04)------Inner Join: a.id = b.id, a.age = b.age, a.state = b.state
+05)--------SubqueryAlias: a
+06)----------TableScan: person projection=[id, age, state]
+07)--------SubqueryAlias: b
+08)----------TableScan: person projection=[id, age, state]
+09)----SubqueryAlias: c
+10)------TableScan: person projection=[id, age, state]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1), (state@2, state@2)], projection=[id@0, age@1, state@2]
+03)----CoalesceBatchesExec: target_batch_size=3
+04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1), (state@2, state@2)], projection=[id@0, age@1, state@2]
+05)--------DataSourceExec: partitions=1, partition_sizes=[0]
+06)--------DataSourceExec: partitions=1, partition_sizes=[0]
+07)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT * FROM person a NATURAL JOIN lineitem b;
+----
+logical_plan
+01)Cross Join: 
+02)--SubqueryAlias: a
+03)----TableScan: person projection=[id, age, state]
+04)--SubqueryAlias: b
+05)----TableScan: lineitem projection=[c1]
+physical_plan
+01)CrossJoinExec
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+statement count 0
+drop table person;
+
+query
+drop table lineitem;

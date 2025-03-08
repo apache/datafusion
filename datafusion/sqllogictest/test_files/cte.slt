@@ -859,3 +859,87 @@ SELECT * FROM
 400 500 1
 400 500 2
 400 500 3
+
+query error DataFusion error: Error during planning: Source table contains 3 columns but only 1 names given as column alias
+with numbers(a) as (select 1, 2, 3) select * from numbers;
+
+query TT
+explain with numbers(a,b,c) as (select 1 as x, 2 as y, 3 as z) select * from numbers;
+----
+logical_plan
+01)SubqueryAlias: numbers
+02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
+03)----EmptyRelation
+physical_plan
+01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
+02)--PlaceholderRowExec
+
+query TT
+explain with numbers(a,b,c) as (select 1,2,3) select * from numbers;
+----
+logical_plan
+01)SubqueryAlias: numbers
+02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
+03)----EmptyRelation
+physical_plan
+01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
+02)--PlaceholderRowExec
+
+query TT
+explain with numbers as (select 1 as a, 2 as b, 3 as c) select * from numbers;
+----
+logical_plan
+01)SubqueryAlias: numbers
+02)--Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c
+03)----EmptyRelation
+physical_plan
+01)ProjectionExec: expr=[1 as a, 2 as b, 3 as c]
+02)--PlaceholderRowExec
+
+statement count 0
+create table person (id int, name string, primary key(id))
+
+query TT
+explain with cte as (select * from person) SELECT * FROM person WHERE EXISTS (SELECT * FROM cte WHERE id = person.id);
+----
+logical_plan
+01)LeftSemi Join: person.id = __correlated_sq_1.id
+02)--TableScan: person projection=[id, name]
+03)--SubqueryAlias: __correlated_sq_1
+04)----SubqueryAlias: cte
+05)------TableScan: person projection=[id]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8182
+02)--HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(id@0, id@0)]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+statement count 0
+drop table person;
+
+statement count 0
+create table j1(a int);
+
+statement count 0
+create table j2(b int);
+
+query TT
+explain SELECT * FROM j1, LATERAL (SELECT 1) AS j2;
+----
+logical_plan
+01)Cross Join: 
+02)--TableScan: j1 projection=[a]
+03)--SubqueryAlias: j2
+04)----Projection: Int64(1)
+05)------EmptyRelation
+physical_plan
+01)CrossJoinExec
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--ProjectionExec: expr=[1 as Int64(1)]
+04)----PlaceholderRowExec
+
+statement count 0
+drop table j1;
+
+statement count 0
+drop table j2;

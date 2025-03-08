@@ -842,83 +842,6 @@ fn natural_right_join() {
 }
 
 #[test]
-fn natural_join_no_common_becomes_cross_join() {
-    let sql = "SELECT * FROM person a NATURAL JOIN lineitem b";
-    let expected = "Projection: *\
-                        \n  Cross Join: \
-                        \n    SubqueryAlias: a\
-                        \n      TableScan: person\
-                        \n    SubqueryAlias: b\
-                        \n      TableScan: lineitem";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn using_join_multiple_keys() {
-    let sql = "SELECT * FROM person a join person b using (id, age)";
-    let expected = "Projection: *\
-                        \n  Inner Join: Using a.id = b.id, a.age = b.age\
-                        \n    SubqueryAlias: a\
-                        \n      TableScan: person\
-                        \n    SubqueryAlias: b\
-                        \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn using_join_multiple_keys_subquery() {
-    let sql =
-        "SELECT age FROM (SELECT * FROM person a join person b using (id, age, state))";
-    let expected = "Projection: a.age\
-                        \n  Projection: *\
-                        \n    Inner Join: Using a.id = b.id, a.age = b.age, a.state = b.state\
-                        \n      SubqueryAlias: a\
-                        \n        TableScan: person\
-                        \n      SubqueryAlias: b\
-                        \n        TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn using_join_multiple_keys_qualified_wildcard_select() {
-    let sql = "SELECT a.* FROM person a join person b using (id, age)";
-    let expected = "Projection: a.*\
-                        \n  Inner Join: Using a.id = b.id, a.age = b.age\
-                        \n    SubqueryAlias: a\
-                        \n      TableScan: person\
-                        \n    SubqueryAlias: b\
-                        \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn using_join_multiple_keys_select_all_columns() {
-    let sql = "SELECT a.*, b.* FROM person a join person b using (id, age)";
-    let expected = "Projection: a.*, b.*\
-                        \n  Inner Join: Using a.id = b.id, a.age = b.age\
-                        \n    SubqueryAlias: a\
-                        \n      TableScan: person\
-                        \n    SubqueryAlias: b\
-                        \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn using_join_multiple_keys_multiple_joins() {
-    let sql = "SELECT * FROM person a join person b using (id, age, state) join person c using (id, age, state)";
-    let expected = "Projection: *\
-                        \n  Inner Join: Using a.id = c.id, a.age = c.age, a.state = c.state\
-                        \n    Inner Join: Using a.id = b.id, a.age = b.age, a.state = b.state\
-                        \n      SubqueryAlias: a\
-                        \n        TableScan: person\
-                        \n      SubqueryAlias: b\
-                        \n        TableScan: person\
-                        \n    SubqueryAlias: c\
-                        \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
 fn select_with_having() {
     let sql = "SELECT id, age
                    FROM person
@@ -1231,24 +1154,6 @@ fn select_binary_expr_nested() {
     let expected = "Projection: (person.age + person.salary) / Int64(2)\
                         \n  TableScan: person";
     quick_test(sql, expected);
-}
-
-#[test]
-fn select_wildcard_with_groupby() {
-    quick_test(
-            r#"SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date, "😀""#,
-            "Projection: *\
-             \n  Aggregate: groupBy=[[person.id, person.first_name, person.last_name, person.age, person.state, person.salary, person.birth_date, person.😀]], aggr=[[]]\
-             \n    TableScan: person",
-        );
-    quick_test(
-            "SELECT * FROM (SELECT first_name, last_name FROM person) AS a GROUP BY first_name, last_name",
-            "Projection: *\
-            \n  Aggregate: groupBy=[[a.first_name, a.last_name]], aggr=[[]]\
-            \n    SubqueryAlias: a\
-            \n      Projection: person.first_name, person.last_name\
-            \n        TableScan: person",
-        );
 }
 
 #[test]
@@ -1615,15 +1520,6 @@ fn select_aggregate_with_non_column_inner_expression_with_groupby() {
         "Projection: person.state, min(person.age + Int64(1))\
             \n  Aggregate: groupBy=[[person.state]], aggr=[[min(person.age + Int64(1))]]\
             \n    TableScan: person",
-    );
-}
-
-#[test]
-fn test_wildcard() {
-    quick_test(
-        "SELECT * from person",
-        "Projection: *\
-            \n  TableScan: person",
     );
 }
 
@@ -2959,88 +2855,6 @@ fn scalar_subquery_reference_outer_field() {
 }
 
 #[test]
-fn subquery_references_cte() {
-    let sql = "WITH \
-        cte AS (SELECT * FROM person) \
-        SELECT * FROM person WHERE EXISTS (SELECT * FROM cte WHERE id = person.id)";
-
-    let expected = "Projection: *\
-        \n  Filter: EXISTS (<subquery>)\
-        \n    Subquery:\
-        \n      Projection: *\
-        \n        Filter: cte.id = outer_ref(person.id)\
-        \n          SubqueryAlias: cte\
-        \n            Projection: *\
-        \n              TableScan: person\
-        \n    TableScan: person";
-
-    quick_test(sql, expected)
-}
-
-#[test]
-fn cte_with_no_column_names() {
-    let sql = "WITH \
-        numbers AS ( \
-            SELECT 1 as a, 2 as b, 3 as c \
-        ) \
-        SELECT * FROM numbers;";
-
-    let expected = "Projection: *\
-        \n  SubqueryAlias: numbers\
-        \n    Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c\
-        \n      EmptyRelation";
-
-    quick_test(sql, expected)
-}
-
-#[test]
-fn cte_with_column_names() {
-    let sql = "WITH \
-        numbers(a, b, c) AS ( \
-            SELECT 1, 2, 3 \
-        ) \
-        SELECT * FROM numbers;";
-
-    let expected = "Projection: *\
-        \n  SubqueryAlias: numbers\
-        \n    Projection: Int64(1) AS a, Int64(2) AS b, Int64(3) AS c\
-        \n      Projection: Int64(1), Int64(2), Int64(3)\
-        \n        EmptyRelation";
-
-    quick_test(sql, expected)
-}
-
-#[test]
-fn cte_with_column_aliases_precedence() {
-    // The end result should always be what CTE specification says
-    let sql = "WITH \
-        numbers(a, b, c) AS ( \
-            SELECT 1 as x, 2 as y, 3 as z \
-        ) \
-        SELECT * FROM numbers;";
-
-    let expected = "Projection: *\
-        \n  SubqueryAlias: numbers\
-        \n    Projection: x AS a, y AS b, z AS c\
-        \n      Projection: Int64(1) AS x, Int64(2) AS y, Int64(3) AS z\
-        \n        EmptyRelation";
-    quick_test(sql, expected)
-}
-
-#[test]
-fn cte_unbalanced_number_of_columns() {
-    let sql = "WITH \
-        numbers(a) AS ( \
-            SELECT 1, 2, 3 \
-        ) \
-        SELECT * FROM numbers;";
-
-    let expected = "Error during planning: Source table contains 3 columns but only 1 names given as column alias";
-    let result = logical_plan(sql).err().unwrap();
-    assert_eq!(result.strip_backtrace(), expected);
-}
-
-#[test]
 fn aggregate_with_rollup() {
     let sql =
         "SELECT id, state, age, count(*) FROM person GROUP BY id, ROLLUP (state, age)";
@@ -3237,21 +3051,6 @@ fn lateral_nested_left_join() {
             \n          Projection: *\
             \n            Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id\
             \n              TableScan: j3";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_unnest() {
-    let sql = "SELECT * from unnest_table u, unnest(u.array_col)";
-    let expected = "Projection: *\
-            \n  Cross Join: \
-            \n    SubqueryAlias: u\
-            \n      TableScan: unnest_table\
-            \n    Subquery:\
-            \n      Projection: __unnest_placeholder(outer_ref(u.array_col),depth=1) AS UNNEST(outer_ref(u.array_col))\
-            \n        Unnest: lists[__unnest_placeholder(outer_ref(u.array_col))|depth=1] structs[]\
-            \n          Projection: outer_ref(u.array_col) AS __unnest_placeholder(outer_ref(u.array_col))\
-            \n            EmptyRelation";
     quick_test(sql, expected);
 }
 
@@ -4318,44 +4117,6 @@ fn test_prepare_statement_bad_list_idx() {
 
     let err = plan.replace_params_with_values(&param_values).unwrap_err();
     assert_contains!(err.to_string(), "Error during planning: Failed to parse placeholder id: invalid digit found in string");
-}
-
-#[test]
-fn test_table_alias() {
-    let sql = "select * from (\
-          (select id from person) t1 \
-            CROSS JOIN \
-          (select age from person) t2 \
-        ) as f";
-
-    let expected = "Projection: *\
-        \n  SubqueryAlias: f\
-        \n    Cross Join: \
-        \n      SubqueryAlias: t1\
-        \n        Projection: person.id\
-        \n          TableScan: person\
-        \n      SubqueryAlias: t2\
-        \n        Projection: person.age\
-        \n          TableScan: person";
-    quick_test(sql, expected);
-
-    let sql = "select * from (\
-          (select id from person) t1 \
-            CROSS JOIN \
-          (select age from person) t2 \
-        ) as f (c1, c2)";
-
-    let expected = "Projection: *\
-        \n  SubqueryAlias: f\
-        \n    Projection: t1.id AS c1, t2.age AS c2\
-        \n      Cross Join: \
-        \n        SubqueryAlias: t1\
-        \n          Projection: person.id\
-        \n            TableScan: person\
-        \n        SubqueryAlias: t2\
-        \n          Projection: person.age\
-        \n            TableScan: person";
-    quick_test(sql, expected);
 }
 
 #[test]
