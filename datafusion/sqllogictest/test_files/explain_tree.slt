@@ -549,6 +549,45 @@ physical_plan
 18)│        format: csv        │
 19)└───────────────────────────┘
 
+# Query with bounded window agg.
+query TT
+explain SELECT
+    v1,
+    SUM(v1) OVER (ORDER BY v1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS rolling_sum
+FROM generate_series(1, 1000) AS t1(v1);
+----
+logical_plan
+01)Projection: t1.v1, sum(t1.v1) ORDER BY [t1.v1 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW AS rolling_sum
+02)--WindowAggr: windowExpr=[[sum(t1.v1) ORDER BY [t1.v1 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW]]
+03)----SubqueryAlias: t1
+04)------Projection: tmp_table.value AS v1
+05)--------TableScan: tmp_table projection=[value]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│    BoundedWindowAggExec   │
+06)│    --------------------   │
+07)│       mode: [Sorted]      │
+08)│                           │
+09)│        select_list:       │
+10)│  [sum(t1.v1) ORDER BY [t1 │
+11)│    .v1 ASC NULLS LAST]    │
+12)│       ROWS BETWEEN 1      │
+13)│        PRECEDING AND      │
+14)│        CURRENT ROW]       │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│          SortExec         │
+18)└─────────────┬─────────────┘
+19)┌─────────────┴─────────────┐
+20)│       ProjectionExec      │
+21)└─────────────┬─────────────┘
+22)┌─────────────┴─────────────┐
+23)│       LazyMemoryExec      │
+24)└───────────────────────────┘
+
 # cleanup
 statement ok
 drop table table1;
