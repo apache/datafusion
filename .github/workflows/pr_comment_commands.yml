@@ -60,8 +60,8 @@ jobs:
             const workflowRunsUrl = `https://github.com/${repoOwner}/${repoName}/actions?query=workflow%3A%22Datafusion+extended+tests%22+branch%3A${pr.head.ref}`;
             
             await github.rest.checks.create({
-              owner: repoOwner,
-              repo: repoName,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               name: 'Extended Tests',
               head_sha: headSha,
               status: 'in_progress',
