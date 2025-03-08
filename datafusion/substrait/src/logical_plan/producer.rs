@@ -1039,7 +1039,7 @@ fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
             .map(|f| to_substrait_type(f.data_type(), f.is_nullable()))
             .collect::<Result<_>>()?,
         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-        nullability: r#type::Nullability::Unspecified as i32,
+        nullability: r#type::Nullability::Required as i32,
     };
 
     Ok(NamedStruct {

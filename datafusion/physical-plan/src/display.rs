@@ -37,10 +37,41 @@ use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 #[derive(Debug, Clone, Copy)]
 pub enum DisplayFormatType {
     /// Default, compact format. Example: `FilterExec: c12 < 10.0`
+    ///
+    /// This format is designed to provide a detailed textual description
+    /// of all rele
     Default,
-    /// Verbose, showing all available details
+    /// Verbose, showing all available details.
+    ///
+    /// This form is even more detailed than [`Self::Default`]
     Verbose,
-    /// TreeRender, display plan like a tree.
+    /// TreeRender, displayed in the `tree` explain type.
+    ///
+    /// This format is inspired by DuckDB's explain plans. The information
+    /// presented should be "user friendly", and contain only the most relevant
+    /// information for understanding a plan. It should NOT contain the same level
+    /// of detail information as the  [`Self::Default`] format.
+    ///
+    /// In this mode, each line contains a key=value pair.
+    /// Everything before the first `=` is treated as the key, and everything after the
+    /// first `=` is treated as the value.
+    ///
+    /// For example, if the output of `TreeRender` is this:
+    /// ```text
+    /// partition_sizes=[1]
+    /// partitions=1
+    /// ```
+    ///
+    /// It is rendered in the center of a box in the following way:
+    ///
+    /// ```text
+    /// ┌───────────────────────────┐
+    /// │       DataSourceExec      │
+    /// │    --------------------   │
+    /// │    partition_sizes: [1]   │
+    /// │       partitions: 1       │
+    /// └───────────────────────────┘
+    ///  ```
     TreeRender,
 }
 
@@ -859,9 +890,13 @@ impl TreeRenderVisitor<'_, '_> {
                 splits = truncated_splits;
             }
             for split in splits {
-                // TODO: check every line is less than MAX_LINE_RENDER_SIZE.
-                result.push(split);
+                Self::split_string_buffer(&split, result);
             }
+            if result.len() > max_lines {
+                result.truncate(max_lines);
+                result.push("...".to_string());
+            }
+
             requires_padding = true;
             was_inlined = is_inlined;
         }
@@ -913,6 +948,52 @@ impl TreeRenderVisitor<'_, '_> {
         }
 
         false
+    }
+
+    fn split_string_buffer(source: &str, result: &mut Vec<String>) {
+        let mut character_pos = 0;
+        let mut start_pos = 0;
+        let mut render_width = 0;
+        let mut last_possible_split = 0;
+
+        let chars: Vec<char> = source.chars().collect();
+
+        while character_pos < chars.len() {
+            // Treating each char as width 1 for simplification
+            let char_width = 1;
+
+            // Does the next character make us exceed the line length?
+            if render_width + char_width > Self::NODE_RENDER_WIDTH - 2 {
+                if start_pos + 8 > last_possible_split {
+                    // The last character we can split on is one of the first 8 characters of the line
+                    // to not create very small lines we instead split on the current character
+                    last_possible_split = character_pos;
+                }
+
+                result.push(source[start_pos..last_possible_split].to_string());
+                render_width = character_pos - last_possible_split;
+                start_pos = last_possible_split;
+                character_pos = last_possible_split;
+            }
+
+            // check if we can split on this character
+            if Self::can_split_on_this_char(chars[character_pos]) {
+                last_possible_split = character_pos;
+            }
+
+            character_pos += 1;
+            render_width += char_width;
+        }
+
+        if source.len() > start_pos {
+            // append the remainder of the input
+            result.push(source[start_pos..].to_string());
+        }
+    }
+
+    fn can_split_on_this_char(c: char) -> bool {
+        (!c.is_ascii_digit() && !c.is_ascii_uppercase() && !c.is_ascii_lowercase())
+            && c != '_'
     }
 }
 
