@@ -185,7 +185,7 @@ impl DisplayAs for WindowAggExec {
                 let g: Vec<String> = self
                     .window_expr
                     .iter()
-                    .map(|e| format!("{}", e.name().to_owned(),))
+                    .map(|e| e.name().to_owned().to_string())
                     .collect();
                 writeln!(f, "select_list=[{}]", g.join(", "))?;
             }
