@@ -181,6 +181,8 @@ jobs:
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
       - name: Run tests (excluding doctests and datafusion-cli)
+        env:
+          RUST_BACKTRACE: 1
         run: |
           cargo test \
             --profile ci \
