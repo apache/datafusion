@@ -1820,7 +1820,7 @@ query I
 select a from t;
 ----
 
-query
+statement count 0
 drop table t;
 
 statement ok
@@ -1845,3 +1845,13 @@ SELECT t1.v1 FROM (SELECT 1 AS "t1.v1");
 # Test issue: https://github.com/apache/datafusion/issues/14124
 query error DataFusion error: Arrow error: Arithmetic overflow: Overflow happened on: 10000 \* 100000000000000000000000000000000000
 SELECT ('0.54321543215432154321543215432154321'::DECIMAL(35,35) + 10000)::VARCHAR
+
+# where_selection_with_ambiguous_column
+statement ok
+CREATE TABLE t(a int, b int, id int);
+
+query error DataFusion error: Schema error: Ambiguous reference to unqualified field id
+select * from t a, t b where id = id + 1;
+
+statement count 0
+drop table t;

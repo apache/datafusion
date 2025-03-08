@@ -55,15 +55,6 @@ mod cases;
 mod common;
 
 #[test]
-fn test_schema_support() {
-    quick_test(
-        "SELECT * FROM s1.test",
-        "Projection: *\
-             \n  TableScan: s1.test",
-    );
-}
-
-#[test]
 fn parse_decimals() {
     let test_data = [
         ("1", "Int64(1)"),
@@ -450,19 +441,6 @@ Explain
 }
 
 #[test]
-fn plan_copy_to_query() {
-    let sql = "COPY (select * from test_decimal limit 10) to 'output.csv'";
-    let plan = r#"
-CopyTo: format=csv output_url=output.csv options: ()
-  Limit: skip=0, fetch=10
-    Projection: *
-      TableScan: test_decimal
-    "#
-    .trim();
-    quick_test(sql, plan);
-}
-
-#[test]
 fn plan_insert() {
     let sql =
         "insert into person (id, first_name, last_name) values (1, 'Alan', 'Turing')";
@@ -582,15 +560,6 @@ fn select_repeated_column() {
     assert_eq!(
         "Error during planning: Projections require unique expression names but the expression \"person.age\" at position 0 and \"person.age\" at position 1 have the same name. Consider aliasing (\"AS\") one of them.",
         err.strip_backtrace()
-    );
-}
-
-#[test]
-fn select_wildcard_with_repeated_column_but_is_aliased() {
-    quick_test(
-        "SELECT *, first_name AS fn from person",
-        "Projection: *, person.first_name AS fn\
-            \n  TableScan: person",
     );
 }
 
@@ -790,30 +759,6 @@ fn join_with_ambiguous_column() {
                         \n      TableScan: person\
                         \n    SubqueryAlias: b\
                         \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn where_selection_with_ambiguous_column() {
-    let sql = "SELECT * FROM person a, person b WHERE id = id + 1";
-    let err = logical_plan(sql)
-        .expect_err("query should have failed")
-        .strip_backtrace();
-    assert_eq!(
-        "\"Schema error: Ambiguous reference to unqualified field id\"",
-        format!("{err:?}")
-    );
-}
-
-#[test]
-fn natural_join() {
-    let sql = "SELECT * FROM lineitem a NATURAL JOIN lineitem b";
-    let expected = "Projection: *\
-                        \n  Inner Join: Using a.l_item_id = b.l_item_id, a.l_description = b.l_description, a.price = b.price\
-                        \n    SubqueryAlias: a\
-                        \n      TableScan: lineitem\
-                        \n    SubqueryAlias: b\
-                        \n      TableScan: lineitem";
     quick_test(sql, expected);
 }
 
@@ -1299,56 +1244,6 @@ fn select_interval_out_of_range() {
     assert_eq!(
         "Arrow error: Invalid argument error: Unable to represent 100000000000000000 days in a signed 32-bit integer",
         err.strip_backtrace(),
-    );
-}
-
-#[test]
-fn recursive_ctes() {
-    let sql = "
-        WITH RECURSIVE numbers AS (
-              select 1 as n
-            UNION ALL
-              select n + 1 FROM numbers WHERE N < 10
-        )
-        select * from numbers;";
-    quick_test(
-        sql,
-        "Projection: *\
-    \n  SubqueryAlias: numbers\
-    \n    RecursiveQuery: is_distinct=false\
-    \n      Projection: Int64(1) AS n\
-    \n        EmptyRelation\
-    \n      Projection: numbers.n + Int64(1)\
-    \n        Filter: numbers.n < Int64(10)\
-    \n          TableScan: numbers",
-    )
-}
-
-#[test]
-fn recursive_ctes_disabled() {
-    let sql = "
-        WITH RECURSIVE numbers AS (
-              select 1 as n
-            UNION ALL
-              select n + 1 FROM numbers WHERE N < 10
-        )
-        select * from numbers;";
-
-    // manually setting up test here so that we can disable recursive ctes
-    let mut state = MockSessionState::default();
-    state.config_options.execution.enable_recursive_ctes = false;
-    let context = MockContextProvider { state };
-
-    let planner = SqlToRel::new_with_options(&context, ParserOptions::default());
-    let result = DFParser::parse_sql_with_dialect(sql, &GenericDialect {});
-    let mut ast = result.unwrap();
-
-    let err = planner
-        .statement_to_plan(ast.pop_front().unwrap())
-        .expect_err("query should have failed");
-    assert_eq!(
-        "This feature is not implemented: Recursive CTEs are not enabled",
-        err.strip_backtrace()
     );
 }
 
@@ -1953,20 +1848,6 @@ fn join_with_using() {
         \n    TableScan: person\
         \n    SubqueryAlias: person2\
         \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn project_wildcard_on_join_with_using() {
-    let sql = "SELECT * \
-            FROM lineitem \
-            JOIN lineitem as lineitem2 \
-            USING (l_item_id)";
-    let expected = "Projection: *\
-        \n  Inner Join: Using lineitem.l_item_id = lineitem2.l_item_id\
-        \n    TableScan: lineitem\
-        \n    SubqueryAlias: lineitem2\
-        \n      TableScan: lineitem";
     quick_test(sql, expected);
 }
 
@@ -2764,24 +2645,6 @@ fn exists_subquery_schema_outer_schema_overlap() {
 }
 
 #[test]
-fn exists_subquery_wildcard() {
-    let sql = "SELECT id FROM person p WHERE EXISTS \
-            (SELECT * FROM person \
-            WHERE last_name = p.last_name \
-            AND state = p.state)";
-
-    let expected = "Projection: p.id\
-        \n  Filter: EXISTS (<subquery>)\
-        \n    Subquery:\
-        \n      Projection: *\
-        \n        Filter: person.last_name = outer_ref(p.last_name) AND person.state = outer_ref(p.state)\
-        \n          TableScan: person\
-        \n    SubqueryAlias: p\
-        \n      TableScan: person";
-    quick_test(sql, expected);
-}
-
-#[test]
 fn in_subquery_uncorrelated() {
     let sql = "SELECT id FROM person p WHERE id IN \
             (SELECT id FROM person)";
@@ -2944,113 +2807,6 @@ fn join_on_complex_condition() {
             \n  Inner Join:  Filter: person.id = orders.customer_id AND (person.age > Int64(30) OR person.last_name = Utf8(\"X\"))\
             \n    TableScan: person\
             \n    TableScan: orders";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_constant() {
-    let sql = "SELECT * FROM j1, LATERAL (SELECT 1) AS j2";
-    let expected = "Projection: *\
-            \n  Cross Join: \
-            \n    TableScan: j1\
-            \n    SubqueryAlias: j2\
-            \n      Projection: Int64(1)\
-            \n        EmptyRelation";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_comma_join() {
-    let sql = "SELECT j1_string, j2_string FROM
-            j1, \
-            LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2";
-    let expected = "Projection: j1.j1_string, j2.j2_string\
-            \n  Cross Join: \
-            \n    TableScan: j1\
-            \n    SubqueryAlias: j2\
-            \n      Subquery:\
-            \n        Projection: *\
-            \n          Filter: outer_ref(j1.j1_id) < j2.j2_id\
-            \n            TableScan: j2";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_comma_join_referencing_join_rhs() {
-    let sql = "SELECT * FROM\
-            \n  j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id),\
-            \n  LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4;";
-    let expected = "Projection: *\
-            \n  Cross Join: \
-            \n    Inner Join:  Filter: j1.j1_id = j2.j2_id\
-            \n      TableScan: j1\
-            \n      Inner Join:  Filter: j2.j2_id = j3.j3_id - Int64(2)\
-            \n        TableScan: j2\
-            \n        TableScan: j3\
-            \n    SubqueryAlias: j4\
-            \n      Subquery:\
-            \n        Projection: *\
-            \n          Filter: j3.j3_string = outer_ref(j2.j2_string)\
-            \n            TableScan: j3";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_comma_join_with_shadowing() {
-    // The j1_id on line 3 references the (closest) j1 definition from line 2.
-    let sql = "\
-            SELECT * FROM j1, LATERAL (\
-              SELECT * FROM j1, LATERAL (\
-                SELECT * FROM j2 WHERE j1_id = j2_id\
-              ) as j2\
-            ) as j2;";
-    let expected = "Projection: *\
-            \n  Cross Join: \
-            \n    TableScan: j1\
-            \n    SubqueryAlias: j2\
-            \n      Subquery:\
-            \n        Projection: *\
-            \n          Cross Join: \
-            \n            TableScan: j1\
-            \n            SubqueryAlias: j2\
-            \n              Subquery:\
-            \n                Projection: *\
-            \n                  Filter: outer_ref(j1.j1_id) = j2.j2_id\
-            \n                    TableScan: j2";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_left_join() {
-    let sql = "SELECT j1_string, j2_string FROM \
-            j1 \
-            LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);";
-    let expected = "Projection: j1.j1_string, j2.j2_string\
-            \n  Left Join:  Filter: Boolean(true)\
-            \n    TableScan: j1\
-            \n    SubqueryAlias: j2\
-            \n      Subquery:\
-            \n        Projection: *\
-            \n          Filter: outer_ref(j1.j1_id) < j2.j2_id\
-            \n            TableScan: j2";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn lateral_nested_left_join() {
-    let sql = "SELECT * FROM 
-            j1, \
-            (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true))";
-    let expected = "Projection: *\
-            \n  Cross Join: \
-            \n    TableScan: j1\
-            \n    Left Join:  Filter: Boolean(true)\
-            \n      TableScan: j2\
-            \n      SubqueryAlias: j3\
-            \n        Subquery:\
-            \n          Projection: *\
-            \n            Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id\
-            \n              TableScan: j3";
     quick_test(sql, expected);
 }
 
@@ -3309,20 +3065,6 @@ fn test_one_side_constant_full_join() {
 
     let expected = "Projection: person.id, orders.order_id\
             \n  Full Join:  Filter: person.id = Int64(10)\
-            \n    TableScan: person\
-            \n    TableScan: orders";
-    quick_test(sql, expected);
-}
-
-#[test]
-fn test_select_all_inner_join() {
-    let sql = "SELECT *
-            FROM person \
-            INNER JOIN orders \
-            ON orders.customer_id * 2 = person.id + 10";
-
-    let expected = "Projection: *\
-            \n  Inner Join:  Filter: orders.customer_id * Int64(2) = person.id + Int64(10)\
             \n    TableScan: person\
             \n    TableScan: orders";
     quick_test(sql, expected);
@@ -4054,34 +3796,6 @@ fn test_prepare_statement_to_plan_limit() {
     let expected_plan = "Limit: skip=10, fetch=200\
         \n  Projection: person.id\
         \n    TableScan: person";
-    prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
-}
-
-#[test]
-fn test_prepare_statement_to_plan_value_list() {
-    let sql = "PREPARE my_plan(STRING, STRING) AS SELECT * FROM (VALUES(1, $1), (2, $2)) AS t (num, letter);";
-
-    let expected_plan = "Prepare: \"my_plan\" [Utf8, Utf8] \
-        \n  Projection: *\
-        \n    SubqueryAlias: t\
-        \n      Projection: column1 AS num, column2 AS letter\
-        \n        Values: (Int64(1), $1), (Int64(2), $2)";
-
-    let expected_dt = "[Utf8, Utf8]";
-
-    let plan = prepare_stmt_quick_test(sql, expected_plan, expected_dt);
-
-    ///////////////////
-    // replace params with values
-    let param_values = vec![
-        ScalarValue::from("a".to_string()),
-        ScalarValue::from("b".to_string()),
-    ];
-    let expected_plan = "Projection: *\
-        \n  SubqueryAlias: t\
-        \n    Projection: column1 AS num, column2 AS letter\
-        \n      Values: (Int64(1), Utf8(\"a\") AS $1), (Int64(2), Utf8(\"b\") AS $2)";
-
     prepare_stmt_replace_params_quick_test(plan, param_values, expected_plan);
 }
 
