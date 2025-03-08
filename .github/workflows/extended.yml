@@ -32,36 +32,14 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    
       
-  issue_comment:
-    types: [created]
-
 jobs:
-
-  check_trigger:
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ github.event_name == 'push' || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, 'Run extended tests')) }}
-      # Custom ref is required since issue_comment event points to the default branch rather than pull request branch
-      ref: ${{ github.event_name == 'push' && github.ref ||format('refs/pull/{0}/head', github.event.issue.number) }}
-    steps:
-      - name: Add reaction to comment
-        if: github.event_name == 'issue_comment'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: context.payload.comment.id,
-              content: 'rocket'
-            });
 
   # Check crate compiles and base cargo check passes
   linux-build-lib:
     name: linux build test
-    needs: [check_trigger]
-    if: needs.check_trigger.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
@@ -69,7 +47,6 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
-          ref: ${{ needs.check_trigger.outputs.ref }}
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -85,8 +62,7 @@ jobs:
   # Run extended tests (with feature 'extended_tests')
   linux-test-extended:
     name: cargo test 'extended_tests' (amd64)
-    needs: [linux-build-lib, check_trigger]
-    if: needs.check_trigger.outputs.should_run == 'true'
+    needs: [linux-build-lib]
     runs-on: ubuntu-latest
     # note: do not use amd/rust container to preserve disk space
     steps:
@@ -94,7 +70,6 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
-          ref: ${{ needs.check_trigger.outputs.ref }}
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
       - name: Install Rust
@@ -120,8 +95,6 @@ jobs:
   # Check answers are correct when hash values collide
   hash-collisions:
     name: cargo test hash collisions (amd64)
-    needs: [check_trigger]
-    if: needs.check_trigger.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -130,7 +103,6 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
-          ref: ${{ needs.check_trigger.outputs.ref }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -143,8 +115,6 @@ jobs:
 
   sqllogictest-sqlite:
     name: "Run sqllogictests with the sqlite test suite"
-    needs: [check_trigger]
-    if: needs.check_trigger.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -153,7 +123,6 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
-          ref: ${{ needs.check_trigger.outputs.ref }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
