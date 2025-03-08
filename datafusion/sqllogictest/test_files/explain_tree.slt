@@ -543,7 +543,7 @@ physical_plan
 01)┌───────────────────────────┐
 02)│      PartialSortExec      │
 03)│    --------------------   │
-04)│           sort:           │
+04)│         sort keys:        │
 05)│  [a@1 ASC NULLS LAST, b@2 │
 06)│     ASC NULLS LAST, d@4   │
 07)│       ASC NULLS LAST]     │
@@ -565,9 +565,9 @@ physical_plan
 01)┌───────────────────────────┐
 02)│      PartialSortExec      │
 03)│    --------------------   │
-04)│         fetch: 50         │
+04)│         limit: 50         │
 05)│                           │
-06)│           sort:           │
+06)│         sort keys:        │
 07)│  [a@1 ASC NULLS LAST, b@2 │
 08)│     ASC NULLS LAST, d@4   │
 09)│       ASC NULLS LAST]     │
