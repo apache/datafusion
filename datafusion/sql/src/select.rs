@@ -38,9 +38,8 @@ use datafusion_expr::utils::{
     find_aggregate_exprs, find_window_exprs,
 };
 use datafusion_expr::{
-    Aggregate, Expr, Filter,
-    GroupingSet, LogicalPlan, LogicalPlanBuilder, LogicalPlanBuilderOptions,
-    Partitioning,
+    Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
+    LogicalPlanBuilderOptions, Partitioning,
 };
 
 use indexmap::IndexMap;
@@ -646,6 +645,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let expanded =
                     expand_wildcard(plan.schema(), plan, Some(&planned_options))?;
 
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
                 if let Some(replace) = planned_options.replace {
                     replace_columns(expanded, &replace)
                 } else {
