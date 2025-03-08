@@ -47,20 +47,11 @@ jobs:
             
             // Extract the branch name
             const branchName = pullRequest.head.ref;
-            
-            // Dispatch the workflow with the PR branch name
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'extended.yml',
-              ref: branchName,
-            });
-
-            // Create a check run that links to the Actions tab so the run will be visible in GitHub UI
             const headSha = pullRequest.head.sha;
             const workflowRunsUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions?query=workflow%3A%22Datafusion+extended+tests%22+branch%3A${branchName}`;
             
-            await github.rest.checks.create({
+            // Create a check run that links to the Actions tab so the run will be visible in GitHub UI
+            const check = await github.rest.checks.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               name: 'Extended Tests',
@@ -71,6 +62,19 @@ jobs:
                 summary: `Extended tests have been triggered for this PR.\n\n[View workflow runs](${workflowRunsUrl})`
               },
               details_url: workflowRunsUrl
+            });
+
+            // Dispatch the workflow with the PR branch name
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'extended.yml',
+              ref: branchName,
+              inputs: {
+                pr_number: context.payload.issue.number.toString(),
+                check_run_id: check.data.id.toString(),
+                pr_head_sha: headSha
+              }
             });
 
       - name: Add reaction to comment 
