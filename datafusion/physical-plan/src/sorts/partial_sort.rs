@@ -229,10 +229,10 @@ impl DisplayAs for PartialSortExec {
             DisplayFormatType::TreeRender => match self.fetch {
                 Some(fetch) => {
                     writeln!(f, "limit={fetch}")?;
-                    writeln!(f, "sort keys=[{}]", self.expr)
+                    writeln!(f, "sort keys={}", self.expr)
                 }
                 None => {
-                    writeln!(f, "sort keys=[{}]", self.expr)
+                    writeln!(f, "sort keys={}", self.expr)
                 }
             },
         }

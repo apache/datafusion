@@ -544,9 +544,9 @@ physical_plan
 02)│      PartialSortExec      │
 03)│    --------------------   │
 04)│         sort keys:        │
-05)│  [a@1 ASC NULLS LAST, b@2 │
+05)│  a@1 ASC NULLS LAST, b@2  │
 06)│     ASC NULLS LAST, d@4   │
-07)│       ASC NULLS LAST]     │
+07)│       ASC NULLS LAST      │
 08)└─────────────┬─────────────┘
 09)┌─────────────┴─────────────┐
 10)│     StreamingTableExec    │
@@ -568,9 +568,9 @@ physical_plan
 04)│         limit: 50         │
 05)│                           │
 06)│         sort keys:        │
-07)│  [a@1 ASC NULLS LAST, b@2 │
+07)│  a@1 ASC NULLS LAST, b@2  │
 08)│     ASC NULLS LAST, d@4   │
-09)│       ASC NULLS LAST]     │
+09)│       ASC NULLS LAST      │
 10)└─────────────┬─────────────┘
 11)┌─────────────┴─────────────┐
 12)│     StreamingTableExec    │
