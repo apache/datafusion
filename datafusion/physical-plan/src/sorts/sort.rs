@@ -1005,10 +1005,15 @@ impl DisplayAs for SortExec {
                     None => write!(f, "SortExec: expr=[{}], preserve_partitioning=[{preserve_partitioning}]", self.expr),
                 }
             }
-            DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
-            }
+            DisplayFormatType::TreeRender => match self.fetch {
+                Some(fetch) => {
+                    writeln!(f, "fetch={fetch}")?;
+                    writeln!(f, "sort=[{}]", self.expr)
+                }
+                None => {
+                    writeln!(f, "sort=[{}]", self.expr)
+                }
+            },
         }
     }
 }
@@ -1225,13 +1230,9 @@ mod tests {
     impl DisplayAs for SortedUnboundedExec {
         fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result {
             match t {
-                DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    write!(f, "UnboundableExec",).unwrap()
-                }
-                DisplayFormatType::TreeRender => {
-                    // TODO: collect info
-                    write!(f, "").unwrap()
-                }
+                DisplayFormatType::Default
+                | DisplayFormatType::Verbose
+                | DisplayFormatType::TreeRender => write!(f, "UnboundableExec",).unwrap(),
             }
             Ok(())
         }
