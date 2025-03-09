@@ -81,6 +81,16 @@ pub(super) fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(
             let Ok(expr_type) = info.get_data_type(&expr) else {
                 return internal_err!("Can't get the data type of the expr {:?}", &expr);
             };
+
+            if let Some(value) = cast_literal_to_type_with_op(&lit_value, &expr_type, op)
+            {
+                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
+                    left: expr,
+                    op,
+                    right: Box::new(lit(value)),
+                })));
+            };
+
             // if the lit_value can be casted to the type of internal_left_expr
             // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
             let Some(value) = try_cast_literal_to_type(&lit_value, &expr_type) else {
@@ -106,6 +116,7 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary<
     info: &S,
     expr: &Expr,
     literal: &Expr,
+    op: Operator,
 ) -> bool {
     match (expr, literal) {
         (
@@ -124,6 +135,10 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary<
             let Ok(lit_type) = info.get_data_type(literal) else {
                 return false;
             };
+
+            if cast_literal_to_type_with_op(lit_val, &expr_type, op).is_some() {
+                return true;
+            }
 
             try_cast_literal_to_type(lit_val, &expr_type).is_some()
                 && is_supported_type(&expr_type)
@@ -175,6 +190,33 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist<
     }
 
     true
+}
+
+fn cast_literal_to_type_with_op(
+    lit_value: &ScalarValue,
+    target_type: &DataType,
+    op: Operator,
+) -> Option<ScalarValue> {
+    dbg!(lit_value, target_type, op);
+    match (op, lit_value) {
+        (
+            Operator::Eq | Operator::NotEq,
+            ScalarValue::Utf8(Some(ref str))
+            | ScalarValue::Utf8View(Some(ref str))
+            | ScalarValue::LargeUtf8(Some(ref str)),
+        ) => match target_type {
+            DataType::Int8 => str.parse::<i8>().ok().map(ScalarValue::from),
+            DataType::Int16 => str.parse::<i16>().ok().map(ScalarValue::from),
+            DataType::Int32 => str.parse::<i32>().ok().map(ScalarValue::from),
+            DataType::Int64 => str.parse::<i64>().ok().map(ScalarValue::from),
+            DataType::UInt8 => str.parse::<u8>().ok().map(ScalarValue::from),
+            DataType::UInt16 => str.parse::<u16>().ok().map(ScalarValue::from),
+            DataType::UInt32 => str.parse::<u32>().ok().map(ScalarValue::from),
+            DataType::UInt64 => str.parse::<u64>().ok().map(ScalarValue::from),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Returns true if unwrap_cast_in_comparison supports this data type
@@ -468,6 +510,10 @@ mod tests {
         // the 99999999999 is not within the range of MAX(int32) and MIN(int32), we don't cast the lit(99999999999) to int32 type
         let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(99999999999i64));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+
+        // cast(c1, UTF8) < 123, only eq/not_eq should be optimized
+        let expr_lt = cast(col("c1"), DataType::Utf8).lt(lit("123"));
+        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
     }
 
     #[test]
@@ -496,6 +542,16 @@ mod tests {
         let lit_lt_lit = cast(null_i8(), DataType::Int32).lt(lit(12i32));
         let expected = null_bool();
         assert_eq!(optimize_test(lit_lt_lit, &schema), expected);
+
+        // cast(c1, UTF8) = "123" => c1 = 123
+        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("123"));
+        let expected = col("c1").eq(lit(123i32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(c1, UTF8) != "123" => c1 != 123
+        let expr_input = cast(col("c1"), DataType::Utf8).not_eq(lit("123"));
+        let expected = col("c1").not_eq(lit(123i32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
     #[test]
@@ -504,6 +560,16 @@ mod tests {
         let schema = expr_test_schema();
         let expr_input = cast(col("c6"), DataType::UInt64).eq(lit(0u64));
         let expected = col("c6").eq(lit(0u32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(c6, UTF8) = "123" => c6 = 123
+        let expr_input = cast(col("c6"), DataType::Utf8).eq(lit("123"));
+        let expected = col("c6").eq(lit(123u32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(c6, UTF8) != "123" => c6 != 123
+        let expr_input = cast(col("c6"), DataType::Utf8).not_eq(lit("123"));
+        let expected = col("c6").not_eq(lit(123u32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
