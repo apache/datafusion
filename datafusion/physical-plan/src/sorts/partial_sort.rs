@@ -226,10 +226,15 @@ impl DisplayAs for PartialSortExec {
                     None => write!(f, "PartialSortExec: expr=[{}], common_prefix_length=[{common_prefix_length}]", self.expr),
                 }
             }
-            DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
-            }
+            DisplayFormatType::TreeRender => match self.fetch {
+                Some(fetch) => {
+                    writeln!(f, "limit={fetch}")?;
+                    writeln!(f, "sort keys={}", self.expr)
+                }
+                None => {
+                    writeln!(f, "sort keys={}", self.expr)
+                }
+            },
         }
     }
 }
