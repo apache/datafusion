@@ -827,3 +827,31 @@ drop table table_with_pk;
 
 statement ok
 set datafusion.catalog.information_schema = false;
+
+# Test VARCHAR is mapped to Utf8View during SQL planning when setting default_varchar_views to true
+statement ok
+CREATE TABLE t1(c1 VARCHAR(10) NOT NULL, c2 VARCHAR);
+
+query TTT
+DESCRIBE t1;
+----
+c1 Utf8 NO
+c2 Utf8 YES
+
+statement ok
+set datafusion.sql_parser.default_varchar_views = true;
+
+statement ok
+CREATE TABLE t2(c1 VARCHAR(10) NOT NULL, c2 VARCHAR);
+
+query TTT
+DESCRIBE t2;
+----
+c1 Utf8View NO
+c2 Utf8View YES
+
+statement ok
+DROP TABLE t1;
+
+statement ok
+DROP TABLE t2;

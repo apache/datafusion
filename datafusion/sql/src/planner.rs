@@ -54,8 +54,8 @@ pub struct ParserOptions {
     pub enable_options_value_normalization: bool,
     /// Whether to collect spans
     pub collect_spans: bool,
-    /// Whether support sql varchar to view types
-    pub support_sql_varchar_to_view_types: bool,
+    /// Whether `VARCHAR` is mapped to `Utf8View` during SQL planning.
+    pub default_varchar_views: bool,
 }
 
 impl ParserOptions {
@@ -74,7 +74,7 @@ impl ParserOptions {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
-            support_sql_varchar_to_view_types: false,
+            default_varchar_views: false,
             enable_options_value_normalization: false,
             collect_spans: false,
         }
@@ -114,9 +114,9 @@ impl ParserOptions {
         self
     }
 
-    /// Sets the `support_sql_varchar_to_view_types` option.
-    pub fn with_support_sql_varchar_to_view_types(mut self, value: bool) -> Self {
-        self.support_sql_varchar_to_view_types = value;
+    /// Sets the `default_varchar_views` option.
+    pub fn with_default_varchar_views(mut self, value: bool) -> Self {
+        self.default_varchar_views = value;
         self
     }
 
@@ -145,7 +145,7 @@ impl From<&SqlParserOptions> for ParserOptions {
             parse_float_as_decimal: options.parse_float_as_decimal,
             enable_ident_normalization: options.enable_ident_normalization,
             support_varchar_with_length: options.support_varchar_with_length,
-            support_sql_varchar_to_view_types: options.support_varchar_to_view_types,
+            default_varchar_views: options.default_varchar_views,
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
@@ -569,7 +569,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match (length, self.options.support_varchar_with_length) {
                     (Some(_), false) => plan_err!("does not support Varchar with length, please set `support_varchar_with_length` to be true"),
                     _ => {
-                        if self.options.support_sql_varchar_to_view_types {
+                        if self.options.default_varchar_views {
                             Ok(DataType::Utf8View)
                         } else {
                             Ok(DataType::Utf8)
