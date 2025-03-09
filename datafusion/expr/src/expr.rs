@@ -28,7 +28,7 @@ use crate::logical_plan::Subquery;
 use crate::Volatility;
 use crate::{udaf, ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use arrow::datatypes::{DataType, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -227,7 +227,7 @@ pub enum Expr {
     /// A named reference to a qualified field in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
-    ScalarVariable(DataType, Vec<String>),
+    ScalarVariable(Field, Vec<String>),
     /// A constant value.
     Literal(ScalarValue),
     /// A binary expression such as "age > 21"
@@ -326,7 +326,7 @@ pub enum Expr {
     Placeholder(Placeholder),
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
-    OuterReferenceColumn(DataType, Column),
+    OuterReferenceColumn(Field, Column),
     /// Unnest expression
     Unnest(Unnest),
 }
