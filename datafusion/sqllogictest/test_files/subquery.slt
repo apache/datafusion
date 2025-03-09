@@ -1431,3 +1431,23 @@ drop table t1;
 
 statement count 0
 drop table t2;
+
+
+# test exists_subquery_wildcard
+statement count 0
+create table person(id int, last_name int, state int);
+
+query TT
+explain SELECT id FROM person p WHERE EXISTS 
+    (SELECT * FROM person WHERE last_name = p.last_name AND state = p.state)
+----
+logical_plan
+01)Projection: p.id
+02)--LeftSemi Join: p.last_name = __correlated_sq_1.last_name, p.state = __correlated_sq_1.state
+03)----SubqueryAlias: p
+04)------TableScan: person projection=[id, last_name, state]
+05)----SubqueryAlias: __correlated_sq_1
+06)------TableScan: person projection=[last_name, state]
+
+statement count 0
+drop table person;

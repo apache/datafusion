@@ -631,3 +631,20 @@ COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);
 # Copy using execution.keep_partition_by_columns with an invalid value
 query error DataFusion error: Invalid or Unsupported Configuration: provided value for 'execution.keep_partition_by_columns' was not recognized: "invalid_value"
 COPY source_table  to '/tmp/table.parquet' OPTIONS (execution.keep_partition_by_columns invalid_value);
+
+statement count 0
+create table t;
+
+query TT
+explain COPY (select * from t limit 10) to 'output.csv';
+----
+logical_plan
+01)CopyTo: format=csv output_url=output.csv options: ()
+02)--Limit: skip=0, fetch=10
+03)----TableScan: t projection=[], fetch=10
+physical_plan
+01)DataSinkExec: sink=CsvSink(file_groups=[])
+02)--DataSourceExec: partitions=1, partition_sizes=[0], fetch=10
+
+statement count 0
+drop table t;

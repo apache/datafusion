@@ -4541,3 +4541,269 @@ DROP TABLE test
 
 statement ok
 set datafusion.execution.target_partitions = 1;
+
+# test using_join_multiple_keys_subquery
+statement count 0
+create table person(id int, age int, state int);
+
+statement count 0
+create table lineitem(c1 int);
+
+query TT
+explain SELECT * FROM person a join person b using (id, age);
+----
+logical_plan
+01)Projection: a.id, a.age, a.state, b.state
+02)--Inner Join: a.id = b.id, a.age = b.age
+03)----SubqueryAlias: a
+04)------TableScan: person projection=[id, age, state]
+05)----SubqueryAlias: b
+06)------TableScan: person projection=[id, age, state]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1)], projection=[id@0, age@1, state@2, state@5]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT age FROM (SELECT * FROM person a join person b using (id, age, state));
+----
+logical_plan
+01)Projection: a.age
+02)--Inner Join: a.id = b.id, a.age = b.age, a.state = b.state
+03)----SubqueryAlias: a
+04)------TableScan: person projection=[id, age, state]
+05)----SubqueryAlias: b
+06)------TableScan: person projection=[id, age, state]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1), (state@2, state@2)], projection=[age@1]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT a.* FROM person a join person b using (id, age);
+----
+logical_plan
+01)Projection: a.id, a.age, a.state
+02)--Inner Join: a.id = b.id, a.age = b.age
+03)----SubqueryAlias: a
+04)------TableScan: person projection=[id, age, state]
+05)----SubqueryAlias: b
+06)------TableScan: person projection=[id, age]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1)], projection=[id@0, age@1, state@2]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT a.*, b.* FROM person a join person b using (id, age);
+----
+logical_plan
+01)Inner Join: a.id = b.id, a.age = b.age
+02)--SubqueryAlias: a
+03)----TableScan: person projection=[id, age, state]
+04)--SubqueryAlias: b
+05)----TableScan: person projection=[id, age, state]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1)]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT * FROM person a join person b using (id, age, state) join person c using (id, age, state);
+----
+logical_plan
+01)Projection: a.id, a.age, a.state
+02)--Inner Join: a.id = c.id, a.age = c.age, a.state = c.state
+03)----Projection: a.id, a.age, a.state
+04)------Inner Join: a.id = b.id, a.age = b.age, a.state = b.state
+05)--------SubqueryAlias: a
+06)----------TableScan: person projection=[id, age, state]
+07)--------SubqueryAlias: b
+08)----------TableScan: person projection=[id, age, state]
+09)----SubqueryAlias: c
+10)------TableScan: person projection=[id, age, state]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1), (state@2, state@2)], projection=[id@0, age@1, state@2]
+03)----CoalesceBatchesExec: target_batch_size=3
+04)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(id@0, id@0), (age@1, age@1), (state@2, state@2)], projection=[id@0, age@1, state@2]
+05)--------DataSourceExec: partitions=1, partition_sizes=[0]
+06)--------DataSourceExec: partitions=1, partition_sizes=[0]
+07)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT * FROM person a NATURAL JOIN lineitem b;
+----
+logical_plan
+01)Cross Join: 
+02)--SubqueryAlias: a
+03)----TableScan: person projection=[id, age, state]
+04)--SubqueryAlias: b
+05)----TableScan: lineitem projection=[c1]
+physical_plan
+01)CrossJoinExec
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain SELECT * FROM lineitem JOIN lineitem as lineitem2 USING (c1)
+----
+logical_plan
+01)Projection: lineitem.c1
+02)--Inner Join: lineitem.c1 = lineitem2.c1
+03)----TableScan: lineitem projection=[c1]
+04)----SubqueryAlias: lineitem2
+05)------TableScan: lineitem projection=[c1]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c1@0, c1@0)], projection=[c1@0]
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+04)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+statement count 0
+drop table person;
+
+statement count 0
+drop table lineitem;
+
+statement count 0
+create table j1(j1_string varchar, j1_id int);
+
+statement count 0
+create table j2(j2_string varchar, j2_id int);
+
+statement count 0
+create table j3(j3_string varchar, j3_id int);
+
+statement count 0
+create table j4(j4_string varchar, j4_id int);
+
+query TT
+explain SELECT j1_string, j2_string FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2;
+----
+logical_plan
+01)Cross Join: 
+02)--TableScan: j1 projection=[j1_string]
+03)--SubqueryAlias: j2
+04)----Projection: j2.j2_string
+05)------Subquery:
+06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
+07)----------TableScan: j2 projection=[j2_string, j2_id]
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+
+query TT
+explain SELECT * FROM j1 JOIN (j2 JOIN j3 ON(j2_id = j3_id - 2)) ON(j1_id = j2_id), LATERAL (SELECT * FROM j3 WHERE j3_string = j2_string) as j4
+----
+logical_plan
+01)Cross Join: 
+02)--Inner Join: CAST(j2.j2_id AS Int64) = CAST(j3.j3_id AS Int64) - Int64(2)
+03)----Inner Join: j1.j1_id = j2.j2_id
+04)------TableScan: j1 projection=[j1_string, j1_id]
+05)------TableScan: j2 projection=[j2_string, j2_id]
+06)----TableScan: j3 projection=[j3_string, j3_id]
+07)--SubqueryAlias: j4
+08)----Subquery:
+09)------Filter: j3.j3_string = outer_ref(j2.j2_string)
+10)--------TableScan: j3 projection=[j3_string, j3_id]
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Utf8, Column { relation: Some(Bare { table: "j2" }), name: "j2_string" })
+
+query TT
+explain SELECT * FROM j1, LATERAL (SELECT * FROM j1, LATERAL (SELECT * FROM j2 WHERE j1_id = j2_id) as j2) as j2;
+----
+logical_plan
+01)Cross Join: 
+02)--TableScan: j1 projection=[j1_string, j1_id]
+03)--SubqueryAlias: j2
+04)----Subquery:
+05)------Cross Join: 
+06)--------TableScan: j1 projection=[j1_string, j1_id]
+07)--------SubqueryAlias: j2
+08)----------Subquery:
+09)------------Filter: outer_ref(j1.j1_id) = j2.j2_id
+10)--------------TableScan: j2 projection=[j2_string, j2_id]
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+
+query TT
+explain SELECT j1_string, j2_string FROM j1 LEFT JOIN LATERAL (SELECT * FROM j2 WHERE j1_id < j2_id) AS j2 ON(true);
+----
+logical_plan
+01)Left Join: 
+02)--TableScan: j1 projection=[j1_string]
+03)--SubqueryAlias: j2
+04)----Projection: j2.j2_string
+05)------Subquery:
+06)--------Filter: outer_ref(j1.j1_id) < j2.j2_id
+07)----------TableScan: j2 projection=[j2_string, j2_id]
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+
+query TT
+explain SELECT * FROM j1, (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true));
+----
+logical_plan
+01)Cross Join: 
+02)--TableScan: j1 projection=[j1_string, j1_id]
+03)--Left Join: 
+04)----TableScan: j2 projection=[j2_string, j2_id]
+05)----SubqueryAlias: j3
+06)------Subquery:
+07)--------Filter: outer_ref(j1.j1_id) + outer_ref(j2.j2_id) = j3.j3_id
+08)----------TableScan: j3 projection=[j3_string, j3_id]
+physical_plan_error This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Int32, Column { relation: Some(Bare { table: "j1" }), name: "j1_id" })
+
+query TT
+explain SELECT * FROM j1, LATERAL (SELECT 1) AS j2;
+----
+logical_plan
+01)Cross Join: 
+02)--TableScan: j1 projection=[j1_string, j1_id]
+03)--SubqueryAlias: j2
+04)----Projection: Int64(1)
+05)------EmptyRelation
+physical_plan
+01)CrossJoinExec
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+03)--ProjectionExec: expr=[1 as Int64(1)]
+04)----PlaceholderRowExec
+
+statement count 0
+drop table j1;
+
+statement count 0
+drop table j2;
+
+statement count 0
+drop table j3;
+
+statement count 0
+drop table j4;
+
+statement count 0
+create table person(id int);
+
+statement count 0
+create table orders(customer_id int);
+
+query TT
+explain SELECT * FROM person INNER JOIN orders ON orders.customer_id * 2 = person.id + 10
+----
+logical_plan
+01)Inner Join: CAST(person.id AS Int64) + Int64(10) = CAST(orders.customer_id AS Int64) * Int64(2)
+02)--TableScan: person projection=[id]
+03)--TableScan: orders projection=[customer_id]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=3
+02)--HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(person.id + Int64(10)@1, orders.customer_id * Int64(2)@1)], projection=[id@0, customer_id@2]
+03)----ProjectionExec: expr=[id@0 as id, CAST(id@0 AS Int64) + 10 as person.id + Int64(10)]
+04)------DataSourceExec: partitions=1, partition_sizes=[0]
+05)----ProjectionExec: expr=[customer_id@0 as customer_id, CAST(customer_id@0 AS Int64) * 2 as orders.customer_id * Int64(2)]
+06)------DataSourceExec: partitions=1, partition_sizes=[0]
+
+statement count 0
+drop table person;
+
+statement count 0
+drop table orders;
