@@ -259,6 +259,10 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Install dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq clang
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build with wasm-pack
