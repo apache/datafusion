@@ -22,12 +22,14 @@ use arrow::array::{ArrayRef, AsArray, BooleanArray};
 use arrow::datatypes::DataType::{Boolean, Float32, Float64};
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 
+use datafusion_common::types::NativeType;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::TypeSignature::Exact;
+use datafusion_expr::TypeSignature::{self};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignatureClass, Volatility,
 };
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 use crate::utils::make_scalar_function;
@@ -51,10 +53,13 @@ impl Default for IsZeroFunc {
 
 impl IsZeroFunc {
     pub fn new() -> Self {
-        use DataType::*;
         Self {
-            signature: Signature::one_of(
-                vec![Exact(vec![Float32]), Exact(vec![Float64])],
+            signature: Signature::new(
+                TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignatureClass::Float,
+                    vec![TypeSignatureClass::Integer],
+                    NativeType::Float64,
+                )]),
                 Volatility::Immutable,
             ),
         }

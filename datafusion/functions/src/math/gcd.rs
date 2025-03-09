@@ -26,8 +26,9 @@ use std::sync::Arc;
 use datafusion_common::{exec_err, internal_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 #[user_doc(
