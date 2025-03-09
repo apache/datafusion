@@ -83,6 +83,19 @@ STORED AS ARROW
 LOCATION 'test_files/scratch/explain_tree/table5.arrow';
 
 statement ok
+CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
 CREATE TABLE hashjoin_datatype_table_t1_source(c1 INT, c2 BIGINT, c3 DECIMAL(5,2), c4 VARCHAR)
 AS VALUES
 (1,    86400000,  1.23,    'abc'),
@@ -563,6 +576,248 @@ physical_plan
 16)│          files: 1         │
 17)│       format: arrow       │
 18)└───────────────────────────┘
+
+# Query for sort.
+query TT
+explain SELECT * FROM table1 ORDER BY string_col;
+----
+logical_plan
+01)Sort: table1.string_col ASC NULLS LAST
+02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│          SortExec         │
+03)│    --------------------   │
+04)│         sort keys:        │
+05)│  [string_col@1 ASC NULLS  │
+06)│            LAST]          │
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│       DataSourceExec      │
+10)│    --------------------   │
+11)│          files: 1         │
+12)│        format: csv        │
+13)└───────────────────────────┘
+
+# Query for sort with limit.
+query TT
+explain SELECT * FROM table1 ORDER BY string_col LIMIT 1;
+----
+logical_plan
+01)Sort: table1.string_col ASC NULLS LAST, fetch=1
+02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│          SortExec         │
+03)│    --------------------   │
+04)│          limit: 1         │
+05)│                           │
+06)│         sort keys:        │
+07)│  [string_col@1 ASC NULLS  │
+08)│            LAST]          │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│       DataSourceExec      │
+12)│    --------------------   │
+13)│          files: 1         │
+14)│        format: csv        │
+15)└───────────────────────────┘
+
+# Query with projection on csv
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table1;
+----
+logical_plan
+01)Projection: table1.int_col, table1.bigint_col, CAST(table1.int_col AS Int64) + table1.bigint_col AS sum_col
+02)--TableScan: table1 projection=[int_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        bigint_col:        │
+05)│        bigint_col@1       │
+06)│                           │
+07)│     int_col: int_col@0    │
+08)│                           │
+09)│          sum_col:         │
+10)│ CAST(int_col@0 AS Int64) +│
+11)│        bigint_col@1       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│      RepartitionExec      │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)│    --------------------   │
+19)│          files: 1         │
+20)│        format: csv        │
+21)└───────────────────────────┘
+
+
+# Query with projection on parquet
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table2;
+----
+logical_plan
+01)Projection: table2.int_col, table2.bigint_col, CAST(table2.int_col AS Int64) + table2.bigint_col AS sum_col
+02)--TableScan: table2 projection=[int_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        bigint_col:        │
+05)│        bigint_col@1       │
+06)│                           │
+07)│     int_col: int_col@0    │
+08)│                           │
+09)│          sum_col:         │
+10)│ CAST(int_col@0 AS Int64) +│
+11)│        bigint_col@1       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│      RepartitionExec      │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)│    --------------------   │
+19)│          files: 1         │
+20)│      format: parquet      │
+21)└───────────────────────────┘
+
+
+# Query with projection on memory
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table3;
+----
+logical_plan
+01)Projection: table3.int_col, table3.bigint_col, CAST(table3.int_col AS Int64) + table3.bigint_col AS sum_col
+02)--TableScan: table3 projection=[int_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        bigint_col:        │
+05)│        bigint_col@1       │
+06)│                           │
+07)│     int_col: int_col@0    │
+08)│                           │
+09)│          sum_col:         │
+10)│ CAST(int_col@0 AS Int64) +│
+11)│        bigint_col@1       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│        bytes: 1560        │
+17)│       format: memory      │
+18)│          rows: 1          │
+19)└───────────────────────────┘
+
+# Query with projection on json
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table4;
+----
+logical_plan
+01)Projection: table4.int_col, table4.bigint_col, table4.int_col + table4.bigint_col AS sum_col
+02)--TableScan: table4 projection=[bigint_col, int_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        bigint_col:        │
+05)│        bigint_col@0       │
+06)│                           │
+07)│     int_col: int_col@1    │
+08)│                           │
+09)│          sum_col:         │
+10)│  int_col@1 + bigint_col@0 │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│      RepartitionExec      │
+14)└─────────────┬─────────────┘
+15)┌─────────────┴─────────────┐
+16)│       DataSourceExec      │
+17)│    --------------------   │
+18)│          files: 1         │
+19)│        format: json       │
+20)└───────────────────────────┘
+
+
+# Query with projection on arrow
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table5;
+----
+logical_plan
+01)Projection: table5.int_col, table5.bigint_col, CAST(table5.int_col AS Int64) + table5.bigint_col AS sum_col
+02)--TableScan: table5 projection=[int_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        bigint_col:        │
+05)│        bigint_col@1       │
+06)│                           │
+07)│     int_col: int_col@0    │
+08)│                           │
+09)│          sum_col:         │
+10)│ CAST(int_col@0 AS Int64) +│
+11)│        bigint_col@1       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│      RepartitionExec      │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)│    --------------------   │
+19)│          files: 1         │
+20)│       format: arrow       │
+21)└───────────────────────────┘
+
+# Query with PartialSortExec.
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_infinite2
+ORDER BY a, b, d;
+----
+logical_plan
+01)Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST
+02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
+physical_plan
+01)┌───────────────────────────┐
+02)│      PartialSortExec      │
+03)│    --------------------   │
+04)│         sort keys:        │
+05)│  a@1 ASC NULLS LAST, b@2  │
+06)│     ASC NULLS LAST, d@4   │
+07)│       ASC NULLS LAST      │
+08)└─────────────┬─────────────┘
+09)┌─────────────┴─────────────┐
+10)│     StreamingTableExec    │
+11)└───────────────────────────┘
+
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_infinite2
+ORDER BY a, b, d
+LIMIT 50;
+----
+logical_plan
+01)Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST, fetch=50
+02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
+physical_plan
+01)┌───────────────────────────┐
+02)│      PartialSortExec      │
+03)│    --------------------   │
+04)│         limit: 50         │
+05)│                           │
+06)│         sort keys:        │
+07)│  a@1 ASC NULLS LAST, b@2  │
+08)│     ASC NULLS LAST, d@4   │
+09)│       ASC NULLS LAST      │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│     StreamingTableExec    │
+13)└───────────────────────────┘
 
 # Query with hash join.
 query TT
