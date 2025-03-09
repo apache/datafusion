@@ -361,7 +361,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             };
             updated_exprs.push(PhysicalSortExpr {
                 expr: updated_expr,
-                options: sort.options,
+                options: sort.options.clone(),
             });
         }
 
@@ -401,7 +401,6 @@ mod tests {
         ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray,
         TimestampNanosecondArray,
     };
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{assert_batches_eq, assert_contains, DataFusionError};
     use datafusion_common_runtime::SpawnedTask;
@@ -412,6 +411,8 @@ mod tests {
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use tokio::time::timeout;
@@ -789,7 +790,8 @@ mod tests {
 
         let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("i", &schema).unwrap(),
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: true,
                 nulls_first: true,
             },
@@ -963,14 +965,16 @@ mod tests {
         let sort = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: col("b", &schema).unwrap(),
-                options: SortOptions {
+                options: AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: true,
                 },
             },
             PhysicalSortExpr {
                 expr: col("c", &schema).unwrap(),
-                options: SortOptions {
+                options: AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 },
@@ -1014,7 +1018,8 @@ mod tests {
 
         let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             },
@@ -1049,7 +1054,8 @@ mod tests {
 
         let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("b", &schema).unwrap(),
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             },
@@ -1082,7 +1088,7 @@ mod tests {
         let schema = make_partition(11).schema();
         let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("i", &schema).unwrap(),
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
 
         let batches =
@@ -1221,7 +1227,7 @@ mod tests {
         let sort_preserving_merge_exec = Arc::new(SortPreservingMergeExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("a", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             blocking_exec,
         ));
@@ -1269,7 +1275,8 @@ mod tests {
 
         let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("value", &schema).unwrap(),
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             },

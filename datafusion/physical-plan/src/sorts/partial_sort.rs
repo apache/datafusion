@@ -465,12 +465,9 @@ mod tests {
     use std::collections::HashMap;
 
     use arrow::array::*;
-    use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use futures::FutureExt;
     use itertools::Itertools;
-
-    use datafusion_common::assert_batches_eq;
 
     use crate::collect;
     use crate::expressions::col;
@@ -480,6 +477,9 @@ mod tests {
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use datafusion_common::assert_batches_eq;
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
 
     use super::*;
 
@@ -496,7 +496,8 @@ mod tests {
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
         ]);
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
@@ -505,15 +506,15 @@ mod tests {
             LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
-                    options: option_asc,
+                    options: option_asc.clone(),
                 },
                 PhysicalSortExpr {
                     expr: col("b", &schema)?,
-                    options: option_asc,
+                    options: option_asc.clone(),
                 },
                 PhysicalSortExpr {
                     expr: col("c", &schema)?,
-                    options: option_asc,
+                    options: option_asc.clone(),
                 },
             ]),
             Arc::clone(&source),
@@ -558,7 +559,8 @@ mod tests {
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
         ]);
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
@@ -569,15 +571,15 @@ mod tests {
                     LexOrdering::new(vec![
                         PhysicalSortExpr {
                             expr: col("a", &schema)?,
-                            options: option_asc,
+                            options: option_asc.clone(),
                         },
                         PhysicalSortExpr {
                             expr: col("b", &schema)?,
-                            options: option_asc,
+                            options: option_asc.clone(),
                         },
                         PhysicalSortExpr {
                             expr: col("c", &schema)?,
-                            options: option_asc,
+                            options: option_asc.clone(),
                         },
                     ]),
                     Arc::clone(&source),
@@ -630,7 +632,8 @@ mod tests {
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
         ]);
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
@@ -641,15 +644,15 @@ mod tests {
                 LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("a", &schema)?,
-                        options: option_asc,
+                        options: option_asc.clone(),
                     },
                     PhysicalSortExpr {
                         expr: col("b", &schema)?,
-                        options: option_asc,
+                        options: option_asc.clone(),
                     },
                     PhysicalSortExpr {
                         expr: col("c", &schema)?,
-                        options: option_asc,
+                        options: option_asc.clone(),
                     },
                 ]),
                 Arc::clone(source),
@@ -717,11 +720,13 @@ mod tests {
     async fn test_partitioned_input_partial_sort() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         let mem_exec = prepare_partitioned_input();
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
-        let option_desc = SortOptions {
+        let option_desc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
@@ -730,15 +735,15 @@ mod tests {
             LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
-                    options: option_asc,
+                    options: option_asc.clone(),
                 },
                 PhysicalSortExpr {
                     expr: col("b", &schema)?,
-                    options: option_desc,
+                    options: option_desc.clone(),
                 },
                 PhysicalSortExpr {
                     expr: col("c", &schema)?,
-                    options: option_asc,
+                    options: option_asc.clone(),
                 },
             ]),
             Arc::clone(&mem_exec),
@@ -773,11 +778,13 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let mem_exec = prepare_partitioned_input();
         let schema = mem_exec.schema();
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
-        let option_desc = SortOptions {
+        let option_desc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
@@ -791,15 +798,15 @@ mod tests {
                 LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("a", &schema)?,
-                        options: option_asc,
+                        options: option_asc.clone(),
                     },
                     PhysicalSortExpr {
                         expr: col("b", &schema)?,
-                        options: option_desc,
+                        options: option_desc.clone(),
                     },
                     PhysicalSortExpr {
                         expr: col("c", &schema)?,
-                        options: option_asc,
+                        options: option_asc.clone(),
                     },
                 ]),
                 Arc::clone(&mem_exec),
@@ -837,7 +844,8 @@ mod tests {
         let task_ctx = Arc::new(TaskContext::default());
         let mem_exec = prepare_partitioned_input();
         let schema = mem_exec.schema();
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
@@ -846,11 +854,11 @@ mod tests {
             LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
-                    options: option_asc,
+                    options: option_asc.clone(),
                 },
                 PhysicalSortExpr {
                     expr: col("c", &schema)?,
-                    options: option_asc,
+                    options: option_asc.clone(),
                 },
             ]),
             Arc::clone(&mem_exec),
@@ -895,7 +903,7 @@ mod tests {
         let partial_sort_exec = Arc::new(PartialSortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("field_name", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             input,
             1,
@@ -935,11 +943,13 @@ mod tests {
             Field::new("b", DataType::Float64, true),
             Field::new("c", DataType::Float64, true),
         ]));
-        let option_asc = SortOptions {
+        let option_asc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: true,
         };
-        let option_desc = SortOptions {
+        let option_desc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: true,
             nulls_first: true,
         };
@@ -985,15 +995,15 @@ mod tests {
             LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
-                    options: option_asc,
+                    options: option_asc.clone(),
                 },
                 PhysicalSortExpr {
                     expr: col("b", &schema)?,
-                    options: option_asc,
+                    options: option_asc.clone(),
                 },
                 PhysicalSortExpr {
                     expr: col("c", &schema)?,
-                    options: option_desc,
+                    options: option_desc.clone(),
                 },
             ]),
             TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?,
@@ -1061,7 +1071,7 @@ mod tests {
         let sort_exec = Arc::new(PartialSortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("a", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             blocking_exec,
             1,

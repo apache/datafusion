@@ -653,6 +653,7 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
+    use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
@@ -680,7 +681,7 @@ mod tests {
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
                 expr: Arc::clone(*expr),
-                options: *options,
+                options: AdvSortOptions::with_default_ordering(*options),
             })
             .collect::<LexOrdering>()
     }

@@ -44,12 +44,9 @@ use crate::{
     Statistics,
 };
 
-use arrow::array::{
-    Array, RecordBatch, RecordBatchOptions, StringViewArray, UInt32Array,
-};
-use arrow::compute::{concat_batches, lexsort_to_indices, take_arrays, SortColumn};
-use arrow::datatypes::{DataType, SchemaRef};
-use arrow::row::{RowConverter, SortField};
+use arrow::array::{Array, RecordBatch, RecordBatchOptions, StringViewArray};
+use arrow::compute::{concat_batches, take_arrays};
+use arrow::datatypes::SchemaRef;
 use datafusion_common::{internal_err, Result};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -58,6 +55,7 @@ use datafusion_execution::TaskContext;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 
+use datafusion_common::sort::lexsort_to_indices;
 use futures::{StreamExt, TryStreamExt};
 use log::{debug, trace};
 
@@ -748,17 +746,10 @@ pub fn sort_batch(
 ) -> Result<RecordBatch> {
     let sort_columns = expressions
         .iter()
-        .map(|expr| expr.evaluate_to_sort_column(batch))
+        .map(|expr| expr.evaluate_to_adv_sort_column(batch))
         .collect::<Result<Vec<_>>>()?;
 
-    let indices = if is_multi_column_with_lists(&sort_columns) {
-        // lex_sort_to_indices doesn't support List with more than one column
-        // https://github.com/apache/arrow-rs/issues/5454
-        lexsort_to_indices_multi_columns(sort_columns, fetch)?
-    } else {
-        lexsort_to_indices(&sort_columns, fetch)?
-    };
-
+    let indices = lexsort_to_indices(sort_columns.as_slice(), fetch)?;
     let mut columns = take_arrays(batch.columns(), &indices, None)?;
 
     // The columns may be larger than the unsorted columns in `batch` especially for variable length
@@ -775,48 +766,6 @@ pub fn sort_batch(
         columns,
         &options,
     )?)
-}
-
-#[inline]
-fn is_multi_column_with_lists(sort_columns: &[SortColumn]) -> bool {
-    sort_columns.iter().any(|c| {
-        matches!(
-            c.values.data_type(),
-            DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
-        )
-    })
-}
-
-pub(crate) fn lexsort_to_indices_multi_columns(
-    sort_columns: Vec<SortColumn>,
-    limit: Option<usize>,
-) -> Result<UInt32Array> {
-    let (fields, columns) = sort_columns.into_iter().fold(
-        (vec![], vec![]),
-        |(mut fields, mut columns), sort_column| {
-            fields.push(SortField::new_with_options(
-                sort_column.values.data_type().clone(),
-                sort_column.options.unwrap_or_default(),
-            ));
-            columns.push(sort_column.values);
-            (fields, columns)
-        },
-    );
-
-    // TODO reuse converter and rows, refer to TopK.
-    let converter = RowConverter::new(fields)?;
-    let rows = converter.convert_columns(&columns)?;
-    let mut sort: Vec<_> = rows.iter().enumerate().collect();
-    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-
-    let mut len = rows.num_rows();
-    if let Some(limit) = limit {
-        len = limit.min(len);
-    }
-    let indices =
-        UInt32Array::from_iter_values(sort.iter().take(len).map(|(i, _)| *i as u32));
-
-    Ok(indices)
 }
 
 /// Sort execution plan.
@@ -1179,7 +1128,7 @@ impl ExecutionPlan for SortExec {
             };
             updated_exprs.push(PhysicalSortExpr {
                 expr: new_expr,
-                options: sort.options,
+                options: sort.options.clone(),
             });
         }
 
@@ -1208,7 +1157,6 @@ mod tests {
     use crate::test::TestMemoryExec;
 
     use arrow::array::*;
-    use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::{assert_batches_eq, Result, ScalarValue};
@@ -1218,6 +1166,8 @@ mod tests {
     use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr::EquivalenceProperties;
 
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use futures::{FutureExt, Stream};
 
     #[derive(Debug, Clone)]
@@ -1345,7 +1295,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("i", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             Arc::new(CoalescePartitionsExec::new(csv)),
         ));
@@ -1391,7 +1341,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("i", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
@@ -1459,7 +1409,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("i", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
@@ -1552,7 +1502,7 @@ mod tests {
                 SortExec::new(
                     LexOrdering::new(vec![PhysicalSortExpr {
                         expr: col("i", &schema)?,
-                        options: SortOptions::default(),
+                        options: AdvSortOptions::default(),
                     }]),
                     Arc::new(CoalescePartitionsExec::new(csv)),
                 )
@@ -1601,7 +1551,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("field_name", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             input,
         ));
@@ -1653,14 +1603,16 @@ mod tests {
             LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
-                    options: SortOptions {
+                    options: AdvSortOptions {
+                        ordering: SortOrdering::Default,
                         descending: false,
                         nulls_first: true,
                     },
                 },
                 PhysicalSortExpr {
                     expr: col("b", &schema)?,
-                    options: SortOptions {
+                    options: AdvSortOptions {
+                        ordering: SortOrdering::Default,
                         descending: true,
                         nulls_first: false,
                     },
@@ -1739,14 +1691,16 @@ mod tests {
             LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
-                    options: SortOptions {
+                    options: AdvSortOptions {
+                        ordering: SortOrdering::Default,
                         descending: true,
                         nulls_first: true,
                     },
                 },
                 PhysicalSortExpr {
                     expr: col("b", &schema)?,
-                    options: SortOptions {
+                    options: AdvSortOptions {
+                        ordering: SortOrdering::Default,
                         descending: false,
                         nulls_first: false,
                     },
@@ -1817,7 +1771,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("a", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             blocking_exec,
         ));
@@ -1848,7 +1802,7 @@ mod tests {
 
         let expressions = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
 
         let result = sort_batch(&batch, expressions.as_ref(), None).unwrap();

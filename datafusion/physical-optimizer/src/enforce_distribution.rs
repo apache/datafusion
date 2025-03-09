@@ -21,17 +21,16 @@
 //! according to the configuration), this rule increases partition counts in
 //! the physical plan.
 
-use std::fmt::Debug;
-use std::sync::Arc;
-
 use crate::optimizer::PhysicalOptimizerRule;
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
     is_sort_preserving_merge,
 };
-
 use arrow::compute::SortOptions;
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
@@ -459,7 +458,7 @@ where
         if !positions.is_empty() {
             let new_join_on = new_join_conditions(&left_keys, &right_keys);
             let new_sort_options = (0..sort_options.len())
-                .map(|idx| sort_options[positions[idx]])
+                .map(|idx| sort_options[positions[idx]].clone())
                 .collect();
             join_plan.plan = join_constructor((new_join_on, new_sort_options))?;
         }
@@ -673,7 +672,7 @@ pub fn reorder_join_keys_to_inputs(
                 } = join_keys;
                 let new_join_on = new_join_conditions(&left_keys, &right_keys);
                 let new_sort_options = (0..sort_options.len())
-                    .map(|idx| sort_options[positions[idx]])
+                    .map(|idx| sort_options[positions[idx]].clone())
                     .collect();
                 return SortMergeJoinExec::try_new(
                     Arc::clone(left),

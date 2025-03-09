@@ -544,6 +544,7 @@ mod tests {
     // use futures::StreamExt;
 
     use super::*;
+    use datafusion_expr::registry::MemoryExtensionTypeRegistry;
     use datafusion_expr::{
         case, col, lit, AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF,
     };
@@ -1057,6 +1058,10 @@ mod tests {
         }
 
         fn window_functions(&self) -> &std::collections::HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn extension_types(&self) -> &MemoryExtensionTypeRegistry {
             unimplemented!()
         }
 

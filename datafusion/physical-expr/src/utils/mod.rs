@@ -308,7 +308,7 @@ pub(crate) mod tests {
         }
 
         fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-            Ok(input[0].sort_properties)
+            Ok(input[0].sort_properties.clone())
         }
 
         fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

@@ -24,7 +24,6 @@ use std::sync::{Arc, LazyLock};
 #[cfg(feature = "extended_tests")]
 mod memory_limit_validation;
 use arrow::array::{ArrayRef, DictionaryArray, Int32Array, RecordBatch, StringViewArray};
-use arrow::compute::SortOptions;
 use arrow::datatypes::{Int32Type, SchemaRef};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::assert_batches_eq;
@@ -54,6 +53,8 @@ use rand::Rng;
 use test_utils::AccessLogGenerator;
 
 use async_trait::async_trait;
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 use futures::StreamExt;
 use tokio::fs::File;
 
@@ -749,14 +750,15 @@ impl Scenario {
                 .collect();
 
                 let schema = batches[0][0].schema();
-                let options = SortOptions {
+                let options = AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 };
                 let sort_information = vec![LexOrdering::new(vec![
                     PhysicalSortExpr {
                         expr: col("a", &schema).unwrap(),
-                        options,
+                        options: options.clone(),
                     },
                     PhysicalSortExpr {
                         expr: col("b", &schema).unwrap(),

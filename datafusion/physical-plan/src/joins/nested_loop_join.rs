@@ -1040,7 +1040,6 @@ pub(crate) mod tests {
     };
 
     use arrow::array::Int32Array;
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
     use datafusion_common::{assert_batches_sorted_eq, assert_contains, ScalarValue};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
@@ -1049,6 +1048,8 @@ pub(crate) mod tests {
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use rstest::rstest;
 
     fn build_table(
@@ -1082,7 +1083,8 @@ pub(crate) mod tests {
                 let index = schema.index_of(name).unwrap();
                 let sort_expr = PhysicalSortExpr {
                     expr: Arc::new(Column::new(name, index)),
-                    options: SortOptions {
+                    options: AdvSortOptions {
+                        ordering: SortOrdering::Default,
                         descending: false,
                         nulls_first: false,
                     },

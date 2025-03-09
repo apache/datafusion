@@ -23,7 +23,7 @@ use std::vec::IntoIter;
 use crate::equivalence::add_offset_to_expr;
 use crate::{LexOrdering, PhysicalExpr};
 
-use arrow::compute::SortOptions;
+use datafusion_common::sort::AdvSortOptions;
 use datafusion_common::HashSet;
 
 /// An `OrderingEquivalenceClass` object keeps track of different alternative
@@ -227,11 +227,11 @@ impl OrderingEquivalenceClass {
 
     /// Gets sort options associated with this expression if it is a leading
     /// ordering expression. Otherwise, returns `None`.
-    pub fn get_options(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<SortOptions> {
+    pub fn get_options(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<&AdvSortOptions> {
         for ordering in self.iter() {
             let leading_ordering = &ordering[0];
             if leading_ordering.expr.eq(expr) {
-                return Some(leading_ordering.options);
+                return Some(&leading_ordering.options);
             }
         }
         None
@@ -359,6 +359,7 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::Result;
     use datafusion_expr::{Operator, ScalarUDF};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -371,16 +372,16 @@ mod tests {
         ]));
         let crude = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(Column::new("a", 0)),
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let finer = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
         ]);
         // finer ordering satisfies, crude ordering should return true

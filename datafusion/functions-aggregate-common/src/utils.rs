@@ -108,8 +108,11 @@ pub fn ordering_fields(
 }
 
 /// Selects the sort option attribute from all the given `PhysicalSortExpr`s.
-pub fn get_sort_options(ordering_req: &LexOrdering) -> Vec<SortOptions> {
-    ordering_req.iter().map(|item| item.options).collect()
+pub fn get_sort_options(ordering_req: &LexOrdering) -> Result<Vec<SortOptions>> {
+    ordering_req
+        .iter()
+        .map(|item| item.options.to_arrow())
+        .collect()
 }
 
 /// A wrapper around a type to provide hash for floats

@@ -734,7 +734,11 @@ fn determine_prune_length(
     };
 
     // Perform binary search on the array to determine the length of the record batch to be pruned
-    bisect::<true>(&[batch_arr], &[target], &[origin_sorted_expr.options])
+    bisect::<true>(
+        &[batch_arr],
+        &[target],
+        &[origin_sorted_expr.options.to_arrow()?],
+    )
 }
 
 /// This method determines if the result of the join should be produced in the final step or not.
@@ -1724,7 +1728,6 @@ mod tests {
         partitioned_sym_join_with_filter, split_record_batches,
     };
 
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_execution::config::SessionConfig;
@@ -1732,6 +1735,8 @@ mod tests {
     use datafusion_physical_expr::expressions::{binary, col, lit, Column};
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use rstest::*;
 
     const TABLE_SIZE: i32 = 30;
@@ -1837,11 +1842,11 @@ mod tests {
                 col("la2", left_schema)?,
                 left_schema,
             )?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ra1", right_schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let (left, right) = create_memory_table(
             left_partition,
@@ -1912,11 +1917,11 @@ mod tests {
 
         let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("la1", left_schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ra1", right_schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let (left, right) = create_memory_table(
             left_partition,
@@ -2057,14 +2062,16 @@ mod tests {
         let right_schema = &right_partition[0].schema();
         let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("la1_des", left_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: true,
                 nulls_first: true,
             },
         }]);
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ra1_des", right_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: true,
                 nulls_first: true,
             },
@@ -2116,14 +2123,16 @@ mod tests {
         let right_schema = &right_partition[0].schema();
         let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("l_asc_null_first", left_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             },
         }]);
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("r_asc_null_first", right_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             },
@@ -2175,14 +2184,16 @@ mod tests {
         let right_schema = &right_partition[0].schema();
         let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("l_asc_null_last", left_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: false,
             },
         }]);
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("r_asc_null_last", right_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: false,
             },
@@ -2236,14 +2247,16 @@ mod tests {
         let right_schema = &right_partition[0].schema();
         let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("l_desc_null_first", left_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: true,
                 nulls_first: true,
             },
         }]);
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("r_desc_null_first", right_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: true,
                 nulls_first: true,
             },
@@ -2298,12 +2311,12 @@ mod tests {
         let right_schema = &right_partition[0].schema();
         let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("la1", left_schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
 
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ra1", right_schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let (left, right) = create_memory_table(
             left_partition,
@@ -2357,17 +2370,17 @@ mod tests {
         let left_sorted = vec![
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("la1", left_schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("la2", left_schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
         ];
 
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ra1", right_schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
 
         let (left, right) = create_memory_table(
@@ -2438,14 +2451,16 @@ mod tests {
         let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
         let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("lt1", left_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             },
         }]);
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("rt1", right_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             },
@@ -2521,14 +2536,16 @@ mod tests {
         let on = vec![(col("lc1", left_schema)?, col("rc1", right_schema)?)];
         let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("li1", left_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             },
         }]);
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("ri1", right_schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             },
@@ -2597,11 +2614,11 @@ mod tests {
         let right_schema = &right_partition[0].schema();
         let left_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("l_float", left_schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let right_sorted = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("r_float", right_schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let (left, right) = create_memory_table(
             left_partition,

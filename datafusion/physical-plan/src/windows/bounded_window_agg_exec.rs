@@ -1213,7 +1213,6 @@ mod tests {
         builder::{Int64Builder, UInt64Builder},
         RecordBatch,
     };
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion_common::{
         assert_batches_eq, exec_datafusion_err, Result, ScalarValue,
@@ -1232,6 +1231,8 @@ mod tests {
     use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
     use itertools::Itertools;
@@ -1334,7 +1335,7 @@ mod tests {
         let partitionby_exprs = vec![col(hash, &schema)?];
         let orderby_exprs = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col(order_by, &schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let window_frame = WindowFrame::new_bounds(
             WindowFrameUnits::Range,
@@ -1451,7 +1452,8 @@ mod tests {
     fn schema_orders(schema: &SchemaRef) -> Result<Vec<LexOrdering>> {
         let orderings = vec![LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("sn", schema)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: false,
             },
@@ -1603,7 +1605,7 @@ mod tests {
 
         let window_exprs = vec![
             // LAST_VALUE(a)
-            Arc::new(StandardWindowExpr::new(
+            Arc::new(StandardWindowExpr::try_new(
                 last_value_func,
                 &[],
                 &LexOrdering::default(),
@@ -1612,9 +1614,9 @@ mod tests {
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
                 )),
-            )) as _,
+            )?) as _,
             // NTH_VALUE(a, -1)
-            Arc::new(StandardWindowExpr::new(
+            Arc::new(StandardWindowExpr::try_new(
                 nth_value_func1,
                 &[],
                 &LexOrdering::default(),
@@ -1623,9 +1625,9 @@ mod tests {
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
                 )),
-            )) as _,
+            )?) as _,
             // NTH_VALUE(a, -2)
-            Arc::new(StandardWindowExpr::new(
+            Arc::new(StandardWindowExpr::try_new(
                 nth_value_func2,
                 &[],
                 &LexOrdering::default(),
@@ -1634,7 +1636,7 @@ mod tests {
                     WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                     WindowFrameBound::CurrentRow,
                 )),
-            )) as _,
+            )?) as _,
         ];
         let physical_plan = BoundedWindowAggExec::try_new(
             window_exprs,

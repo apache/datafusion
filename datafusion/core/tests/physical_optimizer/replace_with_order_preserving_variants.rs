@@ -47,6 +47,7 @@ use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::enforce_sorting::replace_with_order_preserving_variants::{replace_with_order_preserving_variants, OrderPreservationContext};
 use datafusion_common::config::ConfigOptions;
 
+use datafusion_common::sort::AdvSortOptions;
 use object_store::memory::InMemory;
 use object_store::ObjectStore;
 use rstest::rstest;
@@ -1141,7 +1142,7 @@ fn sort_expr_options(
 ) -> PhysicalSortExpr {
     PhysicalSortExpr {
         expr: col(name, schema).unwrap(),
-        options,
+        options: AdvSortOptions::with_default_ordering(options),
     }
 }
 

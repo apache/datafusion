@@ -20,9 +20,8 @@ mod sp_repartition_fuzz_tests {
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int64Array, RecordBatch, UInt64Array};
-    use arrow::compute::{concat_batches, lexsort, SortColumn, SortOptions};
+    use arrow::compute::{concat_batches, lexsort, SortColumn};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-
     use datafusion::physical_plan::{
         collect,
         metrics::{BaselineMetrics, ExecutionPlanMetricsSet},
@@ -46,6 +45,8 @@ mod sp_repartition_fuzz_tests {
 
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::datasource::source::DataSourceExec;
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
@@ -88,7 +89,8 @@ mod sp_repartition_fuzz_tests {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut remaining_exprs = col_exprs[0..4].to_vec(); // only a, b, c, d are sorted
 
-        let options_asc = SortOptions {
+        let options_asc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
@@ -101,7 +103,7 @@ mod sp_repartition_fuzz_tests {
                 .drain(0..n_sort_expr)
                 .map(|expr| PhysicalSortExpr {
                     expr: expr.clone(),
-                    options: options_asc,
+                    options: options_asc.clone(),
                 })
                 .collect();
 
@@ -169,7 +171,7 @@ mod sp_repartition_fuzz_tests {
                     (
                         SortColumn {
                             values: arr,
-                            options: Some(*options),
+                            options: Some(options.to_arrow().unwrap()),
                         },
                         idx,
                     )
@@ -351,7 +353,7 @@ mod sp_repartition_fuzz_tests {
         for ordering_col in ["a", "b", "c"] {
             sort_keys.push(PhysicalSortExpr {
                 expr: col(ordering_col, &schema).unwrap(),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             })
         }
 
