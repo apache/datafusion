@@ -37,7 +37,8 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
     const N_RANDOM_SCHEMA: usize = 5;
     const N_ELEMENTS: usize = 125;
     const N_DISTINCT: usize = 5;
-    const SORT_OPTIONS: SortOptions = SortOptions {
+    const SORT_OPTIONS: AdvSortOptions = AdvSortOptions {
+        ordering: SortOrdering::Default,
         descending: false,
         nulls_first: false,
     };
@@ -63,7 +64,7 @@ fn test_ordering_satisfy_with_equivalence_random() -> Result<()> {
                     .into_iter()
                     .map(|expr| PhysicalSortExpr {
                         expr: Arc::clone(expr),
-                        options: SORT_OPTIONS,
+                        options: SORT_OPTIONS.clone(),
                     })
                     .collect::<LexOrdering>();
                 let expected = is_table_same_after_sort(
@@ -94,7 +95,8 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
     const N_RANDOM_SCHEMA: usize = 100;
     const N_ELEMENTS: usize = 125;
     const N_DISTINCT: usize = 5;
-    const SORT_OPTIONS: SortOptions = SortOptions {
+    const SORT_OPTIONS: AdvSortOptions = AdvSortOptions {
+        ordering: SortOrdering::Default,
         descending: false,
         nulls_first: false,
     };
@@ -135,7 +137,7 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
                     .into_iter()
                     .map(|expr| PhysicalSortExpr {
                         expr: Arc::clone(expr),
-                        options: SORT_OPTIONS,
+                        options: SORT_OPTIONS.clone(),
                     })
                     .collect::<LexOrdering>();
                 let expected = is_table_same_after_sort(

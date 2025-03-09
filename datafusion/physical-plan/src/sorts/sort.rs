@@ -1152,7 +1152,6 @@ mod tests {
     use crate::test::TestMemoryExec;
 
     use arrow::array::*;
-    use arrow::compute::SortOptions;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::{assert_batches_eq, Result, ScalarValue};
@@ -1163,6 +1162,8 @@ mod tests {
     use datafusion_physical_expr::EquivalenceProperties;
 
     use futures::{FutureExt, Stream};
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
 
     #[derive(Debug, Clone)]
     pub struct SortedUnboundedExec {
@@ -1293,7 +1294,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("i", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             Arc::new(CoalescePartitionsExec::new(csv)),
         ));
@@ -1339,7 +1340,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("i", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
@@ -1407,7 +1408,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("i", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             Arc::new(CoalescePartitionsExec::new(input)),
         ));
@@ -1500,7 +1501,7 @@ mod tests {
                 SortExec::new(
                     LexOrdering::new(vec![PhysicalSortExpr {
                         expr: col("i", &schema)?,
-                        options: SortOptions::default(),
+                        options: AdvSortOptions::default(),
                     }]),
                     Arc::new(CoalescePartitionsExec::new(csv)),
                 )
@@ -1549,7 +1550,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("field_name", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             input,
         ));
@@ -1601,14 +1602,16 @@ mod tests {
             LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
-                    options: SortOptions {
+                    options: AdvSortOptions {
+                        ordering: SortOrdering::Default,
                         descending: false,
                         nulls_first: true,
                     },
                 },
                 PhysicalSortExpr {
                     expr: col("b", &schema)?,
-                    options: SortOptions {
+                    options: AdvSortOptions {
+                        ordering: SortOrdering::Default,
                         descending: true,
                         nulls_first: false,
                     },
@@ -1687,14 +1690,16 @@ mod tests {
             LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: col("a", &schema)?,
-                    options: SortOptions {
+                    options: AdvSortOptions {
+                        ordering: SortOrdering::Default,
                         descending: true,
                         nulls_first: true,
                     },
                 },
                 PhysicalSortExpr {
                     expr: col("b", &schema)?,
-                    options: SortOptions {
+                    options: AdvSortOptions {
+                        ordering: SortOrdering::Default,
                         descending: false,
                         nulls_first: false,
                     },
@@ -1765,7 +1770,7 @@ mod tests {
         let sort_exec = Arc::new(SortExec::new(
             LexOrdering::new(vec![PhysicalSortExpr {
                 expr: col("a", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }]),
             blocking_exec,
         ));
@@ -1796,7 +1801,7 @@ mod tests {
 
         let expressions = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
 
         let result = sort_batch(&batch, expressions.as_ref(), None).unwrap();

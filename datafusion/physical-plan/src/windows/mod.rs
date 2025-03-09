@@ -717,7 +717,7 @@ mod tests {
     ) -> PhysicalSortExpr {
         PhysicalSortExpr {
             expr: col(name, schema).unwrap(),
-            options,
+            options: AdvSortOptions::with_default_ordering(options),
         }
     }
 
@@ -777,7 +777,8 @@ mod tests {
             let mut orderbys = vec![];
             for (col_name, descending, nulls_first) in ob_params {
                 let expr = col(col_name, &schema)?;
-                let options = SortOptions {
+                let options = AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending,
                     nulls_first,
                 };
@@ -786,7 +787,8 @@ mod tests {
 
             let mut expected: Option<LexRequirement> = None;
             for (col_name, reqs) in expected_params {
-                let options = reqs.map(|(descending, nulls_first)| SortOptions {
+                let options = reqs.map(|(descending, nulls_first)| AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending,
                     nulls_first,
                 });
@@ -856,14 +858,16 @@ mod tests {
         {
             let physical_ordering = PhysicalSortExpr {
                 expr: col("nullable_col", &schema)?,
-                options: SortOptions {
+                options: AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: physical_desc,
                     nulls_first: physical_nulls_first,
                 },
             };
             let required_ordering = PhysicalSortExpr {
                 expr: col("nullable_col", &schema)?,
-                options: SortOptions {
+                options: AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: req_desc,
                     nulls_first: req_nulls_first,
                 },
@@ -896,14 +900,16 @@ mod tests {
         {
             let physical_ordering = PhysicalSortExpr {
                 expr: col("non_nullable_col", &schema)?,
-                options: SortOptions {
+                options: AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: physical_desc,
                     nulls_first: physical_nulls_first,
                 },
             };
             let required_ordering = PhysicalSortExpr {
                 expr: col("non_nullable_col", &schema)?,
-                options: SortOptions {
+                options: AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: req_desc,
                     nulls_first: req_nulls_first,
                 },
@@ -1019,7 +1025,7 @@ mod tests {
                 let expr = col(col_name, &test_schema)?;
                 // Give default ordering, this is same with input ordering direction
                 // In this test we do check for reversibility.
-                let options = SortOptions::default();
+                let options = AdvSortOptions::default();
                 order_by_exprs.push(PhysicalSortExpr { expr, options });
             }
             let res = get_window_mode(
@@ -1182,7 +1188,8 @@ mod tests {
             let mut order_by_exprs = LexOrdering::default();
             for (col_name, descending, nulls_first) in order_by_params {
                 let expr = col(col_name, &test_schema)?;
-                let options = SortOptions {
+                let options = AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: *descending,
                     nulls_first: *nulls_first,
                 };

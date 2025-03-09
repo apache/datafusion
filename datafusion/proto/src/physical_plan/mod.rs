@@ -22,7 +22,6 @@ use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use prost::bytes::BufMut;
 use prost::Message;
 
-use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::file_format::csv::CsvSink;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
@@ -68,6 +67,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use crate::common::{byte_to_string, str_to_byte};
@@ -893,7 +894,8 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 .as_ref();
                             Ok(PhysicalSortExpr {
                                 expr: parse_physical_expr(expr, registry, input.schema().as_ref(), extension_codec)?,
-                                options: SortOptions {
+                                options: AdvSortOptions {
+                                    ordering: SortOrdering::Default,
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
                                 },
@@ -940,7 +942,8 @@ impl AsExecutionPlan for protobuf::PhysicalPlanNode {
                                 .as_ref();
                             Ok(PhysicalSortExpr {
                                 expr: parse_physical_expr(expr, registry, input.schema().as_ref(), extension_codec)?,
-                                options: SortOptions {
+                                options: AdvSortOptions {
+                                    ordering: SortOrdering::Default,
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
                                 },

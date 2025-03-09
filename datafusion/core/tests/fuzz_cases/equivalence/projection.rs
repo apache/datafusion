@@ -19,7 +19,6 @@ use crate::fuzz_cases::equivalence::utils::{
     apply_projection, create_random_schema, generate_table_for_eq_properties,
     is_table_same_after_sort, TestScalarUDF,
 };
-use arrow::compute::SortOptions;
 use datafusion_common::Result;
 use datafusion_expr::{Operator, ScalarUDF};
 use datafusion_physical_expr::equivalence::ProjectionMapping;
@@ -29,6 +28,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
 use std::sync::Arc;
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 
 #[test]
 fn project_orderings_random() -> Result<()> {
@@ -108,7 +109,8 @@ fn ordering_satisfy_after_projection_random() -> Result<()> {
     const N_RANDOM_SCHEMA: usize = 20;
     const N_ELEMENTS: usize = 125;
     const N_DISTINCT: usize = 5;
-    const SORT_OPTIONS: SortOptions = SortOptions {
+    const SORT_OPTIONS: AdvSortOptions = AdvSortOptions {
+        ordering: SortOrdering::Default,
         descending: false,
         nulls_first: false,
     };

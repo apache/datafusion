@@ -547,6 +547,7 @@ mod tests {
     use datafusion_expr::{
         case, col, lit, AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF,
     };
+    use datafusion_expr::registry::MemoryExtensionTypeRegistry;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
 
@@ -1057,6 +1058,10 @@ mod tests {
         }
 
         fn window_functions(&self) -> &std::collections::HashMap<String, Arc<WindowUDF>> {
+            unimplemented!()
+        }
+
+        fn extension_types(&self) -> &MemoryExtensionTypeRegistry {
             unimplemented!()
         }
 

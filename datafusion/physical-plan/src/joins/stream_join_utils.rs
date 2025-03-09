@@ -799,8 +799,8 @@ pub mod tests {
     use super::*;
     use crate::{joins::test_utils::complicated_filter, joins::utils::ColumnIndex};
 
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::sort::AdvSortOptions;
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{binary, cast, col};
 
@@ -811,7 +811,7 @@ pub mod tests {
         // Sorting information for the left side:
         let left_child_sort_expr = PhysicalSortExpr {
             expr: col("left_1", &left_child_schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         };
 
         let right_child_schema = Schema::new(vec![
@@ -826,7 +826,7 @@ pub mod tests {
                 col("right_2", &right_child_schema)?,
                 &right_child_schema,
             )?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         };
 
         let intermediate_schema = Schema::new(vec![
@@ -1002,7 +1002,7 @@ pub mod tests {
             &left_schema,
             &PhysicalSortExpr {
                 expr: col("la1", left_schema.as_ref())?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }
         )?
         .is_some());
@@ -1012,7 +1012,7 @@ pub mod tests {
             &left_schema,
             &PhysicalSortExpr {
                 expr: col("lt1", left_schema.as_ref())?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }
         )?
         .is_none());
@@ -1022,7 +1022,7 @@ pub mod tests {
             &right_schema,
             &PhysicalSortExpr {
                 expr: col("ra1", right_schema.as_ref())?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }
         )?
         .is_some());
@@ -1032,7 +1032,7 @@ pub mod tests {
             &right_schema,
             &PhysicalSortExpr {
                 expr: col("rb1", right_schema.as_ref())?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             }
         )?
         .is_none());
@@ -1078,7 +1078,7 @@ pub mod tests {
                 col("b", &schema)?,
                 &schema,
             )?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         };
 
         let res = convert_sort_expr_with_filter_schema(

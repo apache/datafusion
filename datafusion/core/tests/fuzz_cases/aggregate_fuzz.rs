@@ -23,7 +23,7 @@ use crate::fuzz_cases::aggregation_fuzzer::{
 };
 
 use arrow::array::{types::Int64Type, Array, ArrayRef, AsArray, Int64Array, RecordBatch};
-use arrow::compute::{concat_batches, SortOptions};
+use arrow::compute::{concat_batches};
 use arrow::datatypes::{
     DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
@@ -51,6 +51,7 @@ use test_utils::{add_empty_batches, StringBatchGenerator};
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, SeedableRng};
 use tokio::task::JoinSet;
+use datafusion_common::sort::AdvSortOptions;
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]
@@ -315,7 +316,7 @@ async fn run_aggregate_test(input1: Vec<RecordBatch>, group_by_columns: Vec<&str
     for ordering_col in ["a", "b", "c"] {
         sort_keys.push(PhysicalSortExpr {
             expr: col(ordering_col, &schema).unwrap(),
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         })
     }
 

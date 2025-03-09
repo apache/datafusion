@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, StringArray};
-use arrow::compute::{concat_batches, SortOptions};
+use arrow::compute::{concat_batches};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
@@ -54,6 +54,7 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use datafusion_common::sort::AdvSortOptions;
 use test_utils::add_empty_batches;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
@@ -598,7 +599,7 @@ async fn run_window_test(
     for column in &orderby_columns {
         orderby_exprs.push(PhysicalSortExpr {
             expr: col(column, &schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         })
     }
     if orderby_exprs.len() > 1 && !window_frame.can_accept_multi_orderby() {
@@ -612,7 +613,7 @@ async fn run_window_test(
     for partition_by_expr in &partitionby_exprs {
         sort_keys.push(PhysicalSortExpr {
             expr: partition_by_expr.clone(),
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         })
     }
     for order_by_expr in &orderby_exprs {

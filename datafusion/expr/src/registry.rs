@@ -222,7 +222,8 @@ pub trait ExtensionTypeRegistry {
     ///
     /// Returns an error if the type cannot be deregistered, for example if the registry is read
     /// only.
-    fn deregister_extension_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>>;
+    fn deregister_extension_type(&mut self, name: &str)
+        -> Result<Option<LogicalTypeRef>>;
 }
 
 /// An [`ExtensionTypeRegistry`] that uses in memory [`HashMap`]s.
@@ -260,7 +261,10 @@ impl ExtensionTypeRegistry for MemoryExtensionTypeRegistry {
         Ok(self.extension_types.insert(signature.into(), logical_type))
     }
 
-    fn deregister_extension_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>> {
+    fn deregister_extension_type(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<LogicalTypeRef>> {
         Ok(self.extension_types.remove(name))
     }
 }
@@ -295,7 +299,10 @@ impl ExtensionTypeRegistry for EmptyExtensionTypeRegistry {
         plan_err!("Cannot register type.")
     }
 
-    fn deregister_extension_type(&mut self, _name: &str) -> Result<Option<LogicalTypeRef>> {
+    fn deregister_extension_type(
+        &mut self,
+        _name: &str,
+    ) -> Result<Option<LogicalTypeRef>> {
         plan_err!("Cannot deregister type.")
     }
 }

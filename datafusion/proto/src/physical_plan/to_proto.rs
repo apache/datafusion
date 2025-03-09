@@ -182,7 +182,7 @@ pub fn serialize_physical_sort_expr(
 ) -> Result<PhysicalSortExprNode> {
     let PhysicalSortExpr {
         expr,
-        options: options,
+        options,
     } = sort_expr;
     let expr = serialize_physical_expr(&expr, codec)?;
     Ok(PhysicalSortExprNode {

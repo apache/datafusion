@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use arrow::{
     array::{as_string_array, ArrayRef, Int32Array, StringArray},
-    compute::SortOptions,
     record_batch::RecordBatch,
 };
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -36,6 +35,8 @@ use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use rand::Rng;
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 const KB: usize = 1 << 10;
@@ -237,7 +238,8 @@ impl SortTest {
                 .iter()
                 .map(|c| PhysicalSortExpr {
                     expr: col(c, &schema).unwrap(),
-                    options: SortOptions {
+                    options: AdvSortOptions {
+                        ordering: SortOrdering::Default,
                         descending: false,
                         nulls_first: true,
                     },

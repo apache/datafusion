@@ -21,7 +21,6 @@ use std::sync::Arc;
 
 use arrow::{
     array::{ArrayRef, Int32Array},
-    compute::SortOptions,
     record_batch::RecordBatch,
 };
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -31,6 +30,8 @@ use datafusion::physical_plan::{
     sorts::sort_preserving_merge::SortPreservingMergeExec,
 };
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
 use test_utils::{batches_to_vec, partitions_to_sorted_vec, stagger_batch_with_seed};
@@ -111,7 +112,8 @@ async fn run_merge_test(input: Vec<Vec<RecordBatch>>) {
 
         let sort = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("x", &schema).unwrap(),
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             },

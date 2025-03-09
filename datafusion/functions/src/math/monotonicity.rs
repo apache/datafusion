@@ -567,9 +567,9 @@ pub fn get_tanh_doc() -> &'static Documentation {
 
 #[cfg(test)]
 mod tests {
-    use arrow::compute::SortOptions;
     use datafusion_common::Result;
-
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use super::*;
 
     #[derive(Debug)]
@@ -602,11 +602,13 @@ mod tests {
                 func: acos_order,
                 lower: -0.5,
                 upper: 0.5,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: true,
                     nulls_first: false,
                 })),
@@ -616,7 +618,8 @@ mod tests {
                 func: acos_order,
                 lower: -2.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
@@ -627,11 +630,13 @@ mod tests {
                 func: acosh_order,
                 lower: 2.0,
                 upper: 100.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: true,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: true,
                 })),
@@ -641,7 +646,8 @@ mod tests {
                 func: acosh_order,
                 lower: 0.5,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: true,
                     nulls_first: false,
                 }),
@@ -652,11 +658,13 @@ mod tests {
                 func: asin_order,
                 lower: -0.5,
                 upper: 0.5,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -666,7 +674,8 @@ mod tests {
                 func: asin_order,
                 lower: -2.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
@@ -677,11 +686,13 @@ mod tests {
                 func: asinh_order,
                 lower: -1.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -691,11 +702,13 @@ mod tests {
                 func: asinh_order,
                 lower: -2.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -705,11 +718,13 @@ mod tests {
                 func: atan_order,
                 lower: -1.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -719,11 +734,13 @@ mod tests {
                 func: atan_order,
                 lower: -2.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -733,11 +750,13 @@ mod tests {
                 func: atanh_order,
                 lower: -0.6,
                 upper: 0.6,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -747,7 +766,8 @@ mod tests {
                 func: atanh_order,
                 lower: -2.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
@@ -758,11 +778,13 @@ mod tests {
                 func: cbrt_order,
                 lower: -1.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -772,11 +794,13 @@ mod tests {
                 func: cbrt_order,
                 lower: -2.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -786,11 +810,13 @@ mod tests {
                 func: ceil_order,
                 lower: -1.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -800,11 +826,13 @@ mod tests {
                 func: ceil_order,
                 lower: -2.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -814,7 +842,8 @@ mod tests {
                 func: cos_order,
                 lower: 0.0,
                 upper: 2.0 * std::f64::consts::PI,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
@@ -825,7 +854,8 @@ mod tests {
                 func: cos_order,
                 lower: -2.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
@@ -836,11 +866,13 @@ mod tests {
                 func: cosh_order,
                 lower: 5.0,
                 upper: 100.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -850,11 +882,13 @@ mod tests {
                 func: cosh_order,
                 lower: -100.0,
                 upper: -5.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: true,
                     nulls_first: false,
                 })),
@@ -864,7 +898,8 @@ mod tests {
                 func: cosh_order,
                 lower: -1.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
@@ -875,11 +910,13 @@ mod tests {
                 func: degrees_order,
                 lower: -1.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: true,
                     nulls_first: true,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: true,
                     nulls_first: true,
                 })),
@@ -889,11 +926,13 @@ mod tests {
                 func: exp_order,
                 lower: -1000.0,
                 upper: 1000.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -903,11 +942,13 @@ mod tests {
                 func: floor_order,
                 lower: -1.0,
                 upper: 1.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: true,
                     nulls_first: true,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: true,
                     nulls_first: true,
                 })),
@@ -917,11 +958,13 @@ mod tests {
                 func: ln_order,
                 lower: 1.0,
                 upper: 2.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),
-                expected: Ok(SortProperties::Ordered(SortOptions {
+                expected: Ok(SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 })),
@@ -931,7 +974,8 @@ mod tests {
                 func: ln_order,
                 lower: -5.0,
                 upper: -4.0,
-                input_sort: SortProperties::Ordered(SortOptions {
+                input_sort: SortProperties::Ordered(AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: false,
                 }),

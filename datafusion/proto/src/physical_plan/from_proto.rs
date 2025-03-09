@@ -19,7 +19,6 @@
 
 use std::sync::Arc;
 
-use arrow::compute::SortOptions;
 use chrono::{TimeZone, Utc};
 use datafusion_expr::dml::InsertOp;
 use object_store::path::Path;
@@ -43,6 +42,8 @@ use datafusion::physical_plan::expressions::{
 use datafusion::physical_plan::windows::{create_window_expr, schema_add_window_field};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 use datafusion_proto_common::common::proto_error;
 
 use crate::convert_required;
@@ -75,7 +76,8 @@ pub fn parse_physical_sort_expr(
 ) -> Result<PhysicalSortExpr> {
     if let Some(expr) = &proto.expr {
         let expr = parse_physical_expr(expr.as_ref(), registry, input_schema, codec)?;
-        let options = SortOptions {
+        let options = AdvSortOptions {
+            ordering: SortOrdering::Default, // TODO this should come from a registry
             descending: !proto.asc,
             nulls_first: proto.nulls_first,
         };

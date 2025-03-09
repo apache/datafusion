@@ -1082,12 +1082,11 @@ mod tests {
     use crate::{test_util::MockSource, tests::aggr_test_schema};
 
     use super::*;
-    use arrow::{
-        array::{Int32Array, RecordBatch},
-        compute::SortOptions,
-    };
+    use arrow::array::{Int32Array, RecordBatch};
 
+    use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::stats::Precision;
+    use datafusion_common::types::SortOrdering;
     use datafusion_common::{assert_batches_eq, DFSchema};
     use datafusion_expr::{execution_props::ExecutionProps, SortExpr};
     use datafusion_physical_expr::create_physical_expr;
@@ -1105,7 +1104,8 @@ mod tests {
         } = e;
         Ok(PhysicalSortExpr {
             expr: create_physical_expr(expr, input_dfschema, execution_props)?,
-            options: SortOptions {
+            options: AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: !asc,
                 nulls_first: *nulls_first,
             },

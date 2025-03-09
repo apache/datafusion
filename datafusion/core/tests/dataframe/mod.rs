@@ -20,7 +20,13 @@ mod dataframe_functions;
 mod describe;
 mod test_types;
 
-use arrow::array::{as_union_array, record_batch, Array, ArrayRef, AsArray, BooleanArray, DictionaryArray, FixedSizeListArray, FixedSizeListBuilder, Float32Array, Float64Array, Int32Array, Int32Builder, Int8Array, LargeListArray, ListArray, ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt32Array, UInt32Builder, UnionArray, UnionBuilder};
+use arrow::array::{
+    as_union_array, record_batch, Array, ArrayRef, AsArray, BooleanArray,
+    DictionaryArray, FixedSizeListArray, FixedSizeListBuilder, Float32Array,
+    Float64Array, Int32Array, Int32Builder, Int8Array, LargeListArray, ListArray,
+    ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt32Array,
+    UInt32Builder, UnionArray, UnionBuilder,
+};
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
     DataType, Field, Float32Type, Float64Type, Int32Type, Int64Type, Schema, SchemaRef,
@@ -3111,7 +3117,8 @@ async fn sort_on_union_with_logical_type() -> Result<()> {
         )?),
     )?;
 
-    let record_batch = ctx.table("test_table")
+    let record_batch = ctx
+        .table("test_table")
         .await?
         .sort_by(vec![col("my_union")])?
         .execute_stream()
@@ -3122,8 +3129,14 @@ async fn sort_on_union_with_logical_type() -> Result<()> {
 
     let result = as_union_array(record_batch.column_by_name("my_union").unwrap());
     assert_eq!(result.type_ids(), &[0, 0, 1, 1]);
-    assert_eq!(result.child(0).as_primitive::<Int64Type>().values(), &[-1, 1]);
-    assert_eq!(result.child(1).as_primitive::<Float64Type>().values(), &[3.0, 6.0]);
+    assert_eq!(
+        result.child(0).as_primitive::<Int64Type>().values(),
+        &[-1, 1]
+    );
+    assert_eq!(
+        result.child(1).as_primitive::<Float64Type>().values(),
+        &[3.0, 6.0]
+    );
 
     Ok(())
 }

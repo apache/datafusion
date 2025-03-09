@@ -1380,7 +1380,7 @@ mod tests {
         DictionaryArray, Float32Array, Float64Array, Int32Array, StructArray,
         UInt32Array, UInt64Array,
     };
-    use arrow::compute::{concat_batches, SortOptions};
+    use arrow::compute::concat_batches;
     use arrow::datatypes::{DataType, Int32Type};
     use datafusion_common::{
         assert_batches_eq, assert_batches_sorted_eq, internal_err, DataFusionError,
@@ -1401,6 +1401,8 @@ mod tests {
     use datafusion_physical_expr::Partitioning;
     use datafusion_physical_expr::PhysicalSortExpr;
 
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use futures::{FutureExt, Stream};
 
     // Generate a schema which consists of 5 columns (a, b, c, d, e)
@@ -2152,7 +2154,7 @@ mod tests {
     // FIRST_VALUE(b ORDER BY b <SortOptions>)
     fn test_first_value_agg_expr(
         schema: &Schema,
-        sort_options: SortOptions,
+        sort_options: AdvSortOptions,
     ) -> Result<Arc<AggregateFunctionExpr>> {
         let ordering_req = [PhysicalSortExpr {
             expr: col("b", schema)?,
@@ -2171,7 +2173,7 @@ mod tests {
     // LAST_VALUE(b ORDER BY b <SortOptions>)
     fn test_last_value_agg_expr(
         schema: &Schema,
-        sort_options: SortOptions,
+        sort_options: AdvSortOptions,
     ) -> Result<Arc<AggregateFunctionExpr>> {
         let ordering_req = [PhysicalSortExpr {
             expr: col("b", schema)?,
@@ -2224,7 +2226,8 @@ mod tests {
         let groups =
             PhysicalGroupBy::new_single(vec![(col("a", &schema)?, "a".to_string())]);
 
-        let sort_options = SortOptions {
+        let sort_options = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
@@ -2301,7 +2304,8 @@ mod tests {
 
         // Assume column a and b are aliases
         // Assume also that a ASC and c DESC describe the same global ordering for the table. (Since they are ordering equivalent).
-        let options1 = SortOptions {
+        let options1 = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: false,
             nulls_first: false,
         };
@@ -2317,30 +2321,30 @@ mod tests {
             None,
             Some(vec![PhysicalSortExpr {
                 expr: Arc::clone(col_a),
-                options: options1,
+                options: options1.clone(),
             }]),
             Some(vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_a),
-                    options: options1,
+                    options: options1.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
-                    options: options1,
+                    options: options1.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::clone(col_c),
-                    options: options1,
+                    options: options1.clone(),
                 },
             ]),
             Some(vec![
                 PhysicalSortExpr {
                     expr: Arc::clone(col_a),
-                    options: options1,
+                    options: options1.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::clone(col_b),
-                    options: options1,
+                    options: options1.clone(),
                 },
             ]),
         ];
@@ -2348,11 +2352,11 @@ mod tests {
         let common_requirement = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::clone(col_a),
-                options: options1,
+                options: options1.clone(),
             },
             PhysicalSortExpr {
                 expr: Arc::clone(col_c),
-                options: options1,
+                options: options1.clone(),
             },
         ]);
         let mut aggr_exprs = order_by_exprs
@@ -2388,15 +2392,16 @@ mod tests {
         ]));
 
         let col_a = col("a", &schema)?;
-        let option_desc = SortOptions {
+        let option_desc = AdvSortOptions {
+            ordering: SortOrdering::Default,
             descending: true,
             nulls_first: true,
         };
         let groups = PhysicalGroupBy::new_single(vec![(col_a, "a".to_string())]);
 
         let aggregates: Vec<Arc<AggregateFunctionExpr>> = vec![
-            test_first_value_agg_expr(&schema, option_desc)?,
-            test_last_value_agg_expr(&schema, option_desc)?,
+            test_first_value_agg_expr(&schema, option_desc.clone())?,
+            test_last_value_agg_expr(&schema, option_desc.clone())?,
         ];
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let aggregate_exec = Arc::new(AggregateExec::try_new(

@@ -728,8 +728,8 @@ mod memory_source_tests {
     use crate::source::DataSourceExec;
     use datafusion_physical_plan::ExecutionPlan;
 
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::sort::AdvSortOptions;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -744,16 +744,16 @@ mod memory_source_tests {
         let sort1 = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: col("a", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
             PhysicalSortExpr {
                 expr: col("b", &schema)?,
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
         ]);
         let sort2 = LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("c", &schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let mut expected_output_order = LexOrdering::default();
         expected_output_order.extend(sort1.clone());

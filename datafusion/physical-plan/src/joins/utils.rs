@@ -1827,13 +1827,13 @@ mod tests {
     use std::pin::Pin;
 
     use arrow::array::Int32Array;
-    use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Fields};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 
     use rstest::rstest;
+    use datafusion_common::sort::AdvSortOptions;
 
     fn check(
         left: &[Column],
@@ -2642,29 +2642,29 @@ mod tests {
 
     #[test]
     fn test_calculate_join_output_ordering() -> Result<()> {
-        let options = SortOptions::default();
+        let options = AdvSortOptions::default();
         let left_ordering = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
-                options,
+                options: options.clone(),
             },
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("c", 2)),
-                options,
+                options: options.clone(),
             },
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("d", 3)),
-                options,
+                options: options.clone(),
             },
         ]);
         let right_ordering = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("z", 2)),
-                options,
+                options: options.clone(),
             },
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("y", 1)),
-                options,
+                options: options.clone(),
             },
         ]);
         let join_type = JoinType::Inner;
@@ -2680,45 +2680,45 @@ mod tests {
             Some(LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("a", 0)),
-                    options,
+                    options: options.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("c", 2)),
-                    options,
+                    options: options.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("d", 3)),
-                    options,
+                    options: options.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("z", 7)),
-                    options,
+                    options: options.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("y", 6)),
-                    options,
+                    options: options.clone(),
                 },
             ])),
             Some(LexOrdering::new(vec![
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("z", 7)),
-                    options,
+                    options: options.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("y", 6)),
-                    options,
+                    options: options.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("a", 0)),
-                    options,
+                    options: options.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("c", 2)),
-                    options,
+                    options: options.clone(),
                 },
                 PhysicalSortExpr {
                     expr: Arc::new(Column::new("d", 3)),
-                    options,
+                    options: options.clone(),
                 },
             ])),
         ];

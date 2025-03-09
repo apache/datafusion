@@ -1199,7 +1199,6 @@ mod tests {
         test::{columns, object_store::register_test_store},
     };
 
-    use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_contains, ScalarValue};
@@ -1211,6 +1210,8 @@ mod tests {
     use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
     use tempfile::TempDir;
     use url::Url;
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {
@@ -1319,7 +1320,8 @@ mod tests {
                 Ok(vec![LexOrdering::new(
                         vec![PhysicalSortExpr {
                             expr: physical_col("string_col", &schema).unwrap(),
-                            options: SortOptions {
+                            options: AdvSortOptions {
+                                ordering: SortOrdering::default(),
                                 descending: false,
                                 nulls_first: false,
                             },

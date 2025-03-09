@@ -222,7 +222,10 @@ impl ExtensionTypeRegistry for TaskContext {
         self.extension_types.register_extension_type(logical_type)
     }
 
-    fn deregister_extension_type(&mut self, name: &str) -> Result<Option<LogicalTypeRef>> {
+    fn deregister_extension_type(
+        &mut self,
+        name: &str,
+    ) -> Result<Option<LogicalTypeRef>> {
         self.extension_types.deregister_extension_type(name)
     }
 }
@@ -264,7 +267,7 @@ mod tests {
             HashMap::default(),
             HashMap::default(),
             HashMap::default(),
-            HashMap::default(),
+            MemoryExtensionTypeRegistry::new(),
             runtime,
         );
 
@@ -297,7 +300,7 @@ mod tests {
             HashMap::default(),
             HashMap::default(),
             HashMap::default(),
-            HashMap::default(),
+            MemoryExtensionTypeRegistry::new(),
             runtime,
         );
 

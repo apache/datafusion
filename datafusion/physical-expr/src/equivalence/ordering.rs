@@ -360,6 +360,7 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::Result;
+    use datafusion_common::sort::AdvSortOptions;
     use datafusion_expr::{Operator, ScalarUDF};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
@@ -371,16 +372,16 @@ mod tests {
         ]));
         let crude = LexOrdering::new(vec![PhysicalSortExpr {
             expr: Arc::new(Column::new("a", 0)),
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }]);
         let finer = LexOrdering::new(vec![
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("a", 0)),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
             PhysicalSortExpr {
                 expr: Arc::new(Column::new("b", 1)),
-                options: SortOptions::default(),
+                options: AdvSortOptions::default(),
             },
         ]);
         // finer ordering satisfies, crude ordering should return true

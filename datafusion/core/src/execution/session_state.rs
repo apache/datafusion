@@ -1864,7 +1864,10 @@ impl FunctionRegistry for SessionState {
 }
 
 impl ExtensionTypeRegistry for SessionState {
-    fn get_extension_type(&self, name: &str) -> datafusion_common::Result<LogicalTypeRef> {
+    fn get_extension_type(
+        &self,
+        name: &str,
+    ) -> datafusion_common::Result<LogicalTypeRef> {
         self.extension_types.get_extension_type(name)
     }
 

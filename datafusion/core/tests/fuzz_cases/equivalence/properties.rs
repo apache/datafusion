@@ -75,7 +75,7 @@ fn test_find_longest_permutation_random() -> Result<()> {
                     .zip(ordering.iter())
                     .map(|(&idx, sort_expr)| PhysicalSortExpr {
                         expr: Arc::clone(&exprs[idx]),
-                        options: sort_expr.options,
+                        options: sort_expr.options.clone(),
                     })
                     .collect::<LexOrdering>();
                 assert_eq!(

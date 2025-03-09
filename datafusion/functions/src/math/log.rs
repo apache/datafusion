@@ -259,9 +259,10 @@ mod tests {
     use super::*;
 
     use arrow::array::{Float32Array, Float64Array, Int64Array};
-    use arrow::compute::SortOptions;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
     use datafusion_common::DFSchema;
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
 
@@ -585,13 +586,15 @@ mod tests {
         let orders = vec![
             ExprProperties::new_unknown(),
             ExprProperties::new_unknown().with_order(SortProperties::Ordered(
-                SortOptions {
+                AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: false,
                     nulls_first: true,
                 },
             )),
             ExprProperties::new_unknown().with_order(SortProperties::Ordered(
-                SortOptions {
+                AdvSortOptions {
+                    ordering: SortOrdering::Default,
                     descending: true,
                     nulls_first: true,
                 },
@@ -628,38 +631,44 @@ mod tests {
             // base: Ascending, num: Ascending
             SortProperties::Unordered,
             // base: Ascending, num: Descending
-            SortProperties::Ordered(SortOptions {
+            SortProperties::Ordered(AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: true,
                 nulls_first: true,
             }),
             // base: Ascending, num: Literal
-            SortProperties::Ordered(SortOptions {
+            SortProperties::Ordered(AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: true,
                 nulls_first: true,
             }),
             // base: Descending, num: Unordered
             SortProperties::Unordered,
             // base: Descending, num: Ascending
-            SortProperties::Ordered(SortOptions {
+            SortProperties::Ordered(AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             }),
             // base: Descending, num: Descending
             SortProperties::Unordered,
             // base: Descending, num: Literal
-            SortProperties::Ordered(SortOptions {
+            SortProperties::Ordered(AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             }),
             // base: Literal, num: Unordered
             SortProperties::Unordered,
             // base: Literal, num: Ascending
-            SortProperties::Ordered(SortOptions {
+            SortProperties::Ordered(AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: true,
             }),
             // base: Literal, num: Descending
-            SortProperties::Ordered(SortOptions {
+            SortProperties::Ordered(AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: true,
                 nulls_first: true,
             }),
@@ -670,13 +679,15 @@ mod tests {
 
         // Test with different `nulls_first`
         let base_order = ExprProperties::new_unknown().with_order(
-            SortProperties::Ordered(SortOptions {
+            SortProperties::Ordered(AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: true,
                 nulls_first: true,
             }),
         );
         let num_order = ExprProperties::new_unknown().with_order(
-            SortProperties::Ordered(SortOptions {
+            SortProperties::Ordered(AdvSortOptions {
+                ordering: SortOrdering::Default,
                 descending: false,
                 nulls_first: false,
             }),
