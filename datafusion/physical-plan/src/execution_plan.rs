@@ -260,6 +260,19 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// used.
     /// Thus, [`spawn`] is disallowed, and instead use [`SpawnedTask`].
     ///
+    /// To enable timely cancellation, the [`Stream`] that is returned must not
+    /// block the CPU and must yield back to the tokio runtime regularly.
+    /// [`ExecutionPlan`] implementations should follow [the guideline of not
+    /// spending a long time without reaching an `await`/yield point][async-guideline].
+    /// This can be achieved by manually returning [`Poll::Pending`] in regular
+    /// intervals, or the use of [`tokio::task::yield_now()`] (as appropriate).
+    /// Determination for "regularly" may be made using a timer (being careful
+    /// with the  overhead-heavy syscall needed to take the time) or by
+    /// counting rows or batches.
+    ///
+    /// The cancellation benchmark tracks some cases of how quickly queries can
+    /// be cancelled.
+    ///
     /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
     /// for structures to help ensure all background tasks are cancelled.
     ///
@@ -267,6 +280,8 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// [`JoinSet`]: tokio::task::JoinSet
     /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
+    /// [`Poll::Pending`]: std::task::Poll::Pending
+    /// [async-guideline]: https://ryhl.io/blog/async-what-is-blocking/
     ///
     /// # Implementation Examples
     ///
