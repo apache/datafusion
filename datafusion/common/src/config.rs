@@ -252,6 +252,11 @@ config_namespace! {
         /// string length and thus DataFusion can not enforce such limits.
         pub support_varchar_with_length: bool, default = true
 
+        /// If true, permit `VARCHAR` default convert to `Utf8View` in the logical plan.
+        /// If false, `VARCHAR` will be converted to `Utf8` in the logical plan.
+        /// Default is false.
+        pub support_varchar_to_view_types: bool, default = false
+
         /// When set to true, the source locations relative to the original SQL
         /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected
         /// and recorded in the logical plan nodes.

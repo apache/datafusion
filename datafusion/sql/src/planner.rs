@@ -54,6 +54,8 @@ pub struct ParserOptions {
     pub enable_options_value_normalization: bool,
     /// Whether to collect spans
     pub collect_spans: bool,
+    /// Whether support sql varchar to view types
+    pub support_sql_varchar_to_view_types: bool,
 }
 
 impl ParserOptions {
@@ -72,6 +74,7 @@ impl ParserOptions {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
+            support_sql_varchar_to_view_types: false,
             enable_options_value_normalization: false,
             collect_spans: false,
         }
@@ -111,6 +114,12 @@ impl ParserOptions {
         self
     }
 
+    /// Sets the `support_sql_varchar_to_view_types` option.
+    pub fn with_support_sql_varchar_to_view_types(mut self, value: bool) -> Self {
+        self.support_sql_varchar_to_view_types = value;
+        self
+    }
+
     /// Sets the `enable_options_value_normalization` option.
     pub fn with_enable_options_value_normalization(mut self, value: bool) -> Self {
         self.enable_options_value_normalization = value;
@@ -136,6 +145,7 @@ impl From<&SqlParserOptions> for ParserOptions {
             parse_float_as_decimal: options.parse_float_as_decimal,
             enable_ident_normalization: options.enable_ident_normalization,
             support_varchar_with_length: options.support_varchar_with_length,
+            support_sql_varchar_to_view_types: options.support_varchar_to_view_types,
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
@@ -558,7 +568,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::Varchar(length) => {
                 match (length, self.options.support_varchar_with_length) {
                     (Some(_), false) => plan_err!("does not support Varchar with length, please set `support_varchar_with_length` to be true"),
-                    _ => Ok(DataType::Utf8),
+                    _ => {
+                        if self.options.support_sql_varchar_to_view_types {
+                            Ok(DataType::Utf8View)
+                        } else {
+                            Ok(DataType::Utf8)
+                        }
+                    }
                 }
             }
             SQLDataType::UnsignedBigInt(_) | SQLDataType::UnsignedInt8(_) => Ok(DataType::UInt64),
