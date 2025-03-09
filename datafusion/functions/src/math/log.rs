@@ -260,9 +260,9 @@ mod tests {
 
     use arrow::array::{Float32Array, Float64Array, Int64Array};
     use datafusion_common::cast::{as_float32_array, as_float64_array};
-    use datafusion_common::DFSchema;
     use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::types::SortOrdering;
+    use datafusion_common::DFSchema;
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::simplify::SimplifyContext;
 

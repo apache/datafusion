@@ -544,10 +544,10 @@ mod tests {
     // use futures::StreamExt;
 
     use super::*;
+    use datafusion_expr::registry::MemoryExtensionTypeRegistry;
     use datafusion_expr::{
         case, col, lit, AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF,
     };
-    use datafusion_expr::registry::MemoryExtensionTypeRegistry;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
     use datafusion_physical_plan::ExecutionPlan;
 

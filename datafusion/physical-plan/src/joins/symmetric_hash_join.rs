@@ -1735,9 +1735,9 @@ mod tests {
     use datafusion_physical_expr::expressions::{binary, col, lit, Column};
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
-    use rstest::*;
     use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::types::SortOrdering;
+    use rstest::*;
 
     const TABLE_SIZE: i32 = 30;
 

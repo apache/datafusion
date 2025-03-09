@@ -653,8 +653,8 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
-    use datafusion_common::ScalarValue;
     use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;

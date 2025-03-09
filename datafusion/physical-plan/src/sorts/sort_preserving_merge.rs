@@ -411,11 +411,11 @@ mod tests {
     use datafusion_physical_expr::EquivalenceProperties;
     use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
     use futures::{FutureExt, Stream, StreamExt};
     use tokio::time::timeout;
-    use datafusion_common::sort::AdvSortOptions;
-    use datafusion_common::types::SortOrdering;
 
     // The number in the function is highly related to the memory limit we are testing
     // any change of the constant should be aware of

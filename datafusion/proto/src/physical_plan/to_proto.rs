@@ -180,10 +180,7 @@ pub fn serialize_physical_sort_expr(
     sort_expr: PhysicalSortExpr,
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<PhysicalSortExprNode> {
-    let PhysicalSortExpr {
-        expr,
-        options,
-    } = sort_expr;
+    let PhysicalSortExpr { expr, options } = sort_expr;
     let expr = serialize_physical_expr(&expr, codec)?;
     Ok(PhysicalSortExprNode {
         expr: Some(Box::new(expr)),

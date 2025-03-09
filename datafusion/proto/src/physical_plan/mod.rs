@@ -66,9 +66,9 @@ use datafusion::physical_plan::{
     ExecutionPlan, InputOrderMode, PhysicalExpr, WindowExpr,
 };
 use datafusion_common::config::TableParquetOptions;
-use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_common::sort::AdvSortOptions;
 use datafusion_common::types::SortOrdering;
+use datafusion_common::{internal_err, not_impl_err, DataFusionError, Result};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 
 use crate::common::{byte_to_string, str_to_byte};

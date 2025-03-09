@@ -1161,9 +1161,9 @@ mod tests {
     use datafusion_physical_expr::expressions::{Column, Literal};
     use datafusion_physical_expr::EquivalenceProperties;
 
-    use futures::{FutureExt, Stream};
     use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::types::SortOrdering;
+    use futures::{FutureExt, Stream};
 
     #[derive(Debug, Clone)]
     pub struct SortedUnboundedExec {

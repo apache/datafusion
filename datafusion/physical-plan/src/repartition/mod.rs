@@ -1599,11 +1599,11 @@ mod tests {
 
 #[cfg(test)]
 mod test {
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::sort::AdvSortOptions;
     use super::*;
     use crate::test::TestMemoryExec;
     use crate::union::UnionExec;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::sort::AdvSortOptions;
 
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};

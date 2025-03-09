@@ -1048,9 +1048,9 @@ pub(crate) mod tests {
     use datafusion_physical_expr::{Partitioning, PhysicalExpr};
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
-    use rstest::rstest;
     use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::types::SortOrdering;
+    use rstest::rstest;
 
     fn build_table(
         a: (&str, &Vec<i32>),

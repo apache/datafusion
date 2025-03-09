@@ -213,7 +213,7 @@ pub trait CustomOrdering: Debug + Send + Sync {
     /// The ordering id is used to establish equality between instances of [CustomOrdering].
     fn ordering_id(&self) -> &str;
 
-    /// TODO
+    /// Returns a [DynComparator] over the given `array` adhering to the given `options`.
     fn dyn_comparator(
         &self,
         array: ArrayRef,

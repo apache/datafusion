@@ -567,10 +567,10 @@ pub fn get_tanh_doc() -> &'static Documentation {
 
 #[cfg(test)]
 mod tests {
-    use datafusion_common::Result;
+    use super::*;
     use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::types::SortOrdering;
-    use super::*;
+    use datafusion_common::Result;
 
     #[derive(Debug)]
     struct MonotonicityTestCase {

@@ -3089,7 +3089,7 @@ async fn sort_on_ambiguous_column() -> Result<()> {
 #[tokio::test]
 async fn sort_on_union_with_logical_type() -> Result<()> {
     let mut builder = UnionBuilder::new_dense();
-    builder.append::<Int64Type>("integer", 1)?;
+    builder.append::<Int64Type>("integer", 10)?;
     builder.append::<Float64Type>("float", 6.0)?;
     builder.append::<Int64Type>("integer", -1)?;
     builder.append::<Float64Type>("float", 3.0)?;
@@ -3128,10 +3128,10 @@ async fn sort_on_union_with_logical_type() -> Result<()> {
         .unwrap()?;
 
     let result = as_union_array(record_batch.column_by_name("my_union").unwrap());
-    assert_eq!(result.type_ids(), &[0, 0, 1, 1]);
+    assert_eq!(result.type_ids(), &[0, 1, 1, 0]);
     assert_eq!(
         result.child(0).as_primitive::<Int64Type>().values(),
-        &[-1, 1]
+        &[-1, 10]
     );
     assert_eq!(
         result.child(1).as_primitive::<Float64Type>().values(),

@@ -64,9 +64,8 @@ impl LogicalType for IntOrFloatType {
     }
 }
 
-/// The order of the IntOrFloat is defined as follows:
-/// - All integers followed by all floats
-/// - Within one subtype, the integers and floats are sorted using their natural order.
+/// The order of the IntOrFloat is computed by converting both values to an `f64` and comparing
+/// the resulting value.
 #[derive(Debug)]
 struct IntOrFloatTypeOrdering {}
 
@@ -118,21 +117,32 @@ fn compare_impl(array: &UnionArray, lhs: usize, rhs: usize) -> Ordering {
     let type_lhs = array.type_ids()[lhs];
     let type_rhs = array.type_ids()[rhs];
 
-    if type_lhs != type_rhs {
-        return type_lhs.cmp(&type_rhs);
-    }
-
     let offset_lhs = array.value_offset(lhs);
     let offset_rhs = array.value_offset(rhs);
-    match type_lhs {
+
+    let lhs = match type_lhs {
         0 => {
             let array = array.child(type_lhs).as_primitive::<Int64Type>();
-            array.value(offset_lhs).cmp(&array.value(offset_rhs))
+            array.value(offset_lhs) as f64
         }
         1 => {
             let array = array.child(type_lhs).as_primitive::<Float64Type>();
-            array.value(offset_lhs).total_cmp(&array.value(offset_rhs))
+            array.value(offset_lhs)
         }
         _ => unreachable!("Union only has two variants"),
-    }
+    };
+
+    let rhs = match type_rhs {
+        0 => {
+            let array = array.child(type_rhs).as_primitive::<Int64Type>();
+            array.value(offset_rhs) as f64
+        }
+        1 => {
+            let array = array.child(type_rhs).as_primitive::<Float64Type>();
+            array.value(offset_rhs)
+        }
+        _ => unreachable!("Union only has two variants"),
+    };
+
+    lhs.total_cmp(&rhs)
 }

@@ -1832,8 +1832,8 @@ mod tests {
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{arrow_datafusion_err, arrow_err, ScalarValue};
 
-    use rstest::rstest;
     use datafusion_common::sort::AdvSortOptions;
+    use rstest::rstest;
 
     fn check(
         left: &[Column],

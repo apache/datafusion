@@ -437,9 +437,9 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-    use datafusion_common::{Constraint, Constraints, Result};
     use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::types::SortOrdering;
+    use datafusion_common::{Constraint, Constraints, Result};
     use datafusion_expr::sort_properties::SortProperties;
     use datafusion_expr::Operator;
 
@@ -742,9 +742,15 @@ mod tests {
                 SortProperties::Ordered(option_asc.clone()),
             ),
             // b
-            (Arc::clone(col_b), SortProperties::Ordered(option_asc.clone())),
+            (
+                Arc::clone(col_b),
+                SortProperties::Ordered(option_asc.clone()),
+            ),
             // a
-            (Arc::clone(col_a), SortProperties::Ordered(option_asc.clone())),
+            (
+                Arc::clone(col_a),
+                SortProperties::Ordered(option_asc.clone()),
+            ),
             // a + c
             (
                 Arc::new(BinaryExpr::new(

@@ -45,11 +45,11 @@ mod sp_repartition_fuzz_tests {
 
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::datasource::source::DataSourceExec;
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
     use itertools::izip;
     use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
-    use datafusion_common::sort::AdvSortOptions;
-    use datafusion_common::types::SortOrdering;
 
     // Generate a schema which consists of 6 columns (a, b, c, d, e, f)
     fn create_test_schema() -> Result<SchemaRef> {

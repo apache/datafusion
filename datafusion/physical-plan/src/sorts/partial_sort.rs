@@ -464,9 +464,6 @@ mod tests {
     use futures::FutureExt;
     use itertools::Itertools;
 
-    use datafusion_common::assert_batches_eq;
-    use datafusion_common::sort::AdvSortOptions;
-    use datafusion_common::types::SortOrdering;
     use crate::collect;
     use crate::expressions::col;
     use crate::expressions::PhysicalSortExpr;
@@ -475,6 +472,9 @@ mod tests {
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::TestMemoryExec;
+    use datafusion_common::assert_batches_eq;
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
 
     use super::*;
 

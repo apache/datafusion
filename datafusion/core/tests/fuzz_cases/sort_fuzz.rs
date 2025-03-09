@@ -34,9 +34,9 @@ use datafusion_execution::memory_pool::GreedyMemoryPool;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use rand::Rng;
 use datafusion_common::sort::AdvSortOptions;
 use datafusion_common::types::SortOrdering;
+use rand::Rng;
 use test_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 const KB: usize = 1 << 10;

@@ -1231,12 +1231,12 @@ mod tests {
     use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr::{LexOrdering, PhysicalExpr};
 
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use futures::future::Shared;
     use futures::{pin_mut, ready, FutureExt, Stream, StreamExt};
     use itertools::Itertools;
     use tokio::time::timeout;
-    use datafusion_common::sort::AdvSortOptions;
-    use datafusion_common::types::SortOrdering;
 
     #[derive(Debug, Clone)]
     struct TestStreamPartition {

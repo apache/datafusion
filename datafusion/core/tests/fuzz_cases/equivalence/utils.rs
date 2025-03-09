@@ -23,8 +23,8 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
-use arrow::compute::{SortColumn, SortOptions};
 use arrow::compute::{lexsort_to_indices, take_record_batch};
+use arrow::compute::{SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
@@ -36,10 +36,10 @@ use datafusion_physical_expr::equivalence::{EquivalenceClass, ProjectionMapping}
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
-use itertools::izip;
-use rand::prelude::*;
 use datafusion_common::sort::AdvSortOptions;
 use datafusion_common::types::SortOrdering;
+use itertools::izip;
+use rand::prelude::*;
 
 pub fn output_schema(
     mapping: &ProjectionMapping,
@@ -390,23 +390,18 @@ pub fn generate_table_for_eq_properties(
     for ordering in eq_properties.oeq_class().iter() {
         let (sort_columns, indices): (Vec<_>, Vec<_>) = ordering
             .iter()
-            .map(
-                |PhysicalSortExpr {
-                     expr,
-                     options,
-                 }| {
-                    let col = expr.as_any().downcast_ref::<Column>().unwrap();
-                    let (idx, _field) = schema.column_with_name(col.name()).unwrap();
-                    let arr = generate_random_array(n_elem, n_distinct);
-                    (
-                        SortColumn {
-                            values: arr,
-                            options: Some(options.to_arrow().unwrap()),
-                        },
-                        idx,
-                    )
-                },
-            )
+            .map(|PhysicalSortExpr { expr, options }| {
+                let col = expr.as_any().downcast_ref::<Column>().unwrap();
+                let (idx, _field) = schema.column_with_name(col.name()).unwrap();
+                let arr = generate_random_array(n_elem, n_distinct);
+                (
+                    SortColumn {
+                        values: arr,
+                        options: Some(options.to_arrow().unwrap()),
+                    },
+                    idx,
+                )
+            })
             .unzip();
 
         let sort_arrs = arrow::compute::lexsort(&sort_columns, None)?;

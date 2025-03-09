@@ -1208,10 +1208,10 @@ mod tests {
     use datafusion_physical_plan::ExecutionPlanProperties;
 
     use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
-    use tempfile::TempDir;
-    use url::Url;
     use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::types::SortOrdering;
+    use tempfile::TempDir;
+    use url::Url;
 
     #[tokio::test]
     async fn read_single_file() -> Result<()> {

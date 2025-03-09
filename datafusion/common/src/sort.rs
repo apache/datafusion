@@ -24,7 +24,8 @@ use arrow::datatypes::DataType;
 use arrow::row::{RowConverter, SortField};
 use std::cmp::Ordering;
 
-/// TODO
+/// An advanced version of arrow's [SortOptions] that allows for the following features:
+/// - Custom sort ordering
 #[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub struct AdvSortOptions {
     /// Specifies the ordering that is used for sorting. This enables implementing user-defined
@@ -93,7 +94,7 @@ impl AdvSortOptions {
     }
 }
 
-/// TODO
+/// An advanced version of arrow's [SortColumn] that uses an [AdvSortOptions].
 #[derive(Clone, Debug)]
 pub struct AdvSortColumn {
     pub values: ArrayRef,
@@ -101,6 +102,8 @@ pub struct AdvSortColumn {
 }
 
 impl AdvSortColumn {
+    /// Creates a [DynComparator] from this sort column. The comparison implementation is decided
+    /// by [SortOrdering::dyn_comparator].
     pub fn dyn_compartor(&self) -> Result<DynComparator> {
         let ordering = self
             .options
@@ -115,6 +118,12 @@ impl AdvSortColumn {
         ordering.dyn_comparator(self.values.clone(), options)
     }
 
+    /// Tries to convert this sort column into an arrow-native [SortColumn].
+    ///
+    /// # Errors
+    ///
+    /// This method returns an error if a custom ordering is specified. This is because this
+    /// ordering cannot be encoded in an arrow native version.
     pub fn to_arrow(&self) -> Result<SortColumn> {
         let has_custom_sort = self
             .options
@@ -131,9 +140,13 @@ impl AdvSortColumn {
     }
 }
 
-/// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
-/// at given two indices. The lifetime is the same at the data wrapped.
+/// A lexicographical comparator that wraps given array data (columns) and can lexicographically
+/// compare data at given two indices. The lifetime is the same at the data wrapped.
+///
+/// We require a separate version of this arrow data structure as we must construct it directly
+/// from a `Vec<DynComparator>`.
 pub struct LexicographicalComparator {
+    /// Comparators for the lexicographical ordering.
     compare_items: Vec<DynComparator>,
 }
 

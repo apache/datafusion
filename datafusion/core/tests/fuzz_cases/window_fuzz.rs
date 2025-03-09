@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int32Array, StringArray};
-use arrow::compute::{concat_batches};
+use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
@@ -51,10 +51,10 @@ use datafusion_physical_expr::expressions::{cast, col, lit};
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use datafusion_common::sort::AdvSortOptions;
 use rand::distributions::Alphanumeric;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use datafusion_common::sort::AdvSortOptions;
 use test_utils::add_empty_batches;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]

@@ -23,7 +23,7 @@ use crate::fuzz_cases::aggregation_fuzzer::{
 };
 
 use arrow::array::{types::Int64Type, Array, ArrayRef, AsArray, Int64Array, RecordBatch};
-use arrow::compute::{concat_batches};
+use arrow::compute::concat_batches;
 use arrow::datatypes::{
     DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
     DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
@@ -48,10 +48,10 @@ use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_plan::InputOrderMode;
 use test_utils::{add_empty_batches, StringBatchGenerator};
 
+use datafusion_common::sort::AdvSortOptions;
 use rand::rngs::StdRng;
 use rand::{thread_rng, Rng, SeedableRng};
 use tokio::task::JoinSet;
-use datafusion_common::sort::AdvSortOptions;
 
 // ========================================================================
 //  The new aggregation fuzz tests based on [`AggregationFuzzer`]

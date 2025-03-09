@@ -359,8 +359,8 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::Result;
     use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::Result;
     use datafusion_expr::{Operator, ScalarUDF};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
