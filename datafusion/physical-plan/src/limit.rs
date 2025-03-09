@@ -109,12 +109,10 @@ impl DisplayAs for GlobalLimitExec {
                 )
             }
             DisplayFormatType::TreeRender => {
-                writeln!(f, "skip={}", self.skip)?;
-                write!(
-                    f,
-                    "fetch={}",
-                    self.fetch.map_or("None".to_string(), |x| x.to_string())
-                )
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "limit={}", fetch)?;
+                }
+                write!(f, "skip={}", self.skip)
             }
         }
     }
