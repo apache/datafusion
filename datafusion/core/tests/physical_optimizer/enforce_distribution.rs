@@ -3106,33 +3106,6 @@ fn preserve_ordering_through_repartition() -> Result<()> {
 }
 
 #[test]
-fn do_not_preserve_ordering_through_repartition() -> Result<()> {
-    let schema = schema();
-    let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
-        expr: col("a", &schema).unwrap(),
-        options: SortOptions::default(),
-    }]);
-    let input = parquet_exec_multiple_sorted(vec![sort_key.clone()]);
-    let physical_plan = sort_preserving_merge_exec(sort_key, filter_exec(input));
-
-    let expected = &[
-        "SortPreservingMergeExec: [a@0 ASC]",
-        "  FilterExec: c@2 = 0",
-        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC",
-        "      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
-
-    assert_optimized!(
-        expected,
-        physical_plan.clone(),
-        &TestConfig::new(DoFirst::Distribution)
-    );
-    assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
-
-    Ok(())
-}
-
-#[test]
 fn no_need_for_sort_after_filter() -> Result<()> {
     let schema = schema();
     let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
@@ -3161,7 +3134,7 @@ fn no_need_for_sort_after_filter() -> Result<()> {
 }
 
 #[test]
-fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
+fn do_not_preserve_ordering_through_repartition() -> Result<()> {
     let schema = schema();
     let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
         expr: col("c", &schema).unwrap(),
@@ -3194,7 +3167,7 @@ fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
 }
 
 #[test]
-fn do_not_preserve_ordering_through_repartition3() -> Result<()> {
+fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
     let schema = schema();
     let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
         expr: col("c", &schema).unwrap(),
