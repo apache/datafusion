@@ -526,6 +526,15 @@ mod tests {
         // cast(c1, UTF8) < 123, only eq/not_eq should be optimized
         let expr_lt = cast(col("c1"), DataType::Utf8).lt(lit("123"));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
+
+        // cast(c1, UTF8) = 'not a number', should not be able to cast to column type
+        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("not a number"));
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
+
+        // cast(c1, UTF8) = '99999999999', where '99999999999' does not fit into int32, so it will
+        // not be optimized to integer comparison
+        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("99999999999"));
+        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
     }
 
     #[test]
@@ -563,6 +572,11 @@ mod tests {
         // cast(c1, UTF8) != "123" => c1 != 123
         let expr_input = cast(col("c1"), DataType::Utf8).not_eq(lit("123"));
         let expected = col("c1").not_eq(lit(123i32));
+        assert_eq!(optimize_test(expr_input, &schema), expected);
+
+        // cast(c1, UTF8) = NULL => c1 = NULL
+        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit(ScalarValue::Utf8(None)));
+        let expected = col("c1").eq(lit(ScalarValue::Int32(None)));
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 

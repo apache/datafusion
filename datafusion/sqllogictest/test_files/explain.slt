@@ -430,6 +430,28 @@ physical_plan
 03)--ProjectionExec: expr=[]
 04)----PlaceholderRowExec
 
+query TT
+explain select a from t1 where a = '100';
+----
+logical_plan
+01)Filter: t1.a = Int32(100)
+02)--TableScan: t1 projection=[a]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: a@0 = 100
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain select a from t1 where a = '99999999999';
+----
+logical_plan
+01)Filter: CAST(t1.a AS Utf8) = Utf8("99999999999")
+02)--TableScan: t1 projection=[a]
+physical_plan
+01)CoalesceBatchesExec: target_batch_size=8192
+02)--FilterExec: CAST(a@0 AS Utf8) = 99999999999
+03)----DataSourceExec: partitions=1, partition_sizes=[0]
+
 statement ok
 drop table t1;
 
