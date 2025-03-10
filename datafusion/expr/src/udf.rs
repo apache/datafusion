@@ -20,9 +20,7 @@
 use crate::expr::schema_name_from_exprs_comma_separated_without_space;
 use crate::simplify::{ExprSimplifyResult, SimplifyInfo};
 use crate::sort_properties::{ExprProperties, SortProperties};
-use crate::{
-    ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
-};
+use crate::{ColumnarValue, Documentation, Expr, Signature};
 use arrow::datatypes::DataType;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
