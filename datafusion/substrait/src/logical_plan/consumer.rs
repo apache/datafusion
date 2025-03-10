@@ -104,10 +104,11 @@ use substrait::proto::{
     rel::RelType,
     rel_common,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, AggregateRel, ConsistentPartitionWindowRel, CrossRel, ExchangeRel,
-    Expression, ExtendedExpression, ExtensionLeafRel, ExtensionMultiRel,
-    ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument, JoinRel, NamedStruct,
-    Plan, ProjectRel, ReadRel, Rel, RelCommon, SetRel, SortField, SortRel, Type,
+    AggregateFunction, AggregateRel, ConsistentPartitionWindowRel, CrossRel,
+    DynamicParameter, ExchangeRel, Expression, ExtendedExpression, ExtensionLeafRel,
+    ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
+    JoinRel, NamedStruct, Plan, ProjectRel, ReadRel, Rel, RelCommon, SetRel, SortField,
+    SortRel, Type,
 };
 
 #[async_trait]
@@ -390,6 +391,14 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 
     async fn consume_enum(&self, _expr: &Enum, _input_schema: &DFSchema) -> Result<Expr> {
         not_impl_err!("Enum expression not supported")
+    }
+
+    async fn consume_dynamic_parameter(
+        &self,
+        _expr: &DynamicParameter,
+        _input_schema: &DFSchema,
+    ) -> Result<Expr> {
+        not_impl_err!("Dynamic Parameter expression not supported")
     }
 
     // User-Defined Functionality
@@ -1988,6 +1997,9 @@ pub async fn from_substrait_rex(
             }
             RexType::Nested(expr) => consumer.consume_nested(expr, input_schema).await,
             RexType::Enum(expr) => consumer.consume_enum(expr, input_schema).await,
+            RexType::DynamicParameter(expr) => {
+                consumer.consume_dynamic_parameter(expr, input_schema).await
+            }
         },
         None => substrait_err!("Expression must set rex_type: {:?}", expression),
     }
