@@ -311,12 +311,14 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
             Expr::ScalarSubquery(Subquery {
                 subquery,
                 outer_ref_columns,
+                spans,
             }) => {
                 let new_plan =
                     analyze_internal(self.schema, Arc::unwrap_or_clone(subquery))?.data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns,
+                    spans,
                 })))
             }
             Expr::Exists(Exists { subquery, negated }) => {
@@ -329,6 +331,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     subquery: Subquery {
                         subquery: Arc::new(new_plan),
                         outer_ref_columns: subquery.outer_ref_columns,
+                        spans: subquery.spans,
                     },
                     negated,
                 })))
@@ -352,6 +355,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                 let new_subquery = Subquery {
                     subquery: Arc::new(new_plan),
                     outer_ref_columns: subquery.outer_ref_columns,
+                    spans: subquery.spans,
                 };
                 Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
                     Box::new(expr.cast_to(&common_type, self.schema)?),
@@ -2089,6 +2093,7 @@ mod test {
             Subquery {
                 subquery: empty_int32,
                 outer_ref_columns: vec![],
+                spans: None,
             },
             false,
         ));
@@ -2114,6 +2119,7 @@ mod test {
             Subquery {
                 subquery: empty_int64,
                 outer_ref_columns: vec![],
+                spans: None,
             },
             false,
         ));
@@ -2138,6 +2144,7 @@ mod test {
             Subquery {
                 subquery: empty_inside,
                 outer_ref_columns: vec![],
+                spans: None,
             },
             false,
         ));

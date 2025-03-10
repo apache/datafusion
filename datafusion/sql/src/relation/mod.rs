@@ -211,6 +211,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     LogicalPlan::Subquery(Subquery {
                         subquery: input,
                         outer_ref_columns,
+                        spans: None,
                     }),
                     alias,
                 )
@@ -218,6 +219,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan => Ok(LogicalPlan::Subquery(Subquery {
                 subquery: Arc::new(plan),
                 outer_ref_columns,
+                spans: None,
             })),
         }
     }

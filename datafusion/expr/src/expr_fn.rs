@@ -252,6 +252,7 @@ pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
         subquery: Subquery {
             subquery,
             outer_ref_columns,
+            spans: None,
         },
         negated: false,
     })
@@ -264,6 +265,7 @@ pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
         subquery: Subquery {
             subquery,
             outer_ref_columns,
+            spans: None,
         },
         negated: true,
     })
@@ -277,6 +279,7 @@ pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
         Subquery {
             subquery,
             outer_ref_columns,
+            spans: None,
         },
         false,
     ))
@@ -290,6 +293,7 @@ pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
         Subquery {
             subquery,
             outer_ref_columns,
+            spans: None,
         },
         true,
     ))
@@ -301,6 +305,7 @@ pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::ScalarSubquery(Subquery {
         subquery,
         outer_ref_columns,
+        spans: None,
     })
 }
 

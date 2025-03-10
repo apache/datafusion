@@ -2257,6 +2257,7 @@ pub async fn from_subquery(
                             subquery: Subquery {
                                 subquery: Arc::new(haystack_expr),
                                 outer_ref_columns: outer_refs,
+                                spans: None,
                             },
                             negated: false,
                         }))
@@ -2275,6 +2276,7 @@ pub async fn from_subquery(
                 Ok(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(plan),
                     outer_ref_columns,
+                    spans: None,
                 }))
             }
             SubqueryType::SetPredicate(predicate) => {
@@ -2290,6 +2292,7 @@ pub async fn from_subquery(
                             Subquery {
                                 subquery: Arc::new(plan),
                                 outer_ref_columns,
+                                spans: None,
                             },
                             false,
                         )))

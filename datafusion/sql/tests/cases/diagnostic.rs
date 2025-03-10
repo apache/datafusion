@@ -286,3 +286,82 @@ fn test_invalid_function() -> Result<()> {
     assert_eq!(diag.span, Some(spans["whole"]));
     Ok(())
 }
+#[test]
+fn test_scalar_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Error>> {
+    let query = "SELECT (SELECT 1 AS /*x*/x/*x*/, 2 AS /*y*/y/*y*/) AS col";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+
+    assert_eq!(diag.message, "Scalar subquery returns multiple columns");
+
+    let column_notes: Vec<_> = diag
+        .notes
+        .iter()
+        .filter(|note| note.message.contains("Found 2 columns"))
+        .collect();
+    assert!(!column_notes.is_empty(), "Expected note about column count");
+
+    let extra_column_notes: Vec<_> = diag
+        .notes
+        .iter()
+        .filter(|note| note.message.contains("Extra column"))
+        .collect();
+    assert_eq!(
+        extra_column_notes.len(),
+        1,
+        "Expected note about extra column"
+    );
+
+    let expected_spans = vec![
+        (
+            "x".to_string(),
+            Span::new(
+                Location {
+                    line: 1,
+                    column: 26,
+                },
+                Location {
+                    line: 1,
+                    column: 27,
+                },
+            ),
+        ),
+        (
+            "y".to_string(),
+            Span::new(
+                Location {
+                    line: 1,
+                    column: 44,
+                },
+                Location {
+                    line: 1,
+                    column: 45,
+                },
+            ),
+        ),
+    ]
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+
+    assert_eq!(
+        spans, expected_spans,
+        "Primary diagnostic span should match the first column's span"
+    );
+
+    let extra_column_span = extra_column_notes
+        .first()
+        .and_then(|note| note.span.as_ref());
+    assert_eq!(
+        extra_column_span,
+        spans.get("y"),
+        "Extra column note span should match the second column's span"
+    );
+    assert!(
+        diag.helps
+            .iter()
+            .any(|help| help.message.contains("Select only one column")),
+        "Expected help message"
+    );
+
+    Ok(())
+}
