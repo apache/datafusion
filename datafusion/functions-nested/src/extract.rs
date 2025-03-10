@@ -1037,34 +1037,6 @@ mod tests {
             fixed_size_list_type
         );
 
-        // ScalarUDFImpl::return_type_from_exprs with typed exprs
-        assert_eq!(
-            udf.return_type_from_exprs(
-                &[
-                    cast(Expr::Literal(ScalarValue::Null), array_type.clone()),
-                    cast(Expr::Literal(ScalarValue::Null), index_type.clone()),
-                ],
-                &schema,
-                &[array_type.clone(), index_type.clone()]
-            )
-            .unwrap(),
-            fixed_size_list_type
-        );
-
-        // ScalarUDFImpl::return_type_from_exprs with exprs not carrying type
-        assert_eq!(
-            udf.return_type_from_exprs(
-                &[
-                    Expr::Column(Column::new_unqualified("my_array")),
-                    Expr::Column(Column::new_unqualified("my_index")),
-                ],
-                &schema,
-                &[array_type.clone(), index_type.clone()]
-            )
-            .unwrap(),
-            fixed_size_list_type
-        );
-
         // Via ExprSchemable::get_type (e.g. SimplifyInfo)
         let udf_expr = Expr::ScalarFunction(ScalarFunction {
             func: array_element_udf(),
