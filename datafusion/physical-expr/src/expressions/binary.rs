@@ -168,8 +168,11 @@ fn boolean_op(
 macro_rules! binary_string_array_flag_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $NOT:expr, $FLAG:expr) => {{
         match $LEFT.data_type() {
-            DataType::Utf8View | DataType::Utf8 => {
+            DataType::Utf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
+            },
+            DataType::Utf8View => {
+                compute_utf8_flag_op!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
             },
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
@@ -212,8 +215,11 @@ macro_rules! binary_string_array_flag_op_scalar {
         // This macro is slightly different from binary_string_array_flag_op because, when comparing with a scalar value,
         // the query can be optimized in such a way that operands will be dicts, so we need to support it here
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-            DataType::Utf8View | DataType::Utf8 => {
+            DataType::Utf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringArray, $NOT, $FLAG)
+            },
+            DataType::Utf8View => {
+                compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, StringViewArray, $NOT, $FLAG)
             },
             DataType::LargeUtf8 => {
                 compute_utf8_flag_op_scalar!($LEFT, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG)
@@ -222,7 +228,8 @@ macro_rules! binary_string_array_flag_op_scalar {
                 let values = $LEFT.as_any_dictionary().values();
 
                 match values.data_type() {
-                    DataType::Utf8View | DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::Utf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringArray, $NOT, $FLAG),
+                    DataType::Utf8View => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, StringViewArray, $NOT, $FLAG),
                     DataType::LargeUtf8 => compute_utf8_flag_op_scalar!(values, $RIGHT, $OP, LargeStringArray, $NOT, $FLAG),
                     other => internal_err!(
                         "Data type {:?} not supported as a dictionary value type for binary_string_array_flag_op_scalar operation '{}' on string array",

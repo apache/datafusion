@@ -144,7 +144,7 @@ EXPLAIN select b from t_pushdown where a = 'bar' order by b;
 ----
 logical_plan
 01)Sort: t_pushdown.b ASC NULLS LAST
-02)--TableScan: t_pushdown projection=[b], full_filters=[t_pushdown.a = Utf8("bar")]
+02)--TableScan: t_pushdown projection=[b], full_filters=[t_pushdown.a = Utf8View("bar")]
 physical_plan
 01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
 02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]

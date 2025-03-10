@@ -34,7 +34,7 @@ ORDER BY "date", "time";
 ----
 logical_plan
 01)Sort: data.date ASC NULLS LAST, data.time ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A")
+02)--Filter: data.ticker = Utf8View("A")
 03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)SortPreservingMergeExec: [date@0 ASC NULLS LAST, time@2 ASC NULLS LAST]
@@ -51,7 +51,7 @@ ORDER BY "time"
 ----
 logical_plan
 01)Sort: data.time ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+02)--Filter: data.ticker = Utf8View("A") AND CAST(data.time AS Date32) = data.date
 03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)SortPreservingMergeExec: [time@2 ASC NULLS LAST]
@@ -68,7 +68,7 @@ ORDER BY "date"
 ----
 logical_plan
 01)Sort: data.date ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+02)--Filter: data.ticker = Utf8View("A") AND CAST(data.time AS Date32) = data.date
 03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)SortPreservingMergeExec: [date@0 ASC NULLS LAST]
@@ -85,7 +85,7 @@ ORDER BY "ticker"
 ----
 logical_plan
 01)Sort: data.ticker ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+02)--Filter: data.ticker = Utf8View("A") AND CAST(data.time AS Date32) = data.date
 03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)CoalescePartitionsExec
@@ -102,7 +102,7 @@ ORDER BY "time", "date";
 ----
 logical_plan
 01)Sort: data.time ASC NULLS LAST, data.date ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
+02)--Filter: data.ticker = Utf8View("A") AND CAST(data.time AS Date32) = data.date
 03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)SortPreservingMergeExec: [time@2 ASC NULLS LAST, date@0 ASC NULLS LAST]
@@ -120,7 +120,7 @@ ORDER BY "time"
 ----
 logical_plan
 01)Sort: data.time ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) != data.date
+02)--Filter: data.ticker = Utf8View("A") AND CAST(data.time AS Date32) != data.date
 03)----TableScan: data projection=[date, ticker, time]
 
 # no relation between time & date
@@ -132,7 +132,7 @@ ORDER BY "time"
 ----
 logical_plan
 01)Sort: data.time ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A")
+02)--Filter: data.ticker = Utf8View("A")
 03)----TableScan: data projection=[date, ticker, time]
 
 # query
