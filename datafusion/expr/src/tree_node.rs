@@ -132,7 +132,10 @@ impl TreeNode for Expr {
                 expr,
                 relation,
                 name,
-            }) => f(*expr)?.update_data(|e| e.alias_qualified(relation, name)),
+                metadata,
+            }) => f(*expr)?.update_data(|e| {
+                e.alias_qualified_with_metadata(relation, name, metadata)
+            }),
             Expr::InSubquery(InSubquery {
                 expr,
                 subquery,
