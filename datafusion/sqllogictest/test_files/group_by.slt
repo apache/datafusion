@@ -5537,3 +5537,32 @@ drop view t
 
 statement ok
 drop table source;
+
+
+# test select_wildcard_with_groupby
+statement count 0
+create table t(a int, b int, c int, "😀" int);
+
+query TT
+explain select * from t group by a, b, c, "😀";
+----
+logical_plan
+01)Aggregate: groupBy=[[t.a, t.b, t.c, t.😀]], aggr=[[]]
+02)--TableScan: t projection=[a, b, c, 😀]
+physical_plan
+01)AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c, 😀@3 as 😀], aggr=[]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+query TT
+explain select * from (select a, b from t) as c group by a, b;
+----
+logical_plan
+01)Aggregate: groupBy=[[c.a, c.b]], aggr=[[]]
+02)--SubqueryAlias: c
+03)----TableScan: t projection=[a, b]
+physical_plan
+01)AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b], aggr=[]
+02)--DataSourceExec: partitions=1, partition_sizes=[0]
+
+statement count 0
+drop table t;

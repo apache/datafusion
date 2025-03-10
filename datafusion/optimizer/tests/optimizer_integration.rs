@@ -22,16 +22,14 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::{assert_contains, plan_err, Result, TableReference};
+use datafusion_common::{plan_err, Result, TableReference};
 use datafusion_expr::planner::ExprPlanner;
-use datafusion_expr::sqlparser::dialect::PostgreSqlDialect;
 use datafusion_expr::test::function_stub::sum_udaf;
 use datafusion_expr::{AggregateUDF, LogicalPlan, ScalarUDF, TableSource, WindowUDF};
 use datafusion_functions_aggregate::average::avg_udaf;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::planner::AggregateFunctionPlanner;
 use datafusion_functions_window::planner::WindowFunctionPlanner;
-use datafusion_optimizer::analyzer::type_coercion::TypeCoercionRewriter;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
@@ -345,16 +343,6 @@ fn test_propagate_empty_relation_inner_join_and_unions() {
 }
 
 #[test]
-fn select_wildcard_with_repeated_column() {
-    let sql = "SELECT *, col_int32 FROM test";
-    let err = test_sql(sql).expect_err("query should have failed");
-    assert_eq!(
-        "Schema error: Schema contains duplicate qualified field name test.col_int32",
-        err.strip_backtrace()
-    );
-}
-
-#[test]
 fn select_wildcard_with_repeated_column_but_is_aliased() {
     let sql = "SELECT *, col_int32 as col_32 FROM test";
 
@@ -388,32 +376,6 @@ fn select_correlated_predicate_subquery_with_uppercase_ident() {
     \n        Filter: test.col_int32 IS NOT NULL\
     \n          TableScan: test projection=[col_int32]";
     assert_eq!(expected, format!("{plan}"));
-}
-
-// The test should return an error
-// because the wildcard didn't be expanded before type coercion
-#[test]
-fn test_union_coercion_with_wildcard() -> Result<()> {
-    let dialect = PostgreSqlDialect {};
-    let context_provider = MyContextProvider::default();
-    let sql = "select * from (SELECT col_int32, col_uint32 FROM test) union all select * from(SELECT col_uint32, col_int32 FROM test)";
-    let statements = Parser::parse_sql(&dialect, sql)?;
-    let sql_to_rel = SqlToRel::new(&context_provider);
-    let logical_plan = sql_to_rel.sql_statement_to_plan(statements[0].clone())?;
-
-    if let LogicalPlan::Union(union) = logical_plan {
-        let err = TypeCoercionRewriter::coerce_union(union)
-            .err()
-            .unwrap()
-            .to_string();
-        assert_contains!(
-            err,
-            "Error during planning: Wildcard should be expanded before type coercion"
-        );
-    } else {
-        panic!("Expected Union plan");
-    }
-    Ok(())
 }
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
