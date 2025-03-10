@@ -278,6 +278,7 @@ impl GroupOrderingPartial {
 mod tests {
     use arrow::array::Int32Array;
     use arrow_schema::{DataType, Field};
+    use datafusion_common::sort::AdvSortOptions;
     use datafusion_physical_expr::{expressions::col, PhysicalSortExpr};
 
     use super::*;
@@ -294,7 +295,7 @@ mod tests {
 
         let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
             col("a", &schema)?,
-            SortOptions::default(),
+            AdvSortOptions::default(),
         )]);
 
         let mut group_ordering =

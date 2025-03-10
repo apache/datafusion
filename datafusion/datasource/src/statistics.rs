@@ -122,7 +122,7 @@ impl MinMaxStatistics {
                 .enumerate()
                 .map(|(i, (col, sort))| PhysicalSortExpr {
                     expr: Arc::new(Column::new(col.name(), i)),
-                    options: sort.options,
+                    options: sort.options.clone(),
                 })
                 .collect::<Vec<_>>(),
         );
@@ -175,9 +175,12 @@ impl MinMaxStatistics {
         let sort_fields = sort_order
             .iter()
             .map(|expr| {
-                expr.expr
-                    .data_type(schema)
-                    .map(|data_type| SortField::new_with_options(data_type, expr.options))
+                expr.expr.data_type(schema).and_then(|data_type| {
+                    Ok(SortField::new_with_options(
+                        data_type,
+                        expr.options.to_arrow()?,
+                    ))
+                })
             })
             .collect::<Result<Vec<_>>>()
             .map_err(|e| e.context("create sort fields"))?;
@@ -233,7 +236,7 @@ impl MinMaxStatistics {
 
                     Ok(SortColumn {
                         values: Arc::clone(values.column(idx)),
-                        options: Some(sort_expr.options),
+                        options: Some(sort_expr.options.to_arrow()?),
                     })
                 })
                 .collect::<Result<Vec<_>>>()

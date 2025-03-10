@@ -25,8 +25,9 @@ use crate::physical_optimizer::test_utils::{
 };
 
 use arrow::datatypes::DataType;
-use arrow::{compute::SortOptions, util::pretty::pretty_format_batches};
+use arrow::util::pretty::pretty_format_batches;
 use datafusion::prelude::SessionContext;
+use datafusion_common::sort::AdvSortOptions;
 use datafusion_common::Result;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
@@ -238,7 +239,7 @@ async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
 fn test_has_order_by() -> Result<()> {
     let sort_key = LexOrdering::new(vec![PhysicalSortExpr {
         expr: col("a", &schema()).unwrap(),
-        options: SortOptions::default(),
+        options: AdvSortOptions::default(),
     }]);
     let source = parquet_exec_with_sort(vec![sort_key]);
     let schema = source.schema();

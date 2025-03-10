@@ -104,7 +104,7 @@ impl ScalarUDFImpl for RoundFunc {
             .map(|r| r.sort_properties.eq(&SortProperties::Singleton))
             .unwrap_or(true)
         {
-            Ok(value.sort_properties)
+            Ok(value.sort_properties.clone())
         } else {
             Ok(SortProperties::Unordered)
         }

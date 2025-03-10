@@ -633,7 +633,10 @@ fn handle_custom_pushdown(
                         }
                     })?
                     .data;
-                Ok(PhysicalSortRequirement::new(updated_columns, req.options))
+                Ok(PhysicalSortRequirement::new(
+                    updated_columns,
+                    req.options.clone(),
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -711,7 +714,10 @@ fn handle_hash_join(
                         }
                     })?
                     .data;
-                Ok(PhysicalSortRequirement::new(updated_columns, req.options))
+                Ok(PhysicalSortRequirement::new(
+                    updated_columns,
+                    req.options.clone(),
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
 

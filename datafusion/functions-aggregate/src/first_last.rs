@@ -254,11 +254,13 @@ impl FirstValueAccumulator {
         let sort_columns = ordering_values
             .iter()
             .zip(self.ordering_req.iter())
-            .map(|(values, req)| SortColumn {
-                values: Arc::clone(values),
-                options: Some(req.options),
+            .map(|(values, req)| {
+                Ok(SortColumn {
+                    values: Arc::clone(values),
+                    options: Some(req.options.to_arrow()?),
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
 
@@ -295,7 +297,7 @@ impl Accumulator for FirstValueAccumulator {
                 if compare_rows(
                     &self.orderings,
                     orderings,
-                    &get_sort_options(self.ordering_req.as_ref()),
+                    &get_sort_options(self.ordering_req.as_ref())?,
                 )?
                 .is_gt()
                 {
@@ -317,7 +319,7 @@ impl Accumulator for FirstValueAccumulator {
         let sort_columns = convert_to_sort_cols(
             &filtered_states[1..is_set_idx],
             self.ordering_req.as_ref(),
-        );
+        )?;
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
         let min = (0..filtered_states[0].len()).min_by(|&a, &b| comparator.compare(a, b));
@@ -326,7 +328,7 @@ impl Accumulator for FirstValueAccumulator {
             let first_row = get_row_at_idx(&filtered_states, first_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let first_ordering = &first_row[1..is_set_idx];
-            let sort_options = get_sort_options(self.ordering_req.as_ref());
+            let sort_options = get_sort_options(self.ordering_req.as_ref())?;
             // Either there is no existing value, or there is an earlier version in new data.
             if !self.is_set
                 || compare_rows(&self.orderings, first_ordering, &sort_options)?.is_gt()
@@ -552,14 +554,8 @@ impl LastValueAccumulator {
                 return Ok((!value.is_empty()).then_some(value.len() - 1));
             }
         }
-        let sort_columns = ordering_values
-            .iter()
-            .zip(self.ordering_req.iter())
-            .map(|(values, req)| SortColumn {
-                values: Arc::clone(values),
-                options: Some(req.options),
-            })
-            .collect::<Vec<_>>();
+        let sort_columns =
+            convert_to_sort_cols(&ordering_values, self.ordering_req.as_ref())?;
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
         let max_ind = if self.ignore_nulls {
@@ -600,7 +596,7 @@ impl Accumulator for LastValueAccumulator {
             if compare_rows(
                 &self.orderings,
                 orderings,
-                &get_sort_options(self.ordering_req.as_ref()),
+                &get_sort_options(self.ordering_req.as_ref())?,
             )?
             .is_lt()
             {
@@ -622,7 +618,7 @@ impl Accumulator for LastValueAccumulator {
         let sort_columns = convert_to_sort_cols(
             &filtered_states[1..is_set_idx],
             self.ordering_req.as_ref(),
-        );
+        )?;
 
         let comparator = LexicographicalComparator::try_new(&sort_columns)?;
         let max = (0..filtered_states[0].len()).max_by(|&a, &b| comparator.compare(a, b));
@@ -631,7 +627,7 @@ impl Accumulator for LastValueAccumulator {
             let last_row = get_row_at_idx(&filtered_states, last_idx)?;
             // When collecting orderings, we exclude the is_set flag from the state.
             let last_ordering = &last_row[1..is_set_idx];
-            let sort_options = get_sort_options(self.ordering_req.as_ref());
+            let sort_options = get_sort_options(self.ordering_req.as_ref())?;
             // Either there is no existing value, or there is a newer (latest)
             // version in the new data:
             if !self.is_set
@@ -672,14 +668,18 @@ fn filter_states_according_to_is_set(
 }
 
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
-fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<SortColumn> {
-    arrs.iter()
-        .zip(sort_exprs.iter())
-        .map(|(item, sort_expr)| SortColumn {
+fn convert_to_sort_cols(
+    arrs: &[ArrayRef],
+    sort_exprs: &LexOrdering,
+) -> Result<Vec<SortColumn>> {
+    Ok(arrs
+        .iter()
+        .zip(get_sort_options(sort_exprs)?)
+        .map(|(item, options)| SortColumn {
             values: Arc::clone(item),
-            options: Some(sort_expr.options),
+            options: Some(options),
         })
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>())
 }
 
 #[cfg(test)]

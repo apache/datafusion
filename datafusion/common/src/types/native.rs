@@ -16,8 +16,8 @@
 // under the License.
 
 use super::{
-    LogicalField, LogicalFieldRef, LogicalFields, LogicalType, LogicalUnionFields,
-    TypeSignature,
+    LogicalField, LogicalFieldRef, LogicalFields, LogicalType,
+    LogicalTypePlanningInformation, LogicalUnionFields, SortOrdering, TypeSignature,
 };
 use crate::error::{Result, _internal_err};
 use arrow::compute::can_cast_types;
@@ -358,6 +358,12 @@ impl LogicalType for NativeType {
             )
             }
         })
+    }
+
+    fn planning_information(&self) -> LogicalTypePlanningInformation {
+        LogicalTypePlanningInformation {
+            ordering: SortOrdering::Default,
+        }
     }
 }
 

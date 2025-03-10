@@ -67,13 +67,13 @@ pub fn add_offset_to_expr(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::expressions::col;
     use crate::PhysicalSortExpr;
-
     use arrow::compute::SortOptions;
+
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion_common::sort::AdvSortOptions;
     use datafusion_common::{plan_datafusion_err, Result};
     use datafusion_physical_expr_common::sort_expr::{
         LexOrdering, PhysicalSortRequirement,
@@ -89,7 +89,7 @@ mod tests {
         let name = parts.next().expect("empty sort expression");
         let mut sort_expr = PhysicalSortExpr::new(
             col(name, schema).expect("invalid column name"),
-            SortOptions::default(),
+            AdvSortOptions::default(),
         );
 
         if let Some(options) = parts.next() {
@@ -206,7 +206,10 @@ mod tests {
         in_data
             .iter()
             .map(|(expr, options)| {
-                PhysicalSortRequirement::new(Arc::clone(*expr), *options)
+                PhysicalSortRequirement::new(
+                    Arc::clone(*expr),
+                    options.map(|opt| AdvSortOptions::with_default_ordering(opt)),
+                )
             })
             .collect()
     }
@@ -219,7 +222,7 @@ mod tests {
             .iter()
             .map(|(expr, options)| PhysicalSortExpr {
                 expr: Arc::clone(*expr),
-                options: *options,
+                options: AdvSortOptions::with_default_ordering(*options),
             })
             .collect()
     }
@@ -243,7 +246,7 @@ mod tests {
                 .iter()
                 .map(|(expr, options)| PhysicalSortExpr {
                     expr: Arc::clone(expr),
-                    options: *options,
+                    options: AdvSortOptions::with_default_ordering(*options),
                 })
                 .collect(),
         )

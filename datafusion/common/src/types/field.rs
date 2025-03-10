@@ -29,6 +29,21 @@ pub struct LogicalField {
     pub nullable: bool,
 }
 
+impl LogicalField {
+    /// Creates a new [LogicalField].
+    pub fn new(
+        name: impl Into<String>,
+        logical_type: LogicalTypeRef,
+        nullable: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            logical_type,
+            nullable,
+        }
+    }
+}
+
 impl PartialEq for LogicalField {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
