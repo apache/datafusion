@@ -198,6 +198,7 @@ fn create_tree_recursive(
     let mut extra_info = HashMap::new();
 
     // Parse the key-value pairs from the formatted string.
+    // See DisplayFormatType::TreeRender for details
     for line in display_info.lines() {
         if let Some((key, value)) = line.split_once('=') {
             extra_info.insert(key.to_string(), value.to_string());

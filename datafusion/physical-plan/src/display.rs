@@ -52,14 +52,18 @@ pub enum DisplayFormatType {
     /// information for understanding a plan. It should NOT contain the same level
     /// of detail information as the  [`Self::Default`] format.
     ///
-    /// In this mode, each line contains a key=value pair.
-    /// Everything before the first `=` is treated as the key, and everything after the
-    /// first `=` is treated as the value.
+    /// In this mode, each line has one of two formats:
+    ///
+    /// 1. A string without a `=`, which is printed in its own line
+    ///
+    /// 2. A string with a `=` that is treated as a `key=value pair`. Everything
+    ///    before the first `=` is treated as the key, and everything after the
+    ///    first `=` is treated as the value.
     ///
     /// For example, if the output of `TreeRender` is this:
     /// ```text
+    /// Parquet
     /// partition_sizes=[1]
-    /// partitions=1
     /// ```
     ///
     /// It is rendered in the center of a box in the following way:
@@ -69,7 +73,7 @@ pub enum DisplayFormatType {
     /// │       DataSourceExec      │
     /// │    --------------------   │
     /// │    partition_sizes: [1]   │
-    /// │       partitions: 1       │
+    /// │          Parquet          │
     /// └───────────────────────────┘
     ///  ```
     TreeRender,
