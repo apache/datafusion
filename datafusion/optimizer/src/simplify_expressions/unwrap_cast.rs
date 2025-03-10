@@ -197,22 +197,34 @@ fn cast_literal_to_type_with_op(
     target_type: &DataType,
     op: Operator,
 ) -> Option<ScalarValue> {
-    dbg!(lit_value, target_type, op);
+    macro_rules! cast_or_else_return_none {
+        ($value:ident, $ty:expr) => {{
+            let opts = arrow::compute::CastOptions {
+                safe: false,
+                format_options: Default::default(),
+            };
+            let array = ScalarValue::to_array($value).ok()?;
+            let casted = arrow::compute::cast_with_options(&array, &$ty, &opts).ok()?;
+            let scalar = ScalarValue::try_from_array(&casted, 0).ok()?;
+            Some(scalar)
+        }};
+    }
+
     match (op, lit_value) {
         (
             Operator::Eq | Operator::NotEq,
-            ScalarValue::Utf8(Some(ref str))
-            | ScalarValue::Utf8View(Some(ref str))
-            | ScalarValue::LargeUtf8(Some(ref str)),
+            ScalarValue::Utf8(Some(_))
+            | ScalarValue::Utf8View(Some(_))
+            | ScalarValue::LargeUtf8(Some(_)),
         ) => match target_type {
-            DataType::Int8 => str.parse::<i8>().ok().map(ScalarValue::from),
-            DataType::Int16 => str.parse::<i16>().ok().map(ScalarValue::from),
-            DataType::Int32 => str.parse::<i32>().ok().map(ScalarValue::from),
-            DataType::Int64 => str.parse::<i64>().ok().map(ScalarValue::from),
-            DataType::UInt8 => str.parse::<u8>().ok().map(ScalarValue::from),
-            DataType::UInt16 => str.parse::<u16>().ok().map(ScalarValue::from),
-            DataType::UInt32 => str.parse::<u32>().ok().map(ScalarValue::from),
-            DataType::UInt64 => str.parse::<u64>().ok().map(ScalarValue::from),
+            DataType::Int8 => cast_or_else_return_none!(lit_value, DataType::Int8),
+            DataType::Int16 => cast_or_else_return_none!(lit_value, DataType::Int16),
+            DataType::Int32 => cast_or_else_return_none!(lit_value, DataType::Int32),
+            DataType::Int64 => cast_or_else_return_none!(lit_value, DataType::Int64),
+            DataType::UInt8 => cast_or_else_return_none!(lit_value, DataType::UInt8),
+            DataType::UInt16 => cast_or_else_return_none!(lit_value, DataType::UInt16),
+            DataType::UInt32 => cast_or_else_return_none!(lit_value, DataType::UInt32),
+            DataType::UInt64 => cast_or_else_return_none!(lit_value, DataType::UInt64),
             _ => None,
         },
         _ => None,
