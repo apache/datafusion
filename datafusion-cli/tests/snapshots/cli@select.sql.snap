@@ -1,0 +1,23 @@
+---
+source: tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args: []
+  stdin: select 1;
+input_file: tests/sql/select.sql
+---
+success: true
+exit_code: 0
+----- stdout -----
+[CLI_VERSION]
++----------+
+| Int64(1) |
++----------+
+| 1        |
++----------+
+1 row(s) fetched. 
+[ELAPSED]
+
+\q
+
+----- stderr -----
