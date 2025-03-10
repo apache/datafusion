@@ -27,7 +27,7 @@ pub use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 pub use datafusion_expr::{Accumulator, ColumnarValue};
 pub use datafusion_physical_expr::window::WindowExpr;
 pub use datafusion_physical_expr::{
-    expressions, udf, Distribution, Partitioning, PhysicalExpr,
+    expressions, Distribution, Partitioning, PhysicalExpr,
 };
 
 use std::any::Any;

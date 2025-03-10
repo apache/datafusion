@@ -795,7 +795,7 @@ impl ScalarUDFImpl for TakeUDF {
         &self.signature
     }
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        not_impl_err!("Not called because the return_type_from_exprs is implemented")
+        not_impl_err!("Not called because the return_type_from_args is implemented")
     }
 
     /// This function returns the type of the first or second argument based on
