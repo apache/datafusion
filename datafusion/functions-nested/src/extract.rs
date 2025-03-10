@@ -1001,9 +1001,9 @@ where
 mod tests {
     use super::array_element_udf;
     use arrow::datatypes::{DataType, Field};
-    use datafusion_common::{Column, DFSchema, ScalarValue};
+    use datafusion_common::{Column, DFSchema};
     use datafusion_expr::expr::ScalarFunction;
-    use datafusion_expr::{cast, Expr, ExprSchemable};
+    use datafusion_expr::{Expr, ExprSchemable};
     use std::collections::HashMap;
 
     // Regression test for https://github.com/apache/datafusion/issues/13755
