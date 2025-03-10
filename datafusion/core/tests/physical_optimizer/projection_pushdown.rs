@@ -29,7 +29,9 @@ use datafusion_common::Result;
 use datafusion_common::{JoinSide, JoinType, ScalarValue};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
-use datafusion_expr::{Operator, ScalarUDF, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_physical_expr::expressions::{
     binary, cast, col, BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr,
 };
@@ -57,6 +59,7 @@ use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlan};
 
+use datafusion_expr_common::columnar_value::ColumnarValue;
 use itertools::Itertools;
 
 /// Mocked UDF
@@ -88,6 +91,10 @@ impl ScalarUDFImpl for DummyUDF {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Int32)
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
     }
 }
 
