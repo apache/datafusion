@@ -33,8 +33,9 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
+use datafusion_expr_common::signature::Coercion;
 use datafusion_macros::user_doc;
 
 type MathArrayFunction = fn(&ArrayRef) -> Result<ArrayRef>;
@@ -126,7 +127,12 @@ impl Default for AbsFunc {
 impl AbsFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::numeric(1, Volatility::Immutable),
+            signature: Signature::new(
+                TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignatureClass::Numeric,
+                )]),
+                Volatility::Immutable,
+            ),
         }
     }
 }

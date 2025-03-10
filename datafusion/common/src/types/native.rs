@@ -437,6 +437,12 @@ impl NativeType {
     }
 
     #[inline]
+    pub fn is_float(&self) -> bool {
+        use NativeType::*;
+        matches!(self, Float16 | Float32 | Float64)
+    }
+
+    #[inline]
     pub fn is_integer(&self) -> bool {
         use NativeType::*;
         matches!(

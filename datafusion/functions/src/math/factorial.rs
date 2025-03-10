@@ -19,6 +19,7 @@ use arrow::{
     array::{ArrayRef, Int64Array},
     error::ArrowError,
 };
+use datafusion_expr_common::signature::Coercion;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -31,7 +32,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    TypeSignature, TypeSignatureClass, Volatility,
 };
 use datafusion_macros::user_doc;
 
@@ -55,7 +56,12 @@ impl Default for FactorialFunc {
 impl FactorialFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::uniform(1, vec![Int64], Volatility::Immutable),
+            signature: Signature::new(
+                TypeSignature::Coercible(vec![Coercion::new_exact(
+                    TypeSignatureClass::Integer,
+                )]),
+                Volatility::Immutable,
+            ),
         }
     }
 }
