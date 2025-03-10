@@ -28,7 +28,8 @@ use datafusion_datasource::PartitionedFile;
 use datafusion_expr::{BinaryExpr, Operator};
 
 use arrow::{
-    array::{Array, ArrayRef, AsArray, StringBuilder},
+    array::{Array, ArrayRef, AsArray, BooleanArray, StringBuilder},
+    buffer::BooleanBuffer,
     compute::{and, cast, prep_null_mask_filter},
     datatypes::{DataType, Field, Fields, Schema},
     record_batch::RecordBatch,
@@ -278,42 +279,18 @@ async fn prune_partitions(
         .collect();
     let schema = Arc::new(Schema::new(fields));
 
-    let df_schema = DFSchema::from_unqualified_fields(
-        partition_cols
-            .iter()
-            .map(|(n, d)| Field::new(n, d.clone(), true))
-            .collect(),
-        Default::default(),
-    )?;
-
     let batch = RecordBatch::try_new(schema, arrays)?;
 
     // TODO: Plumb this down
     let props = ExecutionProps::new();
 
-    // Applies `filter` to `batch` returning `None` on error
-    let do_filter = |filter| -> Result<ArrayRef> {
-        let expr = create_physical_expr(filter, &df_schema, &props)?;
-        expr.evaluate(&batch)?.into_array(partitions.len())
-    };
-
-    //.Compute the conjunction of the filters
-    let mask = filters
-        .iter()
-        .map(|f| do_filter(f).map(|a| a.as_boolean().clone()))
-        .reduce(|a, b| Ok(and(&a?, &b?)?));
-
-    let mask = match mask {
-        Some(Ok(mask)) => mask,
-        Some(Err(err)) => return Err(err),
-        None => return Ok(partitions),
-    };
-
     // Don't retain partitions that evaluated to null
-    let prepared = match mask.null_count() {
-        0 => mask,
-        _ => prep_null_mask_filter(&mask),
-    };
+    let prepared = apply_filters(&batch, filters, &props)?;
+
+    // If all rows are retained, return all partitions
+    if prepared.true_count() == prepared.len() {
+        return Ok(partitions);
+    }
 
     // Sanity check
     assert_eq!(prepared.len(), partitions.len());
@@ -325,6 +302,54 @@ async fn prune_partitions(
         .collect();
 
     Ok(filtered)
+}
+
+/// Applies the given filters to the input batch and returns a boolean mask that represents
+/// the result of the filters applied to each row.
+pub(crate) fn apply_filters(
+    batch: &RecordBatch,
+    filters: &[Expr],
+    props: &ExecutionProps,
+) -> Result<BooleanArray> {
+    if filters.is_empty() {
+        return Ok(BooleanArray::new(
+            BooleanBuffer::new_set(batch.num_rows()),
+            None,
+        ));
+    }
+
+    let num_rows = batch.num_rows();
+
+    let df_schema = DFSchema::from_unqualified_fields(
+        batch.schema().fields().clone(),
+        HashMap::default(),
+    )?;
+
+    // Applies `filter` to `batch` returning `None` on error
+    let do_filter = |filter| -> Result<ArrayRef> {
+        let expr = create_physical_expr(filter, &df_schema, props)?;
+        expr.evaluate(batch)?.into_array(num_rows)
+    };
+
+    // Compute the conjunction of the filters
+    let mask = filters
+        .iter()
+        .map(|f| do_filter(f).map(|a| a.as_boolean().clone()))
+        .reduce(|a, b| Ok(and(&a?, &b?)?));
+
+    let mask = match mask {
+        Some(Ok(mask)) => mask,
+        Some(Err(err)) => return Err(err),
+        None => return Ok(BooleanArray::new(BooleanBuffer::new_set(num_rows), None)),
+    };
+
+    // Don't retain rows that evaluated to null
+    let prepared = match mask.null_count() {
+        0 => mask,
+        _ => prep_null_mask_filter(&mask),
+    };
+
+    Ok(prepared)
 }
 
 #[derive(Debug)]

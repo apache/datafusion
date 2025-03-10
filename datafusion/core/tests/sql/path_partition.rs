@@ -24,7 +24,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::datasource::listing::{ListingTableUrl, MetadataColumn};
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
@@ -72,6 +72,7 @@ async fn parquet_partition_pruning_filter() -> Result<()> {
             ("month", DataType::Int32),
             ("day", DataType::Int32),
         ],
+        &[],
         "mirror:///",
         "alltypes_plain.parquet",
     )
@@ -576,6 +577,134 @@ async fn parquet_overlapping_columns() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_metadata_columns() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let table = create_partitioned_alltypes_parquet_table(
+        &ctx,
+        &[
+            "year=2021/month=09/day=09/file.parquet",
+            "year=2021/month=10/day=09/file.parquet",
+            "year=2021/month=10/day=28/file.parquet",
+        ],
+        &[
+            ("year", DataType::Int32),
+            ("month", DataType::Int32),
+            ("day", DataType::Int32),
+        ],
+        &[
+            MetadataColumn::Location,
+            MetadataColumn::Size,
+            MetadataColumn::LastModified,
+        ],
+        "mirror:///",
+        "alltypes_plain.parquet",
+    )
+    .await;
+
+    ctx.register_table("t", table).unwrap();
+
+    let result = ctx
+        .sql("SELECT id, size, location, last_modified FROM t WHERE size > 1500 ORDER BY id LIMIT 10")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = [
+        "+----+------+----------------------------------------+----------------------+",
+        "| id | size | location                               | last_modified        |",
+        "+----+------+----------------------------------------+----------------------+",
+        "| 0  | 1851 | year=2021/month=09/day=09/file.parquet | 1970-01-01T00:00:00Z |",
+        "| 0  | 1851 | year=2021/month=10/day=09/file.parquet | 1970-01-01T00:00:00Z |",
+        "| 0  | 1851 | year=2021/month=10/day=28/file.parquet | 1970-01-01T00:00:00Z |",
+        "| 1  | 1851 | year=2021/month=09/day=09/file.parquet | 1970-01-01T00:00:00Z |",
+        "| 1  | 1851 | year=2021/month=10/day=09/file.parquet | 1970-01-01T00:00:00Z |",
+        "| 1  | 1851 | year=2021/month=10/day=28/file.parquet | 1970-01-01T00:00:00Z |",
+        "| 2  | 1851 | year=2021/month=09/day=09/file.parquet | 1970-01-01T00:00:00Z |",
+        "| 2  | 1851 | year=2021/month=10/day=09/file.parquet | 1970-01-01T00:00:00Z |",
+        "| 2  | 1851 | year=2021/month=10/day=28/file.parquet | 1970-01-01T00:00:00Z |",
+        "| 3  | 1851 | year=2021/month=10/day=28/file.parquet | 1970-01-01T00:00:00Z |",
+        "+----+------+----------------------------------------+----------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_metadata_columns_pushdown() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let table = create_partitioned_alltypes_parquet_table(
+        &ctx,
+        &[
+            "year=2021/month=09/day=09/file.parquet",
+            "year=2021/month=10/day=09/file.parquet",
+            "year=2021/month=10/day=28/file.parquet",
+        ],
+        &[
+            ("year", DataType::Int32),
+            ("month", DataType::Int32),
+            ("day", DataType::Int32),
+        ],
+        &[
+            MetadataColumn::Location,
+            MetadataColumn::Size,
+            MetadataColumn::LastModified,
+        ],
+        "mirror:///",
+        "alltypes_plain.parquet",
+    )
+    .await;
+
+    // The metadata filters can be resolved using only the metadata columns.
+    let filters = [
+        Expr::eq(
+            col("location"),
+            lit("year=2021/month=09/day=09/file.parquet"),
+        ),
+        Expr::gt(col("size"), lit(400u64)),
+        Expr::gt_eq(
+            col("last_modified"),
+            lit(ScalarValue::TimestampMicrosecond(
+                Some(0),
+                Some("UTC".into()),
+            )),
+        ),
+        Expr::gt(col("id"), lit(1)),
+    ];
+    let exec = table.scan(&ctx.state(), None, &filters, None).await?;
+    let parquet_exec = exec.as_any().downcast_ref::<ParquetExec>().unwrap();
+    let pred = parquet_exec.predicate().unwrap();
+    // Only the last filter should be pushdown to TableScan
+    let expected = Arc::new(BinaryExpr::new(
+        Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
+        Operator::Gt,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+    ));
+
+    assert!(pred.as_any().is::<BinaryExpr>());
+    let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
+
+    assert_eq!(pred, expected.as_any());
+
+    // Only the first file should be scanned
+    let scan_files = parquet_exec
+        .base_config()
+        .file_groups
+        .iter()
+        .flat_map(|x| x.iter().map(|y| y.path()).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    assert_eq!(scan_files.len(), 1);
+    assert_eq!(
+        scan_files[0].to_string(),
+        "year=2021/month=09/day=09/file.parquet"
+    );
+
+    Ok(())
+}
+
 fn register_partitioned_aggregate_csv(
     ctx: &SessionContext,
     store_paths: &[&str],
@@ -620,6 +749,7 @@ async fn register_partitioned_alltypes_parquet(
         ctx,
         store_paths,
         partition_cols,
+        &[],
         table_path,
         source_file,
     )
@@ -632,6 +762,7 @@ async fn create_partitioned_alltypes_parquet_table(
     ctx: &SessionContext,
     store_paths: &[&str],
     partition_cols: &[(&str, DataType)],
+    metadata_cols: &[MetadataColumn],
     table_path: &str,
     source_file: &str,
 ) -> Arc<dyn TableProvider> {
@@ -649,7 +780,8 @@ async fn create_partitioned_alltypes_parquet_table(
                 .iter()
                 .map(|x| (x.0.to_owned(), x.1.clone()))
                 .collect::<Vec<_>>(),
-        );
+        )
+        .with_metadata_cols(metadata_cols.to_vec());
 
     let table_path = ListingTableUrl::parse(table_path).unwrap();
     let store_path =

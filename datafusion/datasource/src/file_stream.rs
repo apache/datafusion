@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::file_meta::FileMeta;
-use crate::file_scan_config::{FileScanConfig, PartitionColumnProjector};
+use crate::file_scan_config::{ExtendedColumnProjector, FileScanConfig};
 use crate::PartitionedFile;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::error::Result;
@@ -41,6 +41,7 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::instant::Instant;
 use datafusion_common::ScalarValue;
+use object_store::ObjectMeta;
 
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -58,8 +59,8 @@ pub struct FileStream {
     /// A dynamic [`FileOpener`]. Calling `open()` returns a [`FileOpenFuture`],
     /// which can be resolved to a stream of `RecordBatch`.
     file_opener: Arc<dyn FileOpener>,
-    /// The partition column projector
-    pc_projector: PartitionColumnProjector,
+    /// The extended (partitioning + metadata) column projector
+    col_projector: ExtendedColumnProjector,
     /// The stream state
     state: FileStreamState,
     /// File stream specific metrics
@@ -79,13 +80,14 @@ impl FileStream {
         metrics: &ExecutionPlanMetricsSet,
     ) -> Result<Self> {
         let (projected_schema, ..) = config.project();
-        let pc_projector = PartitionColumnProjector::new(
+        let col_projector = ExtendedColumnProjector::new(
             Arc::clone(&projected_schema),
             &config
                 .table_partition_cols
                 .iter()
                 .map(|x| x.name().clone())
                 .collect::<Vec<_>>(),
+            &config.metadata_cols,
         );
 
         let files = config.file_groups[partition].clone();
@@ -95,7 +97,7 @@ impl FileStream {
             projected_schema,
             remain: config.limit,
             file_opener,
-            pc_projector,
+            col_projector,
             state: FileStreamState::Idle,
             file_stream_metrics: FileStreamMetrics::new(metrics, partition),
             baseline_metrics: BaselineMetrics::new(metrics, partition),
@@ -116,20 +118,22 @@ impl FileStream {
     ///
     /// Since file opening is mostly IO (and may involve a
     /// bunch of sequential IO), it can be parallelized with decoding.
-    fn start_next_file(&mut self) -> Option<Result<(FileOpenFuture, Vec<ScalarValue>)>> {
+    fn start_next_file(
+        &mut self,
+    ) -> Option<Result<(FileOpenFuture, Vec<ScalarValue>, ObjectMeta)>> {
         let part_file = self.file_iter.pop_front()?;
 
         let file_meta = FileMeta {
-            object_meta: part_file.object_meta,
+            object_meta: part_file.object_meta.clone(),
             range: part_file.range,
             extensions: part_file.extensions,
             metadata_size_hint: part_file.metadata_size_hint,
         };
 
         Some(
-            self.file_opener
-                .open(file_meta)
-                .map(|future| (future, part_file.partition_values)),
+            self.file_opener.open(file_meta).map(|future| {
+                (future, part_file.partition_values, part_file.object_meta)
+            }),
         )
     }
 
@@ -140,10 +144,11 @@ impl FileStream {
                     self.file_stream_metrics.time_opening.start();
 
                     match self.start_next_file().transpose() {
-                        Ok(Some((future, partition_values))) => {
+                        Ok(Some((future, partition_values, object_meta))) => {
                             self.state = FileStreamState::Open {
                                 future,
                                 partition_values,
+                                object_meta,
                             }
                         }
                         Ok(None) => return Poll::Ready(None),
@@ -156,9 +161,11 @@ impl FileStream {
                 FileStreamState::Open {
                     future,
                     partition_values,
+                    object_meta,
                 } => match ready!(future.poll_unpin(cx)) {
                     Ok(reader) => {
                         let partition_values = mem::take(partition_values);
+                        let object_meta = object_meta.clone();
 
                         // include time needed to start opening in `start_next_file`
                         self.file_stream_metrics.time_opening.stop();
@@ -167,13 +174,19 @@ impl FileStream {
                         self.file_stream_metrics.time_scanning_total.start();
 
                         match next {
-                            Ok(Some((next_future, next_partition_values))) => {
+                            Ok(Some((
+                                next_future,
+                                next_partition_values,
+                                next_object_meta,
+                            ))) => {
                                 self.state = FileStreamState::Scan {
                                     partition_values,
+                                    object_meta,
                                     reader,
                                     next: Some((
                                         NextOpen::Pending(next_future),
                                         next_partition_values,
+                                        next_object_meta,
                                     )),
                                 };
                             }
@@ -181,6 +194,7 @@ impl FileStream {
                                 self.state = FileStreamState::Scan {
                                     reader,
                                     partition_values,
+                                    object_meta,
                                     next: None,
                                 };
                             }
@@ -208,9 +222,10 @@ impl FileStream {
                     reader,
                     partition_values,
                     next,
+                    object_meta,
                 } => {
                     // We need to poll the next `FileOpenFuture` here to drive it forward
-                    if let Some((next_open_future, _)) = next {
+                    if let Some((next_open_future, _, _)) = next {
                         if let NextOpen::Pending(f) = next_open_future {
                             if let Poll::Ready(reader) = f.as_mut().poll(cx) {
                                 *next_open_future = NextOpen::Ready(reader);
@@ -222,8 +237,8 @@ impl FileStream {
                             self.file_stream_metrics.time_scanning_until_data.stop();
                             self.file_stream_metrics.time_scanning_total.stop();
                             let result = self
-                                .pc_projector
-                                .project(batch, partition_values)
+                                .col_projector
+                                .project(batch, partition_values, object_meta)
                                 .map_err(|e| ArrowError::ExternalError(e.into()))
                                 .map(|batch| match &mut self.remain {
                                     Some(remain) => {
@@ -256,7 +271,7 @@ impl FileStream {
                             match self.on_error {
                                 // If `OnError::Skip` we skip the file as soon as we hit the first error
                                 OnError::Skip => match mem::take(next) {
-                                    Some((future, partition_values)) => {
+                                    Some((future, partition_values, object_meta)) => {
                                         self.file_stream_metrics.time_opening.start();
 
                                         match future {
@@ -264,6 +279,7 @@ impl FileStream {
                                                 self.state = FileStreamState::Open {
                                                     future,
                                                     partition_values,
+                                                    object_meta,
                                                 }
                                             }
                                             NextOpen::Ready(reader) => {
@@ -272,6 +288,7 @@ impl FileStream {
                                                         reader,
                                                     )),
                                                     partition_values,
+                                                    object_meta,
                                                 }
                                             }
                                         }
@@ -289,7 +306,7 @@ impl FileStream {
                             self.file_stream_metrics.time_scanning_total.stop();
 
                             match mem::take(next) {
-                                Some((future, partition_values)) => {
+                                Some((future, partition_values, object_meta)) => {
                                     self.file_stream_metrics.time_opening.start();
 
                                     match future {
@@ -297,6 +314,7 @@ impl FileStream {
                                             self.state = FileStreamState::Open {
                                                 future,
                                                 partition_values,
+                                                object_meta,
                                             }
                                         }
                                         NextOpen::Ready(reader) => {
@@ -305,6 +323,7 @@ impl FileStream {
                                                     reader,
                                                 )),
                                                 partition_values,
+                                                object_meta,
                                             }
                                         }
                                     }
