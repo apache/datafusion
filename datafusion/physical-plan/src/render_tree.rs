@@ -201,6 +201,8 @@ fn create_tree_recursive(
     for line in display_info.lines() {
         if let Some((key, value)) = line.split_once('=') {
             extra_info.insert(key.to_string(), value.to_string());
+        } else {
+            extra_info.insert(line.to_string(), "".to_string());
         }
     }
 

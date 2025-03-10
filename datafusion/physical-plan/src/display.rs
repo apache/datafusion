@@ -857,22 +857,24 @@ impl TreeRenderVisitor<'_, '_> {
         let sorted_extra_info: BTreeMap<_, _> = extra_info.iter().collect();
         for (key, value) in sorted_extra_info {
             let mut str = Self::remove_padding(value);
-            if str.is_empty() {
-                continue;
-            }
             let mut is_inlined = false;
             let available_width = Self::NODE_RENDER_WIDTH - 7;
             let total_size = key.len() + str.len() + 2;
             let is_multiline = str.contains('\n');
-            if !is_multiline && total_size < available_width {
+
+            if str.is_empty() {
+                str = key.to_string();
+            } else if !is_multiline && total_size < available_width {
                 str = format!("{}: {}", key, str);
                 is_inlined = true;
             } else {
                 str = format!("{}:\n{}", key, str);
             }
+
             if is_inlined && was_inlined {
                 requires_padding = false;
             }
+
             if requires_padding {
                 result.push(String::new());
             }
