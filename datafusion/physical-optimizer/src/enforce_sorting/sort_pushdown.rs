@@ -109,12 +109,14 @@ fn pushdown_sorts_helper(
             .map(LexRequirement::from)
             .map(RequiredInputOrdering::Hard)
             .unwrap_or_default();
-        let parent_is_stricter = plan
-            .equivalence_properties()
-            .requirements_compatible(&parent_reqs, &current_plan_reqs);
-        let current_is_stricter = plan
-            .equivalence_properties()
-            .requirements_compatible(&current_plan_reqs, &parent_reqs);
+        let parent_is_stricter = plan.equivalence_properties().requirements_compatible(
+            parent_reqs.lex_requirement(),
+            current_plan_reqs.lex_requirement(),
+        );
+        let current_is_stricter = plan.equivalence_properties().requirements_compatible(
+            current_plan_reqs.lex_requirement(),
+            parent_reqs.lex_requirement(),
+        );
 
         if !satisfy_parent && !parent_is_stricter {
             // This new sort has different requirements than the ordering being pushed down.
@@ -127,8 +129,11 @@ fn pushdown_sorts_helper(
             sort_push_down = sort_push_down.update_plan_from_children()?; // changed plan
 
             // add back sort exec matching parent
-            sort_push_down =
-                add_sort_above(sort_push_down, parent_reqs.lex_requirement().clone(), parent_req_fetch);
+            sort_push_down = add_sort_above(
+                sort_push_down,
+                parent_reqs.lex_requirement().clone(),
+                parent_req_fetch,
+            );
 
             // make pushdown requirements be the new ones.
             sort_push_down.children[0].data = ParentRequirements {
@@ -188,7 +193,8 @@ fn pushdown_sorts_helper(
             .clone()
             .unwrap_or_default();
         let fetch = sort_push_down.data.fetch;
-        sort_push_down = add_sort_above(sort_push_down, sort_reqs.lex_requirement().clone(), fetch);
+        sort_push_down =
+            add_sort_above(sort_push_down, sort_reqs.lex_requirement().clone(), fetch);
         assign_initial_requirements(&mut sort_push_down);
     }
 
@@ -224,7 +230,7 @@ fn pushdown_requirement_to_children(
                 // that's the case, we block the pushdown of sort operation.
                 if !plan
                     .equivalence_properties()
-                    .ordering_satisfy_requirement(parent_required)
+                    .ordering_satisfy_requirement(parent_required.lex_requirement())
                 {
                     return Ok(None);
                 }

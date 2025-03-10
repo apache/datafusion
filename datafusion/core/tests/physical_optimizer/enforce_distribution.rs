@@ -372,9 +372,6 @@ macro_rules! plans_matches_expected {
 fn test_suite_default_config_options() -> ConfigOptions {
     let mut config = ConfigOptions::new();
 
-    // By default, will not repartition / resort data if it is already sorted.
-    config.optimizer.prefer_existing_sort = false;
-
     // By default, will attempt to convert Union to Interleave.
     config.optimizer.prefer_existing_union = false;
 
@@ -1784,17 +1781,6 @@ fn merge_does_not_need_sort() -> Result<()> {
         "    DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
     assert_optimized!(expected, exec, &TestConfig::new(DoFirst::Distribution));
-
-    // In this case preserving ordering through order preserving operators is not desirable
-    // (according to flag: PREFER_EXISTING_SORT)
-    // hence in this case ordering lost during CoalescePartitionsExec and re-introduced with
-    // SortExec at the top.
-    let expected = &[
-        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "  CoalescePartitionsExec",
-        "    CoalesceBatchesExec: target_batch_size=4096",
-        "      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
     assert_optimized!(expected, exec, &TestConfig::new(DoFirst::Sorting));
 
     Ok(())
@@ -2133,12 +2119,6 @@ fn repartition_ignores_sort_preserving_merge() -> Result<()> {
         plan.clone(),
         &TestConfig::new(DoFirst::Distribution)
     );
-
-    let expected = &[
-        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        "  CoalescePartitionsExec",
-        "    DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
     assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
 
     Ok(())
@@ -2168,14 +2148,6 @@ fn repartition_ignores_sort_preserving_merge_with_union() -> Result<()> {
         plan.clone(),
         &TestConfig::new(DoFirst::Distribution)
     );
-
-    let expected = &[
-        "SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
-        "  CoalescePartitionsExec",
-        "    UnionExec",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-        "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
     assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
 
     Ok(())
@@ -2208,11 +2180,7 @@ fn repartition_does_not_destroy_sort() -> Result<()> {
         plan.clone(),
         &TestConfig::new(DoFirst::Distribution)
     );
-    assert_optimized!(
-        expected,
-        plan,
-        &TestConfig::new(DoFirst::Sorting)
-    );
+    assert_optimized!(expected, plan, &TestConfig::new(DoFirst::Sorting));
 
     Ok(())
 }
@@ -2522,8 +2490,8 @@ fn parallelization_multiple_files() -> Result<()> {
     let plan = filter_exec(parquet_exec_multiple_sorted(vec![sort_key.clone()]));
     let plan = sort_required_exec_with_req(plan, sort_key);
 
-    let test_config = TestConfig::new(DoFirst::Distribution)
-        .with_prefer_repartition_file_scans(1);
+    let test_config =
+        TestConfig::new(DoFirst::Distribution).with_prefer_repartition_file_scans(1);
 
     // The groups must have only contiguous ranges of rows from the same file
     // if any group has rows from multiple files, the data is no longer sorted destroyed
@@ -3106,11 +3074,7 @@ fn remove_unnecessary_spm_after_filter() -> Result<()> {
         physical_plan.clone(),
         &TestConfig::new(DoFirst::Distribution)
     );
-    assert_optimized!(
-        expected,
-        physical_plan,
-        &TestConfig::new(DoFirst::Sorting)
-    );
+    assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
 
     Ok(())
 }
@@ -3136,11 +3100,7 @@ fn preserve_ordering_through_repartition() -> Result<()> {
         physical_plan.clone(),
         &TestConfig::new(DoFirst::Distribution)
     );
-    assert_optimized!(
-        expected,
-        physical_plan,
-        &TestConfig::new(DoFirst::Sorting)
-    );
+    assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
 
     Ok(())
 }
@@ -3157,10 +3117,9 @@ fn do_not_preserve_ordering_through_repartition() -> Result<()> {
 
     let expected = &[
         "SortPreservingMergeExec: [a@0 ASC]",
-        "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-        "    FilterExec: c@2 = 0",
-        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-        "        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
+        "  FilterExec: c@2 = 0",
+        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC",
+        "      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
     ];
 
     assert_optimized!(
@@ -3168,14 +3127,6 @@ fn do_not_preserve_ordering_through_repartition() -> Result<()> {
         physical_plan.clone(),
         &TestConfig::new(DoFirst::Distribution)
     );
-
-    let expected = &[
-        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "  CoalescePartitionsExec",
-        "    FilterExec: c@2 = 0",
-        "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-        "        DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], file_type=parquet",
-    ];
     assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
 
     Ok(())
@@ -3196,7 +3147,7 @@ fn no_need_for_sort_after_filter() -> Result<()> {
         "CoalescePartitionsExec",
         // Since after this stage c is constant. c@2 ASC ordering is already satisfied.
         "  FilterExec: c@2 = 0",
-        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+        "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c@2 ASC",
         "      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
     assert_optimized!(
@@ -3237,15 +3188,6 @@ fn do_not_preserve_ordering_through_repartition2() -> Result<()> {
         physical_plan.clone(),
         &TestConfig::new(DoFirst::Distribution)
     );
-
-    let expected = &[
-        "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
-        "  CoalescePartitionsExec",
-        "    SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
-        "      FilterExec: c@2 = 0",
-        "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
-        "          DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
-    ];
     assert_optimized!(expected, physical_plan, &TestConfig::new(DoFirst::Sorting));
 
     Ok(())

@@ -49,7 +49,7 @@ use datafusion_datasource::write::BatchSerializer;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
@@ -435,7 +435,7 @@ impl FileFormat for CsvFormat {
         input: Arc<dyn ExecutionPlan>,
         state: &dyn Session,
         conf: FileSinkConfig,
-        order_requirements: Option<LexRequirement>,
+        order_requirements: Option<RequiredInputOrdering>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.insert_op != InsertOp::Append {
             return not_impl_err!("Overwrites are not implemented yet for CSV");

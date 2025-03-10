@@ -55,7 +55,7 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::Expr;
 use datafusion_functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr_common::sort_expr::LexRequirement;
+use datafusion_physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion_physical_plan::Accumulator;
 
 use async_trait::async_trait;
@@ -428,7 +428,7 @@ impl FileFormat for ParquetFormat {
         input: Arc<dyn ExecutionPlan>,
         _state: &dyn Session,
         conf: FileSinkConfig,
-        order_requirements: Option<LexRequirement>,
+        order_requirements: Option<RequiredInputOrdering>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if conf.insert_op != InsertOp::Append {
             return not_impl_err!("Overwrites are not implemented yet for Parquet");
