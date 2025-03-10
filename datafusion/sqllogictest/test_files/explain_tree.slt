@@ -755,7 +755,10 @@ physical_plan
 08)└─────────────┬─────────────┘
 09)┌─────────────┴─────────────┐
 10)│     StreamingTableExec    │
-11)└───────────────────────────┘
+11)│    --------------------   │
+12)│       infinite: true      │
+13)│        limit: None        │
+14)└───────────────────────────┘
 
 query TT
 EXPLAIN SELECT *
@@ -779,7 +782,10 @@ physical_plan
 10)└─────────────┬─────────────┘
 11)┌─────────────┴─────────────┐
 12)│     StreamingTableExec    │
-13)└───────────────────────────┘
+13)│    --------------------   │
+14)│       infinite: true      │
+15)│        limit: None        │
+16)└───────────────────────────┘
 
 # Query with hash join.
 query TT
@@ -954,16 +960,9 @@ physical_plan
 16)┌─────────────┴─────────────┐
 17)│     StreamingTableExec    │
 18)│    --------------------   │
-19)│    StreamingTableExec:    │
-20)│      partition_sizes:     │
-21)│    1, projection=[date,   │
-22)│       ticker, time],      │
-23)│    infinite_source=true   │
-24)│ , output_ordering=[date@0 │
-25)│  ASC NULLS LAST, ticker@1 │
-26)│   ASC NULLS LAST, time@2  │
-27)│       ASC NULLS LAST]     │
-28)└───────────────────────────┘
+19)│       infinite: true      │
+20)│        limit: None        │
+21)└───────────────────────────┘
 
 
 # constant ticker, CAST(time AS DATE) = time, order by time
@@ -996,16 +995,9 @@ physical_plan
 17)┌─────────────┴─────────────┐
 18)│     StreamingTableExec    │
 19)│    --------------------   │
-20)│    StreamingTableExec:    │
-21)│      partition_sizes:     │
-22)│    1, projection=[date,   │
-23)│       ticker, time],      │
-24)│    infinite_source=true   │
-25)│ , output_ordering=[date@0 │
-26)│  ASC NULLS LAST, ticker@1 │
-27)│   ASC NULLS LAST, time@2  │
-28)│       ASC NULLS LAST]     │
-29)└───────────────────────────┘
+20)│       infinite: true      │
+21)│        limit: None        │
+22)└───────────────────────────┘
 
 # same thing but order by date
 query TT
@@ -1037,16 +1029,9 @@ physical_plan
 17)┌─────────────┴─────────────┐
 18)│     StreamingTableExec    │
 19)│    --------------------   │
-20)│    StreamingTableExec:    │
-21)│      partition_sizes:     │
-22)│    1, projection=[date,   │
-23)│       ticker, time],      │
-24)│    infinite_source=true   │
-25)│ , output_ordering=[date@0 │
-26)│  ASC NULLS LAST, ticker@1 │
-27)│   ASC NULLS LAST, time@2  │
-28)│       ASC NULLS LAST]     │
-29)└───────────────────────────┘
+20)│       infinite: true      │
+21)│        limit: None        │
+22)└───────────────────────────┘
 
 # same thing but order by ticker
 query TT
@@ -1078,16 +1063,10 @@ physical_plan
 17)┌─────────────┴─────────────┐
 18)│     StreamingTableExec    │
 19)│    --------------------   │
-20)│    StreamingTableExec:    │
-21)│      partition_sizes:     │
-22)│    1, projection=[date,   │
-23)│       ticker, time],      │
-24)│    infinite_source=true   │
-25)│ , output_ordering=[date@0 │
-26)│  ASC NULLS LAST, ticker@1 │
-27)│   ASC NULLS LAST, time@2  │
-28)│       ASC NULLS LAST]     │
-29)└───────────────────────────┘
+20)│       infinite: true      │
+21)│        limit: None        │
+22)└───────────────────────────┘
+
 
 # same thing but order by time, date
 query TT
@@ -1119,16 +1098,10 @@ physical_plan
 17)┌─────────────┴─────────────┐
 18)│     StreamingTableExec    │
 19)│    --------------------   │
-20)│    StreamingTableExec:    │
-21)│      partition_sizes:     │
-22)│    1, projection=[date,   │
-23)│       ticker, time],      │
-24)│    infinite_source=true   │
-25)│ , output_ordering=[date@0 │
-26)│  ASC NULLS LAST, ticker@1 │
-27)│   ASC NULLS LAST, time@2  │
-28)│       ASC NULLS LAST]     │
-29)└───────────────────────────┘
+20)│       infinite: true      │
+21)│        limit: None        │
+22)└───────────────────────────┘
+
 
 
 
@@ -1161,13 +1134,6 @@ physical_plan
 16)┌─────────────┴─────────────┐
 17)│     StreamingTableExec    │
 18)│    --------------------   │
-19)│    StreamingTableExec:    │
-20)│      partition_sizes:     │
-21)│    1, projection=[date,   │
-22)│       ticker, time],      │
-23)│    infinite_source=true   │
-24)│ , output_ordering=[date@0 │
-25)│  ASC NULLS LAST, ticker@1 │
-26)│   ASC NULLS LAST, time@2  │
-27)│       ASC NULLS LAST]     │
-28)└───────────────────────────┘
+19)│       infinite: true      │
+20)│        limit: None        │
+21)└───────────────────────────┘

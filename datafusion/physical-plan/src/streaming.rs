@@ -209,26 +209,15 @@ impl DisplayAs for StreamingTableExec {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                write!(
-                    f,
-                    "StreamingTableExec: partition_sizes={:?}",
-                    self.partitions.len(),
-                )?;
-                if !self.projected_schema.fields().is_empty() {
-                    write!(
-                        f,
-                        ", projection={}",
-                        ProjectSchemaDisplay(&self.projected_schema)
-                    )?;
-                }
                 if self.infinite {
-                    write!(f, ", infinite_source=true")?;
+                    writeln!(f, "infinite={}", self.infinite)?;
                 }
-                if let Some(fetch) = self.limit {
-                    write!(f, ", fetch={fetch}")?;
+                if let Some(limit) = self.limit {
+                    write!(f, "limit={limit}")?;
+                } else {
+                    write!(f, "limit=None")?;
                 }
 
-                display_orderings(f, &self.projected_output_ordering)?;
                 Ok(())
             }
         }
