@@ -1,0 +1,25 @@
+{
+  "columns": [
+    {
+      "name": "r_regionkey",
+      "arrowType": {
+        "INT32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "r_name",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "r_comment",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    }
+  ]
+}
