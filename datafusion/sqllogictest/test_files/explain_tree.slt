@@ -577,6 +577,142 @@ physical_plan
 17)│       format: arrow       │
 18)└───────────────────────────┘
 
+
+# Query with window agg.
+query TT
+explain select count(*) over() from table1;
+----
+logical_plan
+01)Projection: count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+02)--WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: table1 projection=[]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│   count(*) ROWS BETWEEN   │
+05)│     UNBOUNDED PRECEDING   │
+06)│  AND UNBOUNDED FOLLOWING: │
+07)│    count(Int64(1)) ROWS   │
+08)│      BETWEEN UNBOUNDED    │
+09)│   PRECEDING AND UNBOUNDED │
+10)│         FOLLOWING@0       │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│       WindowAggExec       │
+14)│    --------------------   │
+15)│        select_list:       │
+16)│    count(Int64(1)) ROWS   │
+17)│      BETWEEN UNBOUNDED    │
+18)│   PRECEDING AND UNBOUNDED │
+19)│          FOLLOWING        │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│       DataSourceExec      │
+23)│    --------------------   │
+24)│          files: 1         │
+25)│        format: csv        │
+26)└───────────────────────────┘
+
+# Query with bounded window agg.
+query TT
+explain SELECT
+    v1,
+    SUM(v1) OVER (ORDER BY v1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS rolling_sum
+FROM generate_series(1, 1000) AS t1(v1);
+----
+logical_plan
+01)Projection: t1.v1, sum(t1.v1) ORDER BY [t1.v1 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW AS rolling_sum
+02)--WindowAggr: windowExpr=[[sum(t1.v1) ORDER BY [t1.v1 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW]]
+03)----SubqueryAlias: t1
+04)------Projection: tmp_table.value AS v1
+05)--------TableScan: tmp_table projection=[value]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        rolling_sum:       │
+05)│ sum(t1.v1) ORDER BY [t1.v1│
+06)│    ASC NULLS LAST] ROWS   │
+07)│     BETWEEN 1 PRECEDING   │
+08)│      AND CURRENT ROW@1    │
+09)│                           │
+10)│          v1: v1@0         │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│    BoundedWindowAggExec   │
+14)│    --------------------   │
+15)│        mode: Sorted       │
+16)│                           │
+17)│        select_list:       │
+18)│ sum(t1.v1) ORDER BY [t1.v1│
+19)│    ASC NULLS LAST] ROWS   │
+20)│     BETWEEN 1 PRECEDING   │
+21)│       AND CURRENT ROW     │
+22)└─────────────┬─────────────┘
+23)┌─────────────┴─────────────┐
+24)│          SortExec         │
+25)│    --------------------   │
+26)│         sort keys:        │
+27)│   [v1@0 ASC NULLS LAST]   │
+28)└─────────────┬─────────────┘
+29)┌─────────────┴─────────────┐
+30)│       ProjectionExec      │
+31)│    --------------------   │
+32)│        v1: value@0        │
+33)└─────────────┬─────────────┘
+34)┌─────────────┴─────────────┐
+35)│       LazyMemoryExec      │
+36)└───────────────────────────┘
+
+query TT
+explain select 
+  count(*) over(),
+  row_number() over ()
+from table1
+----
+logical_plan
+01)Projection: count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+02)--WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----TableScan: table1 projection=[]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│   count(*) ROWS BETWEEN   │
+05)│     UNBOUNDED PRECEDING   │
+06)│  AND UNBOUNDED FOLLOWING: │
+07)│    count(Int64(1)) ROWS   │
+08)│      BETWEEN UNBOUNDED    │
+09)│   PRECEDING AND UNBOUNDED │
+10)│         FOLLOWING@0       │
+11)│                           │
+12)│ row_number() ROWS BETWEEN │
+13)│   UNBOUNDED PRECEDING AND │
+14)│    UNBOUNDED FOLLOWING:   │
+15)│ row_number() ROWS BETWEEN │
+16)│   UNBOUNDED PRECEDING AND │
+17)│    UNBOUNDED FOLLOWING@1  │
+18)└─────────────┬─────────────┘
+19)┌─────────────┴─────────────┐
+20)│       WindowAggExec       │
+21)│    --------------------   │
+22)│        select_list:       │
+23)│    count(Int64(1)) ROWS   │
+24)│      BETWEEN UNBOUNDED    │
+25)│   PRECEDING AND UNBOUNDED │
+26)│   FOLLOWING, row_number() │
+27)│   ROWS BETWEEN UNBOUNDED  │
+28)│   PRECEDING AND UNBOUNDED │
+29)│          FOLLOWING        │
+30)└─────────────┬─────────────┘
+31)┌─────────────┴─────────────┐
+32)│       DataSourceExec      │
+33)│    --------------------   │
+34)│          files: 1         │
+35)│        format: csv        │
+36)└───────────────────────────┘
+
 # Query for sort.
 query TT
 explain SELECT * FROM table1 ORDER BY string_col;
@@ -653,6 +789,88 @@ physical_plan
 20)│        format: csv        │
 21)└───────────────────────────┘
 
+query TT
+explain select 
+  rank() over(ORDER BY int_col DESC),
+  row_number() over (ORDER BY int_col ASC)
+from table1
+----
+logical_plan
+01)Projection: rank() ORDER BY [table1.int_col DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, row_number() ORDER BY [table1.int_col ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--WindowAggr: windowExpr=[[row_number() ORDER BY [table1.int_col ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+03)----WindowAggr: windowExpr=[[rank() ORDER BY [table1.int_col DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: table1 projection=[int_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│  rank() ORDER BY [table1  │
+05)│    .int_col DESC NULLS    │
+06)│    FIRST] RANGE BETWEEN   │
+07)│   UNBOUNDED PRECEDING AND │
+08)│        CURRENT ROW:       │
+09)│  rank() ORDER BY [table1  │
+10)│    .int_col DESC NULLS    │
+11)│    FIRST] RANGE BETWEEN   │
+12)│   UNBOUNDED PRECEDING AND │
+13)│        CURRENT ROW@1      │
+14)│                           │
+15)│   row_number() ORDER BY   │
+16)│    [table1.int_col ASC    │
+17)│      NULLS LAST] RANGE    │
+18)│      BETWEEN UNBOUNDED    │
+19)│    PRECEDING AND CURRENT  │
+20)│            ROW:           │
+21)│   row_number() ORDER BY   │
+22)│    [table1.int_col ASC    │
+23)│      NULLS LAST] RANGE    │
+24)│      BETWEEN UNBOUNDED    │
+25)│    PRECEDING AND CURRENT  │
+26)│            ROW@2          │
+27)└─────────────┬─────────────┘
+28)┌─────────────┴─────────────┐
+29)│    BoundedWindowAggExec   │
+30)│    --------------------   │
+31)│        mode: Sorted       │
+32)│                           │
+33)│        select_list:       │
+34)│   row_number() ORDER BY   │
+35)│    [table1.int_col ASC    │
+36)│      NULLS LAST] RANGE    │
+37)│      BETWEEN UNBOUNDED    │
+38)│    PRECEDING AND CURRENT  │
+39)│             ROW           │
+40)└─────────────┬─────────────┘
+41)┌─────────────┴─────────────┐
+42)│          SortExec         │
+43)│    --------------------   │
+44)│         sort keys:        │
+45)│ [int_col@0 ASC NULLS LAST]│
+46)└─────────────┬─────────────┘
+47)┌─────────────┴─────────────┐
+48)│    BoundedWindowAggExec   │
+49)│    --------------------   │
+50)│        mode: Sorted       │
+51)│                           │
+52)│        select_list:       │
+53)│  rank() ORDER BY [table1  │
+54)│    .int_col DESC NULLS    │
+55)│    FIRST] RANGE BETWEEN   │
+56)│   UNBOUNDED PRECEDING AND │
+57)│         CURRENT ROW       │
+58)└─────────────┬─────────────┘
+59)┌─────────────┴─────────────┐
+60)│          SortExec         │
+61)│    --------------------   │
+62)│         sort keys:        │
+63)│      [int_col@0 DESC]     │
+64)└─────────────┬─────────────┘
+65)┌─────────────┴─────────────┐
+66)│       DataSourceExec      │
+67)│    --------------------   │
+68)│          files: 1         │
+69)│        format: csv        │
+70)└───────────────────────────┘
 
 # Query with projection on parquet
 query TT
