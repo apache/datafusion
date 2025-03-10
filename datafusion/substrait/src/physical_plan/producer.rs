@@ -23,8 +23,8 @@ use crate::variation_const::{
 };
 
 use datafusion::arrow::datatypes::DataType;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::physical_plan::source::DataSourceExec;
 use datafusion::physical_plan::{displayable, ExecutionPlan};
 
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
@@ -51,9 +51,9 @@ pub fn to_substrait_rel(
         HashMap<String, u32>,
     ),
 ) -> Result<Box<Rel>> {
-    if let Some(data_source) = plan.as_any().downcast_ref::<DataSourceExec>() {
-        let source = data_source.source();
-        if let Some(file_config) = source.as_any().downcast_ref::<FileScanConfig>() {
+    if let Some(data_source_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+        let data_source = data_source_exec.data_source();
+        if let Some(file_config) = data_source.as_any().downcast_ref::<FileScanConfig>() {
             let is_parquet = file_config
                 .file_source()
                 .as_any()

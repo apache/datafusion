@@ -48,16 +48,6 @@ pub use datafusion_functions_aggregate_common::order::AggregateOrderSensitivity;
 ///  `COUNT(<constant>)` expressions
 pub use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 
-/// Recursively walk a list of expression trees, collecting the unique set of columns
-/// referenced in the expression
-#[deprecated(since = "40.0.0", note = "Expr::add_column_refs instead")]
-pub fn exprlist_to_columns(expr: &[Expr], accum: &mut HashSet<Column>) -> Result<()> {
-    for e in expr {
-        expr_to_columns(e, accum)?;
-    }
-    Ok(())
-}
-
 /// Count the number of distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
 pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
@@ -282,6 +272,8 @@ pub fn expr_to_columns(expr: &Expr, accum: &mut HashSet<Column>) -> Result<()> {
             // Use explicit pattern match instead of a default
             // implementation, so that in the future if someone adds
             // new Expr types, they will check here as well
+            // TODO: remove the next line after `Expr::Wildcard` is removed
+            #[expect(deprecated)]
             Expr::Unnest(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Alias(_)
@@ -709,6 +701,7 @@ pub fn exprlist_to_fields<'a>(
     let result = exprs
         .into_iter()
         .map(|e| match e {
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => match qualifier {
                 None => {
                     let mut excluded = exclude_using_columns(plan)?;
@@ -801,6 +794,7 @@ pub fn exprlist_len(
     exprs
         .iter()
         .map(|e| match e {
+            #[expect(deprecated)]
             Expr::Wildcard {
                 qualifier: None,
                 options,
@@ -818,6 +812,7 @@ pub fn exprlist_len(
                         .len(),
                 )
             }
+            #[expect(deprecated)]
             Expr::Wildcard {
                 qualifier: Some(qualifier),
                 options,
@@ -832,7 +827,7 @@ pub fn exprlist_len(
                             .enumerate()
                             .filter_map(|(idx, field)| {
                                 let (maybe_table_ref, _) = schema.qualified_field(idx);
-                                if maybe_table_ref.map_or(true, |q| q == qualifier) {
+                                if maybe_table_ref.is_none_or(|q| q == qualifier) {
                                     Some((maybe_table_ref.cloned(), Arc::clone(field)))
                                 } else {
                                     None

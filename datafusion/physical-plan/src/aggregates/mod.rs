@@ -57,41 +57,60 @@ mod row_hash;
 mod topk;
 mod topk_stream;
 
-/// Hash aggregate modes
+/// Aggregation modes
 ///
 /// See [`Accumulator::state`] for background information on multi-phase
 /// aggregation and how these modes are used.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum AggregateMode {
+    /// One of multiple layers of aggregation, any input partitioning
+    ///
     /// Partial aggregate that can be applied in parallel across input
     /// partitions.
     ///
     /// This is the first phase of a multi-phase aggregation.
     Partial,
+    /// *Final* of multiple layers of aggregation, in exactly one partition
+    ///
     /// Final aggregate that produces a single partition of output by combining
     /// the output of multiple partial aggregates.
     ///
     /// This is the second phase of a multi-phase aggregation.
+    ///
+    /// This mode requires that the input is a single partition
+    ///
+    /// Note: Adjacent `Partial` and `Final` mode aggregation is equivalent to a `Single`
+    /// mode aggregation node. The `Final` mode is required since this is used in an
+    /// intermediate step. The [`CombinePartialFinalAggregate`] physical optimizer rule
+    /// will replace this combination with `Single` mode for more efficient execution.
+    ///
+    /// [`CombinePartialFinalAggregate`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/combine_partial_final_agg/struct.CombinePartialFinalAggregate.html
     Final,
+    /// *Final* of multiple layers of aggregation, input is *Partitioned*
+    ///
     /// Final aggregate that works on pre-partitioned data.
     ///
-    /// This requires the invariant that all rows with a particular
-    /// grouping key are in the same partitions, such as is the case
-    /// with Hash repartitioning on the group keys. If a group key is
-    /// duplicated, duplicate groups would be produced
+    /// This mode requires that all rows with a particular grouping key are in
+    /// the same partitions, such as is the case with Hash repartitioning on the
+    /// group keys. If a group key is duplicated, duplicate groups would be
+    /// produced
     FinalPartitioned,
+    /// *Single* layer of Aggregation, input is exactly one partition
+    ///
     /// Applies the entire logical aggregation operation in a single operator,
     /// as opposed to Partial / Final modes which apply the logical aggregation using
     /// two operators.
     ///
     /// This mode requires that the input is a single partition (like Final)
     Single,
-    /// Applies the entire logical aggregation operation in a single operator,
-    /// as opposed to Partial / Final modes which apply the logical aggregation using
-    /// two operators.
+    /// *Single* layer of Aggregation, input is *Partitioned*
     ///
-    /// This mode requires that the input is partitioned by group key (like
-    /// FinalPartitioned)
+    /// Applies the entire logical aggregation operation in a single operator,
+    /// as opposed to Partial / Final modes which apply the logical aggregation
+    /// using two operators.
+    ///
+    /// This mode requires that the input has more than one partition, and is
+    /// partitioned by group key (like FinalPartitioned).
     SinglePartitioned,
 }
 
@@ -789,6 +808,10 @@ impl DisplayAs for AggregateExec {
                     write!(f, ", ordering_mode={:?}", self.input_order_mode)?;
                 }
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")?;
+            }
         }
         Ok(())
     }
@@ -1347,10 +1370,10 @@ mod tests {
     use crate::common::collect;
     use crate::execution_plan::Boundedness;
     use crate::expressions::col;
-    use crate::memory::MemorySourceConfig;
     use crate::metrics::MetricValue;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::test::TestMemoryExec;
     use crate::RecordBatchStream;
 
     use arrow::array::{
@@ -1797,6 +1820,10 @@ mod tests {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "TestYieldingExec")
                 }
+                DisplayFormatType::TreeRender => {
+                    // TODO: collect info
+                    write!(f, "")
+                }
             }
         }
     }
@@ -2207,7 +2234,7 @@ mod tests {
             vec![test_last_value_agg_expr(&schema, sort_options)?]
         };
 
-        let memory_exec = MemorySourceConfig::try_new_exec(
+        let memory_exec = TestMemoryExec::try_new_exec(
             &[
                 vec![partition1],
                 vec![partition2],
@@ -2442,11 +2469,8 @@ mod tests {
             })
             .collect();
 
-        let input = MemorySourceConfig::try_new_exec(
-            &[input_batches],
-            Arc::clone(&schema),
-            None,
-        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[input_batches], Arc::clone(&schema), None)?;
 
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Single,
@@ -2557,7 +2581,7 @@ mod tests {
         .build()
         .map(Arc::new)?];
 
-        let input = MemorySourceConfig::try_new_exec(
+        let input = TestMemoryExec::try_new_exec(
             &[vec![batch.clone()]],
             Arc::<Schema>::clone(&batch.schema()),
             None,
@@ -2627,7 +2651,7 @@ mod tests {
         ];
 
         let input =
-            MemorySourceConfig::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by,
@@ -2714,7 +2738,7 @@ mod tests {
         ];
 
         let input =
-            MemorySourceConfig::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
+            TestMemoryExec::try_new_exec(&[input_data], Arc::clone(&schema), None)?;
         let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             group_by,
@@ -2829,7 +2853,7 @@ mod tests {
             create_record_batch(&schema, (vec![2, 3, 4, 4], vec![1.0, 2.0, 3.0, 4.0]))?,
         ];
         let plan: Arc<dyn ExecutionPlan> =
-            MemorySourceConfig::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
 
         let grouping_set = PhysicalGroupBy::new(
             vec![(col("a", &schema)?, "a".to_string())],

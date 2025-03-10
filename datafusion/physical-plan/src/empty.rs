@@ -20,10 +20,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
+use crate::memory::MemoryStream;
+use crate::{common, DisplayAs, PlanProperties, SendableRecordBatchStream, Statistics};
 use crate::{
     execution_plan::{Boundedness, EmissionType},
-    memory::MemoryStream,
     DisplayFormatType, ExecutionPlan, Partitioning,
 };
 
@@ -93,6 +93,10 @@ impl DisplayAs for EmptyExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "EmptyExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }

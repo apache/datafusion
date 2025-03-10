@@ -1,0 +1,914 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Tests for tree explain
+
+
+
+statement ok
+set datafusion.explain.format = "tree";
+
+########  Setup Data Files #######
+
+# table1: CSV
+query I
+COPY (VALUES (1, 'foo', 1, '2023-01-01'), (2, 'bar', 2, '2023-01-02'), (3, 'baz', 3, '2023-01-03'))
+TO 'test_files/scratch/explain_tree/table1.csv';
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE table1 (
+  int_col INT,
+  string_col TEXT,
+  bigint_col BIGINT,
+  date_col DATE
+)
+STORED AS CSV
+LOCATION 'test_files/scratch/explain_tree/table1.csv';
+
+# table2: Parquet
+query I
+COPY (SELECT * from table1)
+TO 'test_files/scratch/explain_tree/table2.parquet'
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE table2
+STORED AS PARQUET
+LOCATION 'test_files/scratch/explain_tree/table2.parquet';
+
+
+# table3: Memory
+statement ok
+CREATE TABLE table3 as select * from table1;
+
+# table4: JSON
+query I
+COPY (SELECT * from table1)
+TO 'test_files/scratch/explain_tree/table4.json'
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE table4
+STORED AS JSON
+LOCATION 'test_files/scratch/explain_tree/table4.json';
+
+# table5: ARROW
+query I
+COPY (SELECT * from table1)
+TO 'test_files/scratch/explain_tree/table5.arrow'
+----
+3
+
+statement ok
+CREATE EXTERNAL TABLE table5
+STORED AS ARROW
+LOCATION 'test_files/scratch/explain_tree/table5.arrow';
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE annotated_data_infinite2 (
+  a0 INTEGER,
+  a INTEGER,
+  b INTEGER,
+  c INTEGER,
+  d INTEGER
+)
+STORED AS CSV
+WITH ORDER (a ASC, b ASC, c ASC)
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+######## Begin Queries ########
+
+# Filter
+query TT
+explain SELECT int_col FROM table1 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8("foo")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│        format: csv        │
+18)└───────────────────────────┘
+
+# Aggregate
+query TT
+explain SELECT string_col, SUM(bigint_col) FROM table1 GROUP BY string_col;
+----
+logical_plan
+01)Aggregate: groupBy=[[table1.string_col]], aggr=[[sum(table1.bigint_col)]]
+02)--TableScan: table1 projection=[string_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       AggregateExec       │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│    CoalesceBatchesExec    │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│      RepartitionExec      │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│       AggregateExec       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│      RepartitionExec      │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)│    --------------------   │
+19)│          files: 1         │
+20)│        format: csv        │
+21)└───────────────────────────┘
+
+# 2 Joins
+query TT
+explain SELECT table1.string_col, table2.date_col FROM table1 JOIN table2 ON table1.int_col = table2.int_col;
+----
+logical_plan
+01)Projection: table1.string_col, table2.date_col
+02)--Inner Join: table1.int_col = table2.int_col
+03)----TableScan: table1 projection=[int_col, string_col]
+04)----TableScan: table2 projection=[int_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│        HashJoinExec       │
+06)│    --------------------   │
+07)│            on:            ├──────────────┐
+08)│  (int_col@0 = int_col@0)  │              │
+09)└─────────────┬─────────────┘              │
+10)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+11)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    │
+12)└─────────────┬─────────────┘└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+14)│      RepartitionExec      ││      RepartitionExec      │
+15)└─────────────┬─────────────┘└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+17)│      RepartitionExec      ││      RepartitionExec      │
+18)└─────────────┬─────────────┘└─────────────┬─────────────┘
+19)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+20)│       DataSourceExec      ││       DataSourceExec      │
+21)│    --------------------   ││    --------------------   │
+22)│          files: 1         ││          files: 1         │
+23)│        format: csv        ││      format: parquet      │
+24)└───────────────────────────┘└───────────────────────────┘
+
+# 3 Joins
+query TT
+explain SELECT
+  table1.string_col,
+  table2.date_col,
+  table3.date_col
+FROM
+  table1 JOIN table2 ON table1.int_col = table2.int_col
+         JOIN table3 ON table2.int_col = table3.int_col;
+----
+logical_plan
+01)Projection: table1.string_col, table2.date_col, table3.date_col
+02)--Inner Join: table2.int_col = table3.int_col
+03)----Projection: table1.string_col, table2.int_col, table2.date_col
+04)------Inner Join: table1.int_col = table2.int_col
+05)--------TableScan: table1 projection=[int_col, string_col]
+06)--------TableScan: table2 projection=[int_col, date_col]
+07)----TableScan: table3 projection=[int_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│        HashJoinExec       │
+06)│    --------------------   │
+07)│            on:            ├───────────────────────────────────────────┐
+08)│  (int_col@1 = int_col@0)  │                                           │
+09)└─────────────┬─────────────┘                                           │
+10)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
+11)│    CoalesceBatchesExec    │                             │    CoalesceBatchesExec    │
+12)└─────────────┬─────────────┘                             └─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
+14)│        HashJoinExec       │                             │      RepartitionExec      │
+15)│    --------------------   │                             │                           │
+16)│            on:            ├──────────────┐              │                           │
+17)│  (int_col@0 = int_col@0)  │              │              │                           │
+18)└─────────────┬─────────────┘              │              └─────────────┬─────────────┘
+19)┌─────────────┴─────────────┐┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+20)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    ││       DataSourceExec      │
+21)│                           ││                           ││    --------------------   │
+22)│                           ││                           ││        bytes: 1560        │
+23)│                           ││                           ││       format: memory      │
+24)│                           ││                           ││          rows: 1          │
+25)└─────────────┬─────────────┘└─────────────┬─────────────┘└───────────────────────────┘
+26)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+27)│      RepartitionExec      ││      RepartitionExec      │
+28)└─────────────┬─────────────┘└─────────────┬─────────────┘
+29)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+30)│      RepartitionExec      ││      RepartitionExec      │
+31)└─────────────┬─────────────┘└─────────────┬─────────────┘
+32)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+33)│       DataSourceExec      ││       DataSourceExec      │
+34)│    --------------------   ││    --------------------   │
+35)│          files: 1         ││          files: 1         │
+36)│        format: csv        ││      format: parquet      │
+37)└───────────────────────────┘└───────────────────────────┘
+
+# Long Filter (demonstrate what happens with wrapping)
+query TT
+explain SELECT int_col FROM table1
+WHERE string_col != 'foo' AND string_col != 'bar' AND string_col != 'a really long string constant'
+;
+----
+logical_plan
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8("foo") AND table1.string_col != Utf8("bar") AND table1.string_col != Utf8("a really long string constant")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("foo"), table1.string_col != Utf8("bar"), table1.string_col != Utf8("a really long string constant")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│  string_col@1 != foo AND  │
+09)│     string_col@1 != bar   │
+10)│    AND string_col@1 != a  │
+11)│     really long string    │
+12)│          constant         │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│      RepartitionExec      │
+16)└─────────────┬─────────────┘
+17)┌─────────────┴─────────────┐
+18)│       DataSourceExec      │
+19)│    --------------------   │
+20)│          files: 1         │
+21)│        format: csv        │
+22)└───────────────────────────┘
+
+# Check maximum line limit.
+query TT
+explain SELECT int_col FROM table1
+WHERE string_col != 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+----
+logical_plan
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│      string_col@1 !=      │
+09)│       aaaaaaaaaaaaaa      │
+10)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+11)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+12)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+13)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+14)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+15)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+16)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+17)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+18)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+19)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+20)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+21)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+22)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+23)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+24)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+25)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+26)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+27)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+28)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+29)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+30)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+31)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+32)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+33)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+34)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+35)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
+36)│            ...            │
+37)└─────────────┬─────────────┘
+38)┌─────────────┴─────────────┐
+39)│      RepartitionExec      │
+40)└─────────────┬─────────────┘
+41)┌─────────────┴─────────────┐
+42)│       DataSourceExec      │
+43)│    --------------------   │
+44)│          files: 1         │
+45)│        format: csv        │
+46)└───────────────────────────┘
+
+# Check exactly the render width.
+query TT
+explain SELECT int_col FROM table1
+WHERE string_col != 'aaaaaaaaaaa';
+----
+logical_plan
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8("aaaaaaaaaaa")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("aaaaaaaaaaa")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│string_col@1 != aaaaaaaaaaa│
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│        format: csv        │
+18)└───────────────────────────┘
+
+# Check with the render witdth + 1.
+query TT
+explain SELECT int_col FROM table1
+WHERE string_col != 'aaaaaaaaaaaa';
+----
+logical_plan
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8("aaaaaaaaaaaa")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("aaaaaaaaaaaa")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│      string_col@1 !=      │
+09)│        aaaaaaaaaaaa       │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│      RepartitionExec      │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│       DataSourceExec      │
+16)│    --------------------   │
+17)│          files: 1         │
+18)│        format: csv        │
+19)└───────────────────────────┘
+
+# Query with filter on csv
+query TT
+explain SELECT int_col FROM table1 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table1.int_col
+02)--Filter: table1.string_col != Utf8("foo")
+03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│        format: csv        │
+18)└───────────────────────────┘
+
+
+# Query with filter on parquet
+query TT
+explain SELECT int_col FROM table2 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table2.int_col
+02)--Filter: table2.string_col != Utf8View("foo")
+03)----TableScan: table2 projection=[int_col, string_col], partial_filters=[table2.string_col != Utf8View("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│      format: parquet      │
+18)│                           │
+19)│         predicate:        │
+20)│    string_col@1 != foo    │
+21)└───────────────────────────┘
+
+# Query with filter on memory
+query TT
+explain SELECT int_col FROM table3 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table3.int_col
+02)--Filter: table3.string_col != Utf8("foo")
+03)----TableScan: table3 projection=[int_col, string_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│       DataSourceExec      │
+12)│    --------------------   │
+13)│        bytes: 1560        │
+14)│       format: memory      │
+15)│          rows: 1          │
+16)└───────────────────────────┘
+
+# Query with filter on json
+query TT
+explain SELECT int_col FROM table4 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table4.int_col
+02)--Filter: table4.string_col != Utf8("foo")
+03)----TableScan: table4 projection=[int_col, string_col], partial_filters=[table4.string_col != Utf8("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│        format: json       │
+18)└───────────────────────────┘
+
+# Query with filter on arrow
+query TT
+explain SELECT int_col FROM table5 WHERE string_col != 'foo';
+----
+logical_plan
+01)Projection: table5.int_col
+02)--Filter: table5.string_col != Utf8("foo")
+03)----TableScan: table5 projection=[int_col, string_col], partial_filters=[table5.string_col != Utf8("foo")]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│         FilterExec        │
+06)│    --------------------   │
+07)│         predicate:        │
+08)│    string_col@1 != foo    │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│      RepartitionExec      │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│          files: 1         │
+17)│       format: arrow       │
+18)└───────────────────────────┘
+
+# Query for sort.
+query TT
+explain SELECT * FROM table1 ORDER BY string_col;
+----
+logical_plan
+01)Sort: table1.string_col ASC NULLS LAST
+02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│          SortExec         │
+03)│    --------------------   │
+04)│         sort keys:        │
+05)│  [string_col@1 ASC NULLS  │
+06)│            LAST]          │
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│       DataSourceExec      │
+10)│    --------------------   │
+11)│          files: 1         │
+12)│        format: csv        │
+13)└───────────────────────────┘
+
+# Query for sort with limit.
+query TT
+explain SELECT * FROM table1 ORDER BY string_col LIMIT 1;
+----
+logical_plan
+01)Sort: table1.string_col ASC NULLS LAST, fetch=1
+02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│          SortExec         │
+03)│    --------------------   │
+04)│          limit: 1         │
+05)│                           │
+06)│         sort keys:        │
+07)│  [string_col@1 ASC NULLS  │
+08)│            LAST]          │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│       DataSourceExec      │
+12)│    --------------------   │
+13)│          files: 1         │
+14)│        format: csv        │
+15)└───────────────────────────┘
+
+# Query with projection on csv
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table1;
+----
+logical_plan
+01)Projection: table1.int_col, table1.bigint_col, CAST(table1.int_col AS Int64) + table1.bigint_col AS sum_col
+02)--TableScan: table1 projection=[int_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        bigint_col:        │
+05)│        bigint_col@1       │
+06)│                           │
+07)│     int_col: int_col@0    │
+08)│                           │
+09)│          sum_col:         │
+10)│ CAST(int_col@0 AS Int64) +│
+11)│        bigint_col@1       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│      RepartitionExec      │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)│    --------------------   │
+19)│          files: 1         │
+20)│        format: csv        │
+21)└───────────────────────────┘
+
+
+# Query with projection on parquet
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table2;
+----
+logical_plan
+01)Projection: table2.int_col, table2.bigint_col, CAST(table2.int_col AS Int64) + table2.bigint_col AS sum_col
+02)--TableScan: table2 projection=[int_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        bigint_col:        │
+05)│        bigint_col@1       │
+06)│                           │
+07)│     int_col: int_col@0    │
+08)│                           │
+09)│          sum_col:         │
+10)│ CAST(int_col@0 AS Int64) +│
+11)│        bigint_col@1       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│      RepartitionExec      │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)│    --------------------   │
+19)│          files: 1         │
+20)│      format: parquet      │
+21)└───────────────────────────┘
+
+
+# Query with projection on memory
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table3;
+----
+logical_plan
+01)Projection: table3.int_col, table3.bigint_col, CAST(table3.int_col AS Int64) + table3.bigint_col AS sum_col
+02)--TableScan: table3 projection=[int_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        bigint_col:        │
+05)│        bigint_col@1       │
+06)│                           │
+07)│     int_col: int_col@0    │
+08)│                           │
+09)│          sum_col:         │
+10)│ CAST(int_col@0 AS Int64) +│
+11)│        bigint_col@1       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│       DataSourceExec      │
+15)│    --------------------   │
+16)│        bytes: 1560        │
+17)│       format: memory      │
+18)│          rows: 1          │
+19)└───────────────────────────┘
+
+# Query with projection on json
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table4;
+----
+logical_plan
+01)Projection: table4.int_col, table4.bigint_col, table4.int_col + table4.bigint_col AS sum_col
+02)--TableScan: table4 projection=[bigint_col, int_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        bigint_col:        │
+05)│        bigint_col@0       │
+06)│                           │
+07)│     int_col: int_col@1    │
+08)│                           │
+09)│          sum_col:         │
+10)│  int_col@1 + bigint_col@0 │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│      RepartitionExec      │
+14)└─────────────┬─────────────┘
+15)┌─────────────┴─────────────┐
+16)│       DataSourceExec      │
+17)│    --------------------   │
+18)│          files: 1         │
+19)│        format: json       │
+20)└───────────────────────────┘
+
+
+# Query with projection on arrow
+query TT
+explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table5;
+----
+logical_plan
+01)Projection: table5.int_col, table5.bigint_col, CAST(table5.int_col AS Int64) + table5.bigint_col AS sum_col
+02)--TableScan: table5 projection=[int_col, bigint_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        bigint_col:        │
+05)│        bigint_col@1       │
+06)│                           │
+07)│     int_col: int_col@0    │
+08)│                           │
+09)│          sum_col:         │
+10)│ CAST(int_col@0 AS Int64) +│
+11)│        bigint_col@1       │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│      RepartitionExec      │
+15)└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐
+17)│       DataSourceExec      │
+18)│    --------------------   │
+19)│          files: 1         │
+20)│       format: arrow       │
+21)└───────────────────────────┘
+
+# Query with PartialSortExec.
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_infinite2
+ORDER BY a, b, d;
+----
+logical_plan
+01)Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST
+02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
+physical_plan
+01)┌───────────────────────────┐
+02)│      PartialSortExec      │
+03)│    --------------------   │
+04)│         sort keys:        │
+05)│  a@1 ASC NULLS LAST, b@2  │
+06)│     ASC NULLS LAST, d@4   │
+07)│       ASC NULLS LAST      │
+08)└─────────────┬─────────────┘
+09)┌─────────────┴─────────────┐
+10)│     StreamingTableExec    │
+11)└───────────────────────────┘
+
+query TT
+EXPLAIN SELECT *
+FROM annotated_data_infinite2
+ORDER BY a, b, d
+LIMIT 50;
+----
+logical_plan
+01)Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST, fetch=50
+02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
+physical_plan
+01)┌───────────────────────────┐
+02)│      PartialSortExec      │
+03)│    --------------------   │
+04)│         limit: 50         │
+05)│                           │
+06)│         sort keys:        │
+07)│  a@1 ASC NULLS LAST, b@2  │
+08)│     ASC NULLS LAST, d@4   │
+09)│       ASC NULLS LAST      │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│     StreamingTableExec    │
+13)└───────────────────────────┘
+
+# Query with hash join.
+query TT
+explain select * from table1 inner join table2 on table1.int_col = table2.int_col and table1.string_col = table2.string_col;
+----
+logical_plan
+01)Inner Join: table1.int_col = table2.int_col, CAST(table1.string_col AS Utf8View) = table2.string_col
+02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
+03)--TableScan: table2 projection=[int_col, string_col, bigint_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│        HashJoinExec       │
+06)│    --------------------   │
+07)│            on:            │
+08)│ (int_col@0 = int_col@0),  ├──────────────┐
+09)│  (CAST(table1.string_col  │              │
+10)│      AS Utf8View)@4 =     │              │
+11)│        string_col@1)      │              │
+12)└─────────────┬─────────────┘              │
+13)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+14)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    │
+15)└─────────────┬─────────────┘└─────────────┬─────────────┘
+16)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+17)│      RepartitionExec      ││      RepartitionExec      │
+18)└─────────────┬─────────────┘└─────────────┬─────────────┘
+19)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+20)│       ProjectionExec      ││      RepartitionExec      │
+21)│    --------------------   ││                           │
+22)│ CAST(table1.string_col AS ││                           │
+23)│         Utf8View):        ││                           │
+24)│    CAST(string_col@1 AS   ││                           │
+25)│          Utf8View)        ││                           │
+26)│                           ││                           │
+27)│        bigint_col:        ││                           │
+28)│        bigint_col@2       ││                           │
+29)│                           ││                           │
+30)│    date_col: date_col@3   ││                           │
+31)│     int_col: int_col@0    ││                           │
+32)│                           ││                           │
+33)│        string_col:        ││                           │
+34)│        string_col@1       ││                           │
+35)└─────────────┬─────────────┘└─────────────┬─────────────┘
+36)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+37)│      RepartitionExec      ││       DataSourceExec      │
+38)│                           ││    --------------------   │
+39)│                           ││          files: 1         │
+40)│                           ││      format: parquet      │
+41)└─────────────┬─────────────┘└───────────────────────────┘
+42)┌─────────────┴─────────────┐
+43)│       DataSourceExec      │
+44)│    --------------------   │
+45)│          files: 1         │
+46)│        format: csv        │
+47)└───────────────────────────┘
+
+# Query with outer hash join.
+query TT
+explain select * from table1 left outer join table2 on table1.int_col = table2.int_col and table1.string_col = table2.string_col;
+----
+logical_plan
+01)Left Join: table1.int_col = table2.int_col, CAST(table1.string_col AS Utf8View) = table2.string_col
+02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
+03)--TableScan: table2 projection=[int_col, string_col, bigint_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│    CoalesceBatchesExec    │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│        HashJoinExec       │
+06)│    --------------------   │
+07)│      join_type: Left      │
+08)│                           │
+09)│            on:            ├──────────────┐
+10)│ (int_col@0 = int_col@0),  │              │
+11)│  (CAST(table1.string_col  │              │
+12)│      AS Utf8View)@4 =     │              │
+13)│        string_col@1)      │              │
+14)└─────────────┬─────────────┘              │
+15)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+16)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    │
+17)└─────────────┬─────────────┘└─────────────┬─────────────┘
+18)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+19)│      RepartitionExec      ││      RepartitionExec      │
+20)└─────────────┬─────────────┘└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+22)│       ProjectionExec      ││      RepartitionExec      │
+23)│    --------------------   ││                           │
+24)│ CAST(table1.string_col AS ││                           │
+25)│         Utf8View):        ││                           │
+26)│    CAST(string_col@1 AS   ││                           │
+27)│          Utf8View)        ││                           │
+28)│                           ││                           │
+29)│        bigint_col:        ││                           │
+30)│        bigint_col@2       ││                           │
+31)│                           ││                           │
+32)│    date_col: date_col@3   ││                           │
+33)│     int_col: int_col@0    ││                           │
+34)│                           ││                           │
+35)│        string_col:        ││                           │
+36)│        string_col@1       ││                           │
+37)└─────────────┬─────────────┘└─────────────┬─────────────┘
+38)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+39)│      RepartitionExec      ││       DataSourceExec      │
+40)│                           ││    --------------------   │
+41)│                           ││          files: 1         │
+42)│                           ││      format: parquet      │
+43)└─────────────┬─────────────┘└───────────────────────────┘
+44)┌─────────────┴─────────────┐
+45)│       DataSourceExec      │
+46)│    --------------------   │
+47)│          files: 1         │
+48)│        format: csv        │
+49)└───────────────────────────┘
+
+# cleanup
+statement ok
+drop table table1;
+
+statement ok
+drop table table2;
+
+statement ok
+drop table table3;
+
+statement ok
+drop table table4;
+
+statement ok
+drop table table5;

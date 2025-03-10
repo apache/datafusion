@@ -47,3 +47,26 @@ impl From<InsertOp> for FFI_InsertOp {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::logical_expr::dml::InsertOp;
+
+    use super::FFI_InsertOp;
+
+    fn test_round_trip_insert_op(insert_op: InsertOp) {
+        let ffi_insert_op: FFI_InsertOp = insert_op.into();
+        let round_trip: InsertOp = ffi_insert_op.into();
+
+        assert_eq!(insert_op, round_trip);
+    }
+
+    /// This test ensures we have not accidentally mapped the FFI
+    /// enums to the wrong internal enums values.
+    #[test]
+    fn test_all_round_trip_insert_ops() {
+        test_round_trip_insert_op(InsertOp::Append);
+        test_round_trip_insert_op(InsertOp::Overwrite);
+        test_round_trip_insert_op(InsertOp::Replace);
+    }
+}

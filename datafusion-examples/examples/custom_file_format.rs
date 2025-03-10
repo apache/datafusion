@@ -23,11 +23,15 @@ use arrow::{
 };
 use datafusion::datasource::data_source::FileSource;
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::execution_plan::RequiredInputOrdering;
 use datafusion::{
     catalog::Session,
     common::{GetExt, Statistics},
+};
+use datafusion::{
+    datasource::physical_plan::FileSource, execution::session_state::SessionStateBuilder,
 };
 use datafusion::{
     datasource::{

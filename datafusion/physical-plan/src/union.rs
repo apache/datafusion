@@ -157,6 +157,10 @@ impl DisplayAs for UnionExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "UnionExec")
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -386,6 +390,10 @@ impl DisplayAs for InterleaveExec {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "InterleaveExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
             }
         }
     }
@@ -640,10 +648,9 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 mod tests {
     use super::*;
     use crate::collect;
-    use crate::memory::MemorySourceConfig;
     use crate::test;
+    use crate::test::TestMemoryExec;
 
-    use crate::source::DataSourceExec;
     use arrow::compute::SortOptions;
     use arrow::datatypes::DataType;
     use datafusion_common::ScalarValue;
@@ -865,12 +872,12 @@ mod tests {
                 .iter()
                 .map(|ordering| convert_to_sort_exprs(ordering))
                 .collect::<Vec<_>>();
-            let child1 = Arc::new(DataSourceExec::new(Arc::new(
-                MemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
+            let child1 = Arc::new(TestMemoryExec::update_cache(Arc::new(
+                TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(first_orderings)?,
             )));
-            let child2 = Arc::new(DataSourceExec::new(Arc::new(
-                MemorySourceConfig::try_new(&[], Arc::clone(&schema), None)?
+            let child2 = Arc::new(TestMemoryExec::update_cache(Arc::new(
+                TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?
                     .try_with_sort_information(second_orderings)?,
             )));
 

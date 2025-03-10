@@ -23,9 +23,8 @@ use crate::joins::utils::{JoinFilter, JoinOn};
 use crate::joins::{
     HashJoinExec, PartitionMode, StreamJoinPartitionMode, SymmetricHashJoinExec,
 };
-use crate::memory::MemorySourceConfig;
 use crate::repartition::RepartitionExec;
-use crate::source::DataSourceExec;
+use crate::test::TestMemoryExec;
 use crate::{common, ExecutionPlan, ExecutionPlanProperties, Partitioning};
 
 use arrow::array::{
@@ -530,14 +529,14 @@ pub fn create_memory_table(
     right_sorted: Vec<LexOrdering>,
 ) -> Result<(Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>)> {
     let left_schema = left_partition[0].schema();
-    let left = MemorySourceConfig::try_new(&[left_partition], left_schema, None)?
+    let left = TestMemoryExec::try_new(&[left_partition], left_schema, None)?
         .try_with_sort_information(left_sorted)?;
     let right_schema = right_partition[0].schema();
-    let right = MemorySourceConfig::try_new(&[right_partition], right_schema, None)?
+    let right = TestMemoryExec::try_new(&[right_partition], right_schema, None)?
         .try_with_sort_information(right_sorted)?;
     Ok((
-        Arc::new(DataSourceExec::new(Arc::new(left))),
-        Arc::new(DataSourceExec::new(Arc::new(right))),
+        Arc::new(TestMemoryExec::update_cache(Arc::new(left))),
+        Arc::new(TestMemoryExec::update_cache(Arc::new(right))),
     ))
 }
 

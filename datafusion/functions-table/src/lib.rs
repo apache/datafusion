@@ -15,6 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/datafusion/19fe44cf2f30cbdd63d4a4f52c74055163c6cc38/docs/logos/standalone_logo/logo_original.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+
 pub mod generate_series;
 
 use datafusion_catalog::TableFunction;
@@ -22,7 +28,7 @@ use std::sync::Arc;
 
 /// Returns all default table functions
 pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
-    vec![generate_series()]
+    vec![generate_series(), range()]
 }
 
 /// Creates a singleton instance of a table function
@@ -49,3 +55,4 @@ macro_rules! create_udtf_function {
 }
 
 create_udtf_function!(generate_series::GenerateSeriesFunc, "generate_series");
+create_udtf_function!(generate_series::RangeFunc, "range");

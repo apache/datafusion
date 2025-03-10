@@ -424,6 +424,10 @@ impl DisplayAs for NestedLoopJoinExec {
                     self.join_type, display_filter, display_projections
                 )
             }
+            DisplayFormatType::TreeRender => {
+                // TODO: collect info
+                write!(f, "")
+            }
         }
     }
 }
@@ -1030,8 +1034,7 @@ impl EmbeddedProjection for NestedLoopJoinExec {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::memory::MemorySourceConfig;
-    use crate::source::DataSourceExec;
+    use crate::test::TestMemoryExec;
     use crate::{
         common, expressions::Column, repartition::RepartitionExec, test::build_table_i32,
     };
@@ -1072,7 +1075,7 @@ pub(crate) mod tests {
         };
 
         let mut source =
-            MemorySourceConfig::try_new(&[batches], Arc::clone(&schema), None).unwrap();
+            TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None).unwrap();
         if !sorted_column_names.is_empty() {
             let mut sort_info = LexOrdering::default();
             for name in sorted_column_names {
@@ -1089,7 +1092,7 @@ pub(crate) mod tests {
             source = source.try_with_sort_information(vec![sort_info]).unwrap();
         }
 
-        Arc::new(DataSourceExec::new(Arc::new(source)))
+        Arc::new(TestMemoryExec::update_cache(Arc::new(source)))
     }
 
     fn build_left_table() -> Arc<dyn ExecutionPlan> {

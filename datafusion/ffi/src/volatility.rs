@@ -46,3 +46,24 @@ impl From<&FFI_Volatility> for Volatility {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::logical_expr::Volatility;
+
+    use super::FFI_Volatility;
+
+    fn test_round_trip_volatility(volatility: Volatility) {
+        let ffi_volatility: FFI_Volatility = volatility.into();
+        let round_trip: Volatility = (&ffi_volatility).into();
+
+        assert_eq!(volatility, round_trip);
+    }
+
+    #[test]
+    fn test_all_round_trip_volatility() {
+        test_round_trip_volatility(Volatility::Immutable);
+        test_round_trip_volatility(Volatility::Stable);
+        test_round_trip_volatility(Volatility::Volatile);
+    }
+}

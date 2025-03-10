@@ -167,11 +167,11 @@ impl ScalarUDFImpl for DatePartFunc {
             )
     }
 
-    fn invoke_batch(
+    fn invoke_with_args(
         &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
+        args: datafusion_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
+        let args = args.args;
         let [part, array] = take_function_args(self.name(), args)?;
 
         let part = if let ColumnarValue::Scalar(ScalarValue::Utf8(Some(v))) = part {
@@ -187,11 +187,11 @@ impl ScalarUDFImpl for DatePartFunc {
         let is_scalar = matches!(array, ColumnarValue::Scalar(_));
 
         let array = match array {
-            ColumnarValue::Array(array) => Arc::clone(array),
+            ColumnarValue::Array(array) => Arc::clone(&array),
             ColumnarValue::Scalar(scalar) => scalar.to_array()?,
         };
 
-        let part_trim = part_normalization(part);
+        let part_trim = part_normalization(&part);
 
         // using IntervalUnit here means we hand off all the work of supporting plurals (like "seconds")
         // and synonyms ( like "ms,msec,msecond,millisecond") to Arrow

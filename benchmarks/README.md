@@ -85,7 +85,7 @@ git checkout main
 # Gather baseline data for tpch benchmark
 ./benchmarks/bench.sh run tpch
 
-# Switch to the branch the branch name is mybranch and gather data
+# Switch to the branch named mybranch and gather data
 git checkout mybranch
 ./benchmarks/bench.sh run tpch
 
@@ -157,22 +157,19 @@ Benchmark tpch_mem.json
 └──────────────┴──────────────┴──────────────┴───────────────┘
 ```
 
-Note that you can also execute an automatic comparison of the changes in a given PR against the base
-just by including the trigger `/benchmark` in any comment.
-
 ### Running Benchmarks Manually
 
-Assuming data in the `data` directory, the `tpch` benchmark can be run with a command like this
+Assuming data is in the `data` directory, the `tpch` benchmark can be run with a command like this:
 
 ```bash
 cargo run --release --bin dfbench -- tpch --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
 ```
 
-See the help for more details
+See the help for more details.
 
 ### Different features
 
-You can enable `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`. For example
+You can enable `mimalloc` or `snmalloc` (to use either the mimalloc or snmalloc allocator) as features by passing them in as `--features`. For example:
 
 ```shell
 cargo run --release --features "mimalloc" --bin tpch -- benchmark datafusion --iterations 3 --path ./data --format tbl --query 1 --batch-size 4096
@@ -184,6 +181,7 @@ The benchmark program also supports CSV and Parquet input file formats and a uti
 ```bash
 cargo run --release --bin tpch -- convert --input ./data --output /mnt/tpch-parquet --format parquet
 ```
+
 Or if you want to verify and run all the queries in the benchmark, you can just run `cargo test`.
 
 ### Comparing results between runs
@@ -197,16 +195,16 @@ metadata (number of cores, DataFusion version, etc.).
 $ git checkout main
 # generate an output script in /tmp/output_main
 $ mkdir -p /tmp/output_main
-$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_main
+$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_main/tpch.json
 # generate an output script in /tmp/output_branch
 $ mkdir -p /tmp/output_branch
 $ git checkout my_branch
-$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch
+$ cargo run --release --bin tpch -- benchmark datafusion --iterations 5 --path ./data --format parquet -o /tmp/output_branch/tpch.json
 # compare the results:
-./compare.py /tmp/output_main/tpch-summary--1679330119.json  /tmp/output_branch/tpch-summary--1679328405.json
+./compare.py /tmp/output_main/tpch.json  /tmp/output_branch/tpch.json
 ```
 
-This will produce output like
+This will produce output like:
 
 ```
 ┏━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
@@ -243,31 +241,125 @@ The `dfbench` program contains subcommands to run the various
 benchmarks. When benchmarking, it should always be built in release
 mode using `--release`.
 
-Full help for each benchmark can be found in the relevant sub
-command. For example to get help for tpch, run
+Full help for each benchmark can be found in the relevant
+subcommand. For example, to get help for tpch, run:
 
 ```shell
-cargo run --release --bin dfbench  --help
+cargo run --release --bin dfbench -- tpch --help
 ...
-datafusion-benchmarks 27.0.0
-benchmark command
+dfbench-tpch 45.0.0
+Run the tpch benchmark.
+
+This benchmarks is derived from the [TPC-H][1] version
+[2.17.1]. The data and answers are generated using `tpch-gen` from
+[2].
+
+[1]: http://www.tpc.org/tpch/
+[2]: https://github.com/databricks/tpch-dbgen.git,
+[2.17.1]: https://www.tpc.org/tpc_documents_current_versions/pdf/tpc-h_v2.17.1.pdf
 
 USAGE:
-    dfbench <SUBCOMMAND>
+    dfbench tpch [FLAGS] [OPTIONS] --path <path>
 
-SUBCOMMANDS:
-    clickbench        Run the clickbench benchmark
-    help              Prints this message or the help of the given subcommand(s)
-    parquet-filter    Test performance of parquet filter pushdown
-    sort              Test performance of parquet filter pushdown
-    tpch              Run the tpch benchmark.
-    tpch-convert      Convert tpch .slt files to .parquet or .csv files
+FLAGS:
+    -d, --debug
+            Activate debug mode to see more details
 
+    -S, --disable-statistics
+            Whether to disable collection of statistics (and cost based optimizations) or not
+
+    -h, --help
+            Prints help information
+...
 ```
+
+# Writing a new benchmark
+
+## Creating or downloading data outside of the benchmark
+
+If you want to create or download the data with Rust as part of running the benchmark, see the next
+section on adding a benchmark subcommand and add code to create or download data as part of its
+`run` function.
+
+If you want to create or download the data with shell commands, in `benchmarks/bench.sh`, define a
+new function named `data_[your benchmark name]` and call that function in the `data` command case
+as a subcommand case named for your benchmark. Also call the new function in the `data all` case.
+
+## Adding the benchmark subcommand
+
+In `benchmarks/bench.sh`, define a new function named `run_[your benchmark name]` following the
+example of existing `run_*` functions. Call that function in the `run` command case as a subcommand
+case named for your benchmark. subcommand for your benchmark. Also call the new function in the
+`run all` case. Add documentation for your benchmark to the text in the `usage` function.
+
+In `benchmarks/src/bin/dfbench.rs`, add a `dfbench` subcommand for your benchmark by:
+
+- Adding a new variant to the `Options` enum
+- Adding corresponding code to handle the new variant in the `main` function, similar to the other
+  variants
+- Adding a module to the `use datafusion_benchmarks::{}` statement
+
+In `benchmarks/src/lib.rs`, declare the new module you imported in `dfbench.rs` and create the
+corresponding file(s) for the module's code.
+
+In the module, following the pattern of other existing benchmarks, define a `RunOpt` struct with:
+
+- A doc comment that will become the `--help` output for the subcommand
+- A `run` method that the `dfbench` `main` function will call.
+- A `--path` structopt field that the `bench.sh` script should use with `${DATA_DIR}` to define
+  where the input data should be stored.
+- An `--output` structopt field that the `bench.sh` script should use with `"${RESULTS_FILE}"` to
+  define where the benchmark's results should be stored.
+
+### Creating or downloading data as part of the benchmark
+
+Use the `--path` structopt field defined on the `RunOpt` struct to know where to store or look for
+the data. Generate the data using whatever Rust code you'd like, before the code that will be
+measuring an operation.
+
+### Collecting data
+
+Your benchmark should create and use an instance of `BenchmarkRun` defined in `benchmarks/src/util/run.rs` as follows:
+
+- Call its `start_new_case` method with a string that will appear in the "Query" column of the
+  compare output.
+- Use `write_iter` to record elapsed times for the behavior you're benchmarking.
+- When all cases are done, call the `BenchmarkRun`'s `maybe_write_json` method, giving it the value
+  of the `--output` structopt field on `RunOpt`.
 
 # Benchmarks
 
-The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience
+The output of `dfbench` help includes a description of each benchmark, which is reproduced here for convenience.
+
+## Cancellation
+
+Test performance of cancelling queries
+Queries in DataFusion should stop executing "quickly" after they are
+cancelled (the output stream is dropped).
+
+The queries are executed on a synthetic dataset generated during
+the benchmark execution that is an anonymized version of a
+real-world data set.
+
+The query is an anonymized version of a real-world query, and the
+test starts the query then cancels it and reports how long it takes
+for the runtime to fully exit.
+
+Example output:
+
+```
+Using 7 files found on disk
+Starting to load data into in-memory object store
+Done loading data into in-memory object store
+in main, sleeping
+Starting spawned
+Creating logical plan...
+Creating physical plan...
+Executing physical plan...
+Getting results...
+cancelling thread
+done dropping runtime in 83.531417ms
+```
 
 ## ClickBench
 
@@ -451,5 +543,49 @@ For example, to run query 1 with the small data generated above:
 cargo run --release --bin dfbench -- h2o --path ./benchmarks/data/h2o/G1_1e7_1e7_100_0.csv  --query 1
 ```
 
+## h2o benchmarks for join
+
+### Generate data for h2o benchmarks
+There are three options for generating data for h2o benchmarks: `small`, `medium`, and `big`. The data is generated in the `data` directory.
+
+1. Generate small data (4 table files, the largest is 1e7 rows)
+```bash
+./bench.sh data h2o_small_join
+```
+
+
+2. Generate medium data (4 table files, the largest is 1e8 rows)
+```bash
+./bench.sh data h2o_medium_join
+```
+
+3. Generate large data (4 table files, the largest is 1e9 rows)
+```bash
+./bench.sh data h2o_big_join
+```
+
+### Run h2o benchmarks
+There are three options for running h2o benchmarks: `small`, `medium`, and `big`.
+1. Run small data benchmark
+```bash
+./bench.sh run h2o_small_join
+```
+
+2. Run medium data benchmark
+```bash
+./bench.sh run h2o_medium_join
+```
+
+3. Run large data benchmark
+```bash
+./bench.sh run h2o_big_join
+```
+
+4. Run a specific query with a specific join data paths, the data paths are including 4 table files.
+
+For example, to run query 1 with the small data generated above:
+```bash
+cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/join.sql --query 1
+```
 [1]: http://www.tpc.org/tpch/
 [2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page
