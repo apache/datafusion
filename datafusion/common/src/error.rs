@@ -164,18 +164,25 @@ macro_rules! context {
 #[derive(Debug)]
 pub enum SchemaError {
     /// Schema contains a (possibly) qualified and unqualified field with same unqualified name
-    AmbiguousReference { field: Column },
+    AmbiguousReference {
+        field: Column,
+    },
     /// Schema contains duplicate qualified field name
     DuplicateQualifiedField {
         qualifier: Box<TableReference>,
         name: String,
     },
     /// Schema contains duplicate unqualified field name
-    DuplicateUnqualifiedField { name: String },
+    DuplicateUnqualifiedField {
+        name: String,
+    },
     /// No field with this name
     FieldNotFound {
         field: Box<Column>,
         valid_fields: Vec<Column>,
+    },
+    GroupByColumnInvalid {
+        column: String,
     },
 }
 
@@ -255,6 +262,13 @@ impl Display for SchemaError {
                         field.quoted_flat_name()
                     )
                 }
+            }
+            Self::GroupByColumnInvalid { column } => {
+                write!(
+                    f,
+                    "While expanding wildcard, column '{}' must appear in the GROUP BY clause or must be part of an aggregate function",
+                    column
+                )
             }
         }
     }
