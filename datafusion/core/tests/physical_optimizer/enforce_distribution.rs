@@ -635,13 +635,9 @@ fn multi_hash_joins() -> Result<()> {
                 test_config.run(
                     &expected,
                     top_join.clone(),
-                    DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+                    DISTRIB_DISTRIB_SORT.into(),
                 )?;
-                test_config.run(
-                    &expected,
-                    top_join,
-                    SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-                )?;
+                test_config.run(&expected, top_join, SORT_DISTRIB_DISTRIB.into())?;
             }
             JoinType::RightSemi | JoinType::RightAnti => {}
         }
@@ -709,13 +705,9 @@ fn multi_hash_joins() -> Result<()> {
                 test_config.run(
                     &expected,
                     top_join.clone(),
-                    DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+                    DISTRIB_DISTRIB_SORT.into(),
                 )?;
-                test_config.run(
-                    &expected,
-                    top_join,
-                    SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-                )?;
+                test_config.run(&expected, top_join, SORT_DISTRIB_DISTRIB.into())?;
             }
             JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {}
         }
@@ -772,16 +764,8 @@ fn multi_joins_after_alias() -> Result<()> {
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
     ];
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        top_join.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        top_join,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, top_join.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, top_join, SORT_DISTRIB_DISTRIB.into())?;
 
     // Join on (a2 == c)
     let top_join_on = vec![(
@@ -807,16 +791,8 @@ fn multi_joins_after_alias() -> Result<()> {
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
     ];
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        top_join.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        top_join,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, top_join.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, top_join, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -870,16 +846,8 @@ fn multi_joins_after_multi_alias() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        top_join.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        top_join,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, top_join.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, top_join, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -919,16 +887,8 @@ fn join_after_agg_alias() -> Result<()> {
         "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
     ];
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        join.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        join,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, join.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, join, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -981,16 +941,8 @@ fn hash_join_key_ordering() -> Result<()> {
         "          DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
     ];
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        join.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        join,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, join.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, join, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -1119,13 +1071,9 @@ fn multi_hash_join_key_ordering() -> Result<()> {
     test_config.run(
         expected,
         filter_top_join.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        expected,
-        filter_top_join,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, filter_top_join, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -1886,16 +1834,8 @@ fn union_to_interleave() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -1941,16 +1881,8 @@ fn union_not_to_interleave() -> Result<()> {
     // TestConfig: Prefer existing union.
     let test_config = TestConfig::default().with_prefer_existing_union();
 
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -1969,16 +1901,8 @@ fn added_repartition_to_single_partition() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        &expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        &expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(&expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(&expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -1998,16 +1922,8 @@ fn repartition_deepest_node() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2027,16 +1943,8 @@ fn repartition_unsorted_limit() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2059,16 +1967,8 @@ fn repartition_sorted_limit() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2096,16 +1996,8 @@ fn repartition_sorted_limit_with_filter() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2136,16 +2028,8 @@ fn repartition_ignores_limit() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2165,16 +2049,8 @@ fn repartition_ignores_union() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2196,16 +2072,8 @@ fn repartition_through_sort_preserving_merge() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2315,16 +2183,8 @@ fn repartition_does_not_destroy_sort() -> Result<()> {
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet",
     ];
 
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2366,16 +2226,8 @@ fn repartition_does_not_destroy_sort_more_complex() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2458,16 +2310,8 @@ fn repartition_ignores_transitively_with_projection() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2501,16 +2345,8 @@ fn repartition_transitively_past_sort_with_projection() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2627,13 +2463,9 @@ fn parallelization_single_partition() -> Result<()> {
     test_config.run(
         &expected_parquet,
         plan_parquet.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        &expected_parquet,
-        plan_parquet,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(&expected_parquet, plan_parquet, SORT_DISTRIB_DISTRIB.into())?;
 
     // Test: with csv
     let expected_csv = [
@@ -2642,16 +2474,8 @@ fn parallelization_single_partition() -> Result<()> {
         "    AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "      DataSourceExec: file_groups={2 groups: [[x:0..50], [x:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    test_config.run(
-        &expected_csv,
-        plan_csv.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        &expected_csv,
-        plan_csv,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(&expected_csv, plan_csv.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(&expected_csv, plan_csv, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2682,14 +2506,14 @@ fn parallelization_multiple_files() -> Result<()> {
     let test_config_concurrency_3 =
         test_config.clone().with_query_execution_partitions(3);
     test_config_concurrency_3.run(
-        &expected_with_3_target_partitions, // same if distribution enforced before sort.
+        &expected_with_3_target_partitions,
         plan.clone(),
         DISTRIB_DISTRIB_SORT.into(),
     )?;
     test_config_concurrency_3.run(
         &expected_with_3_target_partitions,
         plan.clone(),
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
+        SORT_DISTRIB_DISTRIB.into(),
     )?;
 
     let expected_with_8_target_partitions = [
@@ -2701,12 +2525,12 @@ fn parallelization_multiple_files() -> Result<()> {
     test_config_concurrency_8.run(
         &expected_with_8_target_partitions,
         plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
     test_config_concurrency_8.run(
         &expected_with_8_target_partitions,
         plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
+        SORT_DISTRIB_DISTRIB.into(),
     )?;
 
     Ok(())
@@ -2760,16 +2584,8 @@ fn parallelization_compressed_csv() -> Result<()> {
         let test_config = TestConfig::default()
             .with_query_execution_partitions(2)
             .with_prefer_repartition_file_scans(10);
-        test_config.run(
-            expected,
-            plan.clone(),
-            DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-        )?;
-        test_config.run(
-            expected,
-            plan,
-            SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-        )?;
+        test_config.run(expected, plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+        test_config.run(expected, plan, SORT_DISTRIB_DISTRIB.into())?;
     }
     Ok(())
 }
@@ -2795,13 +2611,9 @@ fn parallelization_two_partitions() -> Result<()> {
     test_config.run(
         &expected_parquet,
         plan_parquet.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        &expected_parquet,
-        plan_parquet,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(&expected_parquet, plan_parquet, SORT_DISTRIB_DISTRIB.into())?;
 
     // Test: with csv
     let expected_csv = [
@@ -2811,16 +2623,8 @@ fn parallelization_two_partitions() -> Result<()> {
         // Plan already has two partitions
         "      DataSourceExec: file_groups={2 groups: [[x:0..100], [y:0..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    test_config.run(
-        &expected_csv,
-        plan_csv.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        &expected_csv,
-        plan_csv,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(&expected_csv, plan_csv.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(&expected_csv, plan_csv, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2846,13 +2650,9 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
     test_config.run(
         &expected_parquet,
         plan_parquet.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        &expected_parquet,
-        plan_parquet,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(&expected_parquet, plan_parquet, SORT_DISTRIB_DISTRIB.into())?;
 
     // Test: with csv
     let expected_csv = [
@@ -2862,16 +2662,8 @@ fn parallelization_two_partitions_into_four() -> Result<()> {
         // Multiple source files splitted across partitions
         "      DataSourceExec: file_groups={4 groups: [[x:0..50], [x:50..100], [y:0..50], [y:50..100]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    test_config.run(
-        &expected_csv,
-        plan_csv.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        &expected_csv,
-        plan_csv,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(&expected_csv, plan_csv.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(&expected_csv, plan_csv, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2900,13 +2692,9 @@ fn parallelization_sorted_limit() -> Result<()> {
     test_config.run(
         expected_parquet,
         plan_parquet.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        expected_parquet,
-        plan_parquet,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_parquet, plan_parquet, SORT_DISTRIB_DISTRIB.into())?;
 
     // Test: with csv
     let expected_csv = &[
@@ -2917,16 +2705,8 @@ fn parallelization_sorted_limit() -> Result<()> {
         // Doesn't parallelize for SortExec without preserve_partitioning
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    test_config.run(
-        expected_csv,
-        plan_csv.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected_csv,
-        plan_csv,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_csv, plan_csv.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected_csv, plan_csv, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -2963,13 +2743,9 @@ fn parallelization_limit_with_filter() -> Result<()> {
     test_config.run(
         expected_parquet,
         plan_parquet.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        expected_parquet,
-        plan_parquet,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_parquet, plan_parquet, SORT_DISTRIB_DISTRIB.into())?;
 
     // Test: with csv
     let expected_csv = &[
@@ -2984,16 +2760,8 @@ fn parallelization_limit_with_filter() -> Result<()> {
         // SortExec doesn't benefit from input partitioning
         "            DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    test_config.run(
-        expected_csv,
-        plan_csv.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected_csv,
-        plan_csv,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_csv, plan_csv.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected_csv, plan_csv, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3030,13 +2798,9 @@ fn parallelization_ignores_limit() -> Result<()> {
     test_config.run(
         expected_parquet,
         plan_parquet.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        expected_parquet,
-        plan_parquet,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_parquet, plan_parquet, SORT_DISTRIB_DISTRIB.into())?;
 
     // Test: with csv
     let expected_csv = &[
@@ -3055,16 +2819,8 @@ fn parallelization_ignores_limit() -> Result<()> {
         "                    LocalLimitExec: fetch=100",
         "                      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    test_config.run(
-        expected_csv,
-        plan_csv.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected_csv,
-        plan_csv,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_csv, plan_csv.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected_csv, plan_csv, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3089,13 +2845,9 @@ fn parallelization_union_inputs() -> Result<()> {
     test_config.run(
         expected_parquet,
         plan_parquet.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        expected_parquet,
-        plan_parquet,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_parquet, plan_parquet, SORT_DISTRIB_DISTRIB.into())?;
 
     // Test: with csv
     let expected_csv = &[
@@ -3107,16 +2859,8 @@ fn parallelization_union_inputs() -> Result<()> {
         "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
         "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false",
     ];
-    test_config.run(
-        expected_csv,
-        plan_csv.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected_csv,
-        plan_csv,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_csv, plan_csv.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected_csv, plan_csv, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3148,28 +2892,16 @@ fn parallelization_prior_to_sort_preserving_merge() -> Result<()> {
     test_config.run(
         expected_parquet,
         plan_parquet.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        expected_parquet,
-        plan_parquet,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_parquet, plan_parquet, SORT_DISTRIB_DISTRIB.into())?;
 
     // Test: with csv
     let expected_csv = &[
         "DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
     ];
-    test_config.run(
-        expected_csv,
-        plan_csv.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected_csv,
-        plan_csv,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_csv, plan_csv.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected_csv, plan_csv, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3276,29 +3008,17 @@ fn parallelization_does_not_benefit() -> Result<()> {
     test_config.run(
         expected_parquet,
         plan_parquet.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        expected_parquet,
-        plan_parquet,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_parquet, plan_parquet, SORT_DISTRIB_DISTRIB.into())?;
 
     // Test: with csv
     let expected_csv = &[
         "SortRequiredExec: [c@2 ASC]",
         "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
     ];
-    test_config.run(
-        expected_csv,
-        plan_csv.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected_csv,
-        plan_csv,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_csv, plan_csv.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected_csv, plan_csv, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3342,13 +3062,9 @@ fn parallelization_ignores_transitively_with_projection_parquet() -> Result<()> 
     test_config.run(
         expected_parquet,
         plan_parquet.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
+        DISTRIB_DISTRIB_SORT.into(),
     )?;
-    test_config.run(
-        expected_parquet,
-        plan_parquet,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_parquet, plan_parquet, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3389,16 +3105,8 @@ fn parallelization_ignores_transitively_with_projection_csv() -> Result<()> {
         "  DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=csv, has_header=false",
     ];
     let test_config = TestConfig::default();
-    test_config.run(
-        expected_csv,
-        plan_csv.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected_csv,
-        plan_csv,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected_csv, plan_csv.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected_csv, plan_csv, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3424,16 +3132,8 @@ fn remove_redundant_roundrobins() -> Result<()> {
     ];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        physical_plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        physical_plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, physical_plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, physical_plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3462,16 +3162,8 @@ fn remove_unnecessary_spm_after_filter() -> Result<()> {
         "      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
 
-    test_config.run(
-        expected,
-        physical_plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        physical_plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, physical_plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, physical_plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3496,16 +3188,8 @@ fn preserve_ordering_through_repartition() -> Result<()> {
         "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=d@3 ASC",
         "      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[d@3 ASC], file_type=parquet",
     ];
-    test_config.run(
-        expected,
-        physical_plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        physical_plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, physical_plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, physical_plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3568,16 +3252,8 @@ fn no_need_for_sort_after_filter() -> Result<()> {
         "      DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        physical_plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        physical_plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, physical_plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, physical_plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3643,16 +3319,8 @@ fn do_not_preserve_ordering_through_repartition3() -> Result<()> {
         "    DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        physical_plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        physical_plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, physical_plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, physical_plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3751,16 +3419,8 @@ fn do_not_add_unnecessary_hash() -> Result<()> {
         "  AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]",
         "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
-    test_config.run(
-        expected,
-        physical_plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        physical_plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, physical_plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, physical_plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3792,16 +3452,8 @@ fn do_not_add_unnecessary_hash2() -> Result<()> {
         "          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=2",
         "            DataSourceExec: file_groups={2 groups: [[x], [y]]}, projection=[a, b, c, d, e], output_ordering=[c@2 ASC], file_type=parquet",
     ];
-    test_config.run(
-        expected,
-        physical_plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        physical_plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, physical_plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, physical_plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3820,16 +3472,8 @@ fn optimize_away_unnecessary_repartition() -> Result<()> {
         &["DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet"];
 
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        physical_plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        physical_plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, physical_plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, physical_plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
@@ -3856,16 +3500,8 @@ fn optimize_away_unnecessary_repartition2() -> Result<()> {
         "      DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=parquet",
     ];
     let test_config = TestConfig::default();
-    test_config.run(
-        expected,
-        physical_plan.clone(),
-        DISTRIB_DISTRIB_SORT.into(), // same if distribution enforced before sort.
-    )?;
-    test_config.run(
-        expected,
-        physical_plan,
-        SORT_DISTRIB_DISTRIB.into(), // same if sort enforced before distribution.
-    )?;
+    test_config.run(expected, physical_plan.clone(), DISTRIB_DISTRIB_SORT.into())?;
+    test_config.run(expected, physical_plan, SORT_DISTRIB_DISTRIB.into())?;
 
     Ok(())
 }
