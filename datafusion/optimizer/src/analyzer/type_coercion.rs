@@ -1043,9 +1043,11 @@ mod test {
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, TimeUnit};
 
+    use crate::analyzer::expand_wildcard_rule::ExpandWildcardRule;
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
     };
+    use crate::analyzer::Analyzer;
     use crate::test::{assert_analyzed_plan_eq, assert_analyzed_plan_with_config_eq};
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::tree_node::{TransformedResult, TreeNode};
@@ -1054,12 +1056,13 @@ mod test {
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
-        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
-        BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
-        Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
-        SimpleAggregateUDF, Subquery, Volatility,
+        cast, col, create_udaf, is_true, lit, wildcard, AccumulatorFactoryFunction,
+        AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter,
+        LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        SimpleAggregateUDF, Subquery, Union, Volatility,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
+    use datafusion_sql::TableReference;
 
     fn empty() -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -1088,6 +1091,49 @@ mod test {
         let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
         let expected = "Projection: a < CAST(UInt32(2) AS Float64)\n  EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), plan, expected)
+    }
+
+    #[test]
+    fn test_coerce_union() -> Result<()> {
+        let left_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(
+                DFSchema::try_from_qualified_schema(
+                    TableReference::full("datafusion", "test", "foo"),
+                    &Schema::new(vec![Field::new("a", DataType::Int32, false)]),
+                )
+                .unwrap(),
+            ),
+        }));
+        let right_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(
+                DFSchema::try_from_qualified_schema(
+                    TableReference::full("datafusion", "test", "foo"),
+                    &Schema::new(vec![Field::new("a", DataType::Int64, false)]),
+                )
+                .unwrap(),
+            ),
+        }));
+        let union = LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+            left_plan, right_plan,
+        ])?);
+        let analyzed_union = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
+            .execute_and_check(union, &ConfigOptions::default(), |_, _| {})?;
+        let top_level_plan = LogicalPlan::Projection(Projection::try_new(
+            vec![wildcard()],
+            Arc::new(analyzed_union),
+        )?);
+        let expanded_plan =
+            Analyzer::with_rules(vec![Arc::new(ExpandWildcardRule::new())])
+                .execute_and_check(
+                    top_level_plan,
+                    &ConfigOptions::default(),
+                    |_, _| {},
+                )?;
+
+        let expected = "Projection: datafusion.test.foo.a\n  Union\n    Projection: CAST(datafusion.test.foo.a AS Int64) AS a\n      EmptyRelation\n    EmptyRelation";
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), expanded_plan, expected)
     }
 
     fn coerce_on_output_if_viewtype(plan: LogicalPlan, expected: &str) -> Result<()> {
