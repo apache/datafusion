@@ -2039,6 +2039,7 @@ impl DataFrame {
                             })),
                             relation: None,
                             name: field.name().to_string(),
+                            metadata: None,
                         }),
                         Err(_) => col(field.name()),
                     }

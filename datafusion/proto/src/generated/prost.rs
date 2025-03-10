@@ -739,6 +739,11 @@ pub struct AliasNode {
     pub alias: ::prost::alloc::string::String,
     #[prost(message, repeated, tag = "3")]
     pub relation: ::prost::alloc::vec::Vec<TableReference>,
+    #[prost(map = "string, string", tag = "4")]
+    pub metadata: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BinaryExprNode {

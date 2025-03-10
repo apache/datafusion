@@ -770,6 +770,9 @@ impl serde::Serialize for AliasNode {
         if !self.relation.is_empty() {
             len += 1;
         }
+        if !self.metadata.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.AliasNode", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
@@ -779,6 +782,9 @@ impl serde::Serialize for AliasNode {
         }
         if !self.relation.is_empty() {
             struct_ser.serialize_field("relation", &self.relation)?;
+        }
+        if !self.metadata.is_empty() {
+            struct_ser.serialize_field("metadata", &self.metadata)?;
         }
         struct_ser.end()
     }
@@ -793,6 +799,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
             "expr",
             "alias",
             "relation",
+            "metadata",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -800,6 +807,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
             Expr,
             Alias,
             Relation,
+            Metadata,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -824,6 +832,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                             "expr" => Ok(GeneratedField::Expr),
                             "alias" => Ok(GeneratedField::Alias),
                             "relation" => Ok(GeneratedField::Relation),
+                            "metadata" => Ok(GeneratedField::Metadata),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -846,6 +855,7 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                 let mut expr__ = None;
                 let mut alias__ = None;
                 let mut relation__ = None;
+                let mut metadata__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -866,12 +876,21 @@ impl<'de> serde::Deserialize<'de> for AliasNode {
                             }
                             relation__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Metadata => {
+                            if metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("metadata"));
+                            }
+                            metadata__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(AliasNode {
                     expr: expr__,
                     alias: alias__.unwrap_or_default(),
                     relation: relation__.unwrap_or_default(),
+                    metadata: metadata__.unwrap_or_default(),
                 })
             }
         }
