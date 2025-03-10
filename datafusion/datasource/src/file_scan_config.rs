@@ -194,26 +194,37 @@ impl DataSource for FileScanConfig {
     }
 
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
-        let (schema, _, _, orderings) = self.project();
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let (schema, _, _, orderings) = self.project();
 
-        write!(f, "file_groups=")?;
-        FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
+                write!(f, "file_groups=")?;
+                FileGroupsDisplay(&self.file_groups).fmt_as(t, f)?;
 
-        if !schema.fields().is_empty() {
-            write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
+                if !schema.fields().is_empty() {
+                    write!(f, ", projection={}", ProjectSchemaDisplay(&schema))?;
+                }
+
+                if let Some(limit) = self.limit {
+                    write!(f, ", limit={limit}")?;
+                }
+
+                display_orderings(f, &orderings)?;
+
+                if !self.constraints.is_empty() {
+                    write!(f, ", {}", self.constraints)?;
+                }
+
+                self.fmt_file_source(t, f)
+            }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "format={}", self.file_source.file_type())?;
+                self.file_source.fmt_extra(t, f)?;
+                let num_files = self.file_groups.iter().map(Vec::len).sum::<usize>();
+                writeln!(f, "files={num_files}")?;
+                Ok(())
+            }
         }
-
-        if let Some(limit) = self.limit {
-            write!(f, ", limit={limit}")?;
-        }
-
-        display_orderings(f, &orderings)?;
-
-        if !self.constraints.is_empty() {
-            write!(f, ", {}", self.constraints)?;
-        }
-
-        self.fmt_file_source(t, f)
     }
 
     /// If supported by the underlying [`FileSource`], redistribute files across partitions according to their size.
@@ -264,9 +275,20 @@ impl DataSource for FileScanConfig {
         &self,
         projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // If there is any non-column or alias-carrier expression, Projection should not be removed.
         // This process can be moved into CsvExec, but it would be an overlap of their responsibility.
-        Ok(all_alias_free_columns(projection.expr()).then(|| {
+
+        // Must be all column references, with no table partition columns (which can not be projected)
+        let partitioned_columns_in_proj = projection.expr().iter().any(|(expr, _)| {
+            expr.as_any()
+                .downcast_ref::<Column>()
+                .map(|expr| expr.index() >= self.file_schema.fields().len())
+                .unwrap_or(false)
+        });
+
+        // If there is any non-column or alias-carrier expression, Projection should not be removed.
+        let no_aliases = all_alias_free_columns(projection.expr());
+
+        Ok((no_aliases && !partitioned_columns_in_proj).then(|| {
             let file_scan = self.clone();
             let source = Arc::clone(&file_scan.file_source);
             let new_projections = new_projections_for_columns(
@@ -501,7 +523,6 @@ impl FileScanConfig {
         (schema, constraints, stats, output_ordering)
     }
 
-    #[cfg_attr(not(feature = "avro"), allow(unused))] // Only used by avro
     pub fn projected_file_column_names(&self) -> Option<Vec<String>> {
         self.projection.as_ref().map(|p| {
             p.iter()

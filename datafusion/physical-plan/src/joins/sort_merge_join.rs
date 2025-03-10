@@ -369,6 +369,19 @@ impl DisplayAs for SortMergeJoinExec {
                     ))
                 )
             }
+            DisplayFormatType::TreeRender => {
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| format!("({} = {})", c1, c2))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                if self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)?;
+                }
+                writeln!(f, "on={}", on)
+            }
         }
     }
 }

@@ -27,13 +27,6 @@ use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
 use crate::physical_plan::{ColumnStatistics, Statistics};
 
-#[cfg(feature = "parquet")]
-use crate::{
-    arrow::datatypes::Schema,
-    functions_aggregate::min_max::{MaxAccumulator, MinAccumulator},
-    physical_plan::Accumulator,
-};
-
 use super::listing::PartitionedFile;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
@@ -152,28 +145,6 @@ pub async fn get_statistics_with_limit(
     Ok((result_files, statistics))
 }
 
-// only adding this cfg b/c this is the only feature it's used with currently
-#[cfg(feature = "parquet")]
-pub(crate) fn create_max_min_accs(
-    schema: &Schema,
-) -> (Vec<Option<MaxAccumulator>>, Vec<Option<MinAccumulator>>) {
-    let max_values: Vec<Option<MaxAccumulator>> = schema
-        .fields()
-        .iter()
-        .map(|field| {
-            MaxAccumulator::try_new(min_max_aggregate_data_type(field.data_type())).ok()
-        })
-        .collect();
-    let min_values: Vec<Option<MinAccumulator>> = schema
-        .fields()
-        .iter()
-        .map(|field| {
-            MinAccumulator::try_new(min_max_aggregate_data_type(field.data_type())).ok()
-        })
-        .collect();
-    (max_values, min_values)
-}
-
 fn add_row_stats(
     file_num_rows: Precision<usize>,
     num_rows: Precision<usize>,
@@ -182,52 +153,6 @@ fn add_row_stats(
         (Precision::Absent, _) => num_rows.to_inexact(),
         (lhs, Precision::Absent) => lhs.to_inexact(),
         (lhs, rhs) => lhs.add(rhs),
-    }
-}
-
-// only adding this cfg b/c this is the only feature it's used with currently
-#[cfg(feature = "parquet")]
-pub(crate) fn get_col_stats(
-    schema: &Schema,
-    null_counts: Vec<Precision<usize>>,
-    max_values: &mut [Option<MaxAccumulator>],
-    min_values: &mut [Option<MinAccumulator>],
-) -> Vec<ColumnStatistics> {
-    (0..schema.fields().len())
-        .map(|i| {
-            let max_value = match max_values.get_mut(i).unwrap() {
-                Some(max_value) => max_value.evaluate().ok(),
-                None => None,
-            };
-            let min_value = match min_values.get_mut(i).unwrap() {
-                Some(min_value) => min_value.evaluate().ok(),
-                None => None,
-            };
-            ColumnStatistics {
-                null_count: null_counts[i],
-                max_value: max_value.map(Precision::Exact).unwrap_or(Precision::Absent),
-                min_value: min_value.map(Precision::Exact).unwrap_or(Precision::Absent),
-                sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
-            }
-        })
-        .collect()
-}
-
-// Min/max aggregation can take Dictionary encode input but always produces unpacked
-// (aka non Dictionary) output. We need to adjust the output data type to reflect this.
-// The reason min/max aggregate produces unpacked output because there is only one
-// min/max value per group; there is no needs to keep them Dictionary encode
-//
-// only adding this cfg b/c this is the only feature it's used with currently
-#[cfg(feature = "parquet")]
-fn min_max_aggregate_data_type(
-    input_type: &arrow_schema::DataType,
-) -> &arrow_schema::DataType {
-    if let arrow_schema::DataType::Dictionary(_, value_type) = input_type {
-        value_type.as_ref()
-    } else {
-        input_type
     }
 }
 
