@@ -95,6 +95,44 @@ WITH ORDER (a ASC, b ASC, c ASC)
 LOCATION '../core/tests/data/window_2.csv'
 OPTIONS ('format.has_header' 'true');
 
+statement ok
+CREATE TABLE hashjoin_datatype_table_t1_source(c1 INT, c2 BIGINT, c3 DECIMAL(5,2), c4 VARCHAR)
+AS VALUES
+(1,    86400000,  1.23,    'abc'),
+(2,    172800000, 456.00,  'def'),
+(null, 259200000, 789.000, 'ghi'),
+(3,    null,      -123.12, 'jkl')
+;
+
+statement ok
+CREATE TABLE hashjoin_datatype_table_t1
+AS SELECT
+  arrow_cast(c1, 'Date32') as c1,
+  arrow_cast(c2, 'Date64') as c2,
+  c3,
+  arrow_cast(c4, 'Dictionary(Int32, Utf8)') as c4
+FROM
+  hashjoin_datatype_table_t1_source
+
+statement ok
+CREATE TABLE hashjoin_datatype_table_t2_source(c1 INT, c2 BIGINT, c3 DECIMAL(10,2), c4 VARCHAR)
+AS VALUES
+(1,    86400000,  -123.12,   'abc'),
+(null, null,      100000.00, 'abcdefg'),
+(null, 259200000, 0.00,      'qwerty'),
+(3,   null,       789.000,   'qwe')
+;
+
+statement ok
+CREATE TABLE hashjoin_datatype_table_t2
+AS SELECT
+  arrow_cast(c1, 'Date32') as c1,
+  arrow_cast(c2, 'Date64') as c2,
+  c3,
+  arrow_cast(c4, 'Dictionary(Int32, Utf8)') as c4
+FROM
+  hashjoin_datatype_table_t2_source
+
 ######## Begin Queries ########
 
 # Filter
@@ -896,6 +934,109 @@ physical_plan
 47)│          files: 1         │
 48)│        format: csv        │
 49)└───────────────────────────┘
+
+# Query with nested loop join.
+query TT
+explain select int_col from table1 where exists (select count(*) from table2);
+----
+logical_plan
+01)LeftSemi Join: 
+02)--TableScan: table1 projection=[int_col], partial_filters=[Boolean(true)]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: 
+05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+06)--------TableScan: table2 projection=[]
+physical_plan
+01)┌───────────────────────────┐
+02)│     NestedLoopJoinExec    │
+03)│    --------------------   ├──────────────┐
+04)│    join_type: LeftSemi    │              │
+05)└─────────────┬─────────────┘              │
+06)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+07)│       DataSourceExec      ││       ProjectionExec      │
+08)│    --------------------   ││                           │
+09)│          files: 1         ││                           │
+10)│        format: csv        ││                           │
+11)└───────────────────────────┘└─────────────┬─────────────┘
+12)-----------------------------┌─────────────┴─────────────┐
+13)-----------------------------│       AggregateExec       │
+14)-----------------------------└─────────────┬─────────────┘
+15)-----------------------------┌─────────────┴─────────────┐
+16)-----------------------------│   CoalescePartitionsExec  │
+17)-----------------------------└─────────────┬─────────────┘
+18)-----------------------------┌─────────────┴─────────────┐
+19)-----------------------------│       AggregateExec       │
+20)-----------------------------└─────────────┬─────────────┘
+21)-----------------------------┌─────────────┴─────────────┐
+22)-----------------------------│      RepartitionExec      │
+23)-----------------------------└─────────────┬─────────────┘
+24)-----------------------------┌─────────────┴─────────────┐
+25)-----------------------------│       DataSourceExec      │
+26)-----------------------------│    --------------------   │
+27)-----------------------------│          files: 1         │
+28)-----------------------------│      format: parquet      │
+29)-----------------------------└───────────────────────────┘
+
+# Query with cross join.
+query TT
+explain select * from table1 cross join table2 ;
+----
+logical_plan
+01)Cross Join: 
+02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
+03)--TableScan: table2 projection=[int_col, string_col, bigint_col, date_col]
+physical_plan
+01)┌───────────────────────────┐
+02)│       CrossJoinExec       ├──────────────┐
+03)└─────────────┬─────────────┘              │
+04)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+05)│       DataSourceExec      ││      RepartitionExec      │
+06)│    --------------------   ││                           │
+07)│          files: 1         ││                           │
+08)│        format: csv        ││                           │
+09)└───────────────────────────┘└─────────────┬─────────────┘
+10)-----------------------------┌─────────────┴─────────────┐
+11)-----------------------------│       DataSourceExec      │
+12)-----------------------------│    --------------------   │
+13)-----------------------------│          files: 1         │
+14)-----------------------------│      format: parquet      │
+15)-----------------------------└───────────────────────────┘
+
+
+# Query with sort merge join.
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+query TT
+explain select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1
+----
+logical_plan
+01)Inner Join: t1.c1 = t2.c1
+02)--SubqueryAlias: t1
+03)----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
+04)--SubqueryAlias: t2
+05)----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
+physical_plan
+01)┌───────────────────────────┐
+02)│     SortMergeJoinExec     │
+03)│    --------------------   ├──────────────┐
+04)│     on: (c1@0 = c1@0)     │              │
+05)└─────────────┬─────────────┘              │
+06)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+07)│          SortExec         ││          SortExec         │
+08)│    --------------------   ││    --------------------   │
+09)│   sort keys: [c1@0 ASC]   ││   sort keys: [c1@0 ASC]   │
+10)└─────────────┬─────────────┘└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+12)│       DataSourceExec      ││       DataSourceExec      │
+13)│    --------------------   ││    --------------------   │
+14)│        bytes: 6040        ││        bytes: 6040        │
+15)│       format: memory      ││       format: memory      │
+16)│          rows: 1          ││          rows: 1          │
+17)└───────────────────────────┘└───────────────────────────┘
+
+statement ok
+set datafusion.optimizer.prefer_hash_join = true;
 
 # cleanup
 statement ok
