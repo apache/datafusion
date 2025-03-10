@@ -809,8 +809,60 @@ impl DisplayAs for AggregateExec {
                 }
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")?;
+                let g: Vec<String> = if self.group_by.is_single() {
+                    self.group_by
+                        .expr
+                        .iter()
+                        .map(|(e, alias)| {
+                            let e = e.to_string();
+                            if &e != alias {
+                                format!("{e} as {alias}")
+                            } else {
+                                e
+                            }
+                        })
+                        .collect()
+                } else {
+                    self.group_by
+                        .groups
+                        .iter()
+                        .map(|group| {
+                            let terms = group
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, is_null)| {
+                                    if *is_null {
+                                        let (e, alias) = &self.group_by.null_expr[idx];
+                                        let e = e.to_string();
+                                        if &e != alias {
+                                            format!("{e} as {alias}")
+                                        } else {
+                                            e
+                                        }
+                                    } else {
+                                        let (e, alias) = &self.group_by.expr[idx];
+                                        let e = e.to_string();
+                                        if &e != alias {
+                                            format!("{e} as {alias}")
+                                        } else {
+                                            e
+                                        }
+                                    }
+                                })
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            format!("({terms})")
+                        })
+                        .collect()
+                };
+                let a: Vec<String> = self
+                    .aggr_expr
+                    .iter()
+                    .map(|agg| agg.name().to_string())
+                    .collect();
+                writeln!(f, "mode={:?}", self.mode)?;
+                writeln!(f, "group_by={}", g.join(", "))?;
+                writeln!(f, "aggr={}", a.join(", "))?;
             }
         }
         Ok(())
