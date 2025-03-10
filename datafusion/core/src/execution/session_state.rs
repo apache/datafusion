@@ -547,6 +547,11 @@ impl SessionState {
         &self.optimizer
     }
 
+    /// Returns the [`ExprPlanner`]s for this session
+    pub fn expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.expr_planners
+    }
+
     /// Returns the [`QueryPlanner`] for this session
     pub fn query_planner(&self) -> &Arc<dyn QueryPlanner + Send + Sync> {
         &self.query_planner
