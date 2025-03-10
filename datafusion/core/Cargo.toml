@@ -79,7 +79,12 @@ recursive_protection = [
     "datafusion-physical-optimizer/recursive_protection",
     "datafusion-sql/recursive_protection",
 ]
-serde = ["dep:serde", "arrow-schema/serde"]
+serde = [
+    "dep:serde",
+    # Enable `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+    # statements in `arrow-schema` crate
+    "arrow-schema/serde",
+]
 string_expressions = ["datafusion-functions/string_expressions"]
 unicode_expressions = [
     "datafusion-sql/unicode_expressions",
