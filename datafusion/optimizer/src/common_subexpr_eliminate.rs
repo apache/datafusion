@@ -797,8 +797,8 @@ mod test {
     use datafusion_expr::logical_plan::{table_scan, JoinType};
     use datafusion_expr::{
         grouping_set, is_null, not, AccumulatorFactoryFunction, AggregateUDF,
-        ColumnarValue, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
-        Volatility,
+        ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        SimpleAggregateUDF, Volatility,
     };
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
 
@@ -1598,7 +1598,7 @@ mod test {
             Ok(DataType::Int32)
         }
 
-        fn invoke(&self, _: &[ColumnarValue]) -> Result<ColumnarValue> {
+        fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
             panic!("not implemented")
         }
     }
