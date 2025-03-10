@@ -19,12 +19,12 @@
 use super::basic::{digest, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    types::{logical_binary, logical_string},
+    types::{logical_binary, logical_string, NativeType},
     Result,
 };
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    Volatility,
 };
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_macros::user_doc;
@@ -69,16 +69,14 @@ impl Default for DigestFunc {
 impl DigestFunc {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
+            signature: Signature::coercible(
                 vec![
-                    TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                    ]),
-                    TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_binary())),
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                    ]),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_binary()),
+                        vec![TypeSignatureClass::Native(logical_string())],
+                        NativeType::Binary,
+                    ),
+                    Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
                 ],
                 Volatility::Immutable,
             ),
