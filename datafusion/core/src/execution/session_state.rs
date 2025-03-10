@@ -1631,7 +1631,7 @@ struct SessionContextProvider<'a> {
 
 impl ContextProvider for SessionContextProvider<'_> {
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        &self.state.expr_planners
+        self.state.expr_planners()
     }
 
     fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
