@@ -679,6 +679,10 @@ impl ScalarUDFImpl for CastToI64UDF {
         Ok(DataType::Int64)
     }
 
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
+    }
+
     // Demonstrate simplifying a UDF
     fn simplify(
         &self,
@@ -944,6 +948,10 @@ impl ScalarUDFImpl for ScalarFunctionWrapper {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(self.return_type.clone())
+    }
+
+    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        panic!("dummy - not implemented")
     }
 
     fn simplify(
