@@ -21,11 +21,11 @@ use arrow::{
     compute::can_cast_types,
     datatypes::{DataType, Field, TimeUnit},
 };
-use datafusion_common::types::LogicalType;
 use datafusion_common::utils::{coerced_fixed_size_list_to_list, ListCoercion};
+use datafusion_common::{diagnostic, types::LogicalType};
 use datafusion_common::{
     exec_err, internal_datafusion_err, internal_err, plan_err, types::NativeType,
-    utils::list_ndims, Result,
+    utils::list_ndims, Diagnostic, Result, Span,
 };
 use datafusion_expr_common::signature::ArrayFunctionArgument;
 use datafusion_expr_common::{
@@ -301,11 +301,21 @@ fn get_valid_types_with_aggregate_udf(
         TypeSignature::UserDefined => match func.coerce_types(current_types) {
             Ok(coerced_types) => vec![coerced_types],
             Err(e) => {
+                dbg!(&e);
+                let diagnostic = e.diagnostic().cloned();
+
                 return exec_err!(
                     "Function '{}' user-defined coercion failed with {:?}",
                     func.name(),
                     e.strip_backtrace()
-                );
+                )
+                .map_err(|e| {
+                    if let Some(diagnostic) = diagnostic {
+                        e.with_diagnostic(diagnostic)
+                    } else {
+                        e
+                    }
+                });
             }
         },
         TypeSignature::OneOf(signatures) => signatures

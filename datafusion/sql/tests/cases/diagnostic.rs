@@ -42,9 +42,8 @@ fn do_query(sql: &'static str) -> Diagnostic {
         ..ParserOptions::default()
     };
     let state = MockSessionState::default()
-        .with_scalar_function(Arc::new(string::concat().as_ref().clone()));
-
-    let state = MockSessionState::default().with_aggregate_function(sum_udaf());
+        .with_scalar_function(Arc::new(string::concat().as_ref().clone()))
+        .with_aggregate_function(sum_udaf());
     let context = MockContextProvider { state };
     let sql_to_rel = SqlToRel::new_with_options(&context, options);
     match sql_to_rel.statement_to_plan(statement) {
@@ -139,49 +138,6 @@ fn get_spans(query: &'static str) -> HashMap<String, Span> {
     }
 
     spans
-}
-
-#[test]
-fn trace_function_call_error() {
-    let dialect = GenericDialect {};
-    let sql = "SELECT /*a*/sum(1, 2)/*a*/";
-    let statement = Parser::new(&dialect)
-        .try_with_sql(sql)
-        .expect("unable to create parser")
-        .parse_statement()
-        .expect("unable to parse query");
-
-    let options = ParserOptions {
-        collect_spans: true,
-        ..ParserOptions::default()
-    };
-
-    let state = MockSessionState::default().with_aggregate_function(sum_udaf());
-    let context = MockContextProvider { state };
-    let sql_to_rel = SqlToRel::new_with_options(&context, options);
-
-    // 追蹤函數處理過程
-    match statement {
-        Statement::Query(ref query) => {
-            if let SetExpr::Select(select) = query.body.as_ref() {
-                println!("Processing SELECT statement");
-                for expr in &select.projection {
-                    if let SelectItem::UnnamedExpr(expr) = expr {
-                        println!("Processing expression: {:?}", expr);
-                        // 這裡會進到函數處理
-                        if let SQLExpr::Function(func) = expr {
-                            println!("Function name: {:?}", func.name);
-                            println!("Function args: {:?}", func.args);
-                        }
-                    }
-                }
-            }
-        }
-        _ => panic!("Expected Query"),
-    }
-
-    let result = sql_to_rel.sql_statement_to_plan(statement);
-    println!("Final result: {:?}", result);
 }
 
 #[test]
