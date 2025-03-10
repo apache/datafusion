@@ -1028,7 +1028,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: sha224(test.column1_utf8view) AS c
+01)Projection: sha224(CAST(test.column1_utf8view AS BinaryView))) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for sha256
@@ -1038,7 +1038,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: sha256(test.column1_utf8view) AS c
+01)Projection: sha256(CAST(test.column1_utf8view AS BinaryView)) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for sha384
@@ -1048,7 +1048,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: sha384(test.column1_utf8view) AS c
+01)Projection: sha384(CAST(test.column1_utf8view AS BinaryView)) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for sha512
@@ -1058,7 +1058,7 @@ EXPLAIN SELECT
 FROM test;
 ----
 logical_plan
-01)Projection: sha512(test.column1_utf8view) AS c
+01)Projection: sha512(CAST(test.column1_utf8view AS BinaryView)) AS c
 02)--TableScan: test projection=[column1_utf8view]
 
 ## Ensure no casts for digest
