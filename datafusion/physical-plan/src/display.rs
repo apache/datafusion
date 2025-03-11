@@ -34,7 +34,7 @@ use crate::render_tree::RenderTree;
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 
 /// Options for controlling how each [`ExecutionPlan`] should format itself
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DisplayFormatType {
     /// Default, compact format. Example: `FilterExec: c12 < 10.0`
     ///
