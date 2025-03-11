@@ -377,8 +377,17 @@ impl Unparser<'_> {
                 };
                 if self.dialect.unnest_as_table_factor() && unnest_input_type.is_some() {
                     if let LogicalPlan::Unnest(unnest) = &p.input.as_ref() {
-                        return self
-                            .unnest_to_table_factor_sql(unnest, query, select, relation);
+                        if let LogicalPlan::Projection(projection) = unnest.input.as_ref()
+                        {
+                            if matches!(
+                                projection.input.as_ref(),
+                                LogicalPlan::EmptyRelation(_)
+                            ) {
+                                return self.unnest_to_table_factor_sql(
+                                    unnest, query, select, relation,
+                                );
+                            }
+                        }
                     }
                 }
 
