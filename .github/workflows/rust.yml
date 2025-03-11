@@ -152,7 +152,9 @@ jobs:
         with:
           rust-version: stable
       - name: Check datafusion (no-default-features)
-        run: cargo check --all-targets --no-default-features -p datafusion
+        # Some of the test binaries require the parquet feature still
+        #run: cargo check --all-targets --no-default-features -p datafusion
+        run: cargo check --profile ci --no-default-features -p datafusion
 
       - name: Check datafusion (nested_expressions)
         run: cargo check --profile ci --no-default-features --features=nested_expressions -p datafusion
