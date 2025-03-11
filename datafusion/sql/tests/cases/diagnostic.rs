@@ -293,7 +293,10 @@ fn test_scalar_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Err
     let spans = get_spans(query);
     let diag = do_query(query);
 
-    assert_eq!(diag.message, "Scalar subquery returns multiple columns");
+    assert_eq!(
+        diag.message,
+        "Scalar subquery should only return one column"
+    );
 
     let column_count_notes: Vec<_> = diag
         .notes
@@ -351,7 +354,7 @@ fn test_in_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Error>>
     let spans = get_spans(query);
     let diag = do_query(query);
 
-    assert_eq!(diag.message, "IN subquery returns multiple columns");
+    assert_eq!(diag.message, "IN subquery should only return one column");
 
     let column_count_notes: Vec<_> = diag
         .notes

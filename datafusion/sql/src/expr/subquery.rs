@@ -17,9 +17,8 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{plan_err, DFSchema, Diagnostic, Result, Span, Spans};
-use datafusion_expr::expr::Exists;
-use datafusion_expr::expr::InSubquery;
-use datafusion_expr::{Expr, Subquery};
+use datafusion_expr::expr::{Exists, InSubquery};
+use datafusion_expr::{Expr, LogicalPlan, Subquery};
 use sqlparser::ast::Expr as SQLExpr;
 use sqlparser::ast::{Query, SelectItem, SetExpr};
 use std::sync::Arc;
@@ -61,11 +60,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut spans = Spans::new();
         if let SetExpr::Select(select) = subquery.body.as_ref() {
             for item in &select.projection {
-                if let SelectItem::UnnamedExpr(sql_expr) = item {
-                    if let SQLExpr::Identifier(ident) = sql_expr {
-                        if let Some(span) = Span::try_from_sqlparser_span(ident.span) {
-                            spans.add_span(span);
-                        }
+                if let SelectItem::UnnamedExpr(SQLExpr::Identifier(ident)) = item {
+                    if let Some(span) = Span::try_from_sqlparser_span(ident.span) {
+                        spans.add_span(span);
                     }
                 }
             }
@@ -75,49 +72,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
 
-        let sub_schema = sub_plan.schema();
-        let expr_obj = self.sql_to_expr(expr.clone(), input_schema, planner_context)?;
+        self.validate_single_column(
+            &sub_plan,
+            spans.clone(),
+            "IN subquery should only return one column",
+            "Select only one column in the IN subquery",
+        )?;
 
-        if sub_schema.fields().len() > 1 {
-            let fields = sub_schema.fields();
-            let error_message = format!(
-                "IN subquery should only return one column, but found {}: {}",
-                fields.len(),
-                sub_schema.field_names().join(", ")
-            );
-
-            return plan_err!("{}", &error_message).map_err(|err| {
-                let spans_vec = spans.clone();
-                let primary_span = spans_vec.first().clone();
-
-                let mut diagnostic = Diagnostic::new_error(
-                    "IN subquery returns multiple columns",
-                    primary_span,
-                );
-
-                let columns_info = format!(
-                    "Found {} columns: {}",
-                    fields.len(),
-                    sub_schema.field_names().join(", ")
-                );
-
-                if spans_vec.0.len() > 1 {
-                    diagnostic.add_note(columns_info.clone(), primary_span);
-                    for (i, span) in spans_vec.iter().skip(1).enumerate() {
-                        diagnostic.add_note(
-                            format!("Extra column {}", i + 1),
-                            Some(span.clone()),
-                        );
-                    }
-                } else {
-                    diagnostic.add_note(columns_info, primary_span);
-                }
-
-                diagnostic.add_help("Select only one column in the IN subquery", None);
-
-                err.with_diagnostic(diagnostic)
-            });
-        }
+        let expr_obj = self.sql_to_expr(expr, input_schema, planner_context)?;
 
         Ok(Expr::InSubquery(InSubquery::new(
             Box::new(expr_obj),
@@ -151,54 +113,75 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
-        if sub_plan.schema().fields().len() > 1 {
-            let fields = sub_plan.schema().fields();
-            let error_message = format!(
-                "Scalar subquery should only return one column, but found {}: {}",
-                fields.len(),
-                sub_plan.schema().field_names().join(", ")
-            );
 
-            return plan_err!("{}", &error_message).map_err(|err| {
-                let spans_vec = spans.clone();
-                let primary_span = spans_vec.first().clone();
-
-                let mut diagnostic = Diagnostic::new_error(
-                    "Scalar subquery returns multiple columns",
-                    primary_span,
-                );
-
-                let columns_info = format!(
-                    "Found {} columns: {}",
-                    fields.len(),
-                    sub_plan.schema().field_names().join(", ")
-                );
-
-                if spans_vec.0.len() > 1 {
-                    diagnostic.add_note(columns_info.clone(), primary_span);
-                    for (i, span) in spans_vec.iter().skip(1).enumerate() {
-                        diagnostic.add_note(
-                            format!("Extra column {}", i + 1),
-                            Some(span.clone()),
-                        );
-                    }
-                } else {
-                    diagnostic.add_note(columns_info, primary_span);
-                }
-
-                diagnostic.add_help(
-                    "Select only one column in the subquery or use a row constructor",
-                    None,
-                );
-
-                err.with_diagnostic(diagnostic)
-            });
-        }
+        self.validate_single_column(
+            &sub_plan,
+            spans.clone(),
+            "Scalar subquery should only return one column",
+            "Select only one column in the subquery or use a row constructor",
+        )?;
 
         Ok(Expr::ScalarSubquery(Subquery {
             subquery: Arc::new(sub_plan),
             outer_ref_columns,
             spans: Some(spans),
         }))
+    }
+
+    fn validate_single_column(
+        &self,
+        sub_plan: &LogicalPlan,
+        spans: Spans,
+        error_message: &str,
+        help_message: &str,
+    ) -> Result<()> {
+        if sub_plan.schema().fields().len() > 1 {
+            let sub_schema = sub_plan.schema();
+            let fields = sub_schema.fields();
+            let field_names = sub_schema.field_names();
+
+            plan_err!("{}: {}", error_message, field_names.join(", ")).map_err(|err| {
+                let diagnostic = self.build_multi_column_diagnostic(
+                    fields.len(),
+                    &field_names,
+                    spans,
+                    error_message,
+                    help_message,
+                );
+                err.with_diagnostic(diagnostic)
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn build_multi_column_diagnostic(
+        &self,
+        column_count: usize,
+        column_names: &[String],
+        spans: Spans,
+        error_message: &str,
+        help_message: &str,
+    ) -> Diagnostic {
+        let primary_span = spans.first().clone();
+        let columns_info = format!(
+            "Found {} columns: {}",
+            column_count,
+            column_names.join(", ")
+        );
+
+        let mut diagnostic = Diagnostic::new_error(error_message, primary_span);
+        if spans.0.len() > 1 {
+            diagnostic.add_note(columns_info, primary_span);
+            for (i, span) in spans.iter().skip(1).enumerate() {
+                diagnostic
+                    .add_note(format!("Extra column {}", i + 1), Some(span.clone()));
+            }
+        } else {
+            diagnostic.add_note(columns_info, primary_span);
+        }
+
+        diagnostic.add_help(help_message, None);
+        diagnostic
     }
 }
