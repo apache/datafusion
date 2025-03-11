@@ -533,6 +533,11 @@
   </a>
  </li>
  <li class="toc-h2 nav-item toc-entry">
+  <a class="reference internal nav-link" href="#snapshot-testing">
+   Snapshot testing
+  </a>
+ </li>
+ <li class="toc-h2 nav-item toc-entry">
   <a class="reference internal nav-link" href="#extended-tests">
    Extended Tests
   </a>
@@ -663,6 +668,16 @@ The <a class="reference external" href="https://github.com/apache/datafusion/tre
 <p><code class="docutils literal notranslate"><span class="pre">sqllogictests</span></code> tests may be less convenient for new contributors who are familiar with writing <code class="docutils literal notranslate"><span class="pre">.rs</span></code> tests as they require learning another tool. However, <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> based tests are much easier to develop and maintain as they 1) do not require a slow recompile/link cycle and 2) can be automatically updated via <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">test</span> <span class="pre">--test</span> <span class="pre">sqllogictests</span> <span class="pre">--</span> <span class="pre">--complete</span></code>.</p>
 <p>Like similar systems such as <a class="reference external" href="https://duckdb.org/dev/testing">DuckDB</a>, DataFusion has chosen to trade off a slightly higher barrier to contribution for longer term maintainability.</p>
 <p>DataFusion has integrated <a class="reference external" href="https://sqlite.org/sqllogictest/doc/trunk/about.wiki">sqlite’s test suite</a> as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite">README</a> file for instructions.</p>
+</section>
+<section id="snapshot-testing">
+<h2>Snapshot testing<a class="headerlink" href="#snapshot-testing" title="Link to this heading">¶</a></h2>
+<p><a class="reference external" href="https://github.com/mitsuhiko/insta">Insta</a> is used for snapshot testing. Snapshots are generated
+and compared on each test run. If the output changes, tests will fail.</p>
+<p>To review the changes, you can use Insta CLI:</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>install<span class="w"> </span>cargo-insta
+cargo<span class="w"> </span>insta<span class="w"> </span>review
+</pre></div>
+</div>
 </section>
 <section id="extended-tests">
 <h2>Extended Tests<a class="headerlink" href="#extended-tests" title="Link to this heading">¶</a></h2>
