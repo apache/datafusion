@@ -17,7 +17,9 @@
 
 extern crate criterion;
 
+use arrow::datatypes::DataType;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_expr::ScalarFunctionArgs;
 use helper::gen_string_array;
 
 mod helper;
@@ -25,6 +27,8 @@ mod helper;
 fn criterion_benchmark(c: &mut Criterion) {
     // All benches are single batch run with 8192 rows
     let character_length = datafusion_functions::unicode::character_length();
+
+    let return_type = DataType::Utf8;
 
     let n_rows = 8192;
     for str_len in [8, 32, 128, 4096] {
@@ -34,8 +38,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("character_length_StringArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(character_length.invoke_batch(&args_string_ascii, n_rows))
+                    black_box(character_length.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_ascii.clone(),
+                        number_rows: n_rows,
+                        return_type: &return_type,
+                    }))
                 })
             },
         );
@@ -46,8 +53,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("character_length_StringArray_utf8_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(character_length.invoke_batch(&args_string_utf8, n_rows))
+                    black_box(character_length.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_utf8.clone(),
+                        number_rows: n_rows,
+                        return_type: &return_type,
+                    }))
                 })
             },
         );
@@ -58,10 +68,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("character_length_StringViewArray_ascii_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(
-                        character_length.invoke_batch(&args_string_view_ascii, n_rows),
-                    )
+                    black_box(character_length.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_view_ascii.clone(),
+                        number_rows: n_rows,
+                        return_type: &return_type,
+                    }))
                 })
             },
         );
@@ -72,10 +83,11 @@ fn criterion_benchmark(c: &mut Criterion) {
             &format!("character_length_StringViewArray_utf8_str_len_{}", str_len),
             |b| {
                 b.iter(|| {
-                    // TODO use invoke_with_args
-                    black_box(
-                        character_length.invoke_batch(&args_string_view_utf8, n_rows),
-                    )
+                    black_box(character_length.invoke_with_args(ScalarFunctionArgs {
+                        args: args_string_view_utf8.clone(),
+                        number_rows: n_rows,
+                        return_type: &return_type,
+                    }))
                 })
             },
         );
