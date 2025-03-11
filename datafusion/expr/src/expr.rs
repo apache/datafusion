@@ -1316,6 +1316,19 @@ impl Expr {
         Expr::Alias(Alias::new(self, None::<&str>, name.into()))
     }
 
+    /// Return `self AS name` alias expression with metadata
+    ///
+    /// The metadata will be attached to the Arrow Schema field when the expression
+    /// is converted to a field via `Expr.to_field()`.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// use std::collections::HashMap;
+    /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let expr = col("foo").alias_with_metadata("bar", Some(metadata));
+    /// ```
+    ///
     pub fn alias_with_metadata(
         self,
         name: impl Into<String>,
@@ -1333,7 +1346,19 @@ impl Expr {
         Expr::Alias(Alias::new(self, relation, name.into()))
     }
 
-    /// Return `self AS name` alias expression with a specific qualifier
+    /// Return `self AS name` alias expression with a specific qualifier and metadata
+    ///
+    /// The metadata will be attached to the Arrow Schema field when the expression
+    /// is converted to a field via `Expr.to_field()`.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::col;
+    /// use std::collections::HashMap;
+    /// let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+    /// let expr = col("foo").alias_qualified_with_metadata(Some("tbl"), "bar", Some(metadata));
+    /// ```
+    ///
     pub fn alias_qualified_with_metadata(
         self,
         relation: Option<impl Into<TableReference>>,
