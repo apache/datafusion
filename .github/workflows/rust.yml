@@ -194,7 +194,7 @@ jobs:
             --lib \
             --tests \
             --bins \
-            --features avro,json,backtrace,integration-tests
+            --features serde,avro,json,backtrace,integration-tests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
