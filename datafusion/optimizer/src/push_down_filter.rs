@@ -3852,7 +3852,7 @@ Projection: a, b
                 assert!(exprs.is_empty());
                 assert!(inputs.is_empty());
                 Ok(Self {
-                    schema: self.schema.clone(),
+                    schema: Arc::clone(&self.schema),
                 })
             }
         }
@@ -3931,7 +3931,7 @@ Projection: a, b
                 assert!(exprs.is_empty());
                 assert!(inputs.is_empty());
                 Ok(Self {
-                    schema: self.schema.clone(),
+                    schema: Arc::clone(&self.schema),
                 })
             }
         }
