@@ -774,7 +774,7 @@ impl OptimizerRule for PushDownFilter {
 
         let plan_schema = Arc::clone(plan.schema());
 
-        let LogicalPlan::Filter(mut filter) = plan.clone() else {
+        let LogicalPlan::Filter(mut filter) = plan else {
             return Ok(Transformed::no(plan));
         };
 
