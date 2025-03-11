@@ -15,19 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::binary::{binary_numeric_coercion, comparison_coercion};
+use super::binary::binary_numeric_coercion;
 use crate::{AggregateUDF, ScalarUDF, Signature, TypeSignature, WindowUDF};
 use arrow::{
     compute::can_cast_types,
-    datatypes::{DataType, Field, TimeUnit},
+    datatypes::{DataType, TimeUnit},
 };
 use datafusion_common::types::LogicalType;
-use datafusion_common::utils::{coerced_fixed_size_list_to_list, ListCoercion};
+use datafusion_common::utils::{
+    base_type, coerced_fixed_size_list_to_list, ListCoercion,
+};
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, plan_err, types::NativeType,
-    utils::list_ndims, Result,
+    exec_err, internal_err, plan_err, types::NativeType, utils::list_ndims, Result,
 };
 use datafusion_expr_common::signature::ArrayFunctionArgument;
+use datafusion_expr_common::type_coercion::binary::type_union_resolution;
 use datafusion_expr_common::{
     signature::{ArrayFunctionSignature, FIXED_SIZE_LIST_WILDCARD, TIMEZONE_WILDCARD},
     type_coercion::binary::comparison_coercion_numeric,
@@ -364,98 +366,73 @@ fn get_valid_types(
             return Ok(vec![vec![]]);
         }
 
-        let array_idx = arguments.iter().enumerate().find_map(|(idx, arg)| {
-            if *arg == ArrayFunctionArgument::Array {
-                Some(idx)
-            } else {
-                None
-            }
-        });
-        let Some(array_idx) = array_idx else {
-            return Err(internal_datafusion_err!("Function '{function_name}' expected at least one argument array argument"));
-        };
-        let Some(array_type) = array(&current_types[array_idx]) else {
-            return Ok(vec![vec![]]);
-        };
+        let mut fixed_size = None;
+        let mut large_list = false;
+        let mut element_types = Vec::with_capacity(arguments.len());
+        for (argument, current_type) in arguments.iter().zip(current_types.iter()) {
+            match argument {
+                ArrayFunctionArgument::Array => match current_type {
+                    DataType::FixedSizeList(field, size) => {
+                        match array_coercion {
+                            Some(ListCoercion::FixedSizedListToList) => (),
+                            None if fixed_size.is_none() => fixed_size = Some(*size),
+                            None if fixed_size == Some(*size) => (),
+                            None => fixed_size = None,
+                        }
 
-        // We need to find the coerced base type, mainly for cases like:
-        // `array_append(List(null), i64)` -> `List(i64)`
-        let mut new_base_type = datafusion_common::utils::base_type(&array_type);
-        for (current_type, argument_type) in current_types.iter().zip(arguments.iter()) {
-            match argument_type {
-                ArrayFunctionArgument::Element | ArrayFunctionArgument::Array => {
-                    new_base_type =
-                        coerce_array_types(function_name, current_type, &new_base_type)?;
+                        element_types.push(field.data_type().clone())
+                    }
+                    DataType::List(field) => {
+                        fixed_size = None;
+                        element_types.push(field.data_type().clone())
+                    }
+                    DataType::LargeList(field) => {
+                        fixed_size = None;
+                        large_list = true;
+                        element_types.push(field.data_type().clone())
+                    }
+                    DataType::Null => {
+                        fixed_size = None;
+                        element_types.push(DataType::Null)
+                    }
+                    arg_type => {
+                        return plan_err!(
+                        "{function_name} does not support an argument of type {arg_type}"
+                    )
+                    }
+                },
+                ArrayFunctionArgument::Element => {
+                    element_types.push(current_type.clone())
                 }
-                ArrayFunctionArgument::Index | ArrayFunctionArgument::String => {}
+                ArrayFunctionArgument::Index | ArrayFunctionArgument::String => (),
             }
         }
-        let new_array_type = datafusion_common::utils::coerced_type_with_base_type_only(
-            &array_type,
-            &new_base_type,
-            array_coercion,
-        );
 
-        let new_elem_type = match new_array_type {
-            DataType::List(ref field)
-            | DataType::LargeList(ref field)
-            | DataType::FixedSizeList(ref field, _) => field.data_type(),
-            _ => return Ok(vec![vec![]]),
+        let Some(element_type) = type_union_resolution(&element_types) else {
+            return plan_err!(
+                "Failed to unify argument types of {function_name}: {current_types:?}."
+            );
         };
 
-        let mut valid_types = Vec::with_capacity(arguments.len());
-        for (current_type, argument_type) in current_types.iter().zip(arguments.iter()) {
-            let valid_type = match argument_type {
-                ArrayFunctionArgument::Element => new_elem_type.clone(),
+        let array_type = if large_list {
+            DataType::new_large_list(element_type.clone(), true)
+        } else if let Some(size) = fixed_size {
+            DataType::new_fixed_size_list(element_type.clone(), size, true)
+        } else {
+            DataType::new_list(element_type.clone(), true)
+        };
+
+        let valid_types = arguments.iter().zip(current_types.iter()).map(
+            |(argument_type, current_type)| match argument_type {
+                ArrayFunctionArgument::Array if current_type.is_null() => DataType::Null,
+                ArrayFunctionArgument::Array => array_type.clone(),
+                ArrayFunctionArgument::Element => element_type.clone(),
                 ArrayFunctionArgument::Index => DataType::Int64,
                 ArrayFunctionArgument::String => DataType::Utf8,
-                ArrayFunctionArgument::Array => {
-                    let Some(current_type) = array(current_type) else {
-                        return Ok(vec![vec![]]);
-                    };
-                    let new_type =
-                        datafusion_common::utils::coerced_type_with_base_type_only(
-                            &current_type,
-                            &new_base_type,
-                            array_coercion,
-                        );
-                    // All array arguments must be coercible to the same type
-                    if new_type != new_array_type {
-                        return Ok(vec![vec![]]);
-                    }
-                    new_type
-                }
-            };
-            valid_types.push(valid_type);
-        }
+            },
+        );
 
-        Ok(vec![valid_types])
-    }
-
-    fn array(array_type: &DataType) -> Option<DataType> {
-        match array_type {
-            DataType::List(_) | DataType::LargeList(_) => Some(array_type.clone()),
-            DataType::FixedSizeList(field, _) => Some(DataType::List(Arc::clone(field))),
-            DataType::Null => Some(DataType::List(Arc::new(Field::new_list_field(
-                DataType::Int64,
-                true,
-            )))),
-            _ => None,
-        }
-    }
-
-    fn coerce_array_types(
-        function_name: &str,
-        current_type: &DataType,
-        base_type: &DataType,
-    ) -> Result<DataType> {
-        let current_base_type = datafusion_common::utils::base_type(current_type);
-        let new_base_type = comparison_coercion(base_type, &current_base_type);
-        new_base_type.ok_or_else(|| {
-            internal_datafusion_err!(
-                "Function '{function_name}' does not support coercion from {base_type:?} to {current_base_type:?}"
-            )
-        })
+        Ok(vec![valid_types.collect()])
     }
 
     fn recursive_array(array_type: &DataType) -> Option<DataType> {
@@ -800,7 +777,7 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
 ///
 /// Expect uni-directional coercion, for example, i32 is coerced to i64, but i64 is not coerced to i32.
 ///
-/// Unlike [comparison_coercion], the coerced type is usually `wider` for lossless conversion.
+/// Unlike [crate::binary::comparison_coercion], the coerced type is usually `wider` for lossless conversion.
 fn coerced_from<'a>(
     type_into: &'a DataType,
     type_from: &'a DataType,
@@ -867,7 +844,7 @@ fn coerced_from<'a>(
         // Only accept list and largelist with the same number of dimensions unless the type is Null.
         // List or LargeList with different dimensions should be handled in TypeSignature or other places before this
         (List(_) | LargeList(_), _)
-            if datafusion_common::utils::base_type(type_from).eq(&Null)
+            if base_type(type_from).is_null()
                 || list_ndims(type_from) == list_ndims(type_into) =>
         {
             Some(type_into.clone())
@@ -906,7 +883,6 @@ fn coerced_from<'a>(
 
 #[cfg(test)]
 mod tests {
-
     use crate::Volatility;
 
     use super::*;
