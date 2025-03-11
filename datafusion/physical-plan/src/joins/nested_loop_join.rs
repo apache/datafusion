@@ -425,8 +425,11 @@ impl DisplayAs for NestedLoopJoinExec {
                 )
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                if *self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)
+                } else {
+                    Ok(())
+                }
             }
         }
     }

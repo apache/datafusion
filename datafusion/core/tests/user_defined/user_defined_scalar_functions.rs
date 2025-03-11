@@ -1228,12 +1228,8 @@ impl ScalarUDFImpl for MyRegexUdf {
         }
     }
 
-    fn invoke_batch(
-        &self,
-        args: &[ColumnarValue],
-        _number_rows: usize,
-    ) -> Result<ColumnarValue> {
-        match args {
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        match args.args.as_slice() {
             [ColumnarValue::Scalar(ScalarValue::Utf8(value))] => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Boolean(
                     self.matches(value.as_deref()),
