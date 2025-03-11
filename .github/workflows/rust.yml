@@ -106,10 +106,10 @@ jobs:
         run: cargo check --profile ci --all-targets --no-default-features -p datafusion-substrait
       - name: Check datafusion-substrait (physical)
         run: cargo check --profile ci --all-targets --no-default-features -p datafusion-substrait --features=physical
-      - name: Install Protobuf Compiler
+      - name: Install cmake
         run: |
-          apt-get update
-          apt-get install -y protobuf-compiler
+          # note the builder setup runs apt-get update / installs protobuf compiler
+          apt-get install -y cmake
       - name: Check datafusion-substrait (protoc)
         run: cargo check --profile ci --all-targets --no-default-features -p datafusion-substrait --features=protoc
 
