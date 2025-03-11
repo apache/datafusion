@@ -106,6 +106,8 @@ jobs:
         run: cargo check --profile ci --all-targets --no-default-features -p datafusion-substrait
       - name: Check datafusion-substrait (physical)
         run: cargo check --profile ci --all-targets --no-default-features -p datafusion-substrait --features=physical
+      - name: Install Protobuf Compiler
+        run: sudo apt-get install -y protobuf-compiler
       - name: Check datafusion-substrait (protoc)
         run: cargo check --profile ci --all-targets --no-default-features -p datafusion-substrait --features=protoc
 
