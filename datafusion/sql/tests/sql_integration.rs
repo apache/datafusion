@@ -3275,12 +3275,11 @@ fn order_by_unaliased_name() {
     // SchemaError(FieldNotFound { qualifier: Some("p"), name: "state", valid_fields: ["z", "q"] })
     let sql =
         "select p.state z, sum(age) q from person p group by p.state order by p.state";
-    let expected = "Projection: z, q\
-        \n  Sort: p.state ASC NULLS LAST\
-        \n    Projection: p.state AS z, sum(p.age) AS q, p.state\
-        \n      Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]\
-        \n        SubqueryAlias: p\
-        \n          TableScan: person";
+    let expected = "Sort: z ASC NULLS LAST\
+        \n  Projection: p.state AS z, sum(p.age) AS q\
+        \n    Aggregate: groupBy=[[p.state]], aggr=[[sum(p.age)]]\
+        \n      SubqueryAlias: p\
+        \n        TableScan: person";
     quick_test(sql, expected);
 }
 
