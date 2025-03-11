@@ -1632,7 +1632,7 @@ impl FunctionRegistry for SessionContext {
     }
 
     fn expr_planners(&self) -> Vec<Arc<dyn ExprPlanner>> {
-        self.state.read().expr_planners()
+        self.state.read().expr_planners().to_vec()
     }
 
     fn register_expr_planner(
