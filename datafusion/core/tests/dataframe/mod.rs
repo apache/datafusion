@@ -80,7 +80,7 @@ use datafusion_expr::{
 use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
-use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
+use datafusion_physical_plan::{displayable, ExecutionPlanProperties};
 
 // Get string representation of the plan
 async fn physical_plan_to_string(df: &DataFrame) -> String {
@@ -90,7 +90,8 @@ async fn physical_plan_to_string(df: &DataFrame) -> String {
         .await
         .expect("Error creating physical plan");
 
-    get_plan_string(&physical_plan).join("\n")
+    let formated = displayable(physical_plan.as_ref()).indent(true);
+    formated.to_string()
 }
 
 pub fn table_with_constraints() -> Arc<dyn TableProvider> {
