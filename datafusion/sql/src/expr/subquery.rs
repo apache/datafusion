@@ -118,7 +118,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             &sub_plan,
             spans.clone(),
             "Scalar subquery should only return one column",
-            "Select only one column in the subquery or use a row constructor",
+            "Select only one column in the subquery",
         )?;
 
         Ok(Expr::ScalarSubquery(Subquery {
