@@ -774,11 +774,19 @@ impl OptimizerRule for PushDownFilter {
 
         let plan_schema = Arc::clone(plan.schema());
 
-        let LogicalPlan::Filter(mut filter) = plan else {
+        let LogicalPlan::Filter(mut filter) = plan.clone() else {
             return Ok(Transformed::no(plan));
         };
 
         match Arc::unwrap_or_clone(filter.input) {
+            // This prevents the Filter from being removed when the extension node has no children,
+            // so we return the original Filter unchanged.
+            LogicalPlan::Extension(extension_plan)
+                if extension_plan.node.inputs().is_empty() =>
+            {
+                filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
+                Ok(Transformed::no(LogicalPlan::Filter(filter)))
+            }
             LogicalPlan::Filter(child_filter) => {
                 let parents_predicates = split_conjunction_owned(filter.predicate);
 
@@ -3784,6 +3792,165 @@ Projection: a, b
         let expected_after = "Projection: a, b\
         \n  Filter: t.a > Int32(5) AND t.b > Int32(10) AND TestScalarUDF() > Float64(0.1)\
         \n    TableScan: test";
+        assert_optimized_plan_eq(plan, expected_after)
+    }
+
+    #[test]
+    fn test_push_down_filter_to_user_defined_node() -> Result<()> {
+        // Define a custom user-defined logical node
+        #[derive(Debug, Hash, Eq, PartialEq)]
+        struct TestUserNode {
+            schema: DFSchemaRef,
+        }
+
+        impl PartialOrd for TestUserNode {
+            fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+                None
+            }
+        }
+
+        impl TestUserNode {
+            fn new() -> Self {
+                let schema = Arc::new(
+                    DFSchema::new_with_metadata(
+                        vec![(None, Field::new("a", DataType::Int64, false).into())],
+                        Default::default(),
+                    )
+                    .unwrap(),
+                );
+
+                Self { schema }
+            }
+        }
+
+        impl UserDefinedLogicalNodeCore for TestUserNode {
+            fn name(&self) -> &str {
+                "test_node"
+            }
+
+            fn inputs(&self) -> Vec<&LogicalPlan> {
+                vec![]
+            }
+
+            fn schema(&self) -> &DFSchemaRef {
+                &self.schema
+            }
+
+            fn expressions(&self) -> Vec<Expr> {
+                vec![]
+            }
+
+            fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+                write!(f, "TestUserNode")
+            }
+
+            fn with_exprs_and_inputs(
+                &self,
+                exprs: Vec<Expr>,
+                inputs: Vec<LogicalPlan>,
+            ) -> Result<Self> {
+                assert!(exprs.is_empty());
+                assert!(inputs.is_empty());
+                Ok(Self {
+                    schema: self.schema.clone(),
+                })
+            }
+        }
+
+        // Create a node and build a plan with a filter
+        let node = LogicalPlan::Extension(Extension {
+            node: Arc::new(TestUserNode::new()),
+        });
+
+        let plan = LogicalPlanBuilder::from(node).filter(lit(false))?.build()?;
+
+        // Check the original plan format (not part of the test assertions)
+        let expected_before = "Filter: Boolean(false)\
+        \n  TestUserNode";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        // Check that the filter is pushed down to the user-defined node
+        let expected_after = "Filter: Boolean(false)\n  TestUserNode";
+        assert_optimized_plan_eq(plan, expected_after)
+    }
+
+    #[test]
+    fn test_push_down_filter_to_user_defined_node_2() -> Result<()> {
+        // Define a custom user-defined logical node
+        #[derive(Debug, Hash, Eq, PartialEq)]
+        struct TestUserNode {
+            schema: DFSchemaRef,
+        }
+
+        impl PartialOrd for TestUserNode {
+            fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
+                None
+            }
+        }
+
+        impl TestUserNode {
+            fn new() -> Self {
+                let schema = Arc::new(
+                    DFSchema::new_with_metadata(
+                        vec![(None, Field::new("a", DataType::Int64, false).into())],
+                        Default::default(),
+                    )
+                    .unwrap(),
+                );
+
+                Self { schema }
+            }
+        }
+
+        impl UserDefinedLogicalNodeCore for TestUserNode {
+            fn name(&self) -> &str {
+                "test_node"
+            }
+
+            fn inputs(&self) -> Vec<&LogicalPlan> {
+                vec![]
+            }
+
+            fn schema(&self) -> &DFSchemaRef {
+                &self.schema
+            }
+
+            fn expressions(&self) -> Vec<Expr> {
+                vec![]
+            }
+
+            fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+                write!(f, "TestUserNode")
+            }
+
+            fn with_exprs_and_inputs(
+                &self,
+                exprs: Vec<Expr>,
+                inputs: Vec<LogicalPlan>,
+            ) -> Result<Self> {
+                assert!(exprs.is_empty());
+                assert!(inputs.is_empty());
+                Ok(Self {
+                    schema: self.schema.clone(),
+                })
+            }
+        }
+
+        // Create a node and build a plan with a filter
+        let node = LogicalPlan::Extension(Extension {
+            node: Arc::new(TestUserNode::new()),
+        });
+
+        let plan = LogicalPlanBuilder::from(node).filter(lit(false))?.build()?;
+
+        // Check the original plan format (not part of the test assertions)
+        let expected_before = "Filter: Boolean(false)\
+        \n  TestUserNode";
+        assert_eq!(format!("{plan}"), expected_before);
+
+        // Check that the filter is NOT pushed down and removed from the plan
+        // The filter should remain in place since the node has no children to push to
+        let expected_after = "Filter: Boolean(false)\n  TestUserNode";
         assert_optimized_plan_eq(plan, expected_after)
     }
 }
