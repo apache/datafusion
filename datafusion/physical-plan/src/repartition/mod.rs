@@ -514,10 +514,7 @@ impl DisplayAs for RepartitionExec {
                     self.input.output_partitioning().partition_count()
                 )?;
                 if self.preserve_order {
-                    writeln!(f, ", preserve_order={}", "SortPreserving")?;
-                }
-                if let Some(sort_exprs) = self.sort_exprs() {
-                    write!(f, "sort_exprs={}", sort_exprs.clone())?;
+                    writeln!(f, "preserve_order={}", self.preserve_order)?;
                 }
                 Ok(())
             }
