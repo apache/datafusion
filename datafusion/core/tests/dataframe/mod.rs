@@ -2469,26 +2469,24 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
         .collect()
         .await?;
 
-    let expected_sql_result = "+---------------+------------------------------------------------------------------------------------------------------------+\
-    \n| plan_type     | plan                                                                                                       |\
-    \n+---------------+------------------------------------------------------------------------------------------------------------+\
-    \n| logical_plan  | Projection: t1.b, count(*)                                                                                 |\
-    \n|               |   Sort: count(Int64(1)) AS count(*) AS count(*) ASC NULLS LAST                                             |\
-    \n|               |     Projection: t1.b, count(Int64(1)) AS count(*), count(Int64(1))                                         |\
-    \n|               |       Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                                                |\
-    \n|               |         TableScan: t1 projection=[b]                                                                       |\
-    \n| physical_plan | ProjectionExec: expr=[b@0 as b, count(*)@1 as count(*)]                                                    |\
-    \n|               |   SortPreservingMergeExec: [count(Int64(1))@2 ASC NULLS LAST]                                              |\
-    \n|               |     SortExec: expr=[count(Int64(1))@2 ASC NULLS LAST], preserve_partitioning=[true]                        |\
-    \n|               |       ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*), count(Int64(1))@1 as count(Int64(1))] |\
-    \n|               |         AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))]                       |\
-    \n|               |           CoalesceBatchesExec: target_batch_size=8192                                                      |\
-    \n|               |             RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4                               |\
-    \n|               |               RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1                         |\
-    \n|               |                 AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]                        |\
-    \n|               |                   DataSourceExec: partitions=1, partition_sizes=[1]                                        |\
-    \n|               |                                                                                                            |\
-    \n+---------------+------------------------------------------------------------------------------------------------------------+";
+    let expected_sql_result = "+---------------+------------------------------------------------------------------------------------+\
+    \n| plan_type     | plan                                                                               |\
+    \n+---------------+------------------------------------------------------------------------------------+\
+    \n| logical_plan  | Sort: count(*) ASC NULLS LAST                                                      |\
+    \n|               |   Projection: t1.b, count(Int64(1)) AS count(*)                                    |\
+    \n|               |     Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                          |\
+    \n|               |       TableScan: t1 projection=[b]                                                 |\
+    \n| physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                               |\
+    \n|               |   SortExec: expr=[count(*)@1 ASC NULLS LAST], preserve_partitioning=[true]         |\
+    \n|               |     ProjectionExec: expr=[b@0 as b, count(Int64(1))@1 as count(*)]                 |\
+    \n|               |       AggregateExec: mode=FinalPartitioned, gby=[b@0 as b], aggr=[count(Int64(1))] |\
+    \n|               |         CoalesceBatchesExec: target_batch_size=8192                                |\
+    \n|               |           RepartitionExec: partitioning=Hash([b@0], 4), input_partitions=4         |\
+    \n|               |             RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1   |\
+    \n|               |               AggregateExec: mode=Partial, gby=[b@0 as b], aggr=[count(Int64(1))]  |\
+    \n|               |                 DataSourceExec: partitions=1, partition_sizes=[1]                  |\
+    \n|               |                                                                                    |\
+    \n+---------------+------------------------------------------------------------------------------------+";
 
     assert_eq!(
         expected_sql_result,
