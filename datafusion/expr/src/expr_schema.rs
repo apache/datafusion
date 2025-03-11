@@ -344,10 +344,9 @@ impl ExprSchemable for Expr {
         match self {
             Expr::Column(c) => Ok(schema.metadata(c)?.clone()),
             Expr::Alias(Alias { expr, metadata, .. }) => {
-                let ret = expr.metadata(schema)?;
+                let mut ret = expr.metadata(schema)?;
                 if let Some(metadata) = metadata {
                     if !metadata.is_empty() {
-                        let mut ret = ret.clone();
                         ret.extend(metadata.clone());
                         return Ok(ret);
                     }
