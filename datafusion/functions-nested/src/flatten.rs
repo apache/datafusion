@@ -162,20 +162,17 @@ fn flatten_internal<O: OffsetSizeTrait>(
 ) -> Result<GenericListArray<O>> {
     let (field, offsets, values, _) = array.clone().into_parts();
 
-    match field.data_type() {
+    let array = match field.data_type() {
         List(_) | LargeList(_) => {
             let (inner_field, inner_offsets, inner_values, _) =
                 as_generic_list_array::<O>(&values)?.clone().into_parts();
             let inner_offsets = get_offsets_for_flatten(inner_offsets, offsets);
-            return Ok(GenericListArray::<O>::new(
-                inner_field,
-                inner_offsets,
-                inner_values,
-                None,
-            ));
+            GenericListArray::<O>::new(inner_field, inner_offsets, inner_values, None)
         }
-        _ => Ok(array),
-    }
+        _ => array,
+    };
+
+    Ok(array)
 }
 
 // Create new offsets that are equivalent to `flatten` the array.
