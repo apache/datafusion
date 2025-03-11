@@ -255,7 +255,7 @@ config_namespace! {
        /// If true, `VARCHAR` is mapped to `Utf8View` during SQL planning.
        /// If false, `VARCHAR` is mapped to `Utf8`  during SQL planning.
        /// Default is false.
-        pub default_varchar_views: bool, default = false
+        pub map_varchar_to_utf8view: bool, default = false
 
         /// When set to true, the source locations relative to the original SQL
         /// query (i.e. [`Span`](https://docs.rs/sqlparser/latest/sqlparser/tokenizer/struct.Span.html)) will be collected

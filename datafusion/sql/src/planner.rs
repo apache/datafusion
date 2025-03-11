@@ -55,7 +55,7 @@ pub struct ParserOptions {
     /// Whether to collect spans
     pub collect_spans: bool,
     /// Whether `VARCHAR` is mapped to `Utf8View` during SQL planning.
-    pub default_varchar_views: bool,
+    pub map_varchar_to_utf8view: bool,
 }
 
 impl ParserOptions {
@@ -74,7 +74,7 @@ impl ParserOptions {
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
-            default_varchar_views: false,
+            map_varchar_to_utf8view: false,
             enable_options_value_normalization: false,
             collect_spans: false,
         }
@@ -114,9 +114,9 @@ impl ParserOptions {
         self
     }
 
-    /// Sets the `default_varchar_views` option.
-    pub fn with_default_varchar_views(mut self, value: bool) -> Self {
-        self.default_varchar_views = value;
+    /// Sets the `map_varchar_to_utf8view` option.
+    pub fn with_map_varchar_to_utf8view(mut self, value: bool) -> Self {
+        self.map_varchar_to_utf8view = value;
         self
     }
 
@@ -145,7 +145,7 @@ impl From<&SqlParserOptions> for ParserOptions {
             parse_float_as_decimal: options.parse_float_as_decimal,
             enable_ident_normalization: options.enable_ident_normalization,
             support_varchar_with_length: options.support_varchar_with_length,
-            default_varchar_views: options.default_varchar_views,
+            map_varchar_to_utf8view: options.map_varchar_to_utf8view,
             enable_options_value_normalization: options
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
@@ -569,7 +569,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 match (length, self.options.support_varchar_with_length) {
                     (Some(_), false) => plan_err!("does not support Varchar with length, please set `support_varchar_with_length` to be true"),
                     _ => {
-                        if self.options.default_varchar_views {
+                        if self.options.map_varchar_to_utf8view {
                             Ok(DataType::Utf8View)
                         } else {
                             Ok(DataType::Utf8)
