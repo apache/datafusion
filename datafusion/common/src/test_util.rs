@@ -17,6 +17,9 @@
 
 //! Utility functions to make testing DataFusion based crates easier
 
+use crate::arrow::util::pretty::pretty_format_batches_with_options;
+use crate::format::DEFAULT_FORMAT_OPTIONS;
+use arrow::array::RecordBatch;
 use std::{error::Error, path::PathBuf};
 
 /// Compares formatted output of a record batch with an expected
@@ -71,6 +74,15 @@ macro_rules! assert_batches_eq {
             expected_lines, actual_lines
         );
     };
+}
+
+pub fn batches_to_string(batches: &[RecordBatch]) -> String {
+    let actual_lines =
+        pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)
+            .unwrap()
+            .to_string();
+
+    actual_lines.trim().to_string()
 }
 
 /// Compares formatted output of a record batch with an expected

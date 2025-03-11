@@ -47,6 +47,7 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use url::Url;
 
+use datafusion::assert_batches_sorted_eq;
 use datafusion::dataframe::{DataFrame, DataFrameWriteOptions};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
@@ -60,8 +61,8 @@ use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
     test_table_with_name,
 };
-use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
 use datafusion_catalog::TableProvider;
+use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{
     assert_contains, Constraint, Constraints, DataFusionError, ParamValues, ScalarValue,
     TableReference, UnnestOptions,
@@ -2205,15 +2206,15 @@ async fn filtered_aggr_with_param_values() -> Result<()> {
         .with_param_values(ParamValues::List(vec![ScalarValue::from(10u64)]));
 
     let df_results = df?.collect().await?;
-    assert_batches_eq!(
-        &[
-            "+------------------------------------------------+",
-            "| count(table1.c2) FILTER (WHERE table1.c3 > $1) |",
-            "+------------------------------------------------+",
-            "| 54                                             |",
-            "+------------------------------------------------+",
-        ],
-        &df_results
+    assert_snapshot!(
+        batches_to_string(&df_results),
+        @r###"
+    +------------------------------------------------+
+    | count(table1.c2) FILTER (WHERE table1.c3 > $1) |
+    +------------------------------------------------+
+    | 54                                             |
+    +------------------------------------------------+
+    "###
     );
 
     Ok(())
@@ -2259,20 +2260,21 @@ async fn write_parquet_with_order() -> Result<()> {
     let df = ctx.sql("SELECT * FROM data").await?;
     let results = df.collect().await?;
 
-    assert_batches_eq!(
-        &[
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "| 2 | 6 |",
-            "| 3 | 5 |",
-            "| 5 | 3 |",
-            "| 7 | 4 |",
-            "+---+---+",
-        ],
-        &results
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +---+---+
+    | a | b |
+    +---+---+
+    | 1 | 2 |
+    | 2 | 6 |
+    | 3 | 5 |
+    | 5 | 3 |
+    | 7 | 4 |
+    +---+---+
+    "###
     );
+
     Ok(())
 }
 
@@ -2316,19 +2318,19 @@ async fn write_csv_with_order() -> Result<()> {
     let df = ctx.sql("SELECT * FROM data").await?;
     let results = df.collect().await?;
 
-    assert_batches_eq!(
-        &[
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "| 2 | 6 |",
-            "| 3 | 5 |",
-            "| 5 | 3 |",
-            "| 7 | 4 |",
-            "+---+---+",
-        ],
-        &results
+    assert_snapshot!(
+        batches_to_string(&results),
+        @r###"
+    +---+---+
+    | a | b |
+    +---+---+
+    | 1 | 2 |
+    | 2 | 6 |
+    | 3 | 5 |
+    | 5 | 3 |
+    | 7 | 4 |
+    +---+---+
+    "###
     );
     Ok(())
 }
@@ -2373,19 +2375,19 @@ async fn write_json_with_order() -> Result<()> {
     let df = ctx.sql("SELECT * FROM data").await?;
     let results = df.collect().await?;
 
-    assert_batches_eq!(
-        &[
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "| 2 | 6 |",
-            "| 3 | 5 |",
-            "| 5 | 3 |",
-            "| 7 | 4 |",
-            "+---+---+",
-        ],
-        &results
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +---+---+
+    | a | b |
+    +---+---+
+    | 1 | 2 |
+    | 2 | 6 |
+    | 3 | 5 |
+    | 5 | 3 |
+    | 7 | 4 |
+    +---+---+
+    "###
     );
     Ok(())
 }
@@ -2427,19 +2429,19 @@ async fn write_table_with_order() -> Result<()> {
     let df = ctx.sql("SELECT * FROM data").await?;
     let results = df.collect().await?;
 
-    assert_batches_eq!(
-        &[
-            "+-----------+",
-            "| tablecol1 |",
-            "+-----------+",
-            "| a         |",
-            "| b         |",
-            "| c         |",
-            "| x         |",
-            "| z         |",
-            "+-----------+",
-        ],
-        &results
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +-----------+
+    | tablecol1 |
+    +-----------+
+    | a         |
+    | b         |
+    | c         |
+    | x         |
+    | z         |
+    +-----------+
+    "###
     );
     Ok(())
 }
@@ -2971,16 +2973,19 @@ async fn sort_on_unprojected_columns() -> Result<()> {
         .unwrap();
     let results = df.collect().await.unwrap();
 
-    #[rustfmt::skip]
-        let expected = ["+-----+",
-        "| a   |",
-        "+-----+",
-        "| 100 |",
-        "| 10  |",
-        "| 10  |",
-        "| 1   |",
-        "+-----+"];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +-----+
+    | a   |
+    +-----+
+    | 100 |
+    | 10  |
+    | 10  |
+    | 1   |
+    +-----+
+    "###
+    );
 
     Ok(())
 }
@@ -3015,15 +3020,18 @@ async fn sort_on_distinct_columns() -> Result<()> {
         .unwrap();
     let results = df.collect().await.unwrap();
 
-    #[rustfmt::skip]
-        let expected = ["+-----+",
-        "| a   |",
-        "+-----+",
-        "| 100 |",
-        "| 10  |",
-        "| 1   |",
-        "+-----+"];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +-----+
+    | a   |
+    +-----+
+    | 100 |
+    | 10  |
+    | 1   |
+    +-----+
+    "###
+    );
     Ok(())
 }
 
@@ -3155,14 +3163,17 @@ async fn filter_with_alias_overwrite() -> Result<()> {
         .unwrap();
     let results = df.collect().await.unwrap();
 
-    #[rustfmt::skip]
-        let expected = ["+------+",
-        "| a    |",
-        "+------+",
-        "| true |",
-        "| true |",
-        "+------+"];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +------+
+    | a    |
+    +------+
+    | true |
+    | true |
+    +------+
+    "###
+    );
 
     Ok(())
 }
@@ -3188,16 +3199,19 @@ async fn select_with_alias_overwrite() -> Result<()> {
 
     let results = df.collect().await?;
 
-    #[rustfmt::skip]
-        let expected = ["+-------+",
-        "| a     |",
-        "+-------+",
-        "| false |",
-        "| true  |",
-        "| true  |",
-        "| false |",
-        "+-------+"];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +-------+
+    | a     |
+    +-------+
+    | false |
+    | true  |
+    | true  |
+    | false |
+    +-------+
+    "###
+    );
 
     Ok(())
 }
@@ -3220,24 +3234,26 @@ async fn test_grouping_sets() -> Result<()> {
 
     let results = df.collect().await?;
 
-    let expected = vec![
-        "+-----------+-----+---------------+",
-        "| a         | b   | count(test.a) |",
-        "+-----------+-----+---------------+",
-        "|           | 100 | 1             |",
-        "|           | 10  | 2             |",
-        "|           | 1   | 1             |",
-        "| abcDEF    |     | 1             |",
-        "| abcDEF    | 1   | 1             |",
-        "| abc123    |     | 1             |",
-        "| abc123    | 10  | 1             |",
-        "| CBAdef    |     | 1             |",
-        "| CBAdef    | 10  | 1             |",
-        "| 123AbcDef |     | 1             |",
-        "| 123AbcDef | 100 | 1             |",
-        "+-----------+-----+---------------+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +-----------+-----+---------------+
+    | a         | b   | count(test.a) |
+    +-----------+-----+---------------+
+    |           | 100 | 1             |
+    |           | 10  | 2             |
+    |           | 1   | 1             |
+    | abcDEF    |     | 1             |
+    | abcDEF    | 1   | 1             |
+    | abc123    |     | 1             |
+    | abc123    | 10  | 1             |
+    | CBAdef    |     | 1             |
+    | CBAdef    | 10  | 1             |
+    | 123AbcDef |     | 1             |
+    | 123AbcDef | 100 | 1             |
+    +-----------+-----+---------------+
+    "###
+    );
 
     Ok(())
 }
@@ -3261,23 +3277,25 @@ async fn test_grouping_sets_count() -> Result<()> {
 
     let results = df.collect().await?;
 
-    let expected = vec![
-        "+----+----+-----------------+",
-        "| c1 | c2 | count(Int32(1)) |",
-        "+----+----+-----------------+",
-        "|    | 5  | 14              |",
-        "|    | 4  | 23              |",
-        "|    | 3  | 19              |",
-        "|    | 2  | 22              |",
-        "|    | 1  | 22              |",
-        "| e  |    | 21              |",
-        "| d  |    | 18              |",
-        "| c  |    | 21              |",
-        "| b  |    | 19              |",
-        "| a  |    | 21              |",
-        "+----+----+-----------------+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +----+----+-----------------+
+    | c1 | c2 | count(Int32(1)) |
+    +----+----+-----------------+
+    |    | 5  | 14              |
+    |    | 4  | 23              |
+    |    | 3  | 19              |
+    |    | 2  | 22              |
+    |    | 1  | 22              |
+    | e  |    | 21              |
+    | d  |    | 18              |
+    | c  |    | 21              |
+    | b  |    | 19              |
+    | a  |    | 21              |
+    +----+----+-----------------+
+    "###
+    );
 
     Ok(())
 }
@@ -3308,48 +3326,50 @@ async fn test_grouping_set_array_agg_with_overflow() -> Result<()> {
 
     let results = df.collect().await?;
 
-    let expected = vec![
-        "+----+----+--------+---------------------+",
-        "| c1 | c2 | sum_c3 | avg_c3              |",
-        "+----+----+--------+---------------------+",
-        "|    | 5  | -194   | -13.857142857142858 |",
-        "|    | 4  | 29     | 1.2608695652173914  |",
-        "|    | 3  | 395    | 20.789473684210527  |",
-        "|    | 2  | 184    | 8.363636363636363   |",
-        "|    | 1  | 367    | 16.681818181818183  |",
-        "| e  |    | 847    | 40.333333333333336  |",
-        "| e  | 5  | -22    | -11.0               |",
-        "| e  | 4  | 261    | 37.285714285714285  |",
-        "| e  | 3  | 192    | 48.0                |",
-        "| e  | 2  | 189    | 37.8                |",
-        "| e  | 1  | 227    | 75.66666666666667   |",
-        "| d  |    | 458    | 25.444444444444443  |",
-        "| d  | 5  | -99    | -49.5               |",
-        "| d  | 4  | 162    | 54.0                |",
-        "| d  | 3  | 124    | 41.333333333333336  |",
-        "| d  | 2  | 328    | 109.33333333333333  |",
-        "| d  | 1  | -57    | -8.142857142857142  |",
-        "| c  |    | -28    | -1.3333333333333333 |",
-        "| c  | 5  | 24     | 12.0                |",
-        "| c  | 4  | -43    | -10.75              |",
-        "| c  | 3  | 190    | 47.5                |",
-        "| c  | 2  | -389   | -55.57142857142857  |",
-        "| c  | 1  | 190    | 47.5                |",
-        "| b  |    | -111   | -5.842105263157895  |",
-        "| b  | 5  | -1     | -0.2                |",
-        "| b  | 4  | -223   | -44.6               |",
-        "| b  | 3  | -84    | -42.0               |",
-        "| b  | 2  | 102    | 25.5                |",
-        "| b  | 1  | 95     | 31.666666666666668  |",
-        "| a  |    | -385   | -18.333333333333332 |",
-        "| a  | 5  | -96    | -32.0               |",
-        "| a  | 4  | -128   | -32.0               |",
-        "| a  | 3  | -27    | -4.5                |",
-        "| a  | 2  | -46    | -15.333333333333334 |",
-        "| a  | 1  | -88    | -17.6               |",
-        "+----+----+--------+---------------------+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +----+----+--------+---------------------+
+    | c1 | c2 | sum_c3 | avg_c3              |
+    +----+----+--------+---------------------+
+    |    | 5  | -194   | -13.857142857142858 |
+    |    | 4  | 29     | 1.2608695652173914  |
+    |    | 3  | 395    | 20.789473684210527  |
+    |    | 2  | 184    | 8.363636363636363   |
+    |    | 1  | 367    | 16.681818181818183  |
+    | e  |    | 847    | 40.333333333333336  |
+    | e  | 5  | -22    | -11.0               |
+    | e  | 4  | 261    | 37.285714285714285  |
+    | e  | 3  | 192    | 48.0                |
+    | e  | 2  | 189    | 37.8                |
+    | e  | 1  | 227    | 75.66666666666667   |
+    | d  |    | 458    | 25.444444444444443  |
+    | d  | 5  | -99    | -49.5               |
+    | d  | 4  | 162    | 54.0                |
+    | d  | 3  | 124    | 41.333333333333336  |
+    | d  | 2  | 328    | 109.33333333333333  |
+    | d  | 1  | -57    | -8.142857142857142  |
+    | c  |    | -28    | -1.3333333333333333 |
+    | c  | 5  | 24     | 12.0                |
+    | c  | 4  | -43    | -10.75              |
+    | c  | 3  | 190    | 47.5                |
+    | c  | 2  | -389   | -55.57142857142857  |
+    | c  | 1  | 190    | 47.5                |
+    | b  |    | -111   | -5.842105263157895  |
+    | b  | 5  | -1     | -0.2                |
+    | b  | 4  | -223   | -44.6               |
+    | b  | 3  | -84    | -42.0               |
+    | b  | 2  | 102    | 25.5                |
+    | b  | 1  | 95     | 31.666666666666668  |
+    | a  |    | -385   | -18.333333333333332 |
+    | a  | 5  | -96    | -32.0               |
+    | a  | 4  | -128   | -32.0               |
+    | a  | 3  | -27    | -4.5                |
+    | a  | 2  | -46    | -15.333333333333334 |
+    | a  | 1  | -88    | -17.6               |
+    +----+----+--------+---------------------+
+    "###
+    );
 
     Ok(())
 }
@@ -3625,16 +3645,18 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
         .unnest_columns(&["make_array_expr"])?;
 
     let results = df.collect().await.unwrap();
-    let expected = [
-        "+-----------------+---------+",
-        "| make_array_expr | column1 |",
-        "+-----------------+---------+",
-        "| x               | x       |",
-        "| y               | y       |",
-        "| z               | z       |",
-        "+-----------------+---------+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +-----------------+---------+
+    | make_array_expr | column1 |
+    +-----------------+---------+
+    | x               | x       |
+    | y               | y       |
+    | z               | z       |
+    +-----------------+---------+
+    "###
+    );
 
     // make_array(dict_encoded_string,literal string)
     let make_array_udf_expr2 = make_array_udf().call(vec![
@@ -3651,19 +3673,21 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
         .unnest_columns(&["make_array_expr"])?;
 
     let results = df.collect().await.unwrap();
-    let expected = [
-        "+-----------------+---------+",
-        "| make_array_expr | column1 |",
-        "+-----------------+---------+",
-        "| x               | x       |",
-        "| fixed_string    | x       |",
-        "| y               | y       |",
-        "| fixed_string    | y       |",
-        "| z               | z       |",
-        "| fixed_string    | z       |",
-        "+-----------------+---------+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +-----------------+---------+
+    | make_array_expr | column1 |
+    +-----------------+---------+
+    | x               | x       |
+    | fixed_string    | x       |
+    | y               | y       |
+    | fixed_string    | y       |
+    | z               | z       |
+    | fixed_string    | z       |
+    +-----------------+---------+
+    "###
+    );
     Ok(())
 }
 
@@ -3671,17 +3695,19 @@ async fn unnest_dict_encoded_columns() -> Result<()> {
 async fn unnest_column_nulls() -> Result<()> {
     let df = table_with_lists_and_nulls().await?;
     let results = df.clone().collect().await?;
-    let expected = [
-        "+--------+----+",
-        "| list   | id |",
-        "+--------+----+",
-        "| [1, 2] | A  |",
-        "|        | B  |",
-        "| []     | C  |",
-        "| [3]    | D  |",
-        "+--------+----+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +--------+----+
+    | list   | id |
+    +--------+----+
+    | [1, 2] | A  |
+    |        | B  |
+    | []     | C  |
+    | [3]    | D  |
+    +--------+----+
+    "###
+    );
 
     // Unnest, preserving nulls (row with B is preserved)
     let options = UnnestOptions::new().with_preserve_nulls(true);
@@ -3691,33 +3717,37 @@ async fn unnest_column_nulls() -> Result<()> {
         .unnest_columns_with_options(&["list"], options)?
         .collect()
         .await?;
-    let expected = [
-        "+------+----+",
-        "| list | id |",
-        "+------+----+",
-        "| 1    | A  |",
-        "| 2    | A  |",
-        "|      | B  |",
-        "| 3    | D  |",
-        "+------+----+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +------+----+
+    | list | id |
+    +------+----+
+    | 1    | A  |
+    | 2    | A  |
+    |      | B  |
+    | 3    | D  |
+    +------+----+
+    "###
+    );
 
     let options = UnnestOptions::new().with_preserve_nulls(false);
     let results = df
         .unnest_columns_with_options(&["list"], options)?
         .collect()
         .await?;
-    let expected = [
-        "+------+----+",
-        "| list | id |",
-        "+------+----+",
-        "| 1    | A  |",
-        "| 2    | A  |",
-        "| 3    | D  |",
-        "+------+----+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +------+----+
+    | list | id |
+    +------+----+
+    | 1    | A  |
+    | 2    | A  |
+    | 3    | D  |
+    +------+----+
+    "###
+    );
 
     Ok(())
 }
@@ -4178,22 +4208,24 @@ async fn unnest_multiple_columns() -> Result<()> {
     // large_list:  [null, 1.1], [2.2, 3.3, 4.4], null, [],
     // fixed_list:  null, [1,2], [3,4], null
     // string:      a, b, c, d
-    let expected = [
-        "+------+------------+------------+--------+",
-        "| list | large_list | fixed_list | string |",
-        "+------+------------+------------+--------+",
-        "| 1    |            |            | a      |",
-        "| 2    | 1.1        |            | a      |",
-        "| 3    |            |            | a      |",
-        "|      | 2.2        | 1          | b      |",
-        "|      | 3.3        | 2          | b      |",
-        "|      | 4.4        |            | b      |",
-        "|      |            | 3          | c      |",
-        "|      |            | 4          | c      |",
-        "|      |            |            | d      |",
-        "+------+------------+------------+--------+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +------+------------+------------+--------+
+    | list | large_list | fixed_list | string |
+    +------+------------+------------+--------+
+    | 1    |            |            | a      |
+    | 2    | 1.1        |            | a      |
+    | 3    |            |            | a      |
+    |      | 2.2        | 1          | b      |
+    |      | 3.3        | 2          | b      |
+    |      | 4.4        |            | b      |
+    |      |            | 3          | c      |
+    |      |            | 4          | c      |
+    |      |            |            | d      |
+    +------+------------+------------+--------+
+    "###
+    );
 
     // Test with `preserve_nulls = false``
     let results = df
@@ -4207,21 +4239,23 @@ async fn unnest_multiple_columns() -> Result<()> {
     // large_list:  [null, 1.1], [2.2, 3.3, 4.4], null, [],
     // fixed_list:  null, [1,2], [3,4], null
     // string:      a, b, c, d
-    let expected = [
-        "+------+------------+------------+--------+",
-        "| list | large_list | fixed_list | string |",
-        "+------+------------+------------+--------+",
-        "| 1    |            |            | a      |",
-        "| 2    | 1.1        |            | a      |",
-        "| 3    |            |            | a      |",
-        "|      | 2.2        | 1          | b      |",
-        "|      | 3.3        | 2          | b      |",
-        "|      | 4.4        |            | b      |",
-        "|      |            | 3          | c      |",
-        "|      |            | 4          | c      |",
-        "+------+------------+------------+--------+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +------+------------+------------+--------+
+    | list | large_list | fixed_list | string |
+    +------+------------+------------+--------+
+    | 1    |            |            | a      |
+    | 2    | 1.1        |            | a      |
+    | 3    |            |            | a      |
+    |      | 2.2        | 1          | b      |
+    |      | 3.3        | 2          | b      |
+    |      | 4.4        |            | b      |
+    |      |            | 3          | c      |
+    |      |            | 4          | c      |
+    +------+------------+------------+--------+
+    "###
+    );
 
     Ok(())
 }
@@ -4247,18 +4281,18 @@ async fn unnest_non_nullable_list() -> Result<()> {
         .collect()
         .await?;
 
-    // Unnesting may produce NULLs even if the list is non-nullable.
-    #[rustfmt::skip]
-    let expected = [
-        "+----+",
-        "| c1 |",
-        "+----+",
-        "| 1  |",
-        "| 2  |",
-        "|    |",
-        "+----+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +----+
+    | c1 |
+    +----+
+    | 1  |
+    | 2  |
+    |    |
+    +----+
+    "###
+    );
 
     Ok(())
 }
@@ -4695,14 +4729,16 @@ async fn test_array_agg() -> Result<()> {
 
     let results = df.collect().await?;
 
-    let expected = [
-        "+-------------------------------------+",
-        "| array_agg(test.a)                   |",
-        "+-------------------------------------+",
-        "| [abcDEF, abc123, CBAdef, 123AbcDef] |",
-        "+-------------------------------------+",
-    ];
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +-------------------------------------+
+    | array_agg(test.a)                   |
+    +-------------------------------------+
+    | [abcDEF, abc123, CBAdef, 123AbcDef] |
+    +-------------------------------------+
+    "###
+    );
 
     Ok(())
 }
@@ -4767,13 +4803,13 @@ async fn test_dataframe_placeholder_missing_param_values() -> Result<()> {
     );
 
     // N.B., the test is basically `SELECT 1 as a WHERE a = 3;` which returns no results.
-    #[rustfmt::skip]
-    let expected = [
-        "++",
-        "++"
-    ];
-
-    assert_batches_eq!(expected, &df.collect().await.unwrap());
+    assert_snapshot!(
+       batches_to_string(&df.collect().await.unwrap()),
+        @r###"
+    ++
+    ++
+    "###
+    );
 
     Ok(())
 }
@@ -4829,16 +4865,16 @@ async fn test_dataframe_placeholder_column_parameter() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    #[rustfmt::skip]
-    let expected = [
-        "+----+",
-        "| $1 |",
-        "+----+",
-        "| 3  |",
-        "+----+"
-    ];
-
-    assert_batches_eq!(expected, &df.collect().await.unwrap());
+    assert_snapshot!(
+       batches_to_string(&df.collect().await.unwrap()),
+        @r###"
+    +----+
+    | $1 |
+    +----+
+    | 3  |
+    +----+
+    "###
+    );
 
     Ok(())
 }
@@ -4902,16 +4938,16 @@ async fn test_dataframe_placeholder_like_expression() -> Result<()> {
         "\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
     );
 
-    #[rustfmt::skip]
-    let expected = [
-        "+-----+",
-        "| a   |",
-        "+-----+",
-        "| foo |",
-        "+-----+"
-    ];
-
-    assert_batches_eq!(expected, &df.collect().await.unwrap());
+    assert_snapshot!(
+       batches_to_string(&df.collect().await.unwrap()),
+        @r###"
+    +-----+
+    | a   |
+    +-----+
+    | foo |
+    +-----+
+    "###
+    );
 
     Ok(())
 }
@@ -4966,9 +5002,16 @@ async fn write_partitioned_parquet_results() -> Result<()> {
 
     // Check that the c2 column is gone and that c1 is abc.
     let results = filter_df.collect().await?;
-    let expected = ["+-----+", "| c1  |", "+-----+", "| abc |", "+-----+"];
-
-    assert_batches_eq!(expected, &results);
+    assert_snapshot!(
+       batches_to_string(&results),
+        @r###"
+    +-----+
+    | c1  |
+    +-----+
+    | abc |
+    +-----+
+    "###
+    );
 
     // Read the entire set of parquet files
     let df = ctx
@@ -5254,32 +5297,37 @@ async fn boolean_dictionary_as_filter() {
     let df = ctx.table("dict_batch").await.unwrap();
 
     // view_all
-    let expected = [
-        "+---------+",
-        "| my_dict |",
-        "+---------+",
-        "| true    |",
-        "| true    |",
-        "| false   |",
-        "|         |",
-        "| false   |",
-        "| true    |",
-        "| false   |",
-        "+---------+",
-    ];
-    assert_batches_eq!(expected, &df.clone().collect().await.unwrap());
+    assert_snapshot!(
+       batches_to_string(&df.clone().collect().await.unwrap()),
+        @r###"
+    +---------+
+    | my_dict |
+    +---------+
+    | true    |
+    | true    |
+    | false   |
+    |         |
+    | false   |
+    | true    |
+    | false   |
+    +---------+
+    "###
+    );
 
     let result_df = df.clone().filter(col("my_dict")).unwrap();
-    let expected = [
-        "+---------+",
-        "| my_dict |",
-        "+---------+",
-        "| true    |",
-        "| true    |",
-        "| true    |",
-        "+---------+",
-    ];
-    assert_batches_eq!(expected, &result_df.collect().await.unwrap());
+
+    assert_snapshot!(
+       batches_to_string(&result_df.collect().await.unwrap()),
+        @r###"
+    +---------+
+    | my_dict |
+    +---------+
+    | true    |
+    | true    |
+    | true    |
+    +---------+
+    "###
+    );
 
     // test nested dictionary
     let keys = vec![0, 2]; // 0 -> true, 2 -> false
@@ -5307,27 +5355,29 @@ async fn boolean_dictionary_as_filter() {
     let df = ctx.table("nested_dict_batch").await.unwrap();
 
     // view_all
-    let expected = [
-        "+----------------+",
-        "| my_nested_dict |",
-        "+----------------+",
-        "| true           |",
-        "| false          |",
-        "+----------------+",
-    ];
-
-    assert_batches_eq!(expected, &df.clone().collect().await.unwrap());
+    assert_snapshot!(
+       batches_to_string(&df.clone().collect().await.unwrap()),
+        @r###"
+    +----------------+
+    | my_nested_dict |
+    +----------------+
+    | true           |
+    | false          |
+    +----------------+
+    "###
+    );
 
     let result_df = df.clone().filter(col("my_nested_dict")).unwrap();
-    let expected = [
-        "+----------------+",
-        "| my_nested_dict |",
-        "+----------------+",
-        "| true           |",
-        "+----------------+",
-    ];
-
-    assert_batches_eq!(expected, &result_df.collect().await.unwrap());
+    assert_snapshot!(
+       batches_to_string(&result_df.collect().await.unwrap()),
+        @r###"
+    +----------------+
+    | my_nested_dict |
+    +----------------+
+    | true           |
+    +----------------+
+    "###
+    );
 }
 
 #[tokio::test]
@@ -5732,11 +5782,16 @@ async fn test_insert_into_casting_support() -> Result<()> {
         .await
         .unwrap();
 
-    // The result should be the same as the input which is ['a123', 'b456']
-    let expected = [
-        "+------+", "| a    |", "+------+", "| a123 |", "| b456 |", "+------+",
-    ];
-
-    assert_batches_eq!(expected, &res);
+    assert_snapshot!(
+       batches_to_string(&res),
+        @r###"
+    +------+
+    | a    |
+    +------+
+    | a123 |
+    | b456 |
+    +------+
+    "###
+    );
     Ok(())
 }
