@@ -1727,7 +1727,10 @@ impl DefaultPhysicalPlanner {
             let config = &session_state.config_options().explain;
             let explain_format = DisplayFormatType::from_str(&config.format)?;
 
-            if !config.physical_plan_only {
+            let skip_logical_plan = config.physical_plan_only
+                || explain_format == DisplayFormatType::TreeRender;
+
+            if !skip_logical_plan {
                 stringified_plans.clone_from(&e.stringified_plans);
                 if e.logical_optimization_succeeded {
                     stringified_plans.push(e.plan.to_stringified(FinalLogicalPlan));

@@ -139,10 +139,6 @@ FROM
 query TT
 explain SELECT int_col FROM table1 WHERE string_col != 'foo';
 ----
-logical_plan
-01)Projection: table1.int_col
-02)--Filter: table1.string_col != Utf8("foo")
-03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("foo")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -167,9 +163,6 @@ physical_plan
 query TT
 explain SELECT string_col, SUM(bigint_col) FROM table1 GROUP BY string_col;
 ----
-logical_plan
-01)Aggregate: groupBy=[[table1.string_col]], aggr=[[sum(table1.bigint_col)]]
-02)--TableScan: table1 projection=[string_col, bigint_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│       AggregateExec       │
@@ -197,9 +190,6 @@ physical_plan
 query TT
 explain SELECT int_col FROM table1 LIMIT 3,2;
 ----
-logical_plan
-01)Limit: skip=3, fetch=2
-02)--TableScan: table1 projection=[int_col], fetch=5
 physical_plan
 01)┌───────────────────────────┐
 02)│      GlobalLimitExec      │
@@ -218,11 +208,6 @@ physical_plan
 query TT
 explain SELECT table1.string_col, table2.date_col FROM table1 JOIN table2 ON table1.int_col = table2.int_col;
 ----
-logical_plan
-01)Projection: table1.string_col, table2.date_col
-02)--Inner Join: table1.int_col = table2.int_col
-03)----TableScan: table1 projection=[int_col, string_col]
-04)----TableScan: table2 projection=[int_col, date_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -259,14 +244,6 @@ FROM
   table1 JOIN table2 ON table1.int_col = table2.int_col
          JOIN table3 ON table2.int_col = table3.int_col;
 ----
-logical_plan
-01)Projection: table1.string_col, table2.date_col, table3.date_col
-02)--Inner Join: table2.int_col = table3.int_col
-03)----Projection: table1.string_col, table2.int_col, table2.date_col
-04)------Inner Join: table1.int_col = table2.int_col
-05)--------TableScan: table1 projection=[int_col, string_col]
-06)--------TableScan: table2 projection=[int_col, date_col]
-07)----TableScan: table3 projection=[int_col, date_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -312,10 +289,6 @@ explain SELECT int_col FROM table1
 WHERE string_col != 'foo' AND string_col != 'bar' AND string_col != 'a really long string constant'
 ;
 ----
-logical_plan
-01)Projection: table1.int_col
-02)--Filter: table1.string_col != Utf8("foo") AND table1.string_col != Utf8("bar") AND table1.string_col != Utf8("a really long string constant")
-03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("foo"), table1.string_col != Utf8("bar"), table1.string_col != Utf8("a really long string constant")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -345,10 +318,6 @@ query TT
 explain SELECT int_col FROM table1
 WHERE string_col != 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 ----
-logical_plan
-01)Projection: table1.int_col
-02)--Filter: table1.string_col != Utf8("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -402,10 +371,6 @@ query TT
 explain SELECT int_col FROM table1
 WHERE string_col != 'aaaaaaaaaaa';
 ----
-logical_plan
-01)Projection: table1.int_col
-02)--Filter: table1.string_col != Utf8("aaaaaaaaaaa")
-03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("aaaaaaaaaaa")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -431,10 +396,6 @@ query TT
 explain SELECT int_col FROM table1
 WHERE string_col != 'aaaaaaaaaaaa';
 ----
-logical_plan
-01)Projection: table1.int_col
-02)--Filter: table1.string_col != Utf8("aaaaaaaaaaaa")
-03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("aaaaaaaaaaaa")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -460,10 +421,6 @@ physical_plan
 query TT
 explain SELECT int_col FROM table1 WHERE string_col != 'foo';
 ----
-logical_plan
-01)Projection: table1.int_col
-02)--Filter: table1.string_col != Utf8("foo")
-03)----TableScan: table1 projection=[int_col, string_col], partial_filters=[table1.string_col != Utf8("foo")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -489,10 +446,6 @@ physical_plan
 query TT
 explain SELECT int_col FROM table2 WHERE string_col != 'foo';
 ----
-logical_plan
-01)Projection: table2.int_col
-02)--Filter: table2.string_col != Utf8View("foo")
-03)----TableScan: table2 projection=[int_col, string_col], partial_filters=[table2.string_col != Utf8View("foo")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -520,10 +473,6 @@ physical_plan
 query TT
 explain SELECT int_col FROM table3 WHERE string_col != 'foo';
 ----
-logical_plan
-01)Projection: table3.int_col
-02)--Filter: table3.string_col != Utf8("foo")
-03)----TableScan: table3 projection=[int_col, string_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -546,10 +495,6 @@ physical_plan
 query TT
 explain SELECT int_col FROM table4 WHERE string_col != 'foo';
 ----
-logical_plan
-01)Projection: table4.int_col
-02)--Filter: table4.string_col != Utf8("foo")
-03)----TableScan: table4 projection=[int_col, string_col], partial_filters=[table4.string_col != Utf8("foo")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -574,10 +519,6 @@ physical_plan
 query TT
 explain SELECT int_col FROM table5 WHERE string_col != 'foo';
 ----
-logical_plan
-01)Projection: table5.int_col
-02)--Filter: table5.string_col != Utf8("foo")
-03)----TableScan: table5 projection=[int_col, string_col], partial_filters=[table5.string_col != Utf8("foo")]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -603,10 +544,6 @@ physical_plan
 query TT
 explain select count(*) over() from table1;
 ----
-logical_plan
-01)Projection: count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-02)--WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-03)----TableScan: table1 projection=[]
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -642,12 +579,6 @@ explain SELECT
     SUM(v1) OVER (ORDER BY v1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS rolling_sum
 FROM generate_series(1, 1000) AS t1(v1);
 ----
-logical_plan
-01)Projection: t1.v1, sum(t1.v1) ORDER BY [t1.v1 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW AS rolling_sum
-02)--WindowAggr: windowExpr=[[sum(t1.v1) ORDER BY [t1.v1 ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW]]
-03)----SubqueryAlias: t1
-04)------Projection: tmp_table.value AS v1
-05)--------TableScan: tmp_table projection=[value]
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -674,17 +605,16 @@ physical_plan
 23)┌─────────────┴─────────────┐
 24)│          SortExec         │
 25)│    --------------------   │
-26)│         sort keys:        │
-27)│   [v1@0 ASC NULLS LAST]   │
-28)└─────────────┬─────────────┘
-29)┌─────────────┴─────────────┐
-30)│       ProjectionExec      │
-31)│    --------------------   │
-32)│        v1: value@0        │
-33)└─────────────┬─────────────┘
-34)┌─────────────┴─────────────┐
-35)│       LazyMemoryExec      │
-36)└───────────────────────────┘
+26)│    v1@0 ASC NULLS LAST    │
+27)└─────────────┬─────────────┘
+28)┌─────────────┴─────────────┐
+29)│       ProjectionExec      │
+30)│    --------------------   │
+31)│        v1: value@0        │
+32)└─────────────┬─────────────┘
+33)┌─────────────┴─────────────┐
+34)│       LazyMemoryExec      │
+35)└───────────────────────────┘
 
 query TT
 explain select 
@@ -692,10 +622,6 @@ explain select
   row_number() over ()
 from table1
 ----
-logical_plan
-01)Projection: count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS count(*) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-02)--WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-03)----TableScan: table1 projection=[]
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -738,16 +664,30 @@ physical_plan
 query TT
 explain SELECT * FROM table1 ORDER BY string_col;
 ----
-logical_plan
-01)Sort: table1.string_col ASC NULLS LAST
-02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│          SortExec         │
 03)│    --------------------   │
-04)│         sort keys:        │
-05)│  [string_col@1 ASC NULLS  │
-06)│            LAST]          │
+04)│string_col@1 ASC NULLS LAST│
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│       DataSourceExec      │
+08)│    --------------------   │
+09)│          files: 1         │
+10)│        format: csv        │
+11)└───────────────────────────┘
+
+# Query for sort with limit.
+query TT
+explain SELECT * FROM table1 ORDER BY string_col LIMIT 1;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│          SortExec         │
+03)│    --------------------   │
+04)│          limit: 1         │
+05)│                           │
+06)│string_col@1 ASC NULLS LAST│
 07)└─────────────┬─────────────┘
 08)┌─────────────┴─────────────┐
 09)│       DataSourceExec      │
@@ -756,37 +696,10 @@ physical_plan
 12)│        format: csv        │
 13)└───────────────────────────┘
 
-# Query for sort with limit.
-query TT
-explain SELECT * FROM table1 ORDER BY string_col LIMIT 1;
-----
-logical_plan
-01)Sort: table1.string_col ASC NULLS LAST, fetch=1
-02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
-physical_plan
-01)┌───────────────────────────┐
-02)│          SortExec         │
-03)│    --------------------   │
-04)│          limit: 1         │
-05)│                           │
-06)│         sort keys:        │
-07)│  [string_col@1 ASC NULLS  │
-08)│            LAST]          │
-09)└─────────────┬─────────────┘
-10)┌─────────────┴─────────────┐
-11)│       DataSourceExec      │
-12)│    --------------------   │
-13)│          files: 1         │
-14)│        format: csv        │
-15)└───────────────────────────┘
-
 # Query with projection on csv
 query TT
 explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table1;
 ----
-logical_plan
-01)Projection: table1.int_col, table1.bigint_col, CAST(table1.int_col AS Int64) + table1.bigint_col AS sum_col
-02)--TableScan: table1 projection=[int_col, bigint_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -816,11 +729,6 @@ explain select
   row_number() over (ORDER BY int_col ASC)
 from table1
 ----
-logical_plan
-01)Projection: rank() ORDER BY [table1.int_col DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, row_number() ORDER BY [table1.int_col ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-02)--WindowAggr: windowExpr=[[row_number() ORDER BY [table1.int_col ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-03)----WindowAggr: windowExpr=[[rank() ORDER BY [table1.int_col DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-04)------TableScan: table1 projection=[int_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -865,41 +773,36 @@ physical_plan
 41)┌─────────────┴─────────────┐
 42)│          SortExec         │
 43)│    --------------------   │
-44)│         sort keys:        │
-45)│ [int_col@0 ASC NULLS LAST]│
-46)└─────────────┬─────────────┘
-47)┌─────────────┴─────────────┐
-48)│    BoundedWindowAggExec   │
-49)│    --------------------   │
-50)│        mode: Sorted       │
-51)│                           │
-52)│        select_list:       │
-53)│  rank() ORDER BY [table1  │
-54)│    .int_col DESC NULLS    │
-55)│    FIRST] RANGE BETWEEN   │
-56)│   UNBOUNDED PRECEDING AND │
-57)│         CURRENT ROW       │
-58)└─────────────┬─────────────┘
-59)┌─────────────┴─────────────┐
-60)│          SortExec         │
-61)│    --------------------   │
-62)│         sort keys:        │
-63)│      [int_col@0 DESC]     │
-64)└─────────────┬─────────────┘
-65)┌─────────────┴─────────────┐
-66)│       DataSourceExec      │
-67)│    --------------------   │
-68)│          files: 1         │
-69)│        format: csv        │
-70)└───────────────────────────┘
+44)│  int_col@0 ASC NULLS LAST │
+45)└─────────────┬─────────────┘
+46)┌─────────────┴─────────────┐
+47)│    BoundedWindowAggExec   │
+48)│    --------------------   │
+49)│        mode: Sorted       │
+50)│                           │
+51)│        select_list:       │
+52)│  rank() ORDER BY [table1  │
+53)│    .int_col DESC NULLS    │
+54)│    FIRST] RANGE BETWEEN   │
+55)│   UNBOUNDED PRECEDING AND │
+56)│         CURRENT ROW       │
+57)└─────────────┬─────────────┘
+58)┌─────────────┴─────────────┐
+59)│          SortExec         │
+60)│    --------------------   │
+61)│       int_col@0 DESC      │
+62)└─────────────┬─────────────┘
+63)┌─────────────┴─────────────┐
+64)│       DataSourceExec      │
+65)│    --------------------   │
+66)│          files: 1         │
+67)│        format: csv        │
+68)└───────────────────────────┘
 
 # Query with projection on parquet
 query TT
 explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table2;
 ----
-logical_plan
-01)Projection: table2.int_col, table2.bigint_col, CAST(table2.int_col AS Int64) + table2.bigint_col AS sum_col
-02)--TableScan: table2 projection=[int_col, bigint_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -928,9 +831,6 @@ physical_plan
 query TT
 explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table3;
 ----
-logical_plan
-01)Projection: table3.int_col, table3.bigint_col, CAST(table3.int_col AS Int64) + table3.bigint_col AS sum_col
-02)--TableScan: table3 projection=[int_col, bigint_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -956,9 +856,6 @@ physical_plan
 query TT
 explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table4;
 ----
-logical_plan
-01)Projection: table4.int_col, table4.bigint_col, table4.int_col + table4.bigint_col AS sum_col
-02)--TableScan: table4 projection=[bigint_col, int_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -986,9 +883,6 @@ physical_plan
 query TT
 explain SELECT int_col, bigint_col, int_col+bigint_col AS sum_col FROM table5;
 ----
-logical_plan
-01)Projection: table5.int_col, table5.bigint_col, CAST(table5.int_col AS Int64) + table5.bigint_col AS sum_col
-02)--TableScan: table5 projection=[int_col, bigint_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
@@ -1018,24 +912,20 @@ EXPLAIN SELECT *
 FROM annotated_data_infinite2
 ORDER BY a, b, d;
 ----
-logical_plan
-01)Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST
-02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
 physical_plan
 01)┌───────────────────────────┐
 02)│      PartialSortExec      │
 03)│    --------------------   │
-04)│         sort keys:        │
-05)│  a@1 ASC NULLS LAST, b@2  │
-06)│     ASC NULLS LAST, d@4   │
-07)│       ASC NULLS LAST      │
-08)└─────────────┬─────────────┘
-09)┌─────────────┴─────────────┐
-10)│     StreamingTableExec    │
-11)│    --------------------   │
-12)│       infinite: true      │
-13)│        limit: None        │
-14)└───────────────────────────┘
+04)│  a@1 ASC NULLS LAST, b@2  │
+05)│     ASC NULLS LAST, d@4   │
+06)│       ASC NULLS LAST      │
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│     StreamingTableExec    │
+10)│    --------------------   │
+11)│       infinite: true      │
+12)│        limit: None        │
+13)└───────────────────────────┘
 
 query TT
 EXPLAIN SELECT *
@@ -1043,35 +933,27 @@ FROM annotated_data_infinite2
 ORDER BY a, b, d
 LIMIT 50;
 ----
-logical_plan
-01)Sort: annotated_data_infinite2.a ASC NULLS LAST, annotated_data_infinite2.b ASC NULLS LAST, annotated_data_infinite2.d ASC NULLS LAST, fetch=50
-02)--TableScan: annotated_data_infinite2 projection=[a0, a, b, c, d]
 physical_plan
 01)┌───────────────────────────┐
 02)│      PartialSortExec      │
 03)│    --------------------   │
-04)│         limit: 50         │
-05)│                           │
-06)│         sort keys:        │
-07)│  a@1 ASC NULLS LAST, b@2  │
-08)│     ASC NULLS LAST, d@4   │
-09)│       ASC NULLS LAST      │
-10)└─────────────┬─────────────┘
-11)┌─────────────┴─────────────┐
-12)│     StreamingTableExec    │
-13)│    --------------------   │
-14)│       infinite: true      │
-15)│        limit: None        │
-16)└───────────────────────────┘
+04)│  a@1 ASC NULLS LAST, b@2  │
+05)│     ASC NULLS LAST, d@4   │
+06)│       ASC NULLS LAST      │
+07)│                           │
+08)│         limit: 50         │
+09)└─────────────┬─────────────┘
+10)┌─────────────┴─────────────┐
+11)│     StreamingTableExec    │
+12)│    --------------------   │
+13)│       infinite: true      │
+14)│        limit: None        │
+15)└───────────────────────────┘
 
 # Query with hash join.
 query TT
 explain select * from table1 inner join table2 on table1.int_col = table2.int_col and table1.string_col = table2.string_col;
 ----
-logical_plan
-01)Inner Join: table1.int_col = table2.int_col, CAST(table1.string_col AS Utf8View) = table2.string_col
-02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
-03)--TableScan: table2 projection=[int_col, string_col, bigint_col, date_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -1125,10 +1007,6 @@ physical_plan
 query TT
 explain select * from table1 left outer join table2 on table1.int_col = table2.int_col and table1.string_col = table2.string_col;
 ----
-logical_plan
-01)Left Join: table1.int_col = table2.int_col, CAST(table1.string_col AS Utf8View) = table2.string_col
-02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
-03)--TableScan: table2 projection=[int_col, string_col, bigint_col, date_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│    CoalesceBatchesExec    │
@@ -1184,13 +1062,6 @@ physical_plan
 query TT
 explain select int_col from table1 where exists (select count(*) from table2);
 ----
-logical_plan
-01)LeftSemi Join: 
-02)--TableScan: table1 projection=[int_col], partial_filters=[Boolean(true)]
-03)--SubqueryAlias: __correlated_sq_1
-04)----Projection: 
-05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
-06)--------TableScan: table2 projection=[]
 physical_plan
 01)┌───────────────────────────┐
 02)│     NestedLoopJoinExec    │
@@ -1226,10 +1097,6 @@ physical_plan
 query TT
 explain select * from table1 cross join table2 ;
 ----
-logical_plan
-01)Cross Join: 
-02)--TableScan: table1 projection=[int_col, string_col, bigint_col, date_col]
-03)--TableScan: table2 projection=[int_col, string_col, bigint_col, date_col]
 physical_plan
 01)┌───────────────────────────┐
 02)│       CrossJoinExec       ├──────────────┐
@@ -1255,12 +1122,6 @@ set datafusion.optimizer.prefer_hash_join = false;
 query TT
 explain select * from hashjoin_datatype_table_t1 t1 join hashjoin_datatype_table_t2 t2 on t1.c1 = t2.c1
 ----
-logical_plan
-01)Inner Join: t1.c1 = t2.c1
-02)--SubqueryAlias: t1
-03)----TableScan: hashjoin_datatype_table_t1 projection=[c1, c2, c3, c4]
-04)--SubqueryAlias: t2
-05)----TableScan: hashjoin_datatype_table_t2 projection=[c1, c2, c3, c4]
 physical_plan
 01)┌───────────────────────────┐
 02)│     SortMergeJoinExec     │
@@ -1270,7 +1131,7 @@ physical_plan
 06)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 07)│          SortExec         ││          SortExec         │
 08)│    --------------------   ││    --------------------   │
-09)│   sort keys: [c1@0 ASC]   ││   sort keys: [c1@0 ASC]   │
+09)│          c1@0 ASC         ││          c1@0 ASC         │
 10)└─────────────┬─────────────┘└─────────────┬─────────────┘
 11)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 12)│       DataSourceExec      ││       DataSourceExec      │
@@ -1317,10 +1178,6 @@ explain SELECT * FROM data
 WHERE ticker = 'A' 
 ORDER BY "date", "time";
 ----
-logical_plan
-01)Sort: data.date ASC NULLS LAST, data.time ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A")
-03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
@@ -1351,10 +1208,6 @@ explain SELECT * FROM data
 WHERE ticker = 'A' AND CAST(time AS DATE) = date
 ORDER BY "time"
 ----
-logical_plan
-01)Sort: data.time ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
-03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
@@ -1385,10 +1238,6 @@ explain SELECT * FROM data
 WHERE ticker = 'A' AND CAST(time AS DATE) = date
 ORDER BY "date"
 ----
-logical_plan
-01)Sort: data.date ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
-03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
@@ -1419,10 +1268,6 @@ explain SELECT * FROM data
 WHERE ticker = 'A' AND CAST(time AS DATE) = date
 ORDER BY "ticker"
 ----
-logical_plan
-01)Sort: data.ticker ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
-03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)┌───────────────────────────┐
 02)│   CoalescePartitionsExec  │
@@ -1454,10 +1299,6 @@ explain SELECT * FROM data
 WHERE ticker = 'A' AND CAST(time AS DATE) = date
 ORDER BY "time", "date";
 ----
-logical_plan
-01)Sort: data.time ASC NULLS LAST, data.date ASC NULLS LAST
-02)--Filter: data.ticker = Utf8("A") AND CAST(data.time AS Date32) = data.date
-03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
@@ -1491,10 +1332,6 @@ explain SELECT * FROM data
 WHERE date = '2006-01-02' 
 ORDER BY "ticker", "time";
 ----
-logical_plan
-01)Sort: data.ticker ASC NULLS LAST, data.time ASC NULLS LAST
-02)--Filter: data.date = Date32("2006-01-02")
-03)----TableScan: data projection=[date, ticker, time]
 physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │

@@ -237,10 +237,12 @@ impl DisplayAs for CrossJoinExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            DisplayFormatType::Default
-            | DisplayFormatType::Verbose
-            | DisplayFormatType::TreeRender => {
+            DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "CrossJoinExec")
+            }
+            DisplayFormatType::TreeRender => {
+                // no extra info to display
+                Ok(())
             }
         }
     }
