@@ -108,15 +108,20 @@ impl DisplayAs for AsyncFuncExec {
         t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
+        let expr: Vec<String> = self
+            .async_exprs
+            .iter()
+            .map(|async_expr| async_expr.to_string())
+            .collect();
+        let exprs = expr.join(", ");
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                let expr: Vec<String> = self
-                    .async_exprs
-                    .iter()
-                    .map(|async_expr| async_expr.to_string())
-                    .collect();
-
-                write!(f, "AsyncFuncExec: async_expr=[{}]", expr.join(", "))
+                write!(f, "AsyncFuncExec: async_expr=[{}]", exprs)
+            }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "format=async_expr")?;
+                writeln!(f, "async_expr={}", exprs)?;
+                Ok(())
             }
         }
     }
