@@ -742,6 +742,15 @@ impl DisplayAs for AggregateExec {
         t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
+        let format_expr_with_alias =
+            |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+                let e = e.to_string();
+                if &e != alias {
+                    format!("{e} as {alias}")
+                } else {
+                    e
+                }
+            };
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
@@ -749,14 +758,7 @@ impl DisplayAs for AggregateExec {
                     self.group_by
                         .expr
                         .iter()
-                        .map(|(e, alias)| {
-                            let e = e.to_string();
-                            if &e != alias {
-                                format!("{e} as {alias}")
-                            } else {
-                                e
-                            }
-                        })
+                        .map(format_expr_with_alias)
                         .collect()
                 } else {
                     self.group_by
@@ -768,21 +770,11 @@ impl DisplayAs for AggregateExec {
                                 .enumerate()
                                 .map(|(idx, is_null)| {
                                     if *is_null {
-                                        let (e, alias) = &self.group_by.null_expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
+                                        format_expr_with_alias(
+                                            &self.group_by.null_expr[idx],
+                                        )
                                     } else {
-                                        let (e, alias) = &self.group_by.expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
+                                        format_expr_with_alias(&self.group_by.expr[idx])
                                     }
                                 })
                                 .collect::<Vec<String>>()
@@ -813,14 +805,7 @@ impl DisplayAs for AggregateExec {
                     self.group_by
                         .expr
                         .iter()
-                        .map(|(e, alias)| {
-                            let e = e.to_string();
-                            if &e != alias {
-                                format!("{e} as {alias}")
-                            } else {
-                                e
-                            }
-                        })
+                        .map(format_expr_with_alias)
                         .collect()
                 } else {
                     self.group_by
@@ -832,21 +817,11 @@ impl DisplayAs for AggregateExec {
                                 .enumerate()
                                 .map(|(idx, is_null)| {
                                     if *is_null {
-                                        let (e, alias) = &self.group_by.null_expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
+                                        format_expr_with_alias(
+                                            &self.group_by.null_expr[idx],
+                                        )
                                     } else {
-                                        let (e, alias) = &self.group_by.expr[idx];
-                                        let e = e.to_string();
-                                        if &e != alias {
-                                            format!("{e} as {alias}")
-                                        } else {
-                                            e
-                                        }
+                                        format_expr_with_alias(&self.group_by.expr[idx])
                                     }
                                 })
                                 .collect::<Vec<String>>()
