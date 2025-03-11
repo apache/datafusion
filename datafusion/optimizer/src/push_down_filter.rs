@@ -779,14 +779,6 @@ impl OptimizerRule for PushDownFilter {
         };
 
         match Arc::unwrap_or_clone(filter.input) {
-            // This prevents the Filter from being removed when the extension node has no children,
-            // so we return the original Filter unchanged.
-            LogicalPlan::Extension(extension_plan)
-                if extension_plan.node.inputs().is_empty() =>
-            {
-                filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
-                Ok(Transformed::no(LogicalPlan::Filter(filter)))
-            }
             LogicalPlan::Filter(child_filter) => {
                 let parents_predicates = split_conjunction_owned(filter.predicate);
 
@@ -1148,6 +1140,12 @@ impl OptimizerRule for PushDownFilter {
                 })
             }
             LogicalPlan::Extension(extension_plan) => {
+                // This check prevents the Filter from being removed when the extension node has no children,
+                // so we return the original Filter unchanged.
+                if extension_plan.node.inputs().is_empty() {
+                    filter.input = Arc::new(LogicalPlan::Extension(extension_plan));
+                    return Ok(Transformed::no(LogicalPlan::Filter(filter)));
+                }
                 let prevent_cols =
                     extension_plan.node.prevent_predicate_push_down_columns();
 
