@@ -3504,36 +3504,44 @@ async fn right_anti_filter_push_down() -> Result<()> {
     Ok(())
 }
 
+// The result can be flaky if `rand` crate updated
+// because of data generated
+// StdRng::seed_from_u64(x) varies in `table_with_nested_types`
+// test data generator
 #[tokio::test]
 async fn unnest_columns() -> Result<()> {
     const NUM_ROWS: usize = 4;
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.collect().await?;
-    let expected = ["+----------+------------------------------------------------+--------------------+",
-        "| shape_id | points                                         | tags               |",
-        "+----------+------------------------------------------------+--------------------+",
-        "| 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | [tag1]             |",
-        "| 2        |                                                | [tag1, tag2]       |",
-        "| 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |                    |",
-        "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | [tag1, tag2, tag3] |",
-        "+----------+------------------------------------------------+--------------------+"];
+    let expected = [
+        "+----------+---------------------------------+--------------------------+",
+        "| shape_id | points                          | tags                     |",
+        "+----------+---------------------------------+--------------------------+",
+        "| 1        | [{x: 5, y: -8}, {x: -3, y: -4}] | [tag1]                   |",
+        "| 2        | [{x: 6, y: 2}, {x: -2, y: -8}]  | [tag1]                   |",
+        "| 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | [tag1, tag2, tag3, tag4] |",
+        "| 4        |                                 | [tag1, tag2, tag3]       |",
+        "+----------+---------------------------------+--------------------------+",
+    ];
     assert_batches_sorted_eq!(expected, &results);
 
     // Unnest tags
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.unnest_columns(&["tags"])?.collect().await?;
     let expected = [
-        "+----------+------------------------------------------------+------+",
-        "| shape_id | points                                         | tags |",
-        "+----------+------------------------------------------------+------+",
-        "| 1        | [{x: -3, y: -4}, {x: -3, y: 6}, {x: 2, y: -2}] | tag1 |",
-        "| 2        |                                                | tag1 |",
-        "| 2        |                                                | tag2 |",
-        "| 3        | [{x: -9, y: 2}, {x: -10, y: -4}]               |      |",
-        "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag1 |",
-        "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag2 |",
-        "| 4        | [{x: -3, y: 5}, {x: 2, y: -1}]                 | tag3 |",
-        "+----------+------------------------------------------------+------+",
+        "+----------+---------------------------------+------+",
+        "| shape_id | points                          | tags |",
+        "+----------+---------------------------------+------+",
+        "| 1        | [{x: 5, y: -8}, {x: -3, y: -4}] | tag1 |",
+        "| 2        | [{x: 6, y: 2}, {x: -2, y: -8}]  | tag1 |",
+        "| 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag1 |",
+        "| 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag2 |",
+        "| 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag3 |",
+        "| 3        | [{x: -9, y: -7}, {x: -2, y: 5}] | tag4 |",
+        "| 4        |                                 | tag1 |",
+        "| 4        |                                 | tag2 |",
+        "| 4        |                                 | tag3 |",
+        "+----------+---------------------------------+------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
 
@@ -3546,18 +3554,18 @@ async fn unnest_columns() -> Result<()> {
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.unnest_columns(&["points"])?.collect().await?;
     let expected = [
-        "+----------+-----------------+--------------------+",
-        "| shape_id | points          | tags               |",
-        "+----------+-----------------+--------------------+",
-        "| 1        | {x: -3, y: -4}  | [tag1]             |",
-        "| 1        | {x: -3, y: 6}   | [tag1]             |",
-        "| 1        | {x: 2, y: -2}   | [tag1]             |",
-        "| 2        |                 | [tag1, tag2]       |",
-        "| 3        | {x: -10, y: -4} |                    |",
-        "| 3        | {x: -9, y: 2}   |                    |",
-        "| 4        | {x: -3, y: 5}   | [tag1, tag2, tag3] |",
-        "| 4        | {x: 2, y: -1}   | [tag1, tag2, tag3] |",
-        "+----------+-----------------+--------------------+",
+        "+----------+----------------+--------------------------+",
+        "| shape_id | points         | tags                     |",
+        "+----------+----------------+--------------------------+",
+        "| 1        | {x: -3, y: -4} | [tag1]                   |",
+        "| 1        | {x: 5, y: -8}  | [tag1]                   |",
+        "| 2        | {x: -2, y: -8} | [tag1]                   |",
+        "| 2        | {x: 6, y: 2}   | [tag1]                   |",
+        "| 3        | {x: -2, y: 5}  | [tag1, tag2, tag3, tag4] |",
+        "| 3        | {x: -9, y: -7} | [tag1, tag2, tag3, tag4] |",
+        "| 4        |                | [tag1, tag2, tag3]       |",
+        "+----------+----------------+--------------------------+",
+
     ];
     assert_batches_sorted_eq!(expected, &results);
 
@@ -3574,23 +3582,25 @@ async fn unnest_columns() -> Result<()> {
         .collect()
         .await?;
     let expected = vec![
-        "+----------+-----------------+------+",
-        "| shape_id | points          | tags |",
-        "+----------+-----------------+------+",
-        "| 1        | {x: -3, y: -4}  | tag1 |",
-        "| 1        | {x: -3, y: 6}   | tag1 |",
-        "| 1        | {x: 2, y: -2}   | tag1 |",
-        "| 2        |                 | tag1 |",
-        "| 2        |                 | tag2 |",
-        "| 3        | {x: -10, y: -4} |      |",
-        "| 3        | {x: -9, y: 2}   |      |",
-        "| 4        | {x: -3, y: 5}   | tag1 |",
-        "| 4        | {x: -3, y: 5}   | tag2 |",
-        "| 4        | {x: -3, y: 5}   | tag3 |",
-        "| 4        | {x: 2, y: -1}   | tag1 |",
-        "| 4        | {x: 2, y: -1}   | tag2 |",
-        "| 4        | {x: 2, y: -1}   | tag3 |",
-        "+----------+-----------------+------+",
+        "+----------+----------------+------+",
+        "| shape_id | points         | tags |",
+        "+----------+----------------+------+",
+        "| 1        | {x: -3, y: -4} | tag1 |",
+        "| 1        | {x: 5, y: -8}  | tag1 |",
+        "| 2        | {x: -2, y: -8} | tag1 |",
+        "| 2        | {x: 6, y: 2}   | tag1 |",
+        "| 3        | {x: -2, y: 5}  | tag1 |",
+        "| 3        | {x: -2, y: 5}  | tag2 |",
+        "| 3        | {x: -2, y: 5}  | tag3 |",
+        "| 3        | {x: -2, y: 5}  | tag4 |",
+        "| 3        | {x: -9, y: -7} | tag1 |",
+        "| 3        | {x: -9, y: -7} | tag2 |",
+        "| 3        | {x: -9, y: -7} | tag3 |",
+        "| 3        | {x: -9, y: -7} | tag4 |",
+        "| 4        |                | tag1 |",
+        "| 4        |                | tag2 |",
+        "| 4        |                | tag3 |",
+        "+----------+----------------+------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
 
@@ -3895,6 +3905,10 @@ async fn unnest_fixed_list_non_null() -> Result<()> {
     Ok(())
 }
 
+// The result can be flaky if `rand` crate updated
+// because of data generated
+// StdRng::seed_from_u64(x) varies in `table_with_nested_types`
+// test data generator
 #[tokio::test]
 async fn unnest_aggregate_columns() -> Result<()> {
     const NUM_ROWS: usize = 5;
@@ -3902,15 +3916,15 @@ async fn unnest_aggregate_columns() -> Result<()> {
     let df = table_with_nested_types(NUM_ROWS).await?;
     let results = df.select_columns(&["tags"])?.collect().await?;
     let expected = [
-        r#"+--------------------+"#,
-        r#"| tags               |"#,
-        r#"+--------------------+"#,
-        r#"| [tag1]             |"#,
-        r#"| [tag1, tag2]       |"#,
-        r#"|                    |"#,
-        r#"| [tag1, tag2, tag3] |"#,
-        r#"| [tag1, tag2, tag3] |"#,
-        r#"+--------------------+"#,
+        "+--------------------------+",
+        "| tags                     |",
+        "+--------------------------+",
+        "| [tag1, tag2, tag3, tag4] |",
+        "| [tag1, tag2, tag3]       |",
+        "| [tag1, tag2]             |",
+        "| [tag1]                   |",
+        "| [tag1]                   |",
+        "+--------------------------+",
     ];
     assert_batches_sorted_eq!(expected, &results);
 
@@ -3924,7 +3938,7 @@ async fn unnest_aggregate_columns() -> Result<()> {
         r#"+-------------+"#,
         r#"| count(tags) |"#,
         r#"+-------------+"#,
-        r#"| 9           |"#,
+        r#"| 11          |"#,
         r#"+-------------+"#,
     ];
     assert_batches_sorted_eq!(expected, &results);
@@ -4150,6 +4164,10 @@ async fn unnest_with_redundant_columns() -> Result<()> {
     Ok(())
 }
 
+// The result can be flaky if `rand` crate updated
+// because of data generated
+// StdRng::seed_from_u64(x) varies in `table_with_nested_types`
+// test data generator
 #[tokio::test]
 async fn unnest_analyze_metrics() -> Result<()> {
     const NUM_ROWS: usize = 5;
@@ -4164,7 +4182,7 @@ async fn unnest_analyze_metrics() -> Result<()> {
     assert_contains!(&formatted, "elapsed_compute=");
     assert_contains!(&formatted, "input_batches=1");
     assert_contains!(&formatted, "input_rows=5");
-    assert_contains!(&formatted, "output_rows=10");
+    assert_contains!(&formatted, "output_rows=11");
     assert_contains!(&formatted, "output_batches=1");
 
     Ok(())

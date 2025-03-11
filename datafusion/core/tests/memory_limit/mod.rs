@@ -393,7 +393,7 @@ async fn oom_with_tracked_consumer_pool() {
         .with_expected_errors(vec![
             "Failed to allocate additional",
             "for ParquetSink(ArrowColumnWriter)",
-            "Additional allocation failed with top memory consumers (across reservations) as: ParquetSink(ArrowColumnWriter)"
+            "Additional allocation failed with top memory consumers (across reservations) as: ParquetSink(SerializedFileWriter)"
         ])
         .with_memory_pool(Arc::new(
             TrackConsumersPool::new(
