@@ -186,8 +186,15 @@ impl DisplayAs for SortPreservingMergeExec {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                for (i, e) in self.expr().iter().enumerate() {
+                    let e = e.to_string();
+                    writeln!(f, "expr{i}={e}")?;
+                }
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "fetch={fetch}")?;
+                };
+
+                Ok(())
             }
         }
     }
