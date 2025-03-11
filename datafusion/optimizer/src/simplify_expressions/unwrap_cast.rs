@@ -81,16 +81,6 @@ pub(super) fn unwrap_cast_in_comparison_for_binary<S: SimplifyInfo>(
             let Ok(expr_type) = info.get_data_type(&expr) else {
                 return internal_err!("Can't get the data type of the expr {:?}", &expr);
             };
-
-            if let Some(value) = cast_literal_to_type_with_op(&lit_value, &expr_type, op)
-            {
-                return Ok(Transformed::yes(Expr::BinaryExpr(BinaryExpr {
-                    left: expr,
-                    op,
-                    right: Box::new(lit(value)),
-                })));
-            };
-
             // if the lit_value can be casted to the type of internal_left_expr
             // we need to unwrap the cast for cast/try_cast expr, and add cast to the literal
             let Some(value) = try_cast_literal_to_type(&lit_value, &expr_type) else {
@@ -116,7 +106,6 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary<
     info: &S,
     expr: &Expr,
     literal: &Expr,
-    op: Operator,
 ) -> bool {
     match (expr, literal) {
         (
@@ -135,10 +124,6 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_binary<
             let Ok(lit_type) = info.get_data_type(literal) else {
                 return false;
             };
-
-            if cast_literal_to_type_with_op(lit_val, &expr_type, op).is_some() {
-                return true;
-            }
 
             try_cast_literal_to_type(lit_val, &expr_type).is_some()
                 && is_supported_type(&expr_type)
@@ -190,45 +175,6 @@ pub(super) fn is_cast_expr_and_support_unwrap_cast_in_comparison_for_inlist<
     }
 
     true
-}
-
-fn cast_literal_to_type_with_op(
-    lit_value: &ScalarValue,
-    target_type: &DataType,
-    op: Operator,
-) -> Option<ScalarValue> {
-    macro_rules! cast_or_else_return_none {
-        ($value:ident, $ty:expr) => {{
-            let opts = arrow::compute::CastOptions {
-                safe: false,
-                format_options: Default::default(),
-            };
-            let array = ScalarValue::to_array($value).ok()?;
-            let casted = arrow::compute::cast_with_options(&array, &$ty, &opts).ok()?;
-            let scalar = ScalarValue::try_from_array(&casted, 0).ok()?;
-            Some(scalar)
-        }};
-    }
-
-    match (op, lit_value) {
-        (
-            Operator::Eq | Operator::NotEq,
-            ScalarValue::Utf8(Some(_))
-            | ScalarValue::Utf8View(Some(_))
-            | ScalarValue::LargeUtf8(Some(_)),
-        ) => match target_type {
-            DataType::Int8 => cast_or_else_return_none!(lit_value, DataType::Int8),
-            DataType::Int16 => cast_or_else_return_none!(lit_value, DataType::Int16),
-            DataType::Int32 => cast_or_else_return_none!(lit_value, DataType::Int32),
-            DataType::Int64 => cast_or_else_return_none!(lit_value, DataType::Int64),
-            DataType::UInt8 => cast_or_else_return_none!(lit_value, DataType::UInt8),
-            DataType::UInt16 => cast_or_else_return_none!(lit_value, DataType::UInt16),
-            DataType::UInt32 => cast_or_else_return_none!(lit_value, DataType::UInt32),
-            DataType::UInt64 => cast_or_else_return_none!(lit_value, DataType::UInt64),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 /// Returns true if unwrap_cast_in_comparison supports this data type
@@ -522,19 +468,6 @@ mod tests {
         // the 99999999999 is not within the range of MAX(int32) and MIN(int32), we don't cast the lit(99999999999) to int32 type
         let expr_lt = cast(col("c1"), DataType::Int64).lt(lit(99999999999i64));
         assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
-
-        // cast(c1, UTF8) < 123, only eq/not_eq should be optimized
-        let expr_lt = cast(col("c1"), DataType::Utf8).lt(lit("123"));
-        assert_eq!(optimize_test(expr_lt.clone(), &schema), expr_lt);
-
-        // cast(c1, UTF8) = 'not a number', should not be able to cast to column type
-        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("not a number"));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
-
-        // cast(c1, UTF8) = '99999999999', where '99999999999' does not fit into int32, so it will
-        // not be optimized to integer comparison
-        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("99999999999"));
-        assert_eq!(optimize_test(expr_input.clone(), &schema), expr_input);
     }
 
     #[test]
@@ -563,21 +496,6 @@ mod tests {
         let lit_lt_lit = cast(null_i8(), DataType::Int32).lt(lit(12i32));
         let expected = null_bool();
         assert_eq!(optimize_test(lit_lt_lit, &schema), expected);
-
-        // cast(c1, UTF8) = "123" => c1 = 123
-        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit("123"));
-        let expected = col("c1").eq(lit(123i32));
-        assert_eq!(optimize_test(expr_input, &schema), expected);
-
-        // cast(c1, UTF8) != "123" => c1 != 123
-        let expr_input = cast(col("c1"), DataType::Utf8).not_eq(lit("123"));
-        let expected = col("c1").not_eq(lit(123i32));
-        assert_eq!(optimize_test(expr_input, &schema), expected);
-
-        // cast(c1, UTF8) = NULL => c1 = NULL
-        let expr_input = cast(col("c1"), DataType::Utf8).eq(lit(ScalarValue::Utf8(None)));
-        let expected = col("c1").eq(lit(ScalarValue::Int32(None)));
-        assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
     #[test]
@@ -586,16 +504,6 @@ mod tests {
         let schema = expr_test_schema();
         let expr_input = cast(col("c6"), DataType::UInt64).eq(lit(0u64));
         let expected = col("c6").eq(lit(0u32));
-        assert_eq!(optimize_test(expr_input, &schema), expected);
-
-        // cast(c6, UTF8) = "123" => c6 = 123
-        let expr_input = cast(col("c6"), DataType::Utf8).eq(lit("123"));
-        let expected = col("c6").eq(lit(123u32));
-        assert_eq!(optimize_test(expr_input, &schema), expected);
-
-        // cast(c6, UTF8) != "123" => c6 != 123
-        let expr_input = cast(col("c6"), DataType::Utf8).not_eq(lit("123"));
-        let expected = col("c6").not_eq(lit(123u32));
         assert_eq!(optimize_test(expr_input, &schema), expected);
     }
 
