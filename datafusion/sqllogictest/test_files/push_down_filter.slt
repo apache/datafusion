@@ -244,6 +244,11 @@ explain select a from t where a = '';
 ----
 logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("")]
 
+# The predicate should still have the column cast when user explicitly cast the column
+query TT
+explain select a from t where cast(a as string) = '100';
+----
+logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("100")]
 
 statement ok
 drop table t;
