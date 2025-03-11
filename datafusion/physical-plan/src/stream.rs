@@ -27,7 +27,7 @@ use super::{ExecutionPlan, RecordBatchStream, SendableRecordBatchStream};
 use crate::displayable;
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{execution_err, internal_err, Result};
 use datafusion_execution::TaskContext;
 
 use futures::stream::BoxStream;
