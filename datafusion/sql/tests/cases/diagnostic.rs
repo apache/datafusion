@@ -343,3 +343,61 @@ fn test_scalar_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Err
 
     Ok(())
 }
+
+#[test]
+fn test_in_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Error>> {
+    // This query uses an IN subquery with multiple columns - this should trigger an error
+    let query = "SELECT * FROM person WHERE id IN (SELECT /*id*/id/*id*/, /*first*/first_name/*first*/ FROM person)";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+
+    assert_eq!(diag.message, "IN subquery returns multiple columns");
+
+    let column_count_notes: Vec<_> = diag
+        .notes
+        .iter()
+        .filter(|note| note.message.contains("Found 2 columns"))
+        .collect();
+    assert!(
+        !column_count_notes.is_empty(),
+        "Expected note about column count"
+    );
+
+    let extra_column_notes: Vec<_> = diag
+        .notes
+        .iter()
+        .filter(|note| note.message.contains("Extra column"))
+        .collect();
+    assert_eq!(
+        extra_column_notes.len(),
+        1,
+        "Expected one note about extra column"
+    );
+
+    if let Some(first_note) = diag.notes.first() {
+        assert_eq!(
+            first_note.span,
+            Some(spans["id"]),
+            "Primary diagnostic span should match the first column's span"
+        );
+    }
+
+    if let Some(extra_column_span) = extra_column_notes
+        .first()
+        .and_then(|note| note.span.as_ref())
+    {
+        assert_eq!(
+            *extra_column_span, spans["first"],
+            "Extra column note span should match the second column's span"
+        );
+    }
+
+    assert!(
+        diag.helps
+            .iter()
+            .any(|help| help.message.contains("Select only one column")),
+        "Expected help message"
+    );
+
+    Ok(())
+}

@@ -57,16 +57,74 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         let old_outer_query_schema =
             planner_context.set_outer_query_schema(Some(input_schema.clone().into()));
+
+        let mut spans = Spans::new();
+        if let SetExpr::Select(select) = subquery.body.as_ref() {
+            for item in &select.projection {
+                if let SelectItem::UnnamedExpr(sql_expr) = item {
+                    if let SQLExpr::Identifier(ident) = sql_expr {
+                        if let Some(span) = Span::try_from_sqlparser_span(ident.span) {
+                            spans.add_span(span);
+                        }
+                    }
+                }
+            }
+        }
+
         let sub_plan = self.query_to_plan(subquery, planner_context)?;
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.set_outer_query_schema(old_outer_query_schema);
-        let expr = Box::new(self.sql_to_expr(expr, input_schema, planner_context)?);
+
+        let sub_schema = sub_plan.schema();
+        let expr_obj = self.sql_to_expr(expr.clone(), input_schema, planner_context)?;
+
+        if sub_schema.fields().len() > 1 {
+            let fields = sub_schema.fields();
+            let error_message = format!(
+                "IN subquery should only return one column, but found {}: {}",
+                fields.len(),
+                sub_schema.field_names().join(", ")
+            );
+
+            return plan_err!("{}", &error_message).map_err(|err| {
+                let spans_vec = spans.clone();
+                let primary_span = spans_vec.first().clone();
+
+                let mut diagnostic = Diagnostic::new_error(
+                    "IN subquery returns multiple columns",
+                    primary_span,
+                );
+
+                let columns_info = format!(
+                    "Found {} columns: {}",
+                    fields.len(),
+                    sub_schema.field_names().join(", ")
+                );
+
+                if spans_vec.0.len() > 1 {
+                    diagnostic.add_note(columns_info.clone(), primary_span);
+                    for (i, span) in spans_vec.iter().skip(1).enumerate() {
+                        diagnostic.add_note(
+                            format!("Extra column {}", i + 1),
+                            Some(span.clone()),
+                        );
+                    }
+                } else {
+                    diagnostic.add_note(columns_info, primary_span);
+                }
+
+                diagnostic.add_help("Select only one column in the IN subquery", None);
+
+                err.with_diagnostic(diagnostic)
+            });
+        }
+
         Ok(Expr::InSubquery(InSubquery::new(
-            expr,
+            Box::new(expr_obj),
             Subquery {
                 subquery: Arc::new(sub_plan),
                 outer_ref_columns,
-                spans: None,
+                spans: Some(spans),
             },
             negated,
         )))
