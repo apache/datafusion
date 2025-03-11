@@ -1780,6 +1780,7 @@ dependencies = [
  "env_logger",
  "flate2",
  "futures",
+ "insta",
  "itertools 0.14.0",
  "log",
  "nix",

@@ -38,6 +38,7 @@ use datafusion_functions_aggregate::expr_fn::{
 };
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::expr_fn::{first_value, row_number};
+use insta::assert_snapshot;
 use object_store::local::LocalFileSystem;
 use sqlparser::ast::NullTreatment;
 use std::collections::HashMap;
@@ -82,18 +83,14 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::{get_plan_string, ExecutionPlanProperties};
 
 // Get string representation of the plan
-async fn assert_physical_plan(df: &DataFrame, expected: Vec<&str>) {
+async fn physical_plan_to_string(df: &DataFrame) -> String {
     let physical_plan = df
         .clone()
         .create_physical_plan()
         .await
         .expect("Error creating physical plan");
 
-    let actual = get_plan_string(&physical_plan);
-    assert_eq!(
-        expected, actual,
-        "\n**Optimized Plan Mismatch\n\nexpected:\n\n{expected:#?}\nactual:\n\n{actual:#?}\n\n"
-    );
+    get_plan_string(&physical_plan).join("\n")
 }
 
 pub fn table_with_constraints() -> Arc<dyn TableProvider> {
@@ -542,14 +539,14 @@ async fn test_aggregate_with_pk() -> Result<()> {
     // expression even if it is not part of the group by expression and can
     // select "name" column even though it wasn't explicitly grouped
     let df = df.select(vec![col("id"), col("name")])?;
-    assert_physical_plan(
-        &df,
-        vec![
-            "AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
-            "  DataSourceExec: partitions=1, partition_sizes=[1]",
-        ],
-    )
-    .await;
+
+    assert_snapshot!(
+        physical_plan_to_string(&df).await,
+        @r###"
+    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]
+      DataSourceExec: partitions=1, partition_sizes=[1]
+    "###
+    );
 
     let df_results = df.collect().await?;
 
@@ -584,16 +581,15 @@ async fn test_aggregate_with_pk2() -> Result<()> {
     // id = 1 AND name = 'a'
     let predicate = col("id").eq(lit(1i32)).and(col("name").eq(lit("a")));
     let df = df.filter(predicate)?;
-    assert_physical_plan(
-        &df,
-        vec![
-            "CoalesceBatchesExec: target_batch_size=8192",
-            "  FilterExec: id@0 = 1 AND name@1 = a",
-            "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
-            "      DataSourceExec: partitions=1, partition_sizes=[1]",
-        ],
-    )
-    .await;
+    assert_snapshot!(
+        physical_plan_to_string(&df).await,
+        @r###"
+    CoalesceBatchesExec: target_batch_size=8192
+      FilterExec: id@0 = 1 AND name@1 = a
+        AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]
+          DataSourceExec: partitions=1, partition_sizes=[1]
+    "###
+    );
 
     // Since id and name are functionally dependant, we can use name among expression
     // even if it is not part of the group by expression.
@@ -633,16 +629,15 @@ async fn test_aggregate_with_pk3() -> Result<()> {
     // Select expression refers to id, and name columns.
     // id, name
     let df = df.select(vec![col("id"), col("name")])?;
-    assert_physical_plan(
-        &df,
-        vec![
-            "CoalesceBatchesExec: target_batch_size=8192",
-            "  FilterExec: id@0 = 1",
-            "    AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]",
-            "      DataSourceExec: partitions=1, partition_sizes=[1]",
-        ],
-    )
-    .await;
+    assert_snapshot!(
+        physical_plan_to_string(&df).await,
+        @r###"
+    CoalesceBatchesExec: target_batch_size=8192
+      FilterExec: id@0 = 1
+        AggregateExec: mode=Single, gby=[id@0 as id, name@1 as name], aggr=[]
+          DataSourceExec: partitions=1, partition_sizes=[1]
+    "###
+    );
 
     // Since id and name are functionally dependant, we can use name among expression
     // even if it is not part of the group by expression.
@@ -684,16 +679,15 @@ async fn test_aggregate_with_pk4() -> Result<()> {
 
     // In this case aggregate shouldn't be expanded, since these
     // columns are not used.
-    assert_physical_plan(
-        &df,
-        vec![
-            "CoalesceBatchesExec: target_batch_size=8192",
-            "  FilterExec: id@0 = 1",
-            "    AggregateExec: mode=Single, gby=[id@0 as id], aggr=[]",
-            "      DataSourceExec: partitions=1, partition_sizes=[1]",
-        ],
-    )
-    .await;
+    assert_snapshot!(
+        physical_plan_to_string(&df).await,
+        @r###"
+    CoalesceBatchesExec: target_batch_size=8192
+      FilterExec: id@0 = 1
+        AggregateExec: mode=Single, gby=[id@0 as id], aggr=[]
+          DataSourceExec: partitions=1, partition_sizes=[1]
+    "###
+    );
 
     let df_results = df.collect().await?;
 
