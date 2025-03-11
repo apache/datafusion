@@ -251,6 +251,6 @@ impl AsyncScalarUDFImpl for AsyncEqual {
         _option: &ConfigOptions,
     ) -> Result<ArrayRef> {
         let [arg1, arg2] = take_function_args(self.name(), &args.args)?;
-        apply_cmp(&arg1, &arg2, eq)?.to_array(args.number_rows)
+        apply_cmp(arg1, arg2, eq)?.to_array(args.number_rows)
     }
 }
