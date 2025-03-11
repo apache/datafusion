@@ -54,7 +54,6 @@ use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
 use crate::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use crate::unwrap_cast_in_comparison::UnwrapCastInComparison;
 use crate::utils::log_plan;
 
 /// `OptimizerRule`s transforms one [`LogicalPlan`] into another which
@@ -70,24 +69,6 @@ use crate::utils::log_plan;
 /// [`AnalyzerRule`]: crate::analyzer::AnalyzerRule
 /// [`SessionState::add_optimizer_rule`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html#method.add_optimizer_rule
 pub trait OptimizerRule: Debug {
-    /// Try and rewrite `plan` to an optimized form, returning None if the plan
-    /// cannot be optimized by this rule.
-    ///
-    /// Note this API will be deprecated in the future as it requires `clone`ing
-    /// the input plan, which can be expensive. OptimizerRules should implement
-    /// [`Self::rewrite`] instead.
-    #[deprecated(
-        since = "40.0.0",
-        note = "please implement supports_rewrite and rewrite instead"
-    )]
-    fn try_optimize(
-        &self,
-        _plan: &LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Option<LogicalPlan>> {
-        internal_err!("Should have called rewrite")
-    }
-
     /// A human readable name for this optimizer rule
     fn name(&self) -> &str;
 
@@ -100,15 +81,13 @@ pub trait OptimizerRule: Debug {
     }
 
     /// Does this rule support rewriting owned plans (rather than by reference)?
+    #[deprecated(since = "47.0.0", note = "This method is no longer used")]
     fn supports_rewrite(&self) -> bool {
         true
     }
 
     /// Try to rewrite `plan` to an optimized form, returning `Transformed::yes`
     /// if the plan was rewritten and `Transformed::no` if it was not.
-    ///
-    /// Note: this function is only called if [`Self::supports_rewrite`] returns
-    /// true. Otherwise the Optimizer calls  [`Self::try_optimize`]
     fn rewrite(
         &self,
         _plan: LogicalPlan,
@@ -243,7 +222,6 @@ impl Optimizer {
         let rules: Vec<Arc<dyn OptimizerRule + Sync + Send>> = vec![
             Arc::new(EliminateNestedUnion::new()),
             Arc::new(SimplifyExpressions::new()),
-            Arc::new(UnwrapCastInComparison::new()),
             Arc::new(ReplaceDistinctWithAggregate::new()),
             Arc::new(EliminateJoin::new()),
             Arc::new(DecorrelatePredicateSubquery::new()),
@@ -266,7 +244,6 @@ impl Optimizer {
             // The previous optimizations added expressions and projections,
             // that might benefit from the following rules
             Arc::new(SimplifyExpressions::new()),
-            Arc::new(UnwrapCastInComparison::new()),
             Arc::new(CommonSubexprEliminate::new()),
             Arc::new(EliminateGroupByConstant::new()),
             Arc::new(OptimizeProjections::new()),
@@ -307,7 +284,9 @@ impl TreeNodeRewriter for Rewriter<'_> {
 
     fn f_down(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         if self.apply_order == ApplyOrder::TopDown {
-            optimize_plan_node(node, self.rule, self.config)
+            {
+                self.rule.rewrite(node, self.config)
+            }
         } else {
             Ok(Transformed::no(node))
         }
@@ -315,33 +294,13 @@ impl TreeNodeRewriter for Rewriter<'_> {
 
     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         if self.apply_order == ApplyOrder::BottomUp {
-            optimize_plan_node(node, self.rule, self.config)
+            {
+                self.rule.rewrite(node, self.config)
+            }
         } else {
             Ok(Transformed::no(node))
         }
     }
-}
-
-/// Invokes the Optimizer rule to rewrite the LogicalPlan in place.
-fn optimize_plan_node(
-    plan: LogicalPlan,
-    rule: &dyn OptimizerRule,
-    config: &dyn OptimizerConfig,
-) -> Result<Transformed<LogicalPlan>> {
-    if rule.supports_rewrite() {
-        return rule.rewrite(plan, config);
-    }
-
-    #[allow(deprecated)]
-    rule.try_optimize(&plan, config).map(|maybe_plan| {
-        match maybe_plan {
-            Some(new_plan) => {
-                // if the node was rewritten by the optimizer, replace the node
-                Transformed::yes(new_plan)
-            }
-            None => Transformed::no(plan),
-        }
-    })
 }
 
 impl Optimizer {
@@ -389,7 +348,9 @@ impl Optimizer {
                         &mut Rewriter::new(apply_order, rule.as_ref(), config),
                     ),
                     // rule handles recursion itself
-                    None => optimize_plan_node(new_plan, rule.as_ref(), config),
+                    None => {
+                        rule.rewrite(new_plan, config)
+                    },
                 }
                 .and_then(|tnr| {
                     // run checks optimizer invariant checks, per optimizer rule applied
