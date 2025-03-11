@@ -19,7 +19,7 @@
 //! help with allocation accounting.
 
 use datafusion_common::{internal_err, Result};
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, sync::Arc, sync::atomic::{AtomicU64, Ordering}};
 
 mod pool;
 pub mod proxy {
@@ -153,15 +153,30 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
 pub struct MemoryConsumer {
     name: String,
     can_spill: bool,
+    id: u64,
+    current_reservation: Arc<AtomicU64>,
 }
 
 impl MemoryConsumer {
     /// Create a new empty [`MemoryConsumer`] that can be grown using [`MemoryReservation`]
     pub fn new(name: impl Into<String>) -> Self {
+        static ID: AtomicU64 = AtomicU64::new(0);
         Self {
             name: name.into(),
             can_spill: false,
+            id: ID.fetch_add(1, Ordering::Relaxed),
+            current_reservation: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Returns the unique identifier for this consumer
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Returns a new unique reservation id for this consumer
+    pub fn new_reservation_id(&self) -> u64 {
+        self.current_reservation.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Set whether this allocation can be spilled to disk
@@ -183,12 +198,14 @@ impl MemoryConsumer {
     /// a [`MemoryReservation`] that can be used to grow or shrink the memory reservation
     pub fn register(self, pool: &Arc<dyn MemoryPool>) -> MemoryReservation {
         pool.register(&self);
+        let consumer = self;
         MemoryReservation {
             registration: Arc::new(SharedRegistration {
                 pool: Arc::clone(pool),
-                consumer: self,
+                consumer,
             }),
             size: 0,
+            id: consumer.new_reservation_id(),
         }
     }
 }
@@ -218,12 +235,18 @@ impl Drop for SharedRegistration {
 pub struct MemoryReservation {
     registration: Arc<SharedRegistration>,
     size: usize,
+    id: u64,
 }
 
 impl MemoryReservation {
     /// Returns the size of this reservation in bytes
     pub fn size(&self) -> usize {
         self.size
+    }
+
+    /// Returns the unique identifier for this reservation
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// Returns [MemoryConsumer] for this [MemoryReservation]
@@ -318,6 +341,7 @@ impl MemoryReservation {
         Self {
             size: capacity,
             registration: Arc::clone(&self.registration),
+            id: self.registration.consumer.new_reservation_id(),
         }
     }
 
@@ -326,6 +350,7 @@ impl MemoryReservation {
         Self {
             size: 0,
             registration: Arc::clone(&self.registration),
+            id: self.registration.consumer.new_reservation_id(),
         }
     }
 
