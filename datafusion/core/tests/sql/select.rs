@@ -354,20 +354,31 @@ async fn test_version_function() {
 #[tokio::test]
 async fn test_subscript() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.sql(r#"CREATE TABLE test
+    ctx.sql(
+        r#"CREATE TABLE test
         (struct_field STRUCT<substruct INT>)
-    "#).await?;
+    "#,
+    )
+    .await?;
     ctx.sql(r#"INSERT INTO test VALUES (STRUCT(1))"#).await?;
 
-    let df = ctx.sql(r#"SELECT *
+    let df = ctx
+        .sql(
+            r#"SELECT *
         FROM test AS test1, test AS test2 WHERE
-        test1.struct_field['substruct'] = test2.struct_field['substruct']"#).await?;
+        test1.struct_field['substruct'] = test2.struct_field['substruct']"#,
+        )
+        .await?;
     let _ = df.collect().await?;
 
-    ctx.sql(r#"CREATE TABLE testx
+    ctx.sql(
+        r#"CREATE TABLE testx
         (struct_field STRUCT<substruct STRUCT<subsubstruct INT>>)
-    "#).await?;
-    ctx.sql(r#"INSERT INTO testx VALUES (STRUCT(STRUCT(1)))"#).await?;
+    "#,
+    )
+    .await?;
+    ctx.sql(r#"INSERT INTO testx VALUES (STRUCT(STRUCT(1)))"#)
+        .await?;
 
     let df = ctx.sql(r#"SELECT *
         FROM testx AS test1, testx AS test2 WHERE

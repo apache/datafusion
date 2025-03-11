@@ -20,7 +20,9 @@ use datafusion_expr::planner::{
     PlannerResult, RawBinaryExpr, RawDictionaryExpr, RawFieldAccessExpr,
 };
 use sqlparser::ast::{
-    AccessExpr, BinaryOperator, CastFormat, CastKind, DataType as SQLDataType, DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry, Spanned, StructField, Subscript, TrimWhereField, Value
+    AccessExpr, BinaryOperator, CastFormat, CastKind, DataType as SQLDataType,
+    DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
+    Spanned, StructField, Subscript, TrimWhereField, Value,
 };
 
 use datafusion_common::{
@@ -981,6 +983,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok(Expr::Cast(Cast::new(Box::new(expr), dt)))
     }
 
+    /// Extracts the root expression and access chain from a compound expression.
+    ///
+    /// This function attempts to identify if a compound expression (like `a.b.c`) should be treated
+    /// as a column reference with a qualifier (like `table.column`) or as a field access expression.
+    ///
+    /// # Arguments
+    ///
+    /// * `root` - The root SQL expression (e.g., the first part of `a.b.c`)
+    /// * `access_chain` - Vector of access expressions (e.g., `.b` and `.c` parts)
+    /// * `schema` - The schema to resolve column references against
+    /// * `planner_context` - Context for planning expressions
+    ///
+    /// # Returns
+    ///
+    /// A tuple containing:
+    /// * The resolved root expression
+    /// * The remaining access chain that should be processed as field accesses
     fn extract_root_and_access_chain(
         &self,
         root: SQLExpr,
@@ -988,25 +1007,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<(Expr, Vec<AccessExpr>)> {
-        if let SQLExpr::Identifier(sqlparser::ast::Ident{value: id, ..}) = &root {
+        if let SQLExpr::Identifier(sqlparser::ast::Ident { value: id, .. }) = &root {
             let mut ids = vec![id.clone()];
             for access in &access_chain {
-                match access {
-                    AccessExpr::Dot(expr) => {
-                        if let SQLExpr::Identifier(sqlparser::ast::Ident{value: id, ..}) = expr {
-                            ids.push(id.clone());
-                        }
-                    }
-                    AccessExpr::Subscript(_) => {
-                        break;
-                    }
+                if let AccessExpr::Dot(SQLExpr::Identifier(sqlparser::ast::Ident {
+                    value: id,
+                    ..
+                })) = access
+                {
+                    ids.push(id.clone());
+                } else {
+                    break;
                 }
             }
 
             if ids.len() > 1 {
                 // maybe it's a compound identifier
-                if let Some((field, Some(qualifier), nested_names)) = identifier::search_dfschema(&ids, schema) {
-                    let num = ids.len() - nested_names.len();
+                if let Some((field, Some(qualifier), nested_names)) =
+                    identifier::search_dfschema(&ids, schema)
+                {
+                    let span_num = ids.len() - nested_names.len();
                     let mut idx = 0;
                     let mut spans = vec![];
                     if let Some(s) = Span::try_from_sqlparser_span(root.span()) {
@@ -1014,20 +1034,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     idx += 1;
 
+                    let mut nested_access_chain = vec![];
                     for access in &access_chain {
-                        match access {
-                            AccessExpr::Dot(expr) => {
-                                if idx >= num {
-                                    break;
-                                }
-                                idx += 1;
-                                if let Some(s) = Span::try_from_sqlparser_span(expr.span()) {
+                        if idx < span_num {
+                            idx += 1;
+                            if let AccessExpr::Dot(expr) = access {
+                                if let Some(s) =
+                                    Span::try_from_sqlparser_span(expr.span())
+                                {
                                     spans.push(s);
                                 }
+                            } else {
+                                unreachable!();
                             }
-                            AccessExpr::Subscript(_) => {
-                                break;
-                            }
+                        } else {
+                            nested_access_chain.push(access.clone());
                         }
                     }
 
@@ -1036,8 +1057,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         relation: Some(qualifier.clone()),
                         spans: datafusion_common::Spans(spans),
                     });
-                    let offset = access_chain.len() - nested_names.len();
-                    let access_chain = access_chain[offset..].to_vec();
+                    let access_chain = nested_access_chain;
                     return Ok((root, access_chain));
                 }
             }
@@ -1053,7 +1073,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let (mut root, access_chain) = self.extract_root_and_access_chain(root, access_chain, schema, planner_context)?;
+        let (mut root, access_chain) = self.extract_root_and_access_chain(
+            root,
+            access_chain,
+            schema,
+            planner_context,
+        )?;
         let fields = access_chain
             .into_iter()
             .map(|field| match field {
