@@ -72,7 +72,7 @@ async fn single_file() {
         // request_method = 'GET'
         .with_filter(col("request_method").eq(lit("GET")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(688);
+        .with_expected_rows(703);
     case.run().await;
 
     let case = TestCase::new(&test_parquet_file)
@@ -80,7 +80,7 @@ async fn single_file() {
         // request_method != 'GET'
         .with_filter(col("request_method").not_eq(lit("GET")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(3408);
+        .with_expected_rows(3393);
     case.run().await;
 
     let case = TestCase::new(&test_parquet_file)
@@ -95,7 +95,7 @@ async fn single_file() {
             .unwrap(),
         )
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(135);
+        .with_expected_rows(137);
     case.run().await;
 
     let case = TestCase::new(&test_parquet_file)
@@ -121,7 +121,7 @@ async fn single_file() {
         // container = 'backend_container_0'
         .with_filter(col("container").eq(lit("backend_container_0")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(802);
+        .with_expected_rows(1031);
     case.run().await;
 
     let case = TestCase::new(&test_parquet_file)
@@ -129,7 +129,7 @@ async fn single_file() {
         // container != 'backend_container_0'
         .with_filter(col("container").not_eq(lit("backend_container_0")))
         .with_pushdown_expected(PushdownExpected::Some)
-        .with_expected_rows(3294);
+        .with_expected_rows(3065);
     case.run().await;
 
     let case = TestCase::new(&test_parquet_file)
