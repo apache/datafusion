@@ -77,12 +77,28 @@ macro_rules! assert_batches_eq {
 }
 
 pub fn batches_to_string(batches: &[RecordBatch]) -> String {
+    let actual = pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)
+        .unwrap()
+        .to_string();
+
+    actual.trim().to_string()
+}
+
+pub fn batches_to_sort_string(batches: &[RecordBatch]) -> String {
     let actual_lines =
         pretty_format_batches_with_options(batches, &DEFAULT_FORMAT_OPTIONS)
             .unwrap()
             .to_string();
 
-    actual_lines.trim().to_string()
+    let mut actual_lines: Vec<&str> = actual_lines.trim().lines().collect();
+
+    // sort except for header + footer
+    let num_lines = actual_lines.len();
+    if num_lines > 3 {
+        actual_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
+    }
+
+    actual_lines.join("\n")
 }
 
 /// Compares formatted output of a record batch with an expected
