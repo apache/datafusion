@@ -15,12 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
-    not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema, Result,
+    not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, Result,
 };
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};
+use indexmap::IndexSet;
 use sqlparser::ast::{Expr as SQLExpr, OrderByExpr, Value};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -108,5 +114,72 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             ))
         }
         Ok(expr_vec)
+    }
+
+    /// Return true if add missing ORDER BY expressions to the SELECT list.
+    /// In this function we also do distinct check like `ambiguous_distinct_check`
+    pub(crate) fn add_missing_order_by_exprs(
+        select_exprs: &mut Vec<Expr>,
+        schema: &DFSchemaRef,
+        distinct: bool,
+        order_by: &mut [Sort],
+    ) -> Result<bool> {
+        let mut missing_exprs: IndexSet<Expr> = IndexSet::new();
+
+        let mut aliases = HashMap::new();
+        select_exprs.iter().for_each(|expr| {
+            if let Expr::Alias(alias) = expr {
+                aliases.insert(alias.expr.clone(), alias.name.clone());
+            }
+        });
+
+        let mut rewriter = |expr: Expr| {
+            if select_exprs.contains(&expr) {
+                return Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump));
+            }
+            if let Some(alias) = aliases.get(&expr) {
+                return Ok(Transformed::new(
+                    Expr::Column(Column::new_unqualified(alias.clone())),
+                    false,
+                    TreeNodeRecursion::Jump,
+                ));
+            }
+            match expr {
+                Expr::AggregateFunction(_) | Expr::WindowFunction(_) => {
+                    let replaced = Expr::Column(Column::new_unqualified(
+                        expr.schema_name().to_string(),
+                    ));
+                    missing_exprs.insert(expr);
+                    Ok(Transformed::new(replaced, true, TreeNodeRecursion::Jump))
+                }
+                Expr::Column(ref c) => {
+                    if !schema.has_column(c) {
+                        missing_exprs.insert(Expr::Column(c.clone()));
+                    }
+                    Ok(Transformed::new(expr, false, TreeNodeRecursion::Jump))
+                }
+                _ => Ok(Transformed::no(expr)),
+            }
+        };
+        for sort in order_by.iter_mut() {
+            sort.expr = sort
+                .expr
+                .clone() // TODO: remove clone
+                .transform_down(&mut rewriter)
+                .data()?;
+        }
+        if missing_exprs.is_empty() {
+            return Ok(false);
+        }
+        if !distinct {
+            select_exprs.extend(missing_exprs);
+            return Ok(true);
+        }
+        let missing_col_names = missing_exprs
+            .iter()
+            .map(|expr| expr.schema_name().to_string())
+            .collect::<String>();
+
+        plan_err!("For SELECT DISTINCT, ORDER BY expressions {missing_col_names} must appear in select list")
     }
 }

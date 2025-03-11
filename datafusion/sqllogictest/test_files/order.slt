@@ -925,10 +925,10 @@ ORDER BY SUM(column1)
 
 # ORDER BY with a GROUP BY clause
 query I
-SELECT SUM(column1) 
-  FROM foo 
-GROUP BY column2 
-ORDER BY SUM(column1) 
+SELECT SUM(column1)
+  FROM foo
+GROUP BY column2
+ORDER BY SUM(column1)
 ----
 0
 2
@@ -940,12 +940,12 @@ ORDER BY SUM(column1)
 
 # ORDER BY with a GROUP BY clause and a HAVING clause
 query I
-SELECT 
-  SUM(column1) 
-FROM foo 
-GROUP BY column2 
-HAVING SUM(column1) < 3 
-ORDER BY SUM(column1) 
+SELECT
+  SUM(column1)
+FROM foo
+GROUP BY column2
+HAVING SUM(column1) < 3
+ORDER BY SUM(column1)
 ----
 0
 2
@@ -959,7 +959,8 @@ SELECT SUM(column1) FROM foo ORDER BY SUM(column1)
 16
 
 # Order by unprojected aggregate expressions is not supported
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression AggregateFunction
+# query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression AggregateFunction
+query error Projection references non-aggregate values
 SELECT column2 FROM foo ORDER BY SUM(column1)
 
 statement ok
@@ -1071,7 +1072,7 @@ physical_plan
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
-drop table ordered_table; 
+drop table ordered_table;
 
 
 # ABS(x) breaks the ordering if x's range contains both negative and positive values.
@@ -1107,7 +1108,7 @@ physical_plan
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
-drop table ordered_table; 
+drop table ordered_table;
 
 # ABS(x) preserves the ordering if x's range falls into positive values.
 # Since x is defined as INT UNSIGNED, its range is assumed to be from 0 to INF.
