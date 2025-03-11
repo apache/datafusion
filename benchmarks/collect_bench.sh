@@ -18,8 +18,8 @@
 
 # This script is meant for developers of DataFusion -- it is runnable
 # from the standard DataFusion development environment and uses cargo,
-# etc and orchestrates gathering data and run the benchmark binary in
-# different configurations.
+# etc and orchestrates gathering data and run the benchmark binary to
+# collect benchmarks from the current main and last 5 major releases.
 
 trap 'git checkout main' EXIT #checkout to main on exit
 ARG1=$1
