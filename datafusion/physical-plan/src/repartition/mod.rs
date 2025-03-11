@@ -507,8 +507,19 @@ impl DisplayAs for RepartitionExec {
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
+                writeln!(
+                    f,
+                    "output_partition_count={}",
+                    self.input.output_partitioning().partition_count()
+                )?;
+                if self.preserve_order {
+                    writeln!(f, ", preserve_order={}", "SortPreserving")?;
+                }
+                if let Some(sort_exprs) = self.sort_exprs() {
+                    write!(f, "sort_exprs={}", sort_exprs.clone())?;
+                }
+                Ok(())
             }
         }
     }
