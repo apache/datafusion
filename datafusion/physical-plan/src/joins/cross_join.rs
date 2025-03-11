@@ -241,8 +241,8 @@ impl DisplayAs for CrossJoinExec {
                 write!(f, "CrossJoinExec")
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                // no extra info to display
+                Ok(())
             }
         }
     }
