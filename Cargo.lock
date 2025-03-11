@@ -2445,6 +2445,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-spark"
+version = "46.0.0"
+dependencies = [
+ "arrow",
+ "arrow-ord",
+ "criterion",
+ "datafusion-common",
+ "datafusion-doc",
+ "datafusion-execution",
+ "datafusion-expr",
+ "datafusion-expr-common",
+ "datafusion-functions",
+ "datafusion-functions-aggregate",
+ "datafusion-functions-aggregate-common",
+ "datafusion-functions-nested",
+ "datafusion-functions-table",
+ "datafusion-functions-window",
+ "datafusion-functions-window-common",
+ "datafusion-macros",
+ "datafusion-physical-expr-common",
+ "itertools 0.14.0",
+ "log",
+ "rand 0.8.5",
+]
+
+[[package]]
 name = "datafusion-sql"
 version = "46.0.0"
 dependencies = [

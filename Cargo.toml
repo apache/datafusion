@@ -47,6 +47,7 @@ members = [
     "datafusion/proto/gen",
     "datafusion/proto-common",
     "datafusion/proto-common/gen",
+    "datafusion/spark",
     "datafusion/sql",
     "datafusion/sqllogictest",
     "datafusion/substrait",
