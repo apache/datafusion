@@ -63,15 +63,14 @@ use std::hash::Hash;
 use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
+use arrow::array::StringViewArray;
 use arrow::{
-    array::{Int64Array, StringArray},
-    datatypes::SchemaRef,
-    record_batch::RecordBatch,
+    array::Int64Array, datatypes::SchemaRef, record_batch::RecordBatch,
     util::pretty::pretty_format_batches,
 };
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::{
-    common::cast::{as_int64_array, as_string_array},
+    common::cast::as_int64_array,
     common::{arrow_datafusion_err, internal_err, DFSchemaRef},
     error::{DataFusionError, Result},
     execution::{
@@ -100,6 +99,7 @@ use datafusion_optimizer::AnalyzerRule;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 
 use async_trait::async_trait;
+use datafusion_common::cast::as_string_view_array;
 use futures::{Stream, StreamExt};
 
 /// Execute the specified sql and return the resulting record batches
@@ -807,10 +807,10 @@ fn accumulate_batch(
 ) -> BTreeMap<i64, String> {
     let num_rows = input_batch.num_rows();
     // Assuming the input columns are
-    // column[0]: customer_id / UTF8
+    // column[0]: customer_id / UTF8View
     // column[1]: revenue: Int64
     let customer_id =
-        as_string_array(input_batch.column(0)).expect("Column 0 is not customer_id");
+        as_string_view_array(input_batch.column(0)).expect("Column 0 is not customer_id");
 
     let revenue = as_int64_array(input_batch.column(1)).unwrap();
 
@@ -857,7 +857,8 @@ impl Stream for TopKReader {
                     RecordBatch::try_new(
                         schema,
                         vec![
-                            Arc::new(StringArray::from(customer)),
+                            // Now the default for VARCHAR is StringViewArray
+                            Arc::new(StringViewArray::from(customer)),
                             Arc::new(Int64Array::from(revenue)),
                         ],
                     )

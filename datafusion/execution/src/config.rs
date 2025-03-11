@@ -360,6 +360,15 @@ impl SessionConfig {
         self
     }
 
+    /// Returns true if the force view metadata option is enabled
+    pub fn with_parquet_force_view_metadata(
+        mut self,
+        schema_force_view_types: bool,
+    ) -> Self {
+        self.options.execution.parquet.schema_force_view_types = schema_force_view_types;
+        self
+    }
+
     /// Returns true if page index should be used to skip parquet data pages
     pub fn parquet_page_index_pruning(&self) -> bool {
         self.options.execution.parquet.enable_page_index
