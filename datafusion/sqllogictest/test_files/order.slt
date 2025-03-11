@@ -1002,13 +1002,6 @@ union all
 select * from (select c, NULL::int as a, a0 from t order by a0, c) t2
 order by c, a, a0
 limit 2;
-
-query III
-select * from (select c, a, NULL::int as a0 from t order by a, c) t1
-union all
-select * from (select c, NULL::int as a, a0 from t order by a0, c) t2
-order by c, a, a0
-limit 2;
 ----
 4 2 NULL
 4 NULL 1
