@@ -266,6 +266,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     fn get_properties(&self, _children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties::new_unknown())
     }
+
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result;
 }
 
 /// [`PhysicalExpr`] can't be constrained by [`Eq`] directly because it must remain object

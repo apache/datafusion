@@ -123,6 +123,11 @@ impl PhysicalExpr for TryCastExpr {
             self.cast_type.clone(),
         )))
     }
+
+    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: simplify
+        fmt::Display::fmt(self, f)
+    }
 }
 
 /// Return a PhysicalExpression representing `expr` casted to

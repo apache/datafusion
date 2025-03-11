@@ -194,6 +194,11 @@ impl PhysicalExpr for CastExpr {
             Ok(ExprProperties::new_unknown().with_range(unbounded))
         }
     }
+
+    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: simplify
+        fmt::Display::fmt(self, f)
+    }
 }
 
 /// Return a PhysicalExpression representing `expr` casted to

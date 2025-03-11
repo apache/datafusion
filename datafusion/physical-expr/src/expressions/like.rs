@@ -145,6 +145,12 @@ impl PhysicalExpr for LikeExpr {
             Arc::clone(&children[1]),
         )))
     }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.expr.fmt_sql(f)?;
+        write!(f, " {} ", self.op_name())?;
+        self.pattern.fmt_sql(f)
+    }
 }
 
 /// used for optimize Dictionary like
@@ -182,6 +188,7 @@ pub fn like(
 mod test {
     use super::*;
     use crate::expressions::col;
+    use crate::utils::fmt_display;
     use arrow::array::*;
     use arrow::datatypes::Field;
     use datafusion_common::cast::as_boolean_array;
@@ -253,6 +260,38 @@ mod test {
             true,
             true,
         ); // not ilike
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_like_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+
+        let test_cases = vec![
+            // (negated, case_insensitive, expected_output)
+            (false, false, "a LIKE b"),
+            (true, false, "a NOT LIKE b"),
+            (false, true, "a ILIKE b"),
+            (true, true, "a NOT ILIKE b"),
+        ];
+
+        for (negated, case_insensitive, expected) in test_cases {
+            let expr = like(
+                negated,
+                case_insensitive,
+                col("a", &schema)?,
+                col("b", &schema)?,
+                &schema,
+            )?;
+
+            // Test fmt_sql formatting.
+            let sql_string = fmt_display(expr.as_ref()).to_string();
+            assert_eq!(sql_string, expected);
+        }
 
         Ok(())
     }

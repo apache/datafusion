@@ -175,6 +175,11 @@ impl PhysicalExpr for NotExpr {
             _ => internal_err!("NotExpr can only operate on Boolean datatypes"),
         }
     }
+
+    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: simplify
+        fmt::Display::fmt(self, f)
+    }
 }
 
 /// Creates a unary expression NOT

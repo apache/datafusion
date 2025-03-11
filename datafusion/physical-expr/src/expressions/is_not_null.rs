@@ -104,6 +104,11 @@ impl PhysicalExpr for IsNotNullExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         Ok(Arc::new(IsNotNullExpr::new(Arc::clone(&children[0]))))
     }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // TODO: simplify
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 /// Create an IS NOT NULL expression

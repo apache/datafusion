@@ -559,6 +559,11 @@ impl PhysicalExpr for CaseExpr {
             )?))
         }
     }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // TODO: simplify
+        std::fmt::Display::fmt(self, f)
+    }
 }
 
 /// Create a CASE expression

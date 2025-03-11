@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod fmt_display;
 mod guarantee;
+pub use fmt_display::fmt_display;
 pub use guarantee::{Guarantee, LiteralGuarantee};
 
 use std::borrow::Borrow;

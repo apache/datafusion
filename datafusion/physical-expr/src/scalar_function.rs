@@ -260,6 +260,11 @@ impl PhysicalExpr for ScalarFunctionExpr {
             preserves_lex_ordering,
         })
     }
+
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // TODO: simplify
+        fmt::Display::fmt(self, f)
+    }
 }
 
 /// Create a physical expression for the UDF.
