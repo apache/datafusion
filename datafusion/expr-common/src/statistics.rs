@@ -16,13 +16,14 @@
 // under the License.
 
 use std::f64::consts::LN_2;
+use std::fmt::{Display, self};
 
 use crate::interval_arithmetic::{apply_operator, Interval};
 use crate::operator::Operator;
 use crate::type_coercion::binary::binary_numeric_coercion;
 
 use arrow::array::ArrowNativeTypeOp;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Schema};
 use datafusion_common::rounding::alter_fp_rounding_mode;
 use datafusion_common::{internal_err, not_impl_err, Result, ScalarValue};
 
@@ -214,6 +215,56 @@ impl Distribution {
 #[derive(Clone, Debug, PartialEq)]
 pub struct UniformDistribution {
     interval: Interval,
+}
+
+// impl AsRef<ScalarValue> for Distribution {
+//     fn as_ref(&self) -> &ScalarValue {
+//         match &self {
+//             Uniform(dist) => {
+//                 if dist.interval.lower() == dist.interval.upper() {
+//                     dist.interval.lower()
+//                 } else {
+//                     &ScalarValue::Null
+//                 }
+//             },
+//             Exponential(dist) => unimplemented!(),
+//             Gaussian(dist) => unimplemented!(),
+//             Bernoulli(dist) => unimplemented!(),
+//             Generic(dist) => unimplemented!(),
+//         }
+//     }
+// }
+
+impl Distribution {
+    pub fn get_value(&self) -> Option<&ScalarValue> {
+        match &self {
+            Uniform(dist) => dist.get_value(),
+            Exponential(dist) => unimplemented!(),
+            Gaussian(dist) => unimplemented!(),
+            Bernoulli(dist) => unimplemented!(),
+            Generic(dist) => unimplemented!(),
+        }
+    }
+
+    pub fn to_inexact(self) -> Result<Self> {
+        let res = match self {
+            Uniform(dist) => Generic(GenericDistribution::try_new(ScalarValue::Null, ScalarValue::Null, ScalarValue::Null,dist.range().clone())?),
+            Exponential(dist) => todo!(),
+            Gaussian(dist) => todo!(),
+            Bernoulli(dist) => todo!(),
+            _ => self,
+        };
+        Ok(res)
+    }
+}
+
+impl UniformDistribution {
+    pub fn get_value(&self) -> Option<&ScalarValue> {
+        if &self.interval.lower() == &self.interval.upper() {
+            return Some(&self.interval.lower());
+        }
+        None
+    }
 }
 
 /// Exponential distribution with an optional shift. The probability density
@@ -855,6 +906,107 @@ pub fn compute_variance(
     }
     let target_type = Distribution::target_type(&[&left_variance, &right_variance])?;
     ScalarValue::try_from(target_type)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatisticsNew {
+    /// The number of table rows.
+    pub num_rows: Distribution,
+    /// Total bytes of the table rows.
+    pub total_byte_size: Distribution,
+    /// Statistics on a column level. It contains a [`ColumnStatistics`] for
+    /// each field in the schema of the table to which the [`Statistics`] refer.
+    pub column_statistics: Vec<ColumnStatisticsNew>, 
+}
+
+impl StatisticsNew {
+    pub fn new_unknown(schema: &Schema) -> Result<Self> {
+        let num_rows = Distribution::new_generic(
+            ScalarValue::Null,
+            ScalarValue::Null,
+            ScalarValue::Null,
+            Interval::make_zero(&DataType::UInt64)?,
+        )?;
+        let total_byte_size = Distribution::new_generic(
+            ScalarValue::Null,
+            ScalarValue::Null,
+            ScalarValue::Null,
+            Interval::make_zero(&DataType::UInt64)?,
+        )?;
+        let column_statistics = vec![ColumnStatisticsNew::new_unknown()?];
+        Ok(Self{ num_rows, total_byte_size, column_statistics })
+    }
+
+    pub fn to_inexact(mut self) -> Result<Self> {
+        self.num_rows = self.num_rows.to_inexact()?;
+        self.total_byte_size = self.total_byte_size.to_inexact()?;
+        self.column_statistics = self
+            .column_statistics
+            .into_iter()
+            .map(|s| s.to_inexact())
+            .collect::<Result<Vec<ColumnStatisticsNew>>>()?;
+        Ok(self)
+    }
+}
+
+/// Statistics for a column within a relation
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnStatisticsNew {
+    /// Number of null values on column
+    pub null_count: Distribution,
+    /// Maximum value of column
+    pub max_value: Distribution,
+    /// Minimum value of column
+    pub min_value: Distribution,
+    /// Sum value of a column
+    pub sum_value: Distribution,
+    /// Number of distinct values
+    pub distinct_count: Distribution,
+}
+
+impl ColumnStatisticsNew {
+    pub fn new_unknown() -> Result<Self> {
+        let null_count = Distribution::new_generic(
+            ScalarValue::Null,
+            ScalarValue::Null,
+            ScalarValue::Null,
+            Interval::make_zero(&DataType::UInt64)?,
+        )?;
+        let max_value = Distribution::new_generic(
+            ScalarValue::Null,
+            ScalarValue::Null,
+            ScalarValue::Null,
+            Interval::make_zero(&DataType::UInt64)?,
+        )?;
+        let min_value = Distribution::new_generic(
+            ScalarValue::Null,
+            ScalarValue::Null,
+            ScalarValue::Null,
+            Interval::make_zero(&DataType::UInt64)?,
+        )?;
+        let sum_value = Distribution::new_generic(
+            ScalarValue::Null,
+            ScalarValue::Null,
+            ScalarValue::Null,
+            Interval::make_zero(&DataType::UInt64)?,
+        )?;
+        let distinct_count = Distribution::new_generic(
+            ScalarValue::Null,
+            ScalarValue::Null,
+            ScalarValue::Null,
+            Interval::make_zero(&DataType::UInt64)?,
+        )?;
+        Ok(Self { null_count, max_value, min_value, sum_value, distinct_count })
+    }
+
+    pub fn to_inexact(mut self) -> Result<Self> {
+        self.null_count = self.null_count.to_inexact()?;
+        self.max_value = self.max_value.to_inexact()?;
+        self.min_value = self.min_value.to_inexact()?;
+        self.sum_value = self.sum_value.to_inexact()?;
+        self.distinct_count = self.distinct_count.to_inexact()?;
+        Ok(self)
+    }
 }
 
 #[cfg(test)]

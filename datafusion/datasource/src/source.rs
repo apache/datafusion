@@ -20,6 +20,7 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
+use datafusion_expr::statistics::StatisticsNew;
 use datafusion_physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -146,7 +147,8 @@ impl ExecutionPlan for DataSourceExec {
     }
 
     fn statistics(&self) -> datafusion_common::Result<Statistics> {
-        self.data_source.statistics()
+        self.data_source.statistics();
+        todo!()
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {

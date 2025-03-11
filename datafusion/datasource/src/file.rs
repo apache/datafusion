@@ -27,6 +27,7 @@ use crate::file_scan_config::FileScanConfig;
 use crate::file_stream::FileOpener;
 use arrow::datatypes::SchemaRef;
 use datafusion_common::Statistics;
+use datafusion_expr::statistics::StatisticsNew;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion_physical_plan::DisplayFormatType;
@@ -53,11 +54,11 @@ pub trait FileSource: Send + Sync {
     /// Initialize new instance with projection information
     fn with_projection(&self, config: &FileScanConfig) -> Arc<dyn FileSource>;
     /// Initialize new instance with projected statistics
-    fn with_statistics(&self, statistics: Statistics) -> Arc<dyn FileSource>;
+    fn with_statistics(&self, statistics: StatisticsNew) -> Arc<dyn FileSource>;
     /// Return execution plan metrics
     fn metrics(&self) -> &ExecutionPlanMetricsSet;
     /// Return projected statistics
-    fn statistics(&self) -> datafusion_common::Result<Statistics>;
+    fn statistics(&self) -> datafusion_common::Result<StatisticsNew>;
     /// String representation of file source such as "csv", "json", "parquet"
     fn file_type(&self) -> &str;
     /// Format FileType specific information

@@ -17,6 +17,7 @@
 
 use crate::cache::CacheAccessor;
 use datafusion_common::{Result, Statistics};
+use datafusion_expr::statistics::StatisticsNew;
 use object_store::path::Path;
 use object_store::ObjectMeta;
 use std::fmt::{Debug, Formatter};
@@ -27,12 +28,12 @@ use std::sync::Arc;
 /// Will avoid infer same file statistics repeatedly during the session lifetime,
 /// this cache will store in [`crate::runtime_env::RuntimeEnv`].
 pub type FileStatisticsCache =
-    Arc<dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta>>;
+    Arc<dyn CacheAccessor<Path, Arc<StatisticsNew>, Extra = ObjectMeta>>;
 
 pub type ListFilesCache =
     Arc<dyn CacheAccessor<Path, Arc<Vec<ObjectMeta>>, Extra = ObjectMeta>>;
 
-impl Debug for dyn CacheAccessor<Path, Arc<Statistics>, Extra = ObjectMeta> {
+impl Debug for dyn CacheAccessor<Path, Arc<StatisticsNew>, Extra = ObjectMeta> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Cache name: {} with length: {}", self.name(), self.len())
     }

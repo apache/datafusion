@@ -43,6 +43,7 @@ pub mod write;
 use chrono::TimeZone;
 use datafusion_common::Result;
 use datafusion_common::{ScalarValue, Statistics};
+use datafusion_expr::statistics::StatisticsNew;
 use futures::Stream;
 use object_store::{path::Path, ObjectMeta};
 use std::pin::Pin;
@@ -95,7 +96,8 @@ pub struct PartitionedFile {
     ///
     /// DataFusion relies on these statistics for planning (in particular to sort file groups),
     /// so if they are incorrect, incorrect answers may result.
-    pub statistics: Option<Statistics>,
+    // pub statistics: Option<Statistics>,
+    pub statistics: Option<StatisticsNew>,
     /// An optional field for user defined per object metadata
     pub extensions: Option<Arc<dyn std::any::Any + Send + Sync>>,
     /// The estimated size of the parquet metadata, in bytes

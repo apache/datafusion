@@ -36,6 +36,7 @@ use datafusion_catalog::TableProvider;
 use datafusion_common::{config_err, DataFusionError, Result};
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_expr::dml::InsertOp;
+use datafusion_expr::statistics::StatisticsNew;
 use datafusion_expr::{utils::conjunction, Expr, TableProviderFilterPushDown};
 use datafusion_expr::{SortExpr, TableType};
 use datafusion_physical_plan::empty::EmptyExec;
@@ -941,7 +942,7 @@ impl TableProvider for ListingTable {
                 )
                 .with_file_groups(partitioned_file_lists)
                 .with_constraints(self.constraints.clone())
-                .with_statistics(statistics)
+                // .with_statistics(statistics) 
                 .with_projection(projection.cloned())
                 .with_limit(limit)
                 .with_output_ordering(output_ordering)
@@ -1080,11 +1081,11 @@ impl ListingTable {
         ctx: &'a dyn Session,
         filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> Result<(Vec<Vec<PartitionedFile>>, Statistics)> {
+    ) -> Result<(Vec<Vec<PartitionedFile>>, StatisticsNew)> {
         let store = if let Some(url) = self.table_paths.first() {
             ctx.runtime_env().object_store(url)?
         } else {
-            return Ok((vec![], Statistics::new_unknown(&self.file_schema)));
+            return Ok((vec![], StatisticsNew::new_unknown(&self.file_schema)?));
         };
         // list files (with partitions)
         let file_list = future::try_join_all(self.table_paths.iter().map(|table_path| {
@@ -1110,7 +1111,7 @@ impl ListingTable {
                 } else {
                     Ok((
                         part_file,
-                        Arc::new(Statistics::new_unknown(&self.file_schema)),
+                        Arc::new(StatisticsNew::new_unknown(&self.file_schema)?),
                     ))
                 }
             })
@@ -1141,32 +1142,33 @@ impl ListingTable {
         ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         part_file: &PartitionedFile,
-    ) -> Result<Arc<Statistics>> {
-        match self
-            .collected_statistics
-            .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
-        {
-            Some(statistics) => Ok(statistics),
-            None => {
-                let statistics = self
-                    .options
-                    .format
-                    .infer_stats(
-                        ctx,
-                        store,
-                        Arc::clone(&self.file_schema),
-                        &part_file.object_meta,
-                    )
-                    .await?;
-                let statistics = Arc::new(statistics);
-                self.collected_statistics.put_with_extra(
-                    &part_file.object_meta.location,
-                    Arc::clone(&statistics),
-                    &part_file.object_meta,
-                );
-                Ok(statistics)
-            }
-        }
+    ) -> Result<Arc<StatisticsNew>> {
+        // match self
+        //     .collected_statistics
+        //     .get_with_extra(&part_file.object_meta.location, &part_file.object_meta)
+        // {
+        //     Some(statistics) => Ok(statistics),
+        //     None => {
+        //         let statistics = self
+        //             .options
+        //             .format
+        //             .infer_stats(
+        //                 ctx,
+        //                 store,
+        //                 Arc::clone(&self.file_schema),
+        //                 &part_file.object_meta,
+        //             )
+        //             .await?;
+        //         let statistics = Arc::new(statistics);
+        //         self.collected_statistics.put_with_extra(
+        //             &part_file.object_meta.location,
+        //             Arc::clone(&statistics),
+        //             &part_file.object_meta,
+        //         );
+        //         Ok(statistics)
+        //     }
+        // }
+        todo!()
     }
 }
 
