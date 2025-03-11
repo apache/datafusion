@@ -836,7 +836,9 @@ impl DisplayAs for AggregateExec {
                     .map(|agg| agg.name().to_string())
                     .collect();
                 writeln!(f, "mode={:?}", self.mode)?;
-                writeln!(f, "group_by={}", g.join(", "))?;
+                if !g.is_empty() {
+                    writeln!(f, "group_by={}", g.join(", "))?;
+                }
                 writeln!(f, "aggr={}", a.join(", "))?;
             }
         }
