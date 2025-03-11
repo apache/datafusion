@@ -985,12 +985,22 @@ drop table ambiguity_test;
 statement ok
 create table t(a0 int, a int, b int, c int) as values (1, 2, 3, 4), (5, 6, 7, 8);
 
-# b is not selected in subquery
-query error DataFusion error: Schema error: No field named b\. Valid fields are t1\.c, t1\.a, t1\.a0\.
+# expect this query to run successfully, not error
+query IIII
+select * from (select c, a, NULL::int as a0, b from t order by a, c) t1
+union all
+select * from (select c, NULL::int as a, a0, b from t order by a0, c) t2
+order by c, a, a0, b
+limit 2;
+----
+4 2 NULL 3
+4 NULL 1 3
+
+query III
 select * from (select c, a, NULL::int as a0 from t order by a, c) t1
 union all
 select * from (select c, NULL::int as a, a0 from t order by a0, c) t2
-order by c, a, a0, b
+order by c, a, a0
 limit 2;
 
 query III
@@ -1002,7 +1012,6 @@ limit 2;
 ----
 4 2 NULL
 4 NULL 1
-
 
 # Casting from numeric to string types breaks the ordering
 statement ok
@@ -1238,20 +1247,42 @@ physical_plan
 
 
 # Test: inputs into union with different orderings
-query error DataFusion error: Schema error: No field named d\. Valid fields are t1\.b, t1\.c, t1\.a, t1\.a0\.
-explain select * from (select b, c, a, NULL::int as a0 from ordered_table order by a, c) t1
+query TT
+explain select * from (select b, c, a, NULL::int as a0, d from ordered_table order by a, c) t1
 union all
-select * from (select b, c, NULL::int as a, a0 from ordered_table order by a0, c) t2
+select * from (select b, c, NULL::int as a, a0, d from ordered_table order by a0, c) t2
 order by d, c, a, a0, b
 limit 2;
+----
+logical_plan
+01)Sort: t1.d ASC NULLS LAST, t1.c ASC NULLS LAST, t1.a ASC NULLS LAST, t1.a0 ASC NULLS LAST, t1.b ASC NULLS LAST, fetch=2
+02)--Union
+03)----SubqueryAlias: t1
+04)------Projection: ordered_table.b, ordered_table.c, ordered_table.a, Int32(NULL) AS a0, ordered_table.d
+05)--------TableScan: ordered_table projection=[a, b, c, d]
+06)----SubqueryAlias: t2
+07)------Projection: ordered_table.b, ordered_table.c, Int32(NULL) AS a, ordered_table.a0, ordered_table.d
+08)--------TableScan: ordered_table projection=[a0, b, c, d]
+physical_plan
+01)SortPreservingMergeExec: [d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a@2 ASC NULLS LAST, a0@3 ASC NULLS LAST, b@0 ASC NULLS LAST], fetch=2
+02)--UnionExec
+03)----SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a@2 ASC NULLS LAST, b@0 ASC NULLS LAST], preserve_partitioning=[false]
+04)------ProjectionExec: expr=[b@1 as b, c@2 as c, a@0 as a, NULL as a0, d@3 as d]
+05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c, d], output_ordering=[c@2 ASC NULLS LAST], file_type=csv, has_header=true
+06)----SortExec: TopK(fetch=2), expr=[d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a0@3 ASC NULLS LAST, b@0 ASC NULLS LAST], preserve_partitioning=[false]
+07)------ProjectionExec: expr=[b@1 as b, c@2 as c, NULL as a, a0@0 as a0, d@3 as d]
+08)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a0, b, c, d], output_ordering=[c@2 ASC NULLS LAST], file_type=csv, has_header=true
 
 # Test: run the query from above
-query error DataFusion error: Schema error: No field named d\. Valid fields are t1\.b, t1\.c, t1\.a, t1\.a0\.
-select * from (select b, c, a, NULL::int as a0 from ordered_table order by a, c) t1
+query IIIII
+select * from (select b, c, a, NULL::int as a0, d from ordered_table order by a, c) t1
 union all
-select * from (select b, c, NULL::int as a, a0 from ordered_table order by a0, c) t2
+select * from (select b, c, NULL::int as a, a0, d from ordered_table order by a0, c) t2
 order by d, c, a, a0, b
 limit 2;
+----
+0 0 0 NULL 0
+0 0 NULL 1 0
 
 
 statement ok

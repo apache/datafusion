@@ -52,14 +52,18 @@ pub enum DisplayFormatType {
     /// information for understanding a plan. It should NOT contain the same level
     /// of detail information as the  [`Self::Default`] format.
     ///
-    /// In this mode, each line contains a key=value pair.
-    /// Everything before the first `=` is treated as the key, and everything after the
-    /// first `=` is treated as the value.
+    /// In this mode, each line has one of two formats:
+    ///
+    /// 1. A string without a `=`, which is printed in its own line
+    ///
+    /// 2. A string with a `=` that is treated as a `key=value pair`. Everything
+    ///    before the first `=` is treated as the key, and everything after the
+    ///    first `=` is treated as the value.
     ///
     /// For example, if the output of `TreeRender` is this:
     /// ```text
+    /// Parquet
     /// partition_sizes=[1]
-    /// partitions=1
     /// ```
     ///
     /// It is rendered in the center of a box in the following way:
@@ -69,7 +73,7 @@ pub enum DisplayFormatType {
     /// │       DataSourceExec      │
     /// │    --------------------   │
     /// │    partition_sizes: [1]   │
-    /// │       partitions: 1       │
+    /// │          Parquet          │
     /// └───────────────────────────┘
     ///  ```
     TreeRender,
@@ -857,22 +861,24 @@ impl TreeRenderVisitor<'_, '_> {
         let sorted_extra_info: BTreeMap<_, _> = extra_info.iter().collect();
         for (key, value) in sorted_extra_info {
             let mut str = Self::remove_padding(value);
-            if str.is_empty() {
-                continue;
-            }
             let mut is_inlined = false;
             let available_width = Self::NODE_RENDER_WIDTH - 7;
             let total_size = key.len() + str.len() + 2;
             let is_multiline = str.contains('\n');
-            if !is_multiline && total_size < available_width {
+
+            if str.is_empty() {
+                str = key.to_string();
+            } else if !is_multiline && total_size < available_width {
                 str = format!("{}: {}", key, str);
                 is_inlined = true;
             } else {
                 str = format!("{}:\n{}", key, str);
             }
+
             if is_inlined && was_inlined {
                 requires_padding = false;
             }
+
             if requires_padding {
                 result.push(String::new());
             }

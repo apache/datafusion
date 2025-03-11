@@ -109,8 +109,10 @@ impl DisplayAs for GlobalLimitExec {
                 )
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "limit={}", fetch)?;
+                }
+                write!(f, "skip={}", self.skip)
             }
         }
     }
