@@ -23,7 +23,6 @@
 
 trap 'git checkout main' EXIT #checkout to main on exit
 ARG1=$1
-echo $ARG1
 
 main(){
 
