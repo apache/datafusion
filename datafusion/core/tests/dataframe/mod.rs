@@ -3565,7 +3565,6 @@ async fn unnest_columns() -> Result<()> {
         "| 3        | {x: -9, y: -7} | [tag1, tag2, tag3, tag4] |",
         "| 4        |                | [tag1, tag2, tag3]       |",
         "+----------+----------------+--------------------------+",
-
     ];
     assert_batches_sorted_eq!(expected, &results);
 
