@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod fmt_display;
+mod sql_formatter;
 mod guarantee;
-pub use fmt_display::sql_formatter;
+pub use sql_formatter::sql_formatter;
 pub use guarantee::{Guarantee, LiteralGuarantee};
 
 use std::borrow::Borrow;
