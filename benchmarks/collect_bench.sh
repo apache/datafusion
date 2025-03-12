@@ -26,7 +26,8 @@ ARG1=$1
 
 main(){
 timestamp=$(date +%s)
-lp_file="results/$ARG1-$timestamp.lp"
+lp_file="../results/$ARG1-$timestamp.lp"
+touch $lp_file
 
 mkdir working
 cp bench.sh working/
