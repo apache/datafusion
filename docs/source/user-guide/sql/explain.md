@@ -31,6 +31,7 @@ EXPLAIN [ANALYZE] [VERBOSE] [FORMAT format] statement
 
 Shows the execution plan of a statement.
 If you need more detailed output, use `EXPLAIN VERBOSE`.
+Note that `EXPLAIN VERBOSE` only supports the `indent` format.
 
 ### `indent` format (default)
 
@@ -232,8 +233,9 @@ Elapsed 0.010 seconds.
 
 ## `EXPLAIN ANALYZE`
 
-Shows the execution plan and metrics of a statement.
-If you need more information output, use `EXPLAIN ANALYZE VERBOSE`. Only the `indent` format is supported for `EXPLAIN ANALYZE`.
+Shows the execution plan and metrics of a statement. If you need more
+information output, use `EXPLAIN ANALYZE VERBOSE`. Note that `EXPLAIN ANALYZE`
+only supports the `indent` format.
 
 ```sql
 EXPLAIN ANALYZE SELECT SUM(x) FROM table GROUP BY b;
