@@ -449,6 +449,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, state: &SessionState) -> Result<Box
         relations: plan_rels,
         advanced_extensions: None,
         expected_type_urls: vec![],
+        parameter_bindings: vec![],
     }))
 }
 
