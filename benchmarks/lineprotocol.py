@@ -1,3 +1,4 @@
+from __future__ import annotations
 
 #!/usr/bin/env python
 # Licensed to the Apache Software Foundation (ASF) under one
@@ -17,7 +18,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from __future__ import annotations
 
 """ 
 Converts a given json to LineProtocol format that can be 
