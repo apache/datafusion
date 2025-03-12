@@ -146,7 +146,10 @@ zstd = { version = "0.13", optional = true, default-features = false }
 async-trait = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio", "async_futures"] }
 ctor = { workspace = true }
+dashmap = "6.1.0"
+datafusion-doc = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
+datafusion-macros = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
