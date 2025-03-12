@@ -966,7 +966,7 @@ impl TableProvider for ListingTable {
                 session_state,
                 &partition_filters,
                 &metadata_filters,
-                limit,
+                statistic_file_limit,
             )
             .await?;
 
