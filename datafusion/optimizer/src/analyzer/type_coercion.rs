@@ -214,7 +214,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
     pub fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
-        let union_schema = Arc::new(coerce_union_schema(&union_plan)?);
+        let union_schema = Arc::new(coerce_union_schema(&union_plan.inputs)?);
         let new_inputs = union_plan
             .inputs
             .into_iter()
@@ -929,8 +929,8 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 ///
 /// This method presumes that the wildcard expansion is unneeded, or has already
 /// been applied.
-pub fn coerce_union_schema(union_plan: &Union) -> Result<DFSchema> {
-    let base_schema = &union_plan.schema;
+pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
+    let base_schema = inputs[0].schema().as_ref().clone().strip_qualifiers();
     let mut union_datatypes = base_schema
         .fields()
         .iter()
@@ -949,7 +949,7 @@ pub fn coerce_union_schema(union_plan: &Union) -> Result<DFSchema> {
 
     let mut metadata = base_schema.metadata().clone();
 
-    for (i, plan) in union_plan.inputs.iter().enumerate().skip(1) {
+    for (i, plan) in inputs.iter().enumerate().skip(1) {
         let plan_schema = plan.schema();
         metadata.extend(plan_schema.metadata().clone());
 
@@ -1132,7 +1132,7 @@ mod test {
                     |_, _| {},
                 )?;
 
-        let expected = "Projection: datafusion.test.foo.a\n  Union\n    Projection: CAST(datafusion.test.foo.a AS Int64) AS a\n      EmptyRelation\n    EmptyRelation";
+        let expected = "Projection: a\n  Union\n    Projection: CAST(datafusion.test.foo.a AS Int64) AS a\n      EmptyRelation\n    EmptyRelation";
         assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), expanded_plan, expected)
     }
 

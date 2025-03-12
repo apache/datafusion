@@ -774,7 +774,7 @@ SELECT * FROM v
 ORDER BY 1, 2;
 ----
 logical_plan
-01)Sort: u.m ASC NULLS LAST, u.t ASC NULLS LAST
+01)Sort: m ASC NULLS LAST, t ASC NULLS LAST
 02)--Union
 03)----SubqueryAlias: u
 04)------Projection: Int64(0) AS m, m0.t
@@ -1239,8 +1239,8 @@ order by d, c, a, a0, b
 limit 2;
 ----
 logical_plan
-01)Projection: t1.b, t1.c, t1.a, t1.a0
-02)--Sort: t1.d ASC NULLS LAST, t1.c ASC NULLS LAST, t1.a ASC NULLS LAST, t1.a0 ASC NULLS LAST, t1.b ASC NULLS LAST, fetch=2
+01)Projection: b, c, a, a0
+02)--Sort: d ASC NULLS LAST, c ASC NULLS LAST, a ASC NULLS LAST, a0 ASC NULLS LAST, b ASC NULLS LAST, fetch=2
 03)----Union
 04)------SubqueryAlias: t1
 05)--------Projection: ordered_table.b, ordered_table.c, ordered_table.a, Int32(NULL) AS a0, ordered_table.d
