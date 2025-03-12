@@ -443,7 +443,7 @@ impl ListingOptions {
     /// then the table schema will include a column named `last_modified` with the value `2024-01-01 12:00:00`
     /// for all rows read from `tripdata01.parquet`.
     ///
-    /// | <other columns> | last_modified         |
+    /// | [other columns] | last_modified         |
     /// |-----------------|-----------------------|
     /// | ...             | 2024-01-01 12:00:00   |
     /// | ...             | 2024-01-02 15:30:00   |
