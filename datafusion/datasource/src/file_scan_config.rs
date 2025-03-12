@@ -1153,8 +1153,11 @@ mod tests {
 
     use super::*;
     use arrow::{
-        array::{Int32Array, RecordBatch},
+        array::{
+            Int32Array, RecordBatch, StringArray, TimestampMicrosecondArray, UInt64Array,
+        },
         compute::SortOptions,
+        datatypes::TimeUnit,
     };
 
     use datafusion_common::stats::Precision;
@@ -1860,5 +1863,333 @@ mod tests {
             ],
         )
         .unwrap()
+    }
+
+    /// Create a test ObjectMeta with given path, size and a fixed timestamp
+    fn create_test_object_meta(path: &str, size: usize) -> ObjectMeta {
+        let timestamp = chrono::DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        ObjectMeta {
+            location: Path::from(path),
+            size,
+            last_modified: timestamp,
+            e_tag: None,
+            version: None,
+        }
+    }
+
+    /// Create a configuration with metadata columns
+    fn config_with_metadata(
+        file_schema: SchemaRef,
+        projection: Option<Vec<usize>>,
+        metadata_cols: Vec<MetadataColumn>,
+    ) -> FileScanConfig {
+        FileScanConfig {
+            object_store_url: ObjectStoreUrl::local_filesystem(),
+            file_schema: file_schema.clone(),
+            file_groups: vec![],
+            constraints: Constraints::empty(),
+            statistics: Statistics::new_unknown(&file_schema),
+            projection,
+            limit: None,
+            table_partition_cols: vec![],
+            metadata_cols,
+            output_ordering: vec![],
+            file_compression_type: FileCompressionType::UNCOMPRESSED,
+            new_lines_in_values: false,
+            file_source: Arc::new(MockSource::default()),
+        }
+    }
+
+    #[test]
+    fn test_projected_schema_with_metadata_col() {
+        let file_schema = aggr_test_schema();
+        let metadata_cols = vec![
+            MetadataColumn::Location,
+            MetadataColumn::Size,
+            MetadataColumn::LastModified,
+        ];
+
+        let conf = config_with_metadata(Arc::clone(&file_schema), None, metadata_cols);
+
+        // Get projected schema
+        let schema = conf.projected_schema();
+
+        // Verify schema has all file schema fields plus metadata columns
+        assert_eq!(schema.fields().len(), file_schema.fields().len() + 3);
+
+        // Check that metadata fields are added at the end
+        let file_schema_len = file_schema.fields().len();
+        assert_eq!(schema.field(file_schema_len).name(), "location");
+        assert_eq!(schema.field(file_schema_len + 1).name(), "size");
+        assert_eq!(schema.field(file_schema_len + 2).name(), "last_modified");
+
+        // Check data types
+        assert_eq!(schema.field(file_schema_len).data_type(), &DataType::Utf8);
+        assert_eq!(
+            schema.field(file_schema_len + 1).data_type(),
+            &DataType::UInt64
+        );
+        assert_eq!(
+            schema.field(file_schema_len + 2).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
+    }
+
+    #[test]
+    fn test_projected_schema_with_projection_and_metadata_cols() {
+        let file_schema = aggr_test_schema();
+        let metadata_cols = vec![MetadataColumn::Location, MetadataColumn::Size];
+
+        // Create projection that includes only the first two columns from file schema plus metadata
+        let file_schema_len = file_schema.fields().len();
+        let projection = Some(vec![
+            0,
+            1,                   // First two columns from file schema
+            file_schema_len,     // Location metadata column
+            file_schema_len + 1, // Size metadata column
+        ]);
+
+        let conf =
+            config_with_metadata(Arc::clone(&file_schema), projection, metadata_cols);
+
+        // Get projected schema
+        let schema = conf.projected_schema();
+
+        // Verify schema has only the projected columns
+        assert_eq!(schema.fields().len(), 4);
+
+        // Check that the first two columns are from the file schema
+        assert_eq!(schema.field(0).name(), file_schema.field(0).name());
+        assert_eq!(schema.field(1).name(), file_schema.field(1).name());
+
+        // Check that metadata fields are correctly projected
+        assert_eq!(schema.field(2).name(), "location");
+        assert_eq!(schema.field(3).name(), "size");
+    }
+
+    #[test]
+    fn test_projected_schema_with_partition_and_metadata_cols() {
+        let file_schema = aggr_test_schema();
+        let partition_cols = to_partition_cols(vec![
+            (
+                "year".to_owned(),
+                wrap_partition_type_in_dict(DataType::Int32),
+            ),
+            (
+                "month".to_owned(),
+                wrap_partition_type_in_dict(DataType::Int32),
+            ),
+        ]);
+        let metadata_cols = vec![MetadataColumn::Location, MetadataColumn::Size];
+
+        // Create config with partition and metadata columns
+        let conf = FileScanConfig {
+            object_store_url: ObjectStoreUrl::local_filesystem(),
+            file_schema: file_schema.clone(),
+            file_groups: vec![],
+            constraints: Constraints::empty(),
+            statistics: Statistics::new_unknown(&file_schema),
+            projection: None,
+            limit: None,
+            table_partition_cols: partition_cols,
+            metadata_cols,
+            output_ordering: vec![],
+            file_compression_type: FileCompressionType::UNCOMPRESSED,
+            new_lines_in_values: false,
+            file_source: Arc::new(MockSource::default()),
+        };
+
+        // Get projected schema
+        let schema = conf.projected_schema();
+
+        // Verify schema has all file schema fields plus partition and metadata columns
+        let expected_len = file_schema.fields().len() + 2 + 2; // file + partition + metadata
+        assert_eq!(schema.fields().len(), expected_len);
+
+        // Check order of columns: file, partition, metadata
+        let file_len = file_schema.fields().len();
+        assert_eq!(schema.field(file_len).name(), "year");
+        assert_eq!(schema.field(file_len + 1).name(), "month");
+        assert_eq!(schema.field(file_len + 2).name(), "location");
+        assert_eq!(schema.field(file_len + 3).name(), "size");
+    }
+
+    #[test]
+    fn test_metadata_column_projector() {
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        // Create metadata columns
+        let metadata_cols = vec![
+            MetadataColumn::Location,
+            MetadataColumn::Size,
+            MetadataColumn::LastModified,
+        ];
+
+        // Create test object metadata
+        let object_meta = create_test_object_meta("bucket/file.parquet", 1024);
+
+        // Create projected schema with metadata columns
+        let projected_fields = vec![
+            file_schema.field(0).clone(),
+            file_schema.field(1).clone(),
+            metadata_cols[0].field(),
+            metadata_cols[1].field(),
+            metadata_cols[2].field(),
+        ];
+        let projected_schema = Arc::new(Schema::new(projected_fields));
+
+        // Create projector
+        let mut projector = ExtendedColumnProjector::new(
+            Arc::clone(&projected_schema),
+            &[], // No partition columns
+            &metadata_cols,
+        );
+
+        // Create a test record batch
+        let a_values = Int32Array::from(vec![1, 2, 3]);
+        let b_values = Int32Array::from(vec![4, 5, 6]);
+        let file_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ])),
+            vec![Arc::new(a_values), Arc::new(b_values)],
+        )
+        .unwrap();
+
+        // Apply projection
+        let result = projector.project(file_batch, &[], &object_meta).unwrap();
+
+        // Verify result
+        assert_eq!(result.num_columns(), 5);
+        assert_eq!(result.num_rows(), 3);
+
+        // Check metadata column values
+        let location_col = result
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(location_col.value(0), "bucket/file.parquet");
+
+        let size_col = result
+            .column(3)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        assert_eq!(size_col.value(0), 1024);
+
+        let timestamp_col = result
+            .column(4)
+            .as_any()
+            .downcast_ref::<TimestampMicrosecondArray>()
+            .unwrap();
+        // The timestamp should match what we set in create_test_object_meta
+        let expected_ts = chrono::DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+            .timestamp_micros();
+        assert_eq!(timestamp_col.value(0), expected_ts);
+    }
+
+    #[test]
+    fn test_extended_column_projector_partition_and_metadata() {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+
+        // Create partition values
+        let partition_cols = vec!["year".to_string(), "month".to_string()];
+        let partition_values = vec![
+            ScalarValue::Dictionary(
+                Box::new(DataType::UInt16),
+                Box::new(ScalarValue::Int32(Some(2023))),
+            ),
+            ScalarValue::Dictionary(
+                Box::new(DataType::UInt16),
+                Box::new(ScalarValue::Int32(Some(1))),
+            ),
+        ];
+
+        // Create metadata columns
+        let metadata_cols = vec![MetadataColumn::Location, MetadataColumn::Size];
+
+        // Create test object metadata
+        let object_meta = create_test_object_meta("bucket/file.parquet", 1024);
+
+        // Create projected schema with file, partition and metadata columns
+        let projected_fields = vec![
+            file_schema.field(0).clone(),
+            Field::new(
+                "year",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Int32),
+                ),
+                true,
+            ),
+            Field::new(
+                "month",
+                DataType::Dictionary(
+                    Box::new(DataType::UInt16),
+                    Box::new(DataType::Int32),
+                ),
+                true,
+            ),
+            metadata_cols[0].field(),
+            metadata_cols[1].field(),
+        ];
+        let projected_schema = Arc::new(Schema::new(projected_fields));
+
+        // Create projector
+        let mut projector = ExtendedColumnProjector::new(
+            Arc::clone(&projected_schema),
+            &partition_cols,
+            &metadata_cols,
+        );
+
+        // Create a test record batch with just the file columns
+        let a_values = Int32Array::from(vec![1, 2, 3]);
+        let file_batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)])),
+            vec![Arc::new(a_values)],
+        )
+        .unwrap();
+
+        // Apply projection
+        let result = projector
+            .project(file_batch, &partition_values, &object_meta)
+            .unwrap();
+
+        // Verify result
+        assert_eq!(result.num_columns(), 5);
+        assert_eq!(result.num_rows(), 3);
+
+        // Columns should be in order: file column, partition columns, metadata columns
+        assert_eq!(result.schema().field(0).name(), "a");
+        assert_eq!(result.schema().field(1).name(), "year");
+        assert_eq!(result.schema().field(2).name(), "month");
+        assert_eq!(result.schema().field(3).name(), "location");
+        assert_eq!(result.schema().field(4).name(), "size");
+
+        // Check metadata column values
+        let location_col = result
+            .column(3)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(location_col.value(0), "bucket/file.parquet");
+
+        let size_col = result
+            .column(4)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        assert_eq!(size_col.value(0), 1024);
     }
 }
