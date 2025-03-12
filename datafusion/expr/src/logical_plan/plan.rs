@@ -38,9 +38,8 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_to_fields,
-    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    split_conjunction,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
+    grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Execute,
