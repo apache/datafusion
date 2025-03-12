@@ -16,9 +16,7 @@
 // under the License.
 
 //! Interfaces and default implementations of catalogs and schemas.
-//!
-//! Implementations
-//! * Listing schema: [`listing_schema`]
 
-pub mod listing_schema;
-pub use crate::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
+pub use crate::catalog::{
+    listing_schema, CatalogProvider, CatalogProviderList, SchemaProvider,
+};

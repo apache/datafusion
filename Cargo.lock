@@ -1843,6 +1843,7 @@ dependencies = [
  "futures",
  "itertools 0.14.0",
  "log",
+ "object_store",
  "parking_lot",
  "tokio",
 ]
@@ -2006,13 +2007,9 @@ dependencies = [
  "datafusion-physical-expr-common",
  "datafusion-physical-plan",
  "futures",
- "itertools 0.14.0",
- "log",
  "object_store",
- "rand 0.8.5",
  "regex",
  "tokio",
- "url",
 ]
 
 [[package]]
