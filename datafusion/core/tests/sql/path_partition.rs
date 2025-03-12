@@ -24,7 +24,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion::datasource::listing::{ListingTableUrl, MetadataColumn};
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::{
@@ -41,6 +41,7 @@ use datafusion::{
 use datafusion_catalog::TableProvider;
 use datafusion_common::stats::Precision;
 use datafusion_common::ScalarValue;
+use datafusion_datasource::metadata::MetadataColumn;
 use datafusion_execution::config::SessionConfig;
 use datafusion_expr::{col, lit, Expr, Operator};
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal};
@@ -675,8 +676,18 @@ async fn test_metadata_columns_pushdown() -> Result<()> {
         Expr::gt(col("id"), lit(1)),
     ];
     let exec = table.scan(&ctx.state(), None, &filters, None).await?;
-    let parquet_exec = exec.as_any().downcast_ref::<ParquetExec>().unwrap();
-    let pred = parquet_exec.predicate().unwrap();
+    let data_source_exec = exec.as_any().downcast_ref::<DataSourceExec>().unwrap();
+    let data_source = data_source_exec.data_source();
+    let file_source = data_source
+        .as_any()
+        .downcast_ref::<FileScanConfig>()
+        .unwrap();
+    let parquet_config = file_source
+        .file_source()
+        .as_any()
+        .downcast_ref::<ParquetSource>()
+        .unwrap();
+    let pred = parquet_config.predicate().unwrap();
     // Only the last filter should be pushdown to TableScan
     let expected = Arc::new(BinaryExpr::new(
         Arc::new(Column::new_with_schema("id", &exec.schema()).unwrap()),
@@ -687,11 +698,10 @@ async fn test_metadata_columns_pushdown() -> Result<()> {
     assert!(pred.as_any().is::<BinaryExpr>());
     let pred = pred.as_any().downcast_ref::<BinaryExpr>().unwrap();
 
-    assert_eq!(pred, expected.as_any());
+    assert_eq!(pred, expected.as_ref());
 
     // Only the first file should be scanned
-    let scan_files = parquet_exec
-        .base_config()
+    let scan_files = file_source
         .file_groups
         .iter()
         .flat_map(|x| x.iter().map(|y| y.path()).collect::<Vec<_>>())

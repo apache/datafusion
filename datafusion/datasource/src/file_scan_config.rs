@@ -20,7 +20,7 @@
 
 use std::{
     any::Any, borrow::Cow, collections::HashMap, fmt::Debug, fmt::Formatter,
-    fmt::Result as FmtResult, marker::PhantomData, sync::Arc,
+    fmt::Result as FmtResult, marker::PhantomData, str::FromStr, sync::Arc,
 };
 
 use arrow::{
@@ -47,13 +47,14 @@ use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan,
 };
 use log::{debug, warn};
+use object_store::ObjectMeta;
 
 use crate::{
     display::FileGroupsDisplay,
     file::FileSource,
     file_compression_type::FileCompressionType,
     file_stream::FileStream,
-    listing::MetadataColumn,
+    metadata::MetadataColumn,
     source::{DataSource, DataSourceExec},
     statistics::MinMaxStatistics,
     PartitionedFile,
@@ -754,6 +755,10 @@ impl ExtendedColumnProjector {
                 projected_metadata_indexes.push(schema_idx);
             }
         }
+        // Sort to ensure that the final metadata column vector is expanded properly
+        if !projected_metadata_indexes.is_empty() {
+            projected_metadata_indexes.sort();
+        }
 
         Self {
             key_buffer_cache: Default::default(),
@@ -1144,7 +1149,7 @@ pub fn wrap_partition_value_in_dict(val: ScalarValue) -> ScalarValue {
 #[cfg(test)]
 mod tests {
     use crate::{test_util::MockSource, tests::aggr_test_schema};
-    use object_store::path::Path;
+    use object_store::{path::Path, ObjectMeta};
 
     use super::*;
     use arrow::{

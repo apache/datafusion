@@ -407,19 +407,23 @@ pub enum FileStreamState {
         future: FileOpenFuture,
         /// The partition values for this file
         partition_values: Vec<ScalarValue>,
+        /// The object meta for this file
+        object_meta: ObjectMeta,
     },
     /// Scanning the [`BoxStream`] returned by the completion of a [`FileOpenFuture`]
     /// returned by [`FileOpener::open`]
     Scan {
         /// Partitioning column values for the current batch_iter
         partition_values: Vec<ScalarValue>,
+        /// The object metadata for the current file
+        object_meta: ObjectMeta,
         /// The reader instance
         reader: BoxStream<'static, Result<RecordBatch, ArrowError>>,
         /// A [`FileOpenFuture`] for the next file to be processed,
         /// and its corresponding partition column values, if any.
         /// This allows the next file to be opened in parallel while the
         /// current file is read.
-        next: Option<(NextOpen, Vec<ScalarValue>)>,
+        next: Option<(NextOpen, Vec<ScalarValue>, ObjectMeta)>,
     },
     /// Encountered an error
     Error,

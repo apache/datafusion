@@ -17,6 +17,7 @@
 
 //! Helper functions for the table implementation
 
+use std::collections::HashMap as StdHashMap;
 use std::mem;
 use std::sync::Arc;
 
@@ -322,7 +323,7 @@ pub(crate) fn apply_filters(
 
     let df_schema = DFSchema::from_unqualified_fields(
         batch.schema().fields().clone(),
-        HashMap::default(),
+        StdHashMap::default(),
     )?;
 
     // Applies `filter` to `batch` returning `None` on error

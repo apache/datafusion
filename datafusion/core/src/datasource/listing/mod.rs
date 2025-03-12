@@ -23,5 +23,4 @@ pub use datafusion_catalog_listing::helpers;
 pub use datafusion_datasource::{
     FileRange, ListingTableUrl, PartitionedFile, PartitionedFileStream,
 };
-pub use metadata::MetadataColumn;
 pub use table::{ListingOptions, ListingTable, ListingTableConfig};
