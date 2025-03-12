@@ -286,7 +286,6 @@ fn test_invalid_function() -> Result<()> {
     assert_eq!(diag.span, Some(spans["whole"]));
     Ok(())
 }
-
 #[test]
 fn test_scalar_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Error>> {
     let query = "SELECT (SELECT 1 AS /*x*/x/*x*/, 2 AS /*y*/y/*y*/) AS col";
@@ -295,53 +294,27 @@ fn test_scalar_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Err
 
     assert_eq!(
         diag.message,
-        "Scalar subquery should only return one column"
+        "Too many columns! The subquery should only return one column"
     );
 
-    let column_count_notes: Vec<_> = diag
-        .notes
-        .iter()
-        .filter(|note| note.message.contains("Found 2 columns"))
-        .collect();
-    assert!(
-        !column_count_notes.is_empty(),
-        "Expected note about column count"
-    );
-
-    let extra_column_notes: Vec<_> = diag
-        .notes
-        .iter()
-        .filter(|note| note.message.contains("Extra column"))
-        .collect();
+    let expected_span = Some(Span {
+        start: spans["x"].start,
+        end: spans["y"].end,
+    });
+    assert_eq!(diag.span, expected_span);
     assert_eq!(
-        extra_column_notes.len(),
-        1,
-        "Expected one note about extra column"
+        diag.notes
+            .iter()
+            .map(|n| (n.message.as_str(), n.span))
+            .collect::<Vec<_>>(),
+        vec![("Extra column 1", Some(spans["y"]))]
     );
-
-    if let Some(first_note) = diag.notes.first() {
-        assert_eq!(
-            first_note.span,
-            Some(spans["x"]),
-            "Primary diagnostic span should match the first column's span"
-        );
-    }
-
-    if let Some(extra_column_span) = extra_column_notes
-        .first()
-        .and_then(|note| note.span.as_ref())
-    {
-        assert_eq!(
-            *extra_column_span, spans["y"],
-            "Extra column note span should match the second column's span"
-        );
-    }
-
-    assert!(
+    assert_eq!(
         diag.helps
             .iter()
-            .any(|help| help.message.contains("Select only one column")),
-        "Expected help message"
+            .map(|h| h.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Select only one column in the subquery"]
     );
 
     Ok(())
@@ -354,52 +327,29 @@ fn test_in_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Error>>
     let spans = get_spans(query);
     let diag = do_query(query);
 
-    assert_eq!(diag.message, "IN subquery should only return one column");
-
-    let column_count_notes: Vec<_> = diag
-        .notes
-        .iter()
-        .filter(|note| note.message.contains("Found 2 columns"))
-        .collect();
-    assert!(
-        !column_count_notes.is_empty(),
-        "Expected note about column count"
-    );
-
-    let extra_column_notes: Vec<_> = diag
-        .notes
-        .iter()
-        .filter(|note| note.message.contains("Extra column"))
-        .collect();
     assert_eq!(
-        extra_column_notes.len(),
-        1,
-        "Expected one note about extra column"
+        diag.message,
+        "Too many columns! The IN subquery should only return one column"
     );
 
-    if let Some(first_note) = diag.notes.first() {
-        assert_eq!(
-            first_note.span,
-            Some(spans["id"]),
-            "Primary diagnostic span should match the first column's span"
-        );
-    }
-
-    if let Some(extra_column_span) = extra_column_notes
-        .first()
-        .and_then(|note| note.span.as_ref())
-    {
-        assert_eq!(
-            *extra_column_span, spans["first"],
-            "Extra column note span should match the second column's span"
-        );
-    }
-
-    assert!(
+    let expected_span = Some(Span {
+        start: spans["id"].start,
+        end: spans["first"].end,
+    });
+    assert_eq!(diag.span, expected_span);
+    assert_eq!(
+        diag.notes
+            .iter()
+            .map(|n| (n.message.as_str(), n.span))
+            .collect::<Vec<_>>(),
+        vec![("Extra column 1", Some(spans["first"]))]
+    );
+    assert_eq!(
         diag.helps
             .iter()
-            .any(|help| help.message.contains("Select only one column")),
-        "Expected help message"
+            .map(|h| h.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Select only one column in the IN subquery"]
     );
 
     Ok(())

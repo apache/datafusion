@@ -56,8 +56,8 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, Span, Spans,
-    TableReference, UnnestOptions,
+    FunctionalDependencies, ParamValues, Result, ScalarValue, Spans, TableReference,
+    UnnestOptions,
 };
 use indexmap::IndexSet;
 

@@ -75,7 +75,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         self.validate_single_column(
             &sub_plan,
             spans.clone(),
-            "IN subquery should only return one column",
+            "Too many columns! The IN subquery should only return one column",
             "Select only one column in the IN subquery",
         )?;
 
@@ -117,7 +117,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         self.validate_single_column(
             &sub_plan,
             spans.clone(),
-            "The subquery should only return one column",
+            "Too many columns! The subquery should only return one column",
             "Select only one column in the subquery",
         )?;
 
@@ -137,13 +137,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<()> {
         if sub_plan.schema().fields().len() > 1 {
             let sub_schema = sub_plan.schema();
-            let fields = sub_schema.fields();
             let field_names = sub_schema.field_names();
 
             plan_err!("{}: {}", error_message, field_names.join(", ")).map_err(|err| {
                 let diagnostic = self.build_multi_column_diagnostic(
-                    fields.len(),
-                    &field_names,
                     spans,
                     error_message,
                     help_message,
@@ -157,30 +154,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn build_multi_column_diagnostic(
         &self,
-        column_count: usize,
-        column_names: &[String],
         spans: Spans,
         error_message: &str,
         help_message: &str,
     ) -> Diagnostic {
-        let primary_span = spans.first().clone();
-        let columns_info = format!(
-            "Found {} columns: {}",
-            column_count,
-            column_names.join(", ")
-        );
-
-        let mut diagnostic = Diagnostic::new_error(error_message, primary_span);
-        if spans.0.len() > 1 {
-            diagnostic.add_note(columns_info, primary_span);
-            for (i, span) in spans.iter().skip(1).enumerate() {
-                diagnostic
-                    .add_note(format!("Extra column {}", i + 1), Some(span.clone()));
-            }
+        // Create a span that encompasses all columns if possible
+        let full_span = if spans.0.len() > 1 {
+            spans.0.first().and_then(|first_span| {
+                spans.0.last().map(|last_span| Span {
+                    start: first_span.start,
+                    end: last_span.end,
+                })
+            })
         } else {
-            diagnostic.add_note(columns_info, primary_span);
+            spans.first()
+        };
+        let mut diagnostic = Diagnostic::new_error(error_message, full_span);
+        for (i, span) in spans.iter().skip(1).enumerate() {
+            diagnostic.add_note(format!("Extra column {}", i + 1), Some(span.clone()));
         }
-
         diagnostic.add_help(help_message, None);
         diagnostic
     }
