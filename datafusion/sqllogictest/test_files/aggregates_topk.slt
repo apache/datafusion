@@ -19,6 +19,12 @@
 # Setup test data table
 #######
 
+# Setting to map varchar to utf8view, to test PR https://github.com/apache/datafusion/pull/15152
+# Before the PR, the test case would not work because the Utf8View will not be supported by the TopK aggregation
+
+statement ok
+set datafusion.sql_parser.map_varchar_to_utf8view = true;
+
 # TopK aggregation
 statement ok
 CREATE TABLE traces(trace_id varchar, timestamp bigint, other bigint) AS VALUES
