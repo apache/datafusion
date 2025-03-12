@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod sql_formatter;
 mod guarantee;
-pub use sql_formatter::sql_formatter;
+mod sql_formatter;
 pub use guarantee::{Guarantee, LiteralGuarantee};
+pub use sql_formatter::sql_formatter;
 
 use std::borrow::Borrow;
 use std::sync::Arc;
