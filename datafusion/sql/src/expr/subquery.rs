@@ -158,21 +158,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         error_message: &str,
         help_message: &str,
     ) -> Diagnostic {
-        // Create a span that encompasses all columns if possible
-        let full_span = if spans.0.len() > 1 {
-            spans.0.first().and_then(|first_span| {
-                spans.0.last().map(|last_span| Span {
-                    start: first_span.start,
-                    end: last_span.end,
-                })
-            })
-        } else {
-            spans.first()
-        };
+        let full_span = Span::union_iter(spans.0.iter().cloned());
         let mut diagnostic = Diagnostic::new_error(error_message, full_span);
+
         for (i, span) in spans.iter().skip(1).enumerate() {
             diagnostic.add_note(format!("Extra column {}", i + 1), Some(span.clone()));
         }
+
         diagnostic.add_help(help_message, None);
         diagnostic
     }
