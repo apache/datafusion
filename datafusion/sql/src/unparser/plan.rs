@@ -49,7 +49,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
     UserDefinedLogicalNode,
 };
-use sqlparser::ast::{self, Ident, SetExpr, TableAliasColumnDef};
+use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::sync::Arc;
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
@@ -356,7 +356,7 @@ impl Unparser<'_> {
                 table_parts.push(
                     self.new_ident_quoted_if_needs(scan.table_name.table().to_string()),
                 );
-                builder.name(ast::ObjectName(table_parts));
+                builder.name(ast::ObjectName::from(table_parts));
                 relation.table(builder);
 
                 Ok(())
@@ -471,7 +471,7 @@ impl Unparser<'_> {
                 };
 
                 if let Some(fetch) = sort.fetch {
-                    query_ref.limit(Some(ast::Expr::Value(ast::Value::Number(
+                    query_ref.limit(Some(ast::Expr::value(ast::Value::Number(
                         fetch.to_string(),
                         false,
                     ))));
@@ -1048,11 +1048,13 @@ impl Unparser<'_> {
         }
     }
 
-    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<Vec<ast::OrderByExpr>> {
-        sort_exprs
-            .iter()
-            .map(|sort_expr| self.sort_to_sql(sort_expr))
-            .collect::<Result<Vec<_>>>()
+    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<OrderByKind> {
+        Ok(OrderByKind::Expressions(
+            sort_exprs
+                .iter()
+                .map(|sort_expr| self.sort_to_sql(sort_expr))
+                .collect::<Result<Vec<_>>>()?,
+        ))
     }
 
     fn join_operator_to_sql(
@@ -1108,7 +1110,7 @@ impl Unparser<'_> {
                     // this is represented as two columns like `[t1.id, t2.id]`
                     // This code forms `id` (without relation name)
                     let ident = self.new_ident_quoted_if_needs(left_name.to_string());
-                    object_names.push(ast::ObjectName(vec![ident]));
+                    object_names.push(ast::ObjectName::from(vec![ident]));
                 }
                 // USING is only valid with matching column names; arbitrary expressions
                 // are not allowed

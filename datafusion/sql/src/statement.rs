@@ -57,6 +57,7 @@ use datafusion_expr::{
 use sqlparser::ast::{
     self, BeginTransactionKind, NullsDistinctOption, ShowStatementIn,
     ShowStatementOptions, SqliteOnConflict, TableObject, UpdateTableFromKind,
+    ValueWithSpan,
 };
 use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
@@ -75,7 +76,11 @@ fn object_name_to_string(object_name: &ObjectName) -> String {
     object_name
         .0
         .iter()
-        .map(ident_to_string)
+        .map(|object_name_part| {
+            object_name_part
+                .as_ident()
+                .map_or_else(String::new, ident_to_string)
+        })
         .collect::<Vec<String>>()
         .join(".")
 }
@@ -160,7 +165,8 @@ fn calc_inline_constraints_from_columns(columns: &[ColumnDef]) -> Vec<TableConst
                 | ast::ColumnOption::OnConflict(_)
                 | ast::ColumnOption::Policy(_)
                 | ast::ColumnOption::Tags(_)
-                | ast::ColumnOption::Alias(_) => {}
+                | ast::ColumnOption::Alias(_)
+                | ast::ColumnOption::Collation(_) => {}
             }
         }
     }
@@ -273,6 +279,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 with_aggregation_policy,
                 with_row_access_policy,
                 with_tags,
+                iceberg,
+                external_volume,
+                base_location,
+                catalog,
+                catalog_sync,
+                storage_serialization_policy,
             }) if table_properties.is_empty() && with_options.is_empty() => {
                 if temporary {
                     return not_impl_err!("Temporary tables not supported")?;
@@ -392,6 +404,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 if with_tags.is_some() {
                     return not_impl_err!("With tags not supported")?;
+                }
+                if iceberg {
+                    return not_impl_err!("Iceberg not supported")?;
+                }
+                if external_volume.is_some() {
+                    return not_impl_err!("External volume not supported")?;
+                }
+                if base_location.is_some() {
+                    return not_impl_err!("Base location not supported")?;
+                }
+                if catalog.is_some() {
+                    return not_impl_err!("Catalog not supported")?;
+                }
+                if catalog_sync.is_some() {
+                    return not_impl_err!("Catalog sync not supported")?;
+                }
+                if storage_serialization_policy.is_some() {
+                    return not_impl_err!("Storage serialization policy not supported")?;
                 }
 
                 // Merge inline constraints and existing constraints
@@ -687,6 +717,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // has_parentheses specifies the syntax, but the plan is the
                 // same no matter the syntax used, so ignore it
                 has_parentheses: _,
+                immediate,
+                into,
             } => {
                 // `USING` is a MySQL-specific syntax and currently not supported.
                 if !using.is_empty() {
@@ -694,7 +726,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         "Execute statement with USING is not supported"
                     );
                 }
-
+                if immediate {
+                    return not_impl_err!(
+                        "Execute statement with IMMEDIATE is not supported"
+                    );
+                }
+                if !into.is_empty() {
+                    return not_impl_err!("Execute statement with INTO is not supported");
+                }
                 let empty_schema = DFSchema::empty();
                 let parameters = parameters
                     .into_iter()
@@ -702,7 +741,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .collect::<Result<Vec<Expr>>>()?;
 
                 Ok(LogicalPlan::Statement(PlanStatement::Execute(Execute {
-                    name: object_name_to_string(&name),
+                    name: object_name_to_string(&name.unwrap()),
                     parameters,
                 })))
             }
@@ -905,8 +944,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             } => {
                 let from =
                     from.map(|update_table_from_kind| match update_table_from_kind {
-                        UpdateTableFromKind::BeforeSet(from) => from,
-                        UpdateTableFromKind::AfterSet(from) => from,
+                        UpdateTableFromKind::BeforeSet(from) => from[0].clone(),
+                        UpdateTableFromKind::AfterSet(from) => from[0].clone(),
                     });
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
@@ -955,11 +994,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 begin: false,
                 modifier,
                 transaction,
+                statements,
+                exception_statements,
+                has_end_keyword,
             } => {
                 if let Some(modifier) = modifier {
                     return not_impl_err!(
                         "Transaction modifier not supported: {modifier}"
                     );
+                }
+                if !statements.is_empty() {
+                    return not_impl_err!(
+                        "Transaction with multiple statements not supported"
+                    );
+                }
+                if exception_statements.is_some() {
+                    return not_impl_err!(
+                        "Transaction with exception statements not supported"
+                    );
+                }
+                if has_end_keyword {
+                    return not_impl_err!("Transaction with END keyword not supported");
                 }
                 self.validate_transaction_kind(transaction)?;
                 let isolation_level: ast::TransactionIsolationLevel = modes
@@ -1085,7 +1140,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // At the moment functions can't be qualified `schema.name`
                 let name = match &name.0[..] {
                     [] => exec_err!("Function should have name")?,
-                    [n] => n.value.clone(),
+                    [n] => n.as_ident().unwrap().value.clone(),
                     [..] => not_impl_err!("Qualified functions are not supported")?,
                 };
                 //
@@ -1143,7 +1198,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // At the moment functions can't be qualified `schema.name`
                     let name = match &desc.name.0[..] {
                         [] => exec_err!("Function should have name")?,
-                        [n] => n.value.clone(),
+                        [n] => n.as_ident().unwrap().value.clone(),
                         [..] => not_impl_err!("Qualified functions are not supported")?,
                     };
                     let statement = DdlStatement::DropFunction(DropFunction {
@@ -1344,8 +1399,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     planner_context,
                                 )
                                 .unwrap();
-                            let asc = order_by_expr.asc.unwrap_or(true);
-                            let nulls_first = order_by_expr.nulls_first.unwrap_or(!asc);
+                            let asc = order_by_expr.options.asc.unwrap_or(true);
+                            let nulls_first =
+                                order_by_expr.options.nulls_first.unwrap_or(!asc);
 
                             SortExpr::new(ordered_expr, asc, nulls_first)
                         })
@@ -1612,7 +1668,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             variable_vec = variable_vec.split_at(variable_vec.len() - 1).0.to_vec();
         }
 
-        let variable = object_name_to_string(&ObjectName(variable_vec));
+        let variable = object_name_to_string(&ObjectName::from(variable_vec));
         let base_query = format!("SELECT {columns} FROM information_schema.df_settings");
         let query = if variable == "all" {
             // Add an ORDER BY so the output comes out in a consistent order
@@ -1679,7 +1735,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Parse value string from Expr
         let value_string = match &value[0] {
             SQLExpr::Identifier(i) => ident_to_string(i),
-            SQLExpr::Value(v) => match crate::utils::value_to_string(v) {
+            SQLExpr::Value(v) => match crate::utils::value_to_string(&v.value) {
                 None => {
                     return plan_err!("Unsupported Value {}", value[0]);
                 }
@@ -1779,7 +1835,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .0
                     .iter()
                     .last()
-                    .ok_or_else(|| plan_datafusion_err!("Empty column id"))?;
+                    .ok_or_else(|| plan_datafusion_err!("Empty column id"))?
+                    .as_ident()
+                    .unwrap();
                 // Validate that the assignment target column exists
                 table_schema.field_with_unqualified_name(&col_name.value)?;
                 Ok((col_name.value.clone(), assign.value.clone()))
@@ -1917,7 +1975,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if let SetExpr::Values(ast::Values { rows, .. }) = (*source.body).clone() {
             for row in rows.iter() {
                 for (idx, val) in row.iter().enumerate() {
-                    if let SQLExpr::Value(Value::Placeholder(name)) = val {
+                    if let SQLExpr::Value(ValueWithSpan {
+                        value: Value::Placeholder(name),
+                        span: _,
+                    }) = val
+                    {
                         let name =
                             name.replace('$', "").parse::<usize>().map_err(|_| {
                                 plan_datafusion_err!("Can't parse placeholder: {name}")

@@ -20,7 +20,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 
-use sqlparser::ast::ExprWithAlias;
+use sqlparser::ast::{ExprWithAlias, OrderByOptions};
 use sqlparser::tokenizer::TokenWithSpan;
 use sqlparser::{
     ast::{
@@ -628,8 +628,7 @@ impl<'a> DFParser<'a> {
 
         Ok(OrderByExpr {
             expr,
-            asc,
-            nulls_first,
+            options: OrderByOptions { asc, nulls_first },
             with_fill: None,
         })
     }
@@ -676,11 +675,6 @@ impl<'a> DFParser<'a> {
     fn parse_column_def(&mut self) -> Result<ColumnDef, ParserError> {
         let name = self.parser.parse_identifier()?;
         let data_type = self.parser.parse_data_type()?;
-        let collation = if self.parser.parse_keyword(Keyword::COLLATE) {
-            Some(self.parser.parse_object_name(false)?)
-        } else {
-            None
-        };
         let mut options = vec![];
         loop {
             if self.parser.parse_keyword(Keyword::CONSTRAINT) {
@@ -702,7 +696,6 @@ impl<'a> DFParser<'a> {
         Ok(ColumnDef {
             name,
             data_type,
-            collation,
             options,
         })
     }
@@ -925,7 +918,6 @@ mod tests {
                 span: Span::empty(),
             },
             data_type,
-            collation: None,
             options: vec![],
         }
     }
@@ -935,7 +927,7 @@ mod tests {
         // positive case
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
         let display = None;
-        let name = ObjectName(vec![Ident::from("t")]);
+        let name = ObjectName::from(vec![Ident::from("t")]);
         let expected = Statement::CreateExternalTable(CreateExternalTable {
             name: name.clone(),
             columns: vec![make_column_def("c1", DataType::Int(display))],
@@ -1233,8 +1225,7 @@ mod tests {
                         quote_style: None,
                         span: Span::empty(),
                     }),
-                    asc,
-                    nulls_first,
+                    options: OrderByOptions { asc, nulls_first },
                     with_fill: None,
                 }]],
                 if_not_exists: false,
@@ -1265,8 +1256,10 @@ mod tests {
                         quote_style: None,
                         span: Span::empty(),
                     }),
-                    asc: Some(true),
-                    nulls_first: None,
+                    options: OrderByOptions {
+                        asc: Some(true),
+                        nulls_first: None,
+                    },
                     with_fill: None,
                 },
                 OrderByExpr {
@@ -1275,8 +1268,10 @@ mod tests {
                         quote_style: None,
                         span: Span::empty(),
                     }),
-                    asc: Some(false),
-                    nulls_first: Some(true),
+                    options: OrderByOptions {
+                        asc: Some(false),
+                        nulls_first: Some(true),
+                    },
                     with_fill: None,
                 },
             ]],
@@ -1314,8 +1309,10 @@ mod tests {
                         span: Span::empty(),
                     })),
                 },
-                asc: Some(true),
-                nulls_first: None,
+                options: OrderByOptions {
+                    asc: Some(true),
+                    nulls_first: None,
+                },
                 with_fill: None,
             }]],
             if_not_exists: false,
@@ -1361,8 +1358,10 @@ mod tests {
                         span: Span::empty(),
                     })),
                 },
-                asc: Some(true),
-                nulls_first: None,
+                options: OrderByOptions {
+                    asc: Some(true),
+                    nulls_first: None,
+                },
                 with_fill: None,
             }]],
             if_not_exists: true,
@@ -1575,7 +1574,7 @@ mod tests {
     // For error cases, see: `copy.slt`
 
     fn object_name(name: &str) -> CopyToSource {
-        CopyToSource::Relation(ObjectName(vec![Ident::new(name)]))
+        CopyToSource::Relation(ObjectName::from(vec![Ident::new(name)]))
     }
 
     // Based on  sqlparser-rs
