@@ -53,7 +53,7 @@ datafusion-optimizer = { workspace = true, default-features = true }
 datafusion-physical-plan = { workspace = true }
 datafusion-sql = { workspace = true }
 # getrandom must be compiled with js feature
-getrandom = { version = "0.3.1" }
+getrandom = { version = "0.3", features = ["wasm_js"] }
 
 wasm-bindgen = "0.2.99"
 
