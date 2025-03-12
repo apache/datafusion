@@ -329,7 +329,7 @@ fn test_in_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Error>>
 
     assert_eq!(
         diag.message,
-        "Too many columns! The IN subquery should only return one column"
+        "Too many columns! The subquery should only return one column"
     );
 
     let expected_span = Some(Span {
@@ -349,7 +349,7 @@ fn test_in_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Error>>
             .iter()
             .map(|h| h.message.as_str())
             .collect::<Vec<_>>(),
-        vec!["Select only one column in the IN subquery"]
+        vec!["Select only one column in the subquery"]
     );
 
     Ok(())

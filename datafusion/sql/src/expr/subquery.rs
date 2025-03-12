@@ -75,8 +75,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         self.validate_single_column(
             &sub_plan,
             spans.clone(),
-            "Too many columns! The IN subquery should only return one column",
-            "Select only one column in the IN subquery",
+            "Too many columns! The subquery should only return one column",
+            "Select only one column in the subquery",
         )?;
 
         let expr_obj = self.sql_to_expr(expr, input_schema, planner_context)?;
