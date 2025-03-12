@@ -75,7 +75,8 @@ struct JoinLeftData {
     probe_threads_counter: AtomicUsize,
     /// Memory reservation for tracking batch and bitmap
     /// Cleared on `JoinLeftData` drop
-    _reservation: MemoryReservation,
+    #[allow(dead_code)]
+    reservation: MemoryReservation,
 }
 
 impl JoinLeftData {
@@ -83,13 +84,13 @@ impl JoinLeftData {
         batch: RecordBatch,
         bitmap: SharedBitmapBuilder,
         probe_threads_counter: AtomicUsize,
-        _reservation: MemoryReservation,
+        reservation: MemoryReservation,
     ) -> Self {
         Self {
             batch,
             bitmap,
             probe_threads_counter,
-            _reservation,
+            reservation,
         }
     }
 
