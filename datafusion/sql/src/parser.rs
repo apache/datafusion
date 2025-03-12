@@ -61,7 +61,7 @@ pub struct ExplainStatement {
     /// `EXPLAIN .. FORMAT `
     pub format: Option<String>,
     /// The statement to analyze. Note this is a DataFusion [`Statement`] (not a
-    /// [`sqlparser::ast::Statement`] so that we can `EXPLAIN`  `COPY` and other
+    /// [`sqlparser::ast::Statement`] so that we can use `EXPLAIN`, `COPY`, and other
     /// DataFusion specific statements
     pub statement: Box<Statement>,
 }
