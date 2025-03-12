@@ -898,8 +898,8 @@ impl CustomDialectBuilder {
         self
     }
 
-    pub fn with_unnest_as_table_factor(mut self, _unnest_as_table_factor: bool) -> Self {
-        self.unnest_as_table_factor = _unnest_as_table_factor;
+    pub fn with_unnest_as_table_factor(mut self, unnest_as_table_factor: bool) -> Self {
+        self.unnest_as_table_factor = unnest_as_table_factor;
         self
     }
 }
