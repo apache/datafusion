@@ -23,7 +23,7 @@ use ahash::RandomState;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::{
     builder::PrimitiveBuilder, cast::AsArray, downcast_primitive, Array, ArrayRef,
-    ArrowPrimitiveType, PrimitiveArray, StringArray, StringViewArray,
+    ArrowPrimitiveType, LargeStringArray, PrimitiveArray, StringArray, StringViewArray,
 };
 use arrow::datatypes::{i256, DataType};
 use datafusion_common::DataFusionError;
@@ -107,6 +107,7 @@ impl StringHashTable {
         let owned: ArrayRef = match data_type {
             DataType::Utf8 => Arc::new(StringArray::from(vals)),
             DataType::Utf8View => Arc::new(StringViewArray::from(vals)),
+            DataType::LargeUtf8 => Arc::new(LargeStringArray::from(vals)),
             _ => panic!("Unsupported data type"),
         };
 
@@ -140,6 +141,7 @@ impl ArrowHashTable for StringHashTable {
         let ids = self.map.take_all(indexes);
         match self.data_type {
             DataType::Utf8 => Arc::new(StringArray::from(ids)),
+            DataType::LargeUtf8 => Arc::new(LargeStringArray::from(ids)),
             DataType::Utf8View => Arc::new(StringViewArray::from(ids)),
             _ => unreachable!(),
         }
@@ -158,6 +160,18 @@ impl ArrowHashTable for StringHashTable {
                     .as_any()
                     .downcast_ref::<StringArray>()
                     .expect("Expected StringArray for DataType::Utf8");
+                if ids.is_null(row_idx) {
+                    None
+                } else {
+                    Some(ids.value(row_idx))
+                }
+            }
+            DataType::LargeUtf8 => {
+                let ids = self
+                    .owned
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .expect("Expected LargeStringArray for DataType::LargeUtf8");
                 if ids.is_null(row_idx) {
                     None
                 } else {
@@ -406,6 +420,7 @@ pub fn new_hash_table(
     downcast_primitive! {
         kt => (downcast_helper, kt),
         DataType::Utf8 => return Ok(Box::new(StringHashTable::new(limit, DataType::Utf8))),
+        DataType::LargeUtf8 => return Ok(Box::new(StringHashTable::new(limit, DataType::LargeUtf8))),
         DataType::Utf8View => return Ok(Box::new(StringHashTable::new(limit, DataType::Utf8View))),
         _ => {}
     }
