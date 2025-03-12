@@ -21,7 +21,7 @@ use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
-    col, lit, table_scan, wildcard, EmptyRelation, Expr, Extension, LogicalPlan,
+    cast, col, lit, table_scan, wildcard, EmptyRelation, Expr, Extension, LogicalPlan,
     LogicalPlanBuilder, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
 use datafusion_functions::unicode;
@@ -37,6 +37,7 @@ use datafusion_sql::unparser::dialect::{
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 use sqlparser::ast::Statement;
 use std::hash::Hash;
+use std::ops::Add;
 use std::sync::Arc;
 use std::{fmt, vec};
 
@@ -1680,5 +1681,68 @@ fn test_unparse_optimized_multi_union() -> Result<()> {
         panic!("Expected error")
     }
 
+    Ok(())
+}
+
+/// Test unparse the optimized plan from the following SQL:
+/// ```
+/// SELECT
+///   customer_view.c_custkey,
+///   customer_view.c_name,
+///   customer_view.custkey_plus
+/// FROM
+///   (
+///     SELECT
+///       customer.c_custkey,
+///       customer.c_name,
+///       customer.custkey_plus
+///     FROM
+///       (
+///         SELECT
+///           customer.c_custkey,
+///           CAST(customer.c_custkey AS BIGINT) + 1 AS custkey_plus,
+///           customer.c_name
+///         FROM
+///           (
+///             SELECT
+///               customer.c_custkey AS c_custkey,
+///               customer.c_name AS c_name
+///             FROM
+///               customer
+///           ) AS customer
+///       ) AS customer
+///   ) AS customer_view
+/// ```
+#[test]
+fn test_unparse_subquery_alias_with_table_pushdown() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("c_custkey", DataType::Int32, false),
+        Field::new("c_name", DataType::Utf8, false),
+    ]);
+
+    let table_scan = table_scan(Some("customer"), &schema, Some(vec![0, 1]))?.build()?;
+
+    let plan = LogicalPlanBuilder::from(table_scan)
+        .alias("customer")?
+        .project(vec![
+            col("customer.c_custkey"),
+            cast(col("customer.c_custkey"), DataType::Int64)
+                .add(lit(1))
+                .alias("custkey_plus"),
+            col("customer.c_name"),
+        ])?
+        .alias("customer")?
+        .project(vec![
+            col("customer.c_custkey"),
+            col("customer.c_name"),
+            col("customer.custkey_plus"),
+        ])?
+        .alias("customer_view")?
+        .build()?;
+
+    let unparser = Unparser::default();
+    let sql = unparser.plan_to_sql(&plan)?;
+    let expected = "SELECT customer_view.c_custkey, customer_view.c_name, customer_view.custkey_plus FROM (SELECT customer.c_custkey, (CAST(customer.c_custkey AS BIGINT) + 1) AS custkey_plus, customer.c_name FROM (SELECT customer.c_custkey, customer.c_name FROM customer AS customer) AS customer) AS customer_view";
+    assert_eq!(sql.to_string(), expected);
     Ok(())
 }
