@@ -26,7 +26,7 @@ ARG1=$1
 
 main(){
 
-mkdir working
+mkdir -p working
 cp bench.sh working/
 cp collect_bench.sh working/
 cp lineprotocol.py working/
@@ -38,6 +38,7 @@ cd working
 
 timestamp=$(date +%s)
 lp_file="../results/$ARG1-$timestamp.lp"
+mkdir -p ../results
 touch $lp_file
 
 git fetch upstream main
@@ -50,18 +51,18 @@ major_version=$(echo "$output" | grep -oE '[0-9]+' | head -n1)
 
 # run for current main
 echo "current major version: $major_version"  
-export RESULTS_DIR="../results/$major_version.0.0"
+export RESULTS_DIR="results/$major_version.0.0"
 DATAFUSION_DIR=../../ ./bench.sh run $ARG1
-python3 lineprotocol.py $RESULTS_DIR/$ARG1.json >> $lp_file
+python3 lineprotocol.py ../$RESULTS_DIR/$ARG1.json >> $lp_file
 
 run for last 5 major releases
 for i in {1..5}; do
     echo "running benchmark on $((major_version-i)).0.0"
     git fetch upstream $((major_version-i)).0.0
     git checkout $((major_version-i)).0.0
-    export RESULTS_DIR="../results/$((major_version-i)).0.0"
+    export RESULTS_DIR="results/$((major_version-i)).0.0"
     DATAFUSION_DIR=../../ ./bench.sh run $ARG1
-    python3 lineprotocol.py $RESULTS_DIR/$ARG1.json >> $lp_file
+    python3 lineprotocol.py ../$RESULTS_DIR/$ARG1.json >> $lp_file
 done
 
 echo "[[inputs.file]]
