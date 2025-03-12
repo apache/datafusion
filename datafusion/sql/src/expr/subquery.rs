@@ -86,7 +86,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Subquery {
                 subquery: Arc::new(sub_plan),
                 outer_ref_columns,
-                spans: spans,
+                spans,
             },
             negated,
         )))
@@ -124,7 +124,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok(Expr::ScalarSubquery(Subquery {
             subquery: Arc::new(sub_plan),
             outer_ref_columns,
-            spans: spans,
+            spans,
         }))
     }
 
@@ -162,7 +162,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut diagnostic = Diagnostic::new_error(error_message, full_span);
 
         for (i, span) in spans.iter().skip(1).enumerate() {
-            diagnostic.add_note(format!("Extra column {}", i + 1), Some(span.clone()));
+            diagnostic.add_note(format!("Extra column {}", i + 1), Some(*span));
         }
 
         diagnostic.add_help(help_message, None);

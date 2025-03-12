@@ -731,9 +731,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "Invalid (non-executable) plan after Analyzer\
-        \ncaused by\
-        \nError during planning: Scalar subquery should only return one column";
+        let expected = "Error during planning: Too many columns! The subquery should only return one column";
         assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
@@ -793,9 +791,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "Invalid (non-executable) plan after Analyzer\
-        \ncaused by\
-        \nError during planning: Scalar subquery should only return one column";
+        let expected = "Error during planning: Too many columns! The subquery should only return one column";
         assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
