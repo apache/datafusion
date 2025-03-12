@@ -419,8 +419,7 @@ impl<'schema> FilterSchemaBuilder<'schema> {
         fields.sort_by_key(|f| {
             let table_schema_index =
                 table_schema.index_of(f.name()).unwrap_or(usize::MAX);
-            let file_schema_index =
-                file_schema.index_of(f.name()).unwrap_or(usize::MAX);
+            let file_schema_index = file_schema.index_of(f.name()).unwrap_or(usize::MAX);
             (table_schema_index, file_schema_index)
         });
     }

@@ -25,6 +25,7 @@ pub use datafusion_datasource_parquet::*;
 mod tests {
     // See also `parquet_exec` integration test
     use std::fs::{self, File};
+    use std::hash::{DefaultHasher, Hasher};
     use std::io::Write;
     use std::sync::Arc;
     use std::sync::Mutex;
@@ -79,7 +80,6 @@ mod tests {
     use object_store::{ObjectMeta, ObjectStore};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
-    use sha2::{Digest, Sha256};
     use tempfile::TempDir;
     use url::Url;
 
@@ -934,11 +934,12 @@ mod tests {
 
     impl PreComputedExpressionRewriter {
         fn expr_to_column_name(expr: &Arc<dyn PhysicalExpr>) -> String {
+            // In a real system you'd want to use a hash that's stable across platforms, etc.
             let expr_sql = format!("{:?}", expr);
-            let mut hasher = Sha256::new();
-            hasher.update(expr_sql.as_bytes());
-            let hash = hasher.finalize();
-            let hex = hex::encode(hash[..8].to_vec());
+            let mut hasher = DefaultHasher::new();
+            hasher.write(expr_sql.as_bytes());
+            let hash = hasher.finish();
+            let hex = hex::encode(hash.to_le_bytes());
             format!("_expr_{hex}")
         }
     }
