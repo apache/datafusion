@@ -46,9 +46,11 @@ mod tests {
     use arrow_schema::SchemaRef;
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
-    use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
+    use datafusion_common::tree_node::{
+        Transformed, TransformedResult, TreeNode, TreeNodeRewriter,
+    };
     use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, assert_contains, Result, ScalarValue
+        assert_batches_eq, assert_batches_sorted_eq, assert_contains, Result, ScalarValue,
     };
     use datafusion_datasource::file_expr_rewriter::FileExpressionRewriter;
     use datafusion_datasource::file_format::FileFormat;
@@ -790,9 +792,11 @@ mod tests {
             &mut self,
             expr: Arc<dyn PhysicalExpr>,
         ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-            if let Some(scalar_function) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+            if let Some(scalar_function) =
+                expr.as_any().downcast_ref::<ScalarFunctionExpr>()
             {
-                if scalar_function.name() == "get_field" && scalar_function.args().len() == 2
+                if scalar_function.name() == "get_field"
+                    && scalar_function.args().len() == 2
                 {
                     // First argument is the column, second argument is the field name
                     let column = scalar_function.args()[0].clone();
@@ -828,7 +832,9 @@ mod tests {
                                                     &expected_flattened_column_name,
                                                     &self.file_schema,
                                                 )?;
-                                                return Ok(Transformed::yes(rewritten_expr));
+                                                return Ok(Transformed::yes(
+                                                    rewritten_expr,
+                                                ));
                                             }
                                         }
                                     }
