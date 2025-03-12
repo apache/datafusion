@@ -171,21 +171,41 @@ jobs:
     name: cargo test (amd64)
     needs: linux-build-lib
     runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: stable
+        run: rustup toolchain install stable
+      - name: Install Protobuf Compiler
+        run: sudo apt-get install -y protobuf-compiler
+      - name: Setup Minio - S3-compatible storage
+        run: |
+          docker run -d --name minio-container \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=TEST-DataFusionLogin -e MINIO_ROOT_PASSWORD=TEST-DataFusionPassword \
+            -v $(pwd)/datafusion/core/tests/data:/source quay.io/minio/minio \
+            server /data
+          docker exec minio-container /bin/sh -c "\
+            mc ready local
+            mc alias set localminio http://localhost:9000 TEST-DataFusionLogin TEST-DataFusionPassword && \
+            mc mb localminio/data && \
+            mc cp -r /source/* localminio/data"
       - name: Run tests (excluding doctests)
+        env:
+          RUST_BACKTRACE: 1
+          AWS_ENDPOINT: http://127.0.0.1:9000
+          AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
+          AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
+          TEST_STORAGE_INTEGRATION: 1
+          AWS_ALLOW_HTTP: true
         run: cargo test --profile ci --exclude datafusion-examples --exclude ffi_example_table_provider --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
+      - name: Minio Output
+        if: ${{ !cancelled() }}
+        run: docker logs minio-container
 
   linux-test-example:
     name: cargo examples (amd64)
@@ -259,6 +279,10 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Install dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq clang
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - name: Build with wasm-pack
@@ -295,7 +319,7 @@ jobs:
           export RUST_MIN_STACK=20971520
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
           cargo test plan_q --package datafusion-benchmarks --profile ci --features=ci -- --test-threads=1
-          INCLUDE_TPCH=true cargo test --profile ci --package datafusion-sqllogictest --test sqllogictests
+          INCLUDE_TPCH=true cargo test --features backtrace --profile ci --package datafusion-sqllogictest --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -331,7 +355,7 @@ jobs:
       - name: Run sqllogictest
         run: |
           cd datafusion/sqllogictest
-          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@$POSTGRES_HOST:$POSTGRES_PORT/db_test" cargo test --profile ci --features=postgres --test sqllogictests
+          PG_COMPAT=true PG_URI="postgresql://postgres:postgres@$POSTGRES_HOST:$POSTGRES_PORT/db_test" cargo test --features backtrace --profile ci --features=postgres --test sqllogictests
         env:
           # use postgres for the host here because we have specified a container for the job
           POSTGRES_HOST: postgres

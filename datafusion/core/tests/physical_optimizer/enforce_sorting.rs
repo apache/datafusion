@@ -21,10 +21,10 @@ use crate::physical_optimizer::test_utils::{
     aggregate_exec, bounded_window_exec, check_integrity, coalesce_batches_exec,
     coalesce_partitions_exec, create_test_schema, create_test_schema2,
     create_test_schema3, filter_exec, global_limit_exec, hash_join_exec, limit_exec,
-    local_limit_exec, memory_exec, parquet_exec, repartition_exec, sort_exec, sort_expr,
-    sort_expr_options, sort_merge_join_exec, sort_preserving_merge_exec,
-    sort_preserving_merge_exec_with_fetch, spr_repartition_exec, stream_exec_ordered,
-    union_exec, RequirementsTestExec,
+    local_limit_exec, memory_exec, parquet_exec, repartition_exec, sort_exec,
+    sort_exec_with_fetch, sort_expr, sort_expr_options, sort_merge_join_exec,
+    sort_preserving_merge_exec, sort_preserving_merge_exec_with_fetch,
+    spr_repartition_exec, stream_exec_ordered, union_exec, RequirementsTestExec,
 };
 
 use arrow::compute::SortOptions;
@@ -2242,7 +2242,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
                 "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
             ],
             expected_plan: vec![
-                "SortExec: expr=[non_nullable_col@1 ASC NULLS LAST, count@2 ASC NULLS LAST], preserve_partitioning=[false]",
+                "SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], preserve_partitioning=[false]",
                 "  WindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]",
                 "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
             ],
@@ -2259,7 +2259,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
                 "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
             ],
             expected_plan: vec![
-                "SortExec: expr=[non_nullable_col@1 DESC NULLS LAST, max@2 DESC NULLS LAST], preserve_partitioning=[false]",
+                "SortExec: expr=[non_nullable_col@1 DESC NULLS LAST], preserve_partitioning=[false]",
                 "  WindowAggExec: wdw=[max: Ok(Field { name: \"max\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]",
                 "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
             ],
@@ -2276,7 +2276,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
                 "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
             ],
             expected_plan: vec![
-                "SortExec: expr=[min@2 ASC NULLS LAST, non_nullable_col@1 ASC NULLS LAST], preserve_partitioning=[false]",
+                "SortExec: expr=[non_nullable_col@1 ASC NULLS LAST], preserve_partitioning=[false]",
                 "  WindowAggExec: wdw=[min: Ok(Field { name: \"min\", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]",
                 "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
             ],
@@ -2293,7 +2293,7 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
                 "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
             ],
             expected_plan: vec![
-                "SortExec: expr=[avg@2 DESC NULLS LAST, nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
+                "SortExec: expr=[nullable_col@0 DESC NULLS LAST], preserve_partitioning=[false]",
                 "  WindowAggExec: wdw=[avg: Ok(Field { name: \"avg\", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]",
                 "    DataSourceExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC NULLS LAST], file_type=parquet",
             ],
@@ -3343,6 +3343,92 @@ async fn test_window_partial_constant_and_set_monotonicity() -> Result<()> {
             case_idx
         );
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_removes_unused_orthogonal_sort() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
+    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs.clone());
+
+    let orthogonal_sort = sort_exec(vec![sort_expr("a", &schema)], unbounded_input);
+    let output_sort = sort_exec(input_sort_exprs, orthogonal_sort); // same sort as data source
+
+    // Test scenario/input has an orthogonal sort:
+    let expected_input = [
+        "SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
+        "  SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+        "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]"
+    ];
+    assert_eq!(get_plan_string(&output_sort), expected_input,);
+
+    // Test: should remove orthogonal sort, and the uppermost (unneeded) sort:
+    let expected_optimized = [
+        "StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]"
+    ];
+    assert_optimized!(expected_input, expected_optimized, output_sort, true);
+
+    Ok(())
+}
+
+#[test]
+fn test_keeps_used_orthogonal_sort() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
+    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs.clone());
+
+    let orthogonal_sort =
+        sort_exec_with_fetch(vec![sort_expr("a", &schema)], Some(3), unbounded_input); // has fetch, so this orthogonal sort changes the output
+    let output_sort = sort_exec(input_sort_exprs, orthogonal_sort);
+
+    // Test scenario/input has an orthogonal sort:
+    let expected_input = [
+        "SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
+        "  SortExec: TopK(fetch=3), expr=[a@0 ASC], preserve_partitioning=[false]",
+        "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]"
+    ];
+    assert_eq!(get_plan_string(&output_sort), expected_input,);
+
+    // Test: should keep the orthogonal sort, since it modifies the output:
+    let expected_optimized = expected_input;
+    assert_optimized!(expected_input, expected_optimized, output_sort, true);
+
+    Ok(())
+}
+
+#[test]
+fn test_handles_multiple_orthogonal_sorts() -> Result<()> {
+    let schema = create_test_schema3()?;
+    let input_sort_exprs = vec![sort_expr("b", &schema), sort_expr("c", &schema)];
+    let unbounded_input = stream_exec_ordered(&schema, input_sort_exprs.clone());
+
+    let orthogonal_sort_0 = sort_exec(vec![sort_expr("c", &schema)], unbounded_input); // has no fetch, so can be removed
+    let orthogonal_sort_1 =
+        sort_exec_with_fetch(vec![sort_expr("a", &schema)], Some(3), orthogonal_sort_0); // has fetch, so this orthogonal sort changes the output
+    let orthogonal_sort_2 = sort_exec(vec![sort_expr("c", &schema)], orthogonal_sort_1); // has no fetch, so can be removed
+    let orthogonal_sort_3 = sort_exec(vec![sort_expr("a", &schema)], orthogonal_sort_2); // has no fetch, so can be removed
+    let output_sort = sort_exec(input_sort_exprs, orthogonal_sort_3); // final sort
+
+    // Test scenario/input has an orthogonal sort:
+    let expected_input = [
+        "SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
+        "  SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
+        "    SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
+        "      SortExec: TopK(fetch=3), expr=[a@0 ASC], preserve_partitioning=[false]",
+        "        SortExec: expr=[c@2 ASC], preserve_partitioning=[false]",
+        "          StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]",
+    ];
+    assert_eq!(get_plan_string(&output_sort), expected_input,);
+
+    // Test: should keep only the needed orthogonal sort, and remove the unneeded ones:
+    let expected_optimized = [
+        "SortExec: expr=[b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
+        "  SortExec: TopK(fetch=3), expr=[a@0 ASC], preserve_partitioning=[false]",
+        "    StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[b@1 ASC, c@2 ASC]",
+    ];
+    assert_optimized!(expected_input, expected_optimized, output_sort, true);
 
     Ok(())
 }

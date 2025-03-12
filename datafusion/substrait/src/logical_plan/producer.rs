@@ -55,6 +55,7 @@ use datafusion::logical_expr::expr::{
     AggregateFunctionParams, Alias, BinaryExpr, Case, Cast, GroupingSet, InList,
     InSubquery, WindowFunction, WindowFunctionParams,
 };
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{expr, Between, JoinConstraint, LogicalPlan, Operator};
 use datafusion::prelude::Expr;
 use pbjson_types::Any as ProtoAny;
@@ -540,7 +541,7 @@ pub fn to_substrait_rel(
 }
 
 pub fn from_table_scan(
-    _producer: &mut impl SubstraitProducer,
+    producer: &mut impl SubstraitProducer,
     scan: &TableScan,
 ) -> Result<Box<Rel>> {
     let projection = scan.projection.as_ref().map(|p| {
@@ -560,11 +561,28 @@ pub fn from_table_scan(
     let table_schema = scan.source.schema().to_dfschema_ref()?;
     let base_schema = to_substrait_named_struct(&table_schema)?;
 
+    let filter_option = if scan.filters.is_empty() {
+        None
+    } else {
+        let table_schema_qualified = Arc::new(
+            DFSchema::try_from_qualified_schema(
+                scan.table_name.clone(),
+                &(scan.source.schema()),
+            )
+            .unwrap(),
+        );
+
+        let combined_expr = conjunction(scan.filters.clone()).unwrap();
+        let filter_expr =
+            producer.handle_expr(&combined_expr, &table_schema_qualified)?;
+        Some(Box::new(filter_expr))
+    };
+
     Ok(Box::new(Rel {
         rel_type: Some(RelType::Read(Box::new(ReadRel {
             common: None,
             base_schema: Some(base_schema),
-            filter: None,
+            filter: filter_option,
             best_effort_filter: None,
             projection,
             advanced_extension: None,
@@ -1039,7 +1057,7 @@ fn to_substrait_named_struct(schema: &DFSchemaRef) -> Result<NamedStruct> {
             .map(|f| to_substrait_type(f.data_type(), f.is_nullable()))
             .collect::<Result<_>>()?,
         type_variation_reference: DEFAULT_TYPE_VARIATION_REF,
-        nullability: r#type::Nullability::Unspecified as i32,
+        nullability: r#type::Nullability::Required as i32,
     };
 
     Ok(NamedStruct {

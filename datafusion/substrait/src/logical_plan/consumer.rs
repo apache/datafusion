@@ -68,8 +68,8 @@ use datafusion::logical_expr::{
 };
 use datafusion::prelude::{lit, JoinType};
 use datafusion::{
-    arrow, error::Result, logical_expr::utils::split_conjunction, prelude::Column,
-    scalar::ScalarValue,
+    arrow, error::Result, logical_expr::utils::split_conjunction,
+    logical_expr::utils::split_conjunction_owned, prelude::Column, scalar::ScalarValue,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -1327,8 +1327,16 @@ pub async fn from_read_rel(
         table_ref: TableReference,
         schema: DFSchema,
         projection: &Option<MaskExpression>,
+        filter: &Option<Box<Expression>>,
     ) -> Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
+
+        let filters = if let Some(f) = filter {
+            let filter_expr = consumer.consume_expression(f, &schema).await?;
+            split_conjunction_owned(filter_expr)
+        } else {
+            vec![]
+        };
 
         let plan = {
             let provider = match consumer.resolve_table_ref(&table_ref).await? {
@@ -1336,10 +1344,11 @@ pub async fn from_read_rel(
                 _ => return plan_err!("No table named '{table_ref}'"),
             };
 
-            LogicalPlanBuilder::scan(
+            LogicalPlanBuilder::scan_with_filters(
                 table_ref,
                 provider_as_source(Arc::clone(&provider)),
                 None,
+                filters,
             )?
             .build()?
         };
@@ -1382,6 +1391,7 @@ pub async fn from_read_rel(
                 table_reference,
                 substrait_schema,
                 &read.projection,
+                &read.filter,
             )
             .await
         }
@@ -1464,6 +1474,7 @@ pub async fn from_read_rel(
                 table_reference,
                 substrait_schema,
                 &read.projection,
+                &read.filter,
             )
             .await
         }

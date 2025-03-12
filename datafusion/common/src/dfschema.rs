@@ -159,20 +159,7 @@ impl DFSchema {
     }
 
     /// Create a new `DFSchema` from a list of Arrow [Field]s
-    #[allow(deprecated)]
     pub fn from_unqualified_fields(
-        fields: Fields,
-        metadata: HashMap<String, String>,
-    ) -> Result<Self> {
-        Self::from_unqualifed_fields(fields, metadata)
-    }
-
-    /// Create a new `DFSchema` from a list of Arrow [Field]s
-    #[deprecated(
-        since = "40.0.0",
-        note = "Please use `from_unqualified_fields` instead (this one's name is a typo). This method is subject to be removed soon"
-    )]
-    pub fn from_unqualifed_fields(
         fields: Fields,
         metadata: HashMap<String, String>,
     ) -> Result<Self> {
@@ -1047,7 +1034,7 @@ impl SchemaExt for Schema {
                 .iter()
                 .zip(other.fields().iter())
                 .try_for_each(|(f1, f2)| {
-                    if f1.name() != f2.name() || !DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type()) {
+                    if f1.name() != f2.name() || (!DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type()) && !can_cast_types(f2.data_type(), f1.data_type())) {
                         _plan_err!(
                             "Inserting query schema mismatch: Expected table field '{}' with type {:?}, \
                             but got '{}' with type {:?}.",

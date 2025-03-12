@@ -280,22 +280,6 @@ impl SessionState {
             .build()
     }
 
-    /// Returns new [`SessionState`] using the provided
-    /// [`SessionConfig`],  [`RuntimeEnv`], and [`CatalogProviderList`]
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    pub fn new_with_config_rt_and_catalog_list(
-        config: SessionConfig,
-        runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogProviderList>,
-    ) -> Self {
-        SessionStateBuilder::new()
-            .with_config(config)
-            .with_runtime_env(runtime)
-            .with_catalog_list(catalog_list)
-            .with_default_features()
-            .build()
-    }
-
     pub(crate) fn resolve_table_ref(
         &self,
         table_ref: impl Into<TableReference>,
@@ -334,53 +318,6 @@ impl SessionState {
             })
     }
 
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Replace the random session id.
-    pub fn with_session_id(mut self, session_id: String) -> Self {
-        self.session_id = session_id;
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// override default query planner with `query_planner`
-    pub fn with_query_planner(
-        mut self,
-        query_planner: Arc<dyn QueryPlanner + Send + Sync>,
-    ) -> Self {
-        self.query_planner = query_planner;
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Override the [`AnalyzerRule`]s optimizer plan rules.
-    pub fn with_analyzer_rules(
-        mut self,
-        rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>>,
-    ) -> Self {
-        self.analyzer = Analyzer::with_rules(rules);
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Replace the entire list of [`OptimizerRule`]s used to optimize plans
-    pub fn with_optimizer_rules(
-        mut self,
-        rules: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
-    ) -> Self {
-        self.optimizer = Optimizer::with_rules(rules);
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Replace the entire list of [`PhysicalOptimizerRule`]s used to optimize plans
-    pub fn with_physical_optimizer_rules(
-        mut self,
-        physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
-    ) -> Self {
-        self.physical_optimizers = PhysicalOptimizer::with_rules(physical_optimizers);
-        self
-    }
-
     /// Add `analyzer_rule` to the end of the list of
     /// [`AnalyzerRule`]s used to rewrite queries.
     pub fn add_analyzer_rule(
@@ -388,17 +325,6 @@ impl SessionState {
         analyzer_rule: Arc<dyn AnalyzerRule + Send + Sync>,
     ) -> &Self {
         self.analyzer.rules.push(analyzer_rule);
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Add `optimizer_rule` to the end of the list of
-    /// [`OptimizerRule`]s used to rewrite queries.
-    pub fn add_optimizer_rule(
-        mut self,
-        optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
-    ) -> Self {
-        self.optimizer.rules.push(optimizer_rule);
         self
     }
 
@@ -412,50 +338,9 @@ impl SessionState {
         self.optimizer.rules.push(optimizer_rule);
     }
 
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Add `physical_optimizer_rule` to the end of the list of
-    /// [`PhysicalOptimizerRule`]s used to rewrite queries.
-    pub fn add_physical_optimizer_rule(
-        mut self,
-        physical_optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
-    ) -> Self {
-        self.physical_optimizers.rules.push(physical_optimizer_rule);
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Adds a new [`ConfigExtension`] to TableOptions
-    pub fn add_table_options_extension<T: ConfigExtension>(
-        mut self,
-        extension: T,
-    ) -> Self {
-        self.table_options.extensions.insert(extension);
-        self
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
-    pub fn with_function_factory(
-        mut self,
-        function_factory: Arc<dyn FunctionFactory>,
-    ) -> Self {
-        self.function_factory = Some(function_factory);
-        self
-    }
-
     /// Registers a [`FunctionFactory`] to handle `CREATE FUNCTION` statements
     pub fn set_function_factory(&mut self, function_factory: Arc<dyn FunctionFactory>) {
         self.function_factory = Some(function_factory);
-    }
-
-    #[deprecated(since = "40.0.0", note = "Use SessionStateBuilder")]
-    /// Replace the extension [`SerializerRegistry`]
-    pub fn with_serializer_registry(
-        mut self,
-        registry: Arc<dyn SerializerRegistry>,
-    ) -> Self {
-        self.serializer_registry = registry;
-        self
     }
 
     /// Get the function factory
@@ -604,6 +489,7 @@ impl SessionState {
             enable_options_value_normalization: sql_parser_options
                 .enable_options_value_normalization,
             support_varchar_with_length: sql_parser_options.support_varchar_with_length,
+            map_varchar_to_utf8view: sql_parser_options.map_varchar_to_utf8view,
             collect_spans: sql_parser_options.collect_spans,
         }
     }
