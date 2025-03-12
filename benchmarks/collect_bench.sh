@@ -21,7 +21,7 @@
 # etc and orchestrates gathering data and run the benchmark binary to
 # collect benchmarks from the current main and last 5 major releases.
 
-trap 'rm -rf working; git checkout main' EXIT #checkout to main on exit
+trap 'cd ..; rm -rf working; git checkout main' EXIT #checkout to main on exit
 ARG1=$1
 
 main(){
@@ -32,6 +32,7 @@ mkdir working
 cp bench.sh working/
 cp collect_bench.sh working/
 cp lineprotocol.py working/
+cp -r data working/
 cp -r queries working/
 cp -r src working/
 
@@ -48,7 +49,7 @@ major_version=$(echo "$output" | grep -oE '[0-9]+' | head -n1)
 # run for current main
 echo "current major version: $major_version"  
 export RESULTS_DIR="results/$major_version.0.0"
-./bench.sh run $ARG1
+DATAFUSION_DIR=../../ ./bench.sh run $ARG1
 python3 lineprotocol.py $RESULTS_DIR/$ARG1.json >> $lp_file
 
 # run for last 5 major releases
@@ -57,7 +58,7 @@ for i in {1..5}; do
     git fetch upstream $((major_version-i)).0.0
     git checkout $((major_version-i)).0.0
     export RESULTS_DIR="results/$((major_version-i)).0.0"
-    ./bench.sh run $ARG1
+    DATAFUSION_DIR=../../ ./bench.sh run $ARG1
     python3 lineprotocol.py $RESULTS_DIR/$ARG1.json >> $lp_file
 done
 
