@@ -561,8 +561,26 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: simplify
-        std::fmt::Display::fmt(self, f)
+        write!(f, "CASE ")?;
+        if let Some(e) = &self.expr {
+            e.fmt_sql(f)?;
+            write!(f, " ")?;
+        }
+
+        for (w, t) in &self.when_then_expr {
+            write!(f, "WHEN ")?;
+            w.fmt_sql(f)?;
+            write!(f, " THEN ")?;
+            t.fmt_sql(f)?;
+            write!(f, " ")?;
+        }
+
+        if let Some(e) = &self.else_expr {
+            write!(f, "ELSE ")?;
+            e.fmt_sql(f)?;
+            write!(f, " ")?;
+        }
+        write!(f, "END")
     }
 }
 
@@ -580,6 +598,7 @@ mod tests {
     use super::*;
 
     use crate::expressions::{binary, cast, col, lit, BinaryExpr};
+    use crate::utils::sql_formatter;
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
@@ -1382,5 +1401,36 @@ mod tests {
                 // refactor again.
                 comparison_coercion(&left_type, right_type)
             })
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+
+        // CASE WHEN a = 'foo' THEN 123.3 ELSE 999 END
+        let when = binary(col("a", &schema)?, Operator::Eq, lit("foo"), &schema)?;
+        let then = lit(123.3f64);
+        let else_value = lit(999i32);
+
+        let expr = generate_case_when_with_type_coercion(
+            None,
+            vec![(when, then)],
+            Some(else_value),
+            &schema,
+        )?;
+
+        let display_string = expr.to_string();
+        assert_eq!(
+            display_string,
+            "CASE WHEN a@0 = foo THEN 123.3 ELSE TRY_CAST(999 AS Float64) END"
+        );
+
+        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        assert_eq!(
+            sql_string,
+            "CASE WHEN a = foo THEN 123.3 ELSE TRY_CAST(999 AS Float64) END"
+        );
+
+        Ok(())
     }
 }

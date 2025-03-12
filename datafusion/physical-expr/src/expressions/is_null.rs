@@ -105,8 +105,8 @@ impl PhysicalExpr for IsNullExpr {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: simplify
-        std::fmt::Display::fmt(self, f)
+        self.arg.fmt_sql(f)?;
+        write!(f, " IS NULL")
     }
 }
 
@@ -119,6 +119,7 @@ pub fn is_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
 mod tests {
     use super::*;
     use crate::expressions::col;
+    use crate::utils::sql_formatter;
     use arrow::array::{
         Array, BooleanArray, Float64Array, Int32Array, StringArray, UnionArray,
     };
@@ -213,5 +214,19 @@ mod tests {
 
         let expected = &BooleanArray::from(vec![false, true, false, true, false, true]);
         assert_eq!(expected, &result);
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+
+        // expression: "a is null"
+        let expr = is_null(col("a", &schema)?).unwrap();
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "a@0 IS NULL");
+        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "a IS NULL");
+
+        Ok(())
     }
 }

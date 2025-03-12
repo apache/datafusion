@@ -125,8 +125,9 @@ impl PhysicalExpr for TryCastExpr {
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // TODO: simplify
-        fmt::Display::fmt(self, f)
+        write!(f, "TRY_CAST(")?;
+        self.expr.fmt_sql(f)?;
+        write!(f, " AS {:?})", self.cast_type)
     }
 }
 
@@ -153,6 +154,7 @@ pub fn try_cast(
 mod tests {
     use super::*;
     use crate::expressions::col;
+    use crate::utils::sql_formatter;
     use arrow::array::{
         Decimal128Array, Decimal128Builder, StringArray, Time64NanosecondArray,
     };
@@ -577,5 +579,27 @@ mod tests {
             .finish()
             .with_precision_and_scale(precision, scale)
             .unwrap()
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+
+        // Test numeric casting
+        let expr = try_cast(col("a", &schema)?, &schema, DataType::Int64)?;
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "TRY_CAST(a@0 AS Int64)");
+        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "TRY_CAST(a AS Int64)");
+
+        // Test string casting
+        let schema = Schema::new(vec![Field::new("b", DataType::Utf8, true)]);
+        let expr = try_cast(col("b", &schema)?, &schema, DataType::Int32)?;
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "TRY_CAST(b@0 AS Int32)");
+        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "TRY_CAST(b AS Int32)");
+
+        Ok(())
     }
 }

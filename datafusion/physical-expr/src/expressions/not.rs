@@ -177,8 +177,8 @@ impl PhysicalExpr for NotExpr {
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // TODO: simplify
-        fmt::Display::fmt(self, f)
+        write!(f, "NOT ")?;
+        self.arg.fmt_sql(f)
     }
 }
 
@@ -192,7 +192,10 @@ mod tests {
     use std::sync::LazyLock;
 
     use super::*;
-    use crate::expressions::{col, Column};
+    use crate::{
+        expressions::{col, Column},
+        utils::sql_formatter,
+    };
 
     use arrow::{array::BooleanArray, datatypes::*};
 
@@ -323,6 +326,21 @@ mod tests {
                 Interval::make_unbounded(&DataType::Float64)?
             )?])
             .is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = schema();
+
+        let expr = not(col("a", &schema)?)?;
+
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "NOT a@0");
+
+        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "NOT a");
 
         Ok(())
     }

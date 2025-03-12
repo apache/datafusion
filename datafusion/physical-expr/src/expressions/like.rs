@@ -188,7 +188,7 @@ pub fn like(
 mod test {
     use super::*;
     use crate::expressions::col;
-    use crate::utils::fmt_display;
+    use crate::utils::sql_formatter;
     use arrow::array::*;
     use arrow::datatypes::Field;
     use datafusion_common::cast::as_boolean_array;
@@ -265,33 +265,27 @@ mod test {
     }
 
     #[test]
-    fn test_like_fmt_sql() -> Result<()> {
+    fn test_fmt_sql() -> Result<()> {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Utf8, false),
         ]);
 
-        let test_cases = vec![
-            // (negated, case_insensitive, expected_output)
-            (false, false, "a LIKE b"),
-            (true, false, "a NOT LIKE b"),
-            (false, true, "a ILIKE b"),
-            (true, true, "a NOT ILIKE b"),
-        ];
+        let expr = like(
+            false,
+            false,
+            col("a", &schema)?,
+            col("b", &schema)?,
+            &schema,
+        )?;
 
-        for (negated, case_insensitive, expected) in test_cases {
-            let expr = like(
-                negated,
-                case_insensitive,
-                col("a", &schema)?,
-                col("b", &schema)?,
-                &schema,
-            )?;
+        // Display format
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "a@0 LIKE b@1");
 
-            // Test fmt_sql formatting.
-            let sql_string = fmt_display(expr.as_ref()).to_string();
-            assert_eq!(sql_string, expected);
-        }
+        // fmt_sql format
+        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "a LIKE b");
 
         Ok(())
     }

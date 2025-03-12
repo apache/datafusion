@@ -169,8 +169,9 @@ impl PhysicalExpr for NegativeExpr {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: simplify
-        std::fmt::Display::fmt(self, f)
+        write!(f, "(- ")?;
+        self.arg.fmt_sql(f)?;
+        write!(f, ")")
     }
 }
 
@@ -200,6 +201,7 @@ pub fn negative(
 mod tests {
     use super::*;
     use crate::expressions::{col, Column};
+    use crate::utils::sql_formatter;
 
     use arrow::array::*;
     use arrow::datatypes::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
@@ -382,6 +384,17 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let expr = negative(col("a", &schema)?, &schema).unwrap_err();
         matches!(expr, DataFusionError::Plan(_));
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "(- a@0)");
+        let sql_string = sql_formatter(&expr).to_string();
+        assert_eq!(sql_string, "(- a)");
+
         Ok(())
     }
 }

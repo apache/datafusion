@@ -17,7 +17,7 @@
 
 mod fmt_display;
 mod guarantee;
-pub use fmt_display::fmt_display;
+pub use fmt_display::sql_formatter;
 pub use guarantee::{Guarantee, LiteralGuarantee};
 
 use std::borrow::Borrow;

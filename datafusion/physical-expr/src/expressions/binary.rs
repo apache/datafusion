@@ -573,8 +573,29 @@ impl PhysicalExpr for BinaryExpr {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: simplify
-        std::fmt::Display::fmt(self, f)
+        fn write_child(
+            f: &mut std::fmt::Formatter,
+            expr: &dyn PhysicalExpr,
+            precedence: u8,
+        ) -> std::fmt::Result {
+            if let Some(child) = expr.as_any().downcast_ref::<BinaryExpr>() {
+                let p = child.op.precedence();
+                if p == 0 || p < precedence {
+                    write!(f, "(")?;
+                    child.fmt_sql(f)?;
+                    write!(f, ")")
+                } else {
+                    child.fmt_sql(f)
+                }
+            } else {
+                expr.fmt_sql(f)
+            }
+        }
+
+        let precedence = self.op.precedence();
+        write_child(f, self.left.as_ref(), precedence)?;
+        write!(f, " {} ", self.op)?;
+        write_child(f, self.right.as_ref(), precedence)
     }
 }
 
@@ -772,7 +793,10 @@ pub fn similar_to(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit, try_cast, Column, Literal};
+    use crate::{
+        expressions::{col, lit, try_cast, Column, Literal},
+        utils::sql_formatter,
+    };
 
     use datafusion_common::plan_datafusion_err;
 
@@ -4674,6 +4698,74 @@ mod tests {
                     .is_some());
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+
+        // Test basic binary expressions
+        let simple_expr = binary_expr(
+            col("a", &schema)?,
+            Operator::Plus,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let display_string = simple_expr.to_string();
+        assert_eq!(display_string, "a@0 + b@1");
+        let sql_string = sql_formatter(&simple_expr).to_string();
+        assert_eq!(sql_string, "a + b");
+
+        // Test nested expressions with different operator precedence
+        let nested_expr = binary_expr(
+            Arc::new(binary_expr(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("b", &schema)?,
+                &schema,
+            )?),
+            Operator::Multiply,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let display_string = nested_expr.to_string();
+        assert_eq!(display_string, "(a@0 + b@1) * b@1");
+        let sql_string = sql_formatter(&nested_expr).to_string();
+        assert_eq!(sql_string, "(a + b) * b");
+
+        // Test nested expressions with same operator precedence
+        let nested_same_prec = binary_expr(
+            Arc::new(binary_expr(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("b", &schema)?,
+                &schema,
+            )?),
+            Operator::Plus,
+            col("b", &schema)?,
+            &schema,
+        )?;
+        let display_string = nested_same_prec.to_string();
+        assert_eq!(display_string, "a@0 + b@1 + b@1");
+        let sql_string = sql_formatter(&nested_same_prec).to_string();
+        assert_eq!(sql_string, "a + b + b");
+
+        // Test with literals
+        let lit_expr = binary_expr(
+            col("a", &schema)?,
+            Operator::Eq,
+            lit(ScalarValue::Int32(Some(42))),
+            &schema,
+        )?;
+        let display_string = lit_expr.to_string();
+        assert_eq!(display_string, "a@0 = 42");
+        let sql_string = sql_formatter(&lit_expr).to_string();
+        assert_eq!(sql_string, "a = 42");
 
         Ok(())
     }

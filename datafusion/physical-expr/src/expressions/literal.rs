@@ -95,7 +95,6 @@ impl PhysicalExpr for Literal {
     }
 
     fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // TODO: simplify
         std::fmt::Display::fmt(self, f)
     }
 }
@@ -110,6 +109,8 @@ pub fn lit<T: datafusion_expr::Literal>(value: T) -> Arc<dyn PhysicalExpr> {
 
 #[cfg(test)]
 mod tests {
+    use crate::utils::sql_formatter;
+
     use super::*;
 
     use arrow::array::Int32Array;
@@ -138,6 +139,18 @@ mod tests {
         for i in 0..literal_array.len() {
             assert_eq!(literal_array.value(i), 42);
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        // create and evaluate a literal expression
+        let expr = lit(42i32);
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "42");
+        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "42");
 
         Ok(())
     }
