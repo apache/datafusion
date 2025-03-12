@@ -35,7 +35,8 @@ git checkout main
 output=$(cargo metadata --format-version=1 --no-deps | jq '.packages[] | select(.name == "datafusion") | .version')
 major_version=$(echo "$output" | grep -oE '[0-9]+' | head -n1)
 
-cp lineprotocol.py results/lineprotocol.py
+mkdir results
+cp lineprotocol.py results/
 
 # run for current main
 echo "current major version: $major_version"  
