@@ -37,7 +37,9 @@ use arrow::compute::kernels::cast_utils::{
     parse_interval_day_time, parse_interval_month_day_nano, parse_interval_year_month,
 };
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::{plan_err, Column, Result, ScalarValue, TableReference};
+use datafusion_common::{
+    plan_err, Column, Result, ScalarValue, Span, Spans, TableReference,
+};
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
 use sqlparser::ast::NullTreatment;
@@ -252,7 +254,7 @@ pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
         subquery: Subquery {
             subquery,
             outer_ref_columns,
-            spans: None,
+            spans: Spans::new(),
         },
         negated: false,
     })
@@ -265,7 +267,7 @@ pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
         subquery: Subquery {
             subquery,
             outer_ref_columns,
-            spans: None,
+            spans: Spans::new(),
         },
         negated: true,
     })
@@ -279,7 +281,7 @@ pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
         Subquery {
             subquery,
             outer_ref_columns,
-            spans: None,
+            spans: Spans::new(),
         },
         false,
     ))
@@ -305,7 +307,7 @@ pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
     Expr::ScalarSubquery(Subquery {
         subquery,
         outer_ref_columns,
-        spans: None,
+        spans: Spans::new(),
     })
 }
 

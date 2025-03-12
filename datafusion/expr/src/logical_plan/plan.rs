@@ -56,8 +56,8 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, Spans, TableReference,
-    UnnestOptions,
+    FunctionalDependencies, ParamValues, Result, ScalarValue, Span, Spans,
+    TableReference, UnnestOptions,
 };
 use indexmap::IndexSet;
 
@@ -3621,7 +3621,7 @@ pub struct Subquery {
     /// The outer references used in the subquery
     pub outer_ref_columns: Vec<Expr>,
     /// Span information for subquery projection columns
-    pub spans: Option<Spans>,
+    pub spans: Spans,
 }
 
 impl Normalizeable for Subquery {
@@ -3656,7 +3656,7 @@ impl Subquery {
         Subquery {
             subquery: plan,
             outer_ref_columns: self.outer_ref_columns.clone(),
-            spans: None,
+            spans: Spans::new(),
         }
     }
 }

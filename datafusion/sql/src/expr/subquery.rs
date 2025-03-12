@@ -40,7 +40,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             subquery: Subquery {
                 subquery: Arc::new(sub_plan),
                 outer_ref_columns,
-                spans: None,
+                spans: Spans::new(),
             },
             negated,
         }))
@@ -86,7 +86,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Subquery {
                 subquery: Arc::new(sub_plan),
                 outer_ref_columns,
-                spans: Some(spans),
+                spans: spans,
             },
             negated,
         )))
@@ -117,14 +117,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         self.validate_single_column(
             &sub_plan,
             spans.clone(),
-            "Scalar subquery should only return one column",
+            "The subquery should only return one column",
             "Select only one column in the subquery",
         )?;
 
         Ok(Expr::ScalarSubquery(Subquery {
             subquery: Arc::new(sub_plan),
             outer_ref_columns,
-            spans: Some(spans),
+            spans: spans,
         }))
     }
 

@@ -30,7 +30,7 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{
     not_impl_err, plan_datafusion_err, plan_err, Column, DataFusionError, ExprSchema,
-    Result, TableReference,
+    Result, Spans, TableReference,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -608,7 +608,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
     Ok(Subquery {
         subquery: Arc::new(new_plan),
         outer_ref_columns: subquery.outer_ref_columns,
-        spans: None,
+        spans: Spans::new(),
     })
 }
 
