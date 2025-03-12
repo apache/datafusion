@@ -44,7 +44,7 @@ python3 lineprotocol.py $RESULTS_DIR/$ARG1.json >> $lp_file
 # run for last 5 major releases
 for i in {1..5}; do
     echo "running benchmark on $((major_version-i)).0.0"
-    # git fetch upstream $((major_version-i)).0.0
+    git fetch upstream $((major_version-i)).0.0
     git checkout $((major_version-i)).0.0
     export RESULTS_DIR="results/$((major_version-i)).0.0"
     ./bench.sh run $ARG1
