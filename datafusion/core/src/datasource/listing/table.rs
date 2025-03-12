@@ -17,7 +17,7 @@
 
 //! The table implementation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::{any::Any, str::FromStr, sync::Arc};
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
@@ -552,11 +552,20 @@ impl ListingOptions {
         Ok(schema)
     }
 
-    /// Validates that the metadata columns do not already exist in the schema, and are one of the allowed metadata columns.
+    /// Validates that the metadata columns do not already exist in the schema,
+    /// and that there are no duplicate metadata columns of the same variant.
     pub fn validate_metadata_cols(&self, schema: &SchemaRef) -> Result<()> {
+        let mut seen = HashSet::with_capacity(self.metadata_cols.len());
+
         for col in self.metadata_cols.iter() {
+            // Check if column already exists in the schema
             if schema.column_with_name(col.name()).is_some() {
                 return plan_err!("Column {} already exists in schema", col);
+            }
+
+            // Check for duplicate metadata columns
+            if !seen.insert(*col) {
+                return plan_err!("Duplicate metadata column: {}", col);
             }
         }
 
@@ -884,6 +893,7 @@ impl ListingTable {
         create_ordering(&self.table_schema, &self.options.file_sort_order)
     }
 
+    /// Returns the partition column fields from the table schema.
     fn partition_column_fields(&self) -> Result<Vec<&Field>> {
         self.options
             .table_partition_cols
@@ -892,6 +902,7 @@ impl ListingTable {
             .collect::<Result<Vec<_>>>()
     }
 
+    /// Returns the partition column names from the table schema.
     fn partition_column_names(&self) -> Result<impl Iterator<Item = &str>> {
         Ok(self
             .options
@@ -900,6 +911,7 @@ impl ListingTable {
             .map(|col| col.0.as_str()))
     }
 
+    /// Returns the metadata column names from the table schema.
     fn metadata_column_names(&self) -> impl Iterator<Item = &str> {
         self.options.metadata_cols.iter().map(|col| col.name())
     }
@@ -1306,6 +1318,8 @@ mod tests {
     #[cfg(feature = "parquet")]
     use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::{provider_as_source, DefaultTableSource, MemTable};
+    use std::collections::HashMap;
+
     use crate::execution::options::ArrowReadOptions;
     use crate::prelude::*;
     use crate::{
@@ -2486,6 +2500,59 @@ mod tests {
         let schema = config_with_schema.file_schema.unwrap();
 
         assert_eq!(schema.fields.len(), 13);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_metadata_cols() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, false),
+        ]));
+
+        // Test valid case - no metadata columns
+        let options = ListingOptions::new(Arc::new(CsvFormat::default()));
+        assert!(options.validate_metadata_cols(&schema).is_ok());
+
+        // Test valid case - all different metadata columns
+        let options = ListingOptions::new(Arc::new(CsvFormat::default()))
+            .with_metadata_cols(vec![
+                MetadataColumn::Location,
+                MetadataColumn::Size,
+                MetadataColumn::LastModified,
+            ]);
+        assert!(options.validate_metadata_cols(&schema).is_ok());
+
+        // Test invalid case - duplicate metadata column
+        let options = ListingOptions::new(Arc::new(CsvFormat::default()))
+            .with_metadata_cols(vec![
+                MetadataColumn::Location,
+                MetadataColumn::Size,
+                MetadataColumn::Size, // Duplicate
+            ]);
+        let result = options.validate_metadata_cols(&schema);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Duplicate metadata column"));
+
+        // Test invalid case - column already exists in schema
+        let schema_with_location = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("location", DataType::Utf8, false), // Same name as Location metadata
+        ]));
+
+        let options = ListingOptions::new(Arc::new(CsvFormat::default()))
+            .with_metadata_cols(vec![MetadataColumn::Location]);
+
+        let result = options.validate_metadata_cols(&schema_with_location);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("already exists in schema"));
 
         Ok(())
     }
