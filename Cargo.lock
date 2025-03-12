@@ -2589,7 +2589,7 @@ dependencies = [
  "datafusion-optimizer",
  "datafusion-physical-plan",
  "datafusion-sql",
- "getrandom 0.2.15",
+ "getrandom 0.3.1",
  "tokio",
  "wasm-bindgen",
  "wasm-bindgen-test",
