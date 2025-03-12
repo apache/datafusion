@@ -348,21 +348,6 @@ impl TreeNodeRewriter for StructFieldRewriterImpl {
                                     }
                                 }
                             }
-                            // Check if the flattened column exists in the file schema and has the same type
-                            if let Ok(shredded_field) = self
-                                .file_schema
-                                .field_with_name(&expected_flattened_column_name)
-                            {
-                                if source_field.data_type() == shredded_field.data_type()
-                                {
-                                    // Rewrite the expression to use the flattened column
-                                    let rewritten_expr = expressions::col(
-                                        &expected_flattened_column_name,
-                                        &self.file_schema,
-                                    )?;
-                                    return Ok(Transformed::yes(rewritten_expr));
-                                }
-                            }
                         }
                     }
                 }

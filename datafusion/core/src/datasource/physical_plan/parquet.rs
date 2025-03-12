@@ -46,9 +46,11 @@ mod tests {
     use arrow_schema::SchemaRef;
     use bytes::{BufMut, BytesMut};
     use datafusion_common::config::TableParquetOptions;
+    use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter};
     use datafusion_common::{
-        assert_batches_eq, assert_batches_sorted_eq, assert_contains, Result, ScalarValue,
+        assert_batches_eq, assert_batches_sorted_eq, assert_contains, Result, ScalarValue
     };
+    use datafusion_datasource::file_expr_rewriter::FileExpressionRewriter;
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_meta::FileMeta;
     use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -61,7 +63,9 @@ mod tests {
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{col, lit, when, Expr};
+    use datafusion_functions::expr_fn::get_field;
     use datafusion_physical_expr::planner::logical2physical;
+    use datafusion_physical_expr::{expressions, PhysicalExpr, ScalarFunctionExpr};
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
     use datafusion_physical_plan::{collect, displayable};
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
@@ -95,6 +99,7 @@ mod tests {
         predicate: Option<Expr>,
         pushdown_predicate: bool,
         page_index_predicate: bool,
+        filter_rewriter: Option<Arc<dyn FileExpressionRewriter>>,
     }
 
     impl RoundTrip {
@@ -127,6 +132,15 @@ mod tests {
             self
         }
 
+        fn with_filter_rewriter(
+            self,
+            filter_rewriter: Arc<dyn FileExpressionRewriter>,
+        ) -> Self {
+            let mut new_self = self;
+            new_self.filter_rewriter = Some(filter_rewriter);
+            new_self
+        }
+
         /// run the test, returning only the resulting RecordBatches
         async fn round_trip_to_batches(
             self,
@@ -143,6 +157,7 @@ mod tests {
                 predicate,
                 pushdown_predicate,
                 page_index_predicate,
+                filter_rewriter,
             } = self;
 
             let file_schema = match schema {
@@ -176,6 +191,10 @@ mod tests {
 
             if page_index_predicate {
                 source = source.with_enable_page_index(true);
+            }
+
+            if let Some(rewriter) = filter_rewriter {
+                source = source.with_filter_expression_rewriter(rewriter);
             }
 
             let base_config = FileScanConfig::new(
@@ -743,6 +762,160 @@ mod tests {
             .await;
         assert_contains!(read.unwrap_err().to_string(),
             "Cannot cast file schema field c3 of type Date64 to table schema field of type Int8");
+    }
+
+    /// Rewriter that converts struct field access to flattened column references
+    #[derive(Debug)]
+    struct StructFieldRewriter;
+
+    impl FileExpressionRewriter for StructFieldRewriter {
+        fn rewrite(
+            &self,
+            file_schema: SchemaRef,
+            expr: Arc<dyn PhysicalExpr>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            let mut rewrite = StructFieldRewriterImpl { file_schema };
+            expr.rewrite(&mut rewrite).data()
+        }
+    }
+
+    struct StructFieldRewriterImpl {
+        file_schema: SchemaRef,
+    }
+
+    impl TreeNodeRewriter for StructFieldRewriterImpl {
+        type Node = Arc<dyn PhysicalExpr>;
+
+        fn f_down(
+            &mut self,
+            expr: Arc<dyn PhysicalExpr>,
+        ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+            if let Some(scalar_function) = expr.as_any().downcast_ref::<ScalarFunctionExpr>()
+            {
+                if scalar_function.name() == "get_field" && scalar_function.args().len() == 2
+                {
+                    // First argument is the column, second argument is the field name
+                    let column = scalar_function.args()[0].clone();
+                    let field_name = scalar_function.args()[1].clone();
+                    if let Some(literal) =
+                        field_name.as_any().downcast_ref::<expressions::Literal>()
+                    {
+                        if let Some(field_name) = literal.value().try_as_str().flatten() {
+                            if let Some(column) =
+                                column.as_any().downcast_ref::<expressions::Column>()
+                            {
+                                let column_name = column.name();
+                                let source_field =
+                                    self.file_schema.field_with_name(column_name)?;
+                                let expected_flattened_column_name =
+                                    format!("_{}.{}", column_name, field_name);
+                                if let DataType::Struct(struct_fields) =
+                                    source_field.data_type()
+                                {
+                                    // Check if the flattened column exists in the file schema and has the same type
+                                    if let Ok(shredded_field) = self
+                                        .file_schema
+                                        .field_with_name(&expected_flattened_column_name)
+                                    {
+                                        if let Some((_, struct_field)) =
+                                            struct_fields.find(field_name)
+                                        {
+                                            if struct_field.data_type()
+                                                == shredded_field.data_type()
+                                            {
+                                                // Rewrite the expression to use the flattened column
+                                                let rewritten_expr = expressions::col(
+                                                    &expected_flattened_column_name,
+                                                    &self.file_schema,
+                                                )?;
+                                                return Ok(Transformed::yes(rewritten_expr));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Ok(Transformed::no(expr))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_filter_pushdown_rewrite() {
+        // Create a schema with a struct column
+        let user_info_fields = Fields::from(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("age", DataType::Int32, false),
+        ]);
+
+        let file_schema = Schema::new(vec![
+            Field::new(
+                "user_info",
+                DataType::Struct(user_info_fields.clone()),
+                false,
+            ),
+            // Include flattened fields (in real scenarios these might be in some files but not others)
+            Field::new("_user_info.age", DataType::Int32, true),
+        ]);
+
+        let table_schema = Schema::new(vec![Field::new(
+            "user_info",
+            DataType::Struct(user_info_fields.clone()),
+            false,
+        )]);
+
+        // Create struct array for user_info
+        let names = StringArray::from(vec!["Alice", "Bob", "Charlie", "Dave"]);
+        let ages = Int32Array::from(vec![30, 25, 35, 22]);
+
+        let user_info = StructArray::from(vec![
+            (
+                Arc::new(Field::new("name", DataType::Utf8, false)),
+                Arc::new(names.clone()) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("age", DataType::Int32, false)),
+                Arc::new(ages.clone()) as ArrayRef,
+            ),
+        ]);
+
+        // Create a record batch with the data
+        let batch = RecordBatch::try_new(
+            Arc::new(file_schema.clone()),
+            vec![
+                Arc::new(user_info),
+                Arc::new(ages), // Shredded age field
+            ],
+        )
+        .unwrap();
+
+        let filter = get_field(col("user_info"), "age").gt(lit(30));
+
+        // read/write them files:
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .with_filter_rewriter(Arc::new(StructFieldRewriter))
+            .with_schema(Arc::new(table_schema))
+            .round_trip(vec![batch])
+            .await;
+
+        #[rustfmt::skip]
+        let expected = [
+            "+--------------------------+",
+            "| user_info                |",
+            "+--------------------------+",
+            "| {name: Charlie, age: 35} |",
+            "+--------------------------+",
+        ];
+        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        // Note there are were 6 rows in total (across three batches)
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 3);
+        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 1);
     }
 
     #[tokio::test]
