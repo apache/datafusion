@@ -64,6 +64,7 @@ pub mod joins;
 mod path_partition;
 pub mod select;
 mod sql_api;
+pub mod system_columns;
 
 async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     let testdata = test_util::arrow_test_data();
