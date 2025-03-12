@@ -196,8 +196,11 @@ impl PhysicalExpr for CastExpr {
     }
 
     fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // TODO: simplify
-        fmt::Display::fmt(self, f)
+        write!(f, "CAST(")?;
+        self.expr.fmt_sql(f)?;
+        write!(f, " AS {:?}", self.cast_type)?;
+
+        write!(f, ")")
     }
 }
 
@@ -237,7 +240,7 @@ pub fn cast(
 mod tests {
     use super::*;
 
-    use crate::expressions::column::col;
+    use crate::{expressions::column::col, utils::sql_formatter};
 
     use arrow::{
         array::{
@@ -769,6 +772,28 @@ mod tests {
         let expression =
             cast_with_options(col("a", &schema)?, &schema, Decimal128(38, 38), None)?;
         expression.evaluate(&batch)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, true)]);
+
+        // Test numeric casting
+        let expr = cast(col("a", &schema)?, &schema, Int64)?;
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "CAST(a@0 AS Int64)");
+        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "CAST(a AS Int64)");
+
+        // Test string casting
+        let schema = Schema::new(vec![Field::new("b", Utf8, true)]);
+        let expr = cast(col("b", &schema)?, &schema, Int32)?;
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "CAST(b@0 AS Int32)");
+        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        assert_eq!(sql_string, "CAST(b AS Int32)");
+
         Ok(())
     }
 }
