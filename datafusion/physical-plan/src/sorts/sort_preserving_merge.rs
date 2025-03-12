@@ -188,10 +188,14 @@ impl DisplayAs for SortPreservingMergeExec {
             DisplayFormatType::TreeRender => {
                 for (i, e) in self.expr().iter().enumerate() {
                     let e = e.to_string();
-                    writeln!(f, "expr{i}={e}")?;
+                    if i == self.expr().len() - 1 {
+                        writeln!(f, "{e}")?;
+                    } else {
+                        write!(f, "{e}, ")?;
+                    }
                 }
                 if let Some(fetch) = self.fetch {
-                    writeln!(f, "fetch={fetch}")?;
+                    writeln!(f, "limit={fetch}")?;
                 };
 
                 Ok(())
