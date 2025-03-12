@@ -23,7 +23,8 @@ use crate::analyzer::AnalyzerRule;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{Column, Result};
-use datafusion_expr::{logical_plan::LogicalPlan, wildcard, Expr, LogicalPlanBuilder};
+use datafusion_expr::utils::expand_wildcard;
+use datafusion_expr::{logical_plan::LogicalPlan, Expr, LogicalPlanBuilder};
 
 /// Analyzed rule that inlines TableScan that provide a [`LogicalPlan`]
 /// (DataFrame / ViewTable)
@@ -92,7 +93,8 @@ fn generate_projection_expr(
             )));
         }
     } else {
-        exprs.push(wildcard());
+        let expanded = expand_wildcard(sub_plan.schema(), sub_plan, None)?;
+        exprs.extend(expanded);
     }
     Ok(exprs)
 }
@@ -181,7 +183,7 @@ mod tests {
         let plan = scan.filter(col("x.a").eq(lit(1)))?.build()?;
         let expected = "Filter: x.a = Int32(1)\
         \n  SubqueryAlias: x\
-        \n    Projection: *\
+        \n    Projection: y.a, y.b\
         \n      TableScan: y";
 
         assert_analyzed_plan_eq(Arc::new(InlineTableScan::new()), plan, expected)
