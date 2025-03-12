@@ -860,7 +860,8 @@ fn match_window_definitions(
         if let SelectItem::ExprWithAlias { expr, alias: _ }
         | SelectItem::UnnamedExpr(expr) = proj
         {
-            let result = visit_expressions_mut(expr, |expr| {
+            let mut err = None;
+            visit_expressions_mut(expr, |expr| {
                 if let SQLExpr::Function(f) = expr {
                     if let Some(WindowType::NamedWindow(_)) = &f.over {
                         for NamedWindowDefinition(window_ident, window_expr) in
@@ -881,18 +882,18 @@ fn match_window_definitions(
                         }
                         // All named windows must be defined with a WindowSpec.
                         if let Some(WindowType::NamedWindow(ident)) = &f.over {
-                            return ControlFlow::Break(DataFusionError::Plan(format!(
+                            err = Some(DataFusionError::Plan(format!(
                                 "The window {ident} is not defined!"
                             )));
+                            return ControlFlow::Break(());
                         }
                     }
                 }
                 ControlFlow::Continue(())
             });
-            match result {
-                ControlFlow::Continue(_) => (),
-                ControlFlow::Break(err) => return Err(err),
-            };
+            if let Some(err) = err {
+                return Err(err);
+            }
         }
     }
     Ok(())
