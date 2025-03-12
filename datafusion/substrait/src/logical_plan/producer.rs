@@ -435,7 +435,7 @@ pub fn to_substrait_plan(plan: &LogicalPlan, state: &SessionState) -> Result<Box
     let mut producer: DefaultSubstraitProducer = DefaultSubstraitProducer::new(state);
     let plan_rels = vec![PlanRel {
         rel_type: Some(plan_rel::RelType::Root(RelRoot {
-            input: Some(*producer.handle_plan(&plan)?),
+            input: Some(*producer.handle_plan(plan)?),
             names: to_substrait_named_struct(plan.schema())?.names,
         })),
     }];
