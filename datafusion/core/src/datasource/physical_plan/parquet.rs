@@ -65,7 +65,7 @@ mod tests {
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{col, lit, when, Expr};
-    use datafusion_functions::expr_fn::get_field;
+    use datafusion_functions::expr_fn::{concat, get_field};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_expr::{expressions, PhysicalExpr, ScalarFunctionExpr};
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -79,6 +79,7 @@ mod tests {
     use object_store::{ObjectMeta, ObjectStore};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
+    use sha2::{Digest, Sha256};
     use tempfile::TempDir;
     use url::Url;
 
@@ -768,9 +769,9 @@ mod tests {
 
     /// Rewriter that converts struct field access to flattened column references
     #[derive(Debug)]
-    struct StructFieldRewriter;
+    struct ShreddedStructRewriter;
 
-    impl FileExpressionRewriter for StructFieldRewriter {
+    impl FileExpressionRewriter for ShreddedStructRewriter {
         fn rewrite(
             &self,
             file_schema: SchemaRef,
@@ -850,7 +851,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_filter_pushdown_rewrite() {
+    async fn test_filter_pushdown_rewrite_into_shredded_struct_column() {
         // Create a schema with a struct column
         let user_info_fields = Fields::from(vec![
             Field::new("name", DataType::Utf8, false),
@@ -900,11 +901,13 @@ mod tests {
 
         let filter = get_field(col("user_info"), "age").gt(lit(30));
 
-        // read/write them files:
+        // Read/write them files
+        // Since we set `with_page_index_predicate` we expect 2 rows per page -> at least 2 pages
         let rt = RoundTrip::new()
             .with_predicate(filter)
             .with_pushdown_predicate()
-            .with_filter_rewriter(Arc::new(StructFieldRewriter))
+            .with_page_index_predicate()
+            .with_filter_rewriter(Arc::new(ShreddedStructRewriter))
             .with_schema(Arc::new(table_schema))
             .round_trip(vec![batch])
             .await;
@@ -919,9 +922,136 @@ mod tests {
         ];
         assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
         let metrics = rt.parquet_exec.metrics().unwrap();
-        // Note there are were 6 rows in total (across three batches)
-        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 3);
-        assert_eq!(get_value(&metrics, "pushdown_rows_matched"), 1);
+        // Prove that the filter is getting pushed down into the page index of the shredded column
+        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
+        // And remaining rows are pruned by filter pushdown
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
+    }
+
+    /// Rewriter that converts struct field access to flattened column references
+    #[derive(Debug)]
+    struct PreComputedExpressionRewriter;
+
+    impl PreComputedExpressionRewriter {
+        fn expr_to_column_name(expr: &Arc<dyn PhysicalExpr>) -> String {
+            let expr_sql = format!("{:?}", expr);
+            let mut hasher = Sha256::new();
+            hasher.update(expr_sql.as_bytes());
+            let hash = hasher.finalize();
+            let hex = hex::encode(hash[..8].to_vec());
+            format!("_expr_{hex}")
+        }
+    }
+
+    impl FileExpressionRewriter for PreComputedExpressionRewriter {
+        fn rewrite(
+            &self,
+            file_schema: SchemaRef,
+            expr: Arc<dyn PhysicalExpr>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            let mut rewrite = PreComputedExpressionRewriterImpl { file_schema };
+            expr.rewrite(&mut rewrite).data()
+        }
+    }
+
+    struct PreComputedExpressionRewriterImpl {
+        file_schema: SchemaRef,
+    }
+
+    impl TreeNodeRewriter for PreComputedExpressionRewriterImpl {
+        type Node = Arc<dyn PhysicalExpr>;
+
+        fn f_down(
+            &mut self,
+            expr: Arc<dyn PhysicalExpr>,
+        ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+            let pre_computed_column_name =
+                PreComputedExpressionRewriter::expr_to_column_name(&expr);
+            // Check if the pre-computed column exists in the file schema
+            if let Ok(pre_computed_field) =
+                self.file_schema.field_with_name(&pre_computed_column_name)
+            {
+                let expected_data_type = expr.data_type(&self.file_schema)?;
+                if pre_computed_field
+                    .data_type()
+                    .equals_datatype(&expected_data_type)
+                {
+                    // Rewrite the expression to use the pre-computed column
+                    let rewritten_expr =
+                        expressions::col(&pre_computed_column_name, &self.file_schema)?;
+                    return Ok(Transformed::yes(rewritten_expr));
+                }
+            }
+
+            Ok(Transformed::no(expr))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pre_computed_expression_pushdwon() {
+        let table_schema = Schema::new(vec![
+            Field::new("first_name", DataType::Utf8, false),
+            Field::new("last_name", DataType::Utf8, false),
+        ]);
+
+        let expr: Expr = concat(vec![col("first_name"), lit(" "), col("last_name")]);
+        let phys_expr = logical2physical(&expr, &table_schema);
+        let pre_computed_column_name =
+            PreComputedExpressionRewriter::expr_to_column_name(&phys_expr);
+
+        let file_schema = Schema::new(vec![
+            Field::new("first_name", DataType::Utf8, false),
+            Field::new("last_name", DataType::Utf8, false),
+            // Pre-compute the full name
+            Field::new(pre_computed_column_name, DataType::Utf8, false),
+        ]);
+
+        let first_names = StringArray::from(vec!["Andrés", "Charly", "Fito", "Gustavo"]);
+        let last_names = StringArray::from(vec!["Calamaro", "Garcia", "Paez", "Cerati"]);
+        let full_names = StringArray::from(vec![
+            "Andrés Calamaro",
+            "Charly Garcia",
+            "Fito Paez",
+            "Gustavo Cerati",
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(file_schema.clone()),
+            vec![
+                Arc::new(first_names),
+                Arc::new(last_names),
+                Arc::new(full_names),
+            ],
+        )
+        .unwrap();
+
+        let filter = expr.eq(lit("Gustavo Cerati"));
+
+        // Read/write them files
+        // Since we set `with_page_index_predicate` we expect 2 rows per page -> at least 2 pages
+        let rt = RoundTrip::new()
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .with_page_index_predicate()
+            .with_filter_rewriter(Arc::new(PreComputedExpressionRewriter))
+            .with_schema(Arc::new(table_schema))
+            .round_trip(vec![batch])
+            .await;
+
+        #[rustfmt::skip]
+        let expected = [
+            "+------------+-----------+",
+            "| first_name | last_name |",
+            "+------------+-----------+",
+            "| Gustavo    | Cerati    |",
+            "+------------+-----------+",
+        ];
+        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+        let metrics = rt.parquet_exec.metrics().unwrap();
+        // Prove that the filter is getting pushed down into the page index of the pre-computed column
+        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
+        // And remaining rows are pruned by filter pushdown
+        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
     }
 
     #[tokio::test]

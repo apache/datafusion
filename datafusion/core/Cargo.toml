@@ -147,12 +147,14 @@ datafusion-functions-window-common = { workspace = true }
 datafusion-physical-optimizer = { workspace = true }
 doc-comment = { workspace = true }
 env_logger = { workspace = true }
+hex = { version = "0.4" }
 paste = "^1.0"
 rand = { workspace = true, features = ["small_rng"] }
 rand_distr = "0.4.3"
 regex = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { version = "^0.10.1" }
 sysinfo = "0.33.1"
 test-utils = { path = "../../test-utils" }
 tokio = { workspace = true, features = ["rt-multi-thread", "parking_lot", "fs"] }
