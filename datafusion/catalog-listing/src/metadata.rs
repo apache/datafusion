@@ -79,7 +79,7 @@ mod tests {
     use datafusion_common::ScalarValue;
     use datafusion_expr::{col, lit};
     use object_store::{path::Path, ObjectMeta};
-    
+
     // Helper function to create a test file with specific metadata
     fn create_test_file(
         path: &str,
@@ -93,7 +93,7 @@ mod tests {
             e_tag: None,
             version: None,
         };
-        
+
         PartitionedFile {
             object_meta,
             partition_values: vec![],
@@ -103,7 +103,7 @@ mod tests {
             metadata_size_hint: None,
         }
     }
-    
+
     #[test]
     fn test_apply_metadata_filters_empty_filters() {
         // Create a test file
@@ -112,20 +112,27 @@ mod tests {
             1024, // 1KB
             Utc.with_ymd_and_hms(2023, 1, 1, 10, 0, 0).unwrap(),
         );
-        
+
         // Test with empty filters
         let result = apply_metadata_filters(
             file.clone(),
             &[],
-            &[MetadataColumn::Location, MetadataColumn::Size, MetadataColumn::LastModified],
+            &[
+                MetadataColumn::Location,
+                MetadataColumn::Size,
+                MetadataColumn::LastModified,
+            ],
         )
         .unwrap();
-        
+
         // With empty filters, the file should be returned
         assert!(result.is_some());
-        assert_eq!(result.unwrap().object_meta.location.as_ref(), "test/file.parquet");
+        assert_eq!(
+            result.unwrap().object_meta.location.as_ref(),
+            "test/file.parquet"
+        );
     }
-    
+
     #[test]
     fn test_apply_metadata_filters_empty_metadata_cols() {
         // Create a test file
@@ -134,16 +141,19 @@ mod tests {
             1024, // 1KB
             Utc.with_ymd_and_hms(2023, 1, 1, 10, 0, 0).unwrap(),
         );
-        
+
         // Test with a filter but empty metadata columns
         let filter = col("location").eq(lit("test/file.parquet"));
         let result = apply_metadata_filters(file.clone(), &[filter], &[]).unwrap();
-        
+
         // With no metadata columns, the file should be returned regardless of the filter
         assert!(result.is_some());
-        assert_eq!(result.unwrap().object_meta.location.as_ref(), "test/file.parquet");
+        assert_eq!(
+            result.unwrap().object_meta.location.as_ref(),
+            "test/file.parquet"
+        );
     }
-    
+
     #[test]
     fn test_apply_metadata_filters_location() {
         // Create a test file
@@ -152,45 +162,39 @@ mod tests {
             1024, // 1KB
             Utc.with_ymd_and_hms(2023, 1, 1, 10, 0, 0).unwrap(),
         );
-        
+
         // Test with location filter - matching
         let filter = col("location").eq(lit("test/file.parquet"));
-        let result = apply_metadata_filters(
-            file.clone(),
-            &[filter],
-            &[MetadataColumn::Location],
-        )
-        .unwrap();
-        
+        let result =
+            apply_metadata_filters(file.clone(), &[filter], &[MetadataColumn::Location])
+                .unwrap();
+
         // The file should match
         assert!(result.is_some());
-        assert_eq!(result.unwrap().object_meta.location.as_ref(), "test/file.parquet");
-        
+        assert_eq!(
+            result.unwrap().object_meta.location.as_ref(),
+            "test/file.parquet"
+        );
+
         // Test with location filter - not matching
         let filter = col("location").eq(lit("test/different.parquet"));
-        let result = apply_metadata_filters(
-            file.clone(),
-            &[filter],
-            &[MetadataColumn::Location],
-        )
-        .unwrap();
-        
+        let result =
+            apply_metadata_filters(file.clone(), &[filter], &[MetadataColumn::Location])
+                .unwrap();
+
         // The file should not match
         assert!(result.is_none());
-        
+
         // Test with location filter - partial match (contains)
         let filter = col("location").like(lit("%file.parquet"));
-        let result = apply_metadata_filters(
-            file.clone(),
-            &[filter],
-            &[MetadataColumn::Location],
-        )
-        .unwrap();
-        
+        let result =
+            apply_metadata_filters(file.clone(), &[filter], &[MetadataColumn::Location])
+                .unwrap();
+
         // The file should match
         assert!(result.is_some());
     }
-    
+
     #[test]
     fn test_apply_metadata_filters_size() {
         // Create a test file
@@ -199,58 +203,51 @@ mod tests {
             1024, // 1KB
             Utc.with_ymd_and_hms(2023, 1, 1, 10, 0, 0).unwrap(),
         );
-        
+
         // Test with size filter - matching
         let filter = col("size").eq(lit(1024u64));
-        let result = apply_metadata_filters(
-            file.clone(),
-            &[filter],
-            &[MetadataColumn::Size],
-        )
-        .unwrap();
-        
+        let result =
+            apply_metadata_filters(file.clone(), &[filter], &[MetadataColumn::Size])
+                .unwrap();
+
         // The file should match
         assert!(result.is_some());
-        
+
         // Test with size filter - not matching
         let filter = col("size").eq(lit(2048u64));
-        let result = apply_metadata_filters(
-            file.clone(),
-            &[filter],
-            &[MetadataColumn::Size],
-        )
-        .unwrap();
-        
+        let result =
+            apply_metadata_filters(file.clone(), &[filter], &[MetadataColumn::Size])
+                .unwrap();
+
         // The file should not match
         assert!(result.is_none());
-        
+
         // Test with size filter - range comparison
-        let filter = col("size").gt(lit(512u64)).and(col("size").lt(lit(2048u64)));
-        let result = apply_metadata_filters(
-            file.clone(),
-            &[filter],
-            &[MetadataColumn::Size],
-        )
-        .unwrap();
-        
+        let filter = col("size")
+            .gt(lit(512u64))
+            .and(col("size").lt(lit(2048u64)));
+        let result =
+            apply_metadata_filters(file.clone(), &[filter], &[MetadataColumn::Size])
+                .unwrap();
+
         // The file should match
         assert!(result.is_some());
     }
-    
+
     #[test]
     fn test_apply_metadata_filters_last_modified() {
         let timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 10, 0, 0).unwrap();
-        
+
         // Create a test file
         let file = create_test_file(
             "test/file.parquet",
             1024, // 1KB
             timestamp,
         );
-        
+
         // Convert to micros timestamp for comparison with the Arrow type
         let timestamp_micros = timestamp.timestamp_micros();
-        
+
         // Test with last_modified filter - matching
         let filter = col("last_modified").eq(lit(ScalarValue::TimestampMicrosecond(
             Some(timestamp_micros),
@@ -262,10 +259,10 @@ mod tests {
             &[MetadataColumn::LastModified],
         )
         .unwrap();
-        
+
         // The file should match
         assert!(result.is_some());
-        
+
         // Test with last_modified filter - not matching
         let different_timestamp = Utc.with_ymd_and_hms(2023, 2, 1, 10, 0, 0).unwrap();
         let different_timestamp_micros = different_timestamp.timestamp_micros();
@@ -279,184 +276,195 @@ mod tests {
             &[MetadataColumn::LastModified],
         )
         .unwrap();
-        
+
         // The file should not match
         assert!(result.is_none());
-        
+
         // Test with last_modified filter - range comparison
         let earlier = Utc.with_ymd_and_hms(2022, 12, 1, 0, 0, 0).unwrap();
         let earlier_micros = earlier.timestamp_micros();
         let later = Utc.with_ymd_and_hms(2023, 2, 1, 0, 0, 0).unwrap();
         let later_micros = later.timestamp_micros();
-        
+
         let filter = col("last_modified")
             .gt(lit(ScalarValue::TimestampMicrosecond(
                 Some(earlier_micros),
                 Some("UTC".to_string().into()),
             )))
-            .and(col("last_modified").lt(lit(ScalarValue::TimestampMicrosecond(
-                Some(later_micros),
-                Some("UTC".to_string().into()),
-            ))));
-            
+            .and(
+                col("last_modified").lt(lit(ScalarValue::TimestampMicrosecond(
+                    Some(later_micros),
+                    Some("UTC".to_string().into()),
+                ))),
+            );
+
         let result = apply_metadata_filters(
             file.clone(),
             &[filter],
             &[MetadataColumn::LastModified],
         )
         .unwrap();
-        
+
         // The file should match
         assert!(result.is_some());
     }
-    
+
     #[test]
     fn test_apply_metadata_filters_multiple_columns() {
         let timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 10, 0, 0).unwrap();
         let timestamp_micros = timestamp.timestamp_micros();
-        
+
         // Create a test file
         let file = create_test_file(
             "test/file.parquet",
             1024, // 1KB
             timestamp,
         );
-        
+
         // Test with multiple metadata columns - all matching
         let filter = col("location")
             .eq(lit("test/file.parquet"))
             .and(col("size").eq(lit(1024u64)));
-            
+
         let result = apply_metadata_filters(
             file.clone(),
             &[filter],
             &[MetadataColumn::Location, MetadataColumn::Size],
         )
         .unwrap();
-        
+
         // The file should match
         assert!(result.is_some());
-        
+
         // Test with multiple metadata columns - one not matching
         let filter = col("location")
             .eq(lit("test/file.parquet"))
             .and(col("size").eq(lit(2048u64)));
-            
+
         let result = apply_metadata_filters(
             file.clone(),
             &[filter],
             &[MetadataColumn::Location, MetadataColumn::Size],
         )
         .unwrap();
-        
+
         // The file should not match
         assert!(result.is_none());
-        
+
         // Test with all three metadata columns
         let filter = col("location")
             .eq(lit("test/file.parquet"))
             .and(col("size").gt(lit(512u64)))
-            .and(col("last_modified").eq(lit(ScalarValue::TimestampMicrosecond(
-                Some(timestamp_micros),
-                Some("UTC".to_string().into()),
-            ))));
-            
+            .and(
+                col("last_modified").eq(lit(ScalarValue::TimestampMicrosecond(
+                    Some(timestamp_micros),
+                    Some("UTC".to_string().into()),
+                ))),
+            );
+
         let result = apply_metadata_filters(
             file.clone(),
             &[filter],
-            &[MetadataColumn::Location, MetadataColumn::Size, MetadataColumn::LastModified],
+            &[
+                MetadataColumn::Location,
+                MetadataColumn::Size,
+                MetadataColumn::LastModified,
+            ],
         )
         .unwrap();
-        
+
         // The file should match
         assert!(result.is_some());
     }
-    
+
     #[test]
     fn test_apply_metadata_filters_complex_expressions() {
         let timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 10, 0, 0).unwrap();
         let timestamp_micros = timestamp.timestamp_micros();
-        
+
         // Create a test file
         let file = create_test_file(
             "test/file.parquet",
             1024, // 1KB
             timestamp,
         );
-        
+
         // Test with a complex expression (OR condition)
         let filter = col("location")
             .eq(lit("test/different.parquet"))
             .or(col("size").eq(lit(1024u64)));
-            
+
         let result = apply_metadata_filters(
             file.clone(),
             &[filter],
             &[MetadataColumn::Location, MetadataColumn::Size],
         )
         .unwrap();
-        
+
         // The file should match because one condition is true
         assert!(result.is_some());
-        
+
         // Test with a more complex nested expression
-        let filter = col("location")
-            .like(lit("%file.parquet"))
-            .and(
-                col("size").lt(lit(2048u64))
-                .or(col("last_modified").gt(lit(ScalarValue::TimestampMicrosecond(
+        let filter = col("location").like(lit("%file.parquet")).and(
+            col("size").lt(lit(2048u64)).or(col("last_modified").gt(lit(
+                ScalarValue::TimestampMicrosecond(
                     Some(timestamp_micros),
                     Some("UTC".to_string().into()),
-                ))))
-            );
-            
+                ),
+            ))),
+        );
+
         let result = apply_metadata_filters(
             file.clone(),
             &[filter],
-            &[MetadataColumn::Location, MetadataColumn::Size, MetadataColumn::LastModified],
+            &[
+                MetadataColumn::Location,
+                MetadataColumn::Size,
+                MetadataColumn::LastModified,
+            ],
         )
         .unwrap();
-        
+
         // The file should match
         assert!(result.is_some());
     }
-    
+
     #[test]
     fn test_apply_metadata_filters_multiple_filters() {
         let timestamp = Utc.with_ymd_and_hms(2023, 1, 1, 10, 0, 0).unwrap();
-        
+
         // Create a test file
         let file = create_test_file(
             "test/file.parquet",
             1024, // 1KB
             timestamp,
         );
-        
+
         // Test with multiple separate filters (AND semantics)
         let filter1 = col("location").eq(lit("test/file.parquet"));
         let filter2 = col("size").eq(lit(1024u64));
-        
+
         let result = apply_metadata_filters(
             file.clone(),
             &[filter1, filter2],
             &[MetadataColumn::Location, MetadataColumn::Size],
         )
         .unwrap();
-        
+
         // The file should match
         assert!(result.is_some());
-        
+
         // Test with multiple separate filters - one not matching
         let filter1 = col("location").eq(lit("test/file.parquet"));
         let filter2 = col("size").eq(lit(2048u64));
-        
+
         let result = apply_metadata_filters(
             file.clone(),
             &[filter1, filter2],
             &[MetadataColumn::Location, MetadataColumn::Size],
         )
         .unwrap();
-        
+
         // The file should not match
         assert!(result.is_none());
     }
