@@ -418,9 +418,9 @@ impl<'schema> FilterSchemaBuilder<'schema> {
         fields.dedup_by_key(|f| f.name().to_string());
         fields.sort_by_key(|f| {
             let table_schema_index =
-                table_schema.index_of(f.name()).unwrap_or(std::usize::MAX);
+                table_schema.index_of(f.name()).unwrap_or(usize::MAX);
             let file_schema_index =
-                file_schema.index_of(f.name()).unwrap_or(std::usize::MAX);
+                file_schema.index_of(f.name()).unwrap_or(usize::MAX);
             (table_schema_index, file_schema_index)
         });
     }
