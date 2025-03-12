@@ -128,7 +128,7 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                             // the JoinSet were aborted, which in turn
                             // would imply that the receiver has been
                             // dropped and this code is not running
-                            return Some(execution_err!("Non Panic Task error: {e}"));
+                            return Some(exec_err!("Non Panic Task error: {e}"));
                         }
                     }
                 }
