@@ -28,7 +28,7 @@ When testing Spark functions:
 - Functions must be tested on both `Scalar` and `Array` inputs
 - Test cases should only contain `SELECT` statements with the function being tested
 - Add explicit casts to input values to ensure the correct data type is used (e.g., `0::INT`)
-    - Explicit casting is necessary because DataFusion and Spark do not infer data types in the same way
+  - Explicit casting is necessary because DataFusion and Spark do not infer data types in the same way
 
 ### Finding Test Cases
 
