@@ -31,3 +31,8 @@ Therefore, direct invocation tests should only be used to verify that the functi
 Please be sure to add additional tests beyond direct invocation.
 For more detailed testing guidelines, refer to
 the [Spark SQLLogicTest README](../sqllogictest/test_files/spark/README.md).
+
+## Implementation References
+
+When implementing Spark-compatible functions, you can check if there are existing implementations in
+the [Sail](https://github.com/lakehq/sail) or [Comet](https://github.com/apache/datafusion-comet) projects first.
