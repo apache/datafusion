@@ -398,7 +398,7 @@ impl ParquetSource {
 
     /// Set optional filter expression rewriter.
     ///
-    /// [`FileExpressionRewriter`] allows users to specify how filter
+    /// [`FileExpressionRewriter`] allows specifying how filter
     /// expressions should be rewritten based on table schema and file schema.
     /// This enables more sophisticated filter pushdown to the file level that can vary on a per-file basis.
     pub fn with_filter_expression_rewriter(
