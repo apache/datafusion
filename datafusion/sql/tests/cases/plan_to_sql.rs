@@ -21,9 +21,8 @@ use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
-    cast, col, lit, table_scan, wildcard,
-    EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Union, UserDefinedLogicalNode,
-    UserDefinedLogicalNodeCore,
+    cast, col, lit, table_scan, wildcard, EmptyRelation, Expr, Extension, LogicalPlan,
+    LogicalPlanBuilder, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
