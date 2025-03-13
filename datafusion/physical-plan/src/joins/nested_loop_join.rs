@@ -75,8 +75,8 @@ struct JoinLeftData {
     probe_threads_counter: AtomicUsize,
     /// Memory reservation for tracking batch and bitmap
     /// Cleared on `JoinLeftData` drop
-    /// reservation is cleared on Drop 
-    #[expect(dead_code)]    
+    /// reservation is cleared on Drop
+    #[expect(dead_code)]
     reservation: MemoryReservation,
 }
 
