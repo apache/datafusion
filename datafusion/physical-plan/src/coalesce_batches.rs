@@ -117,7 +117,7 @@ impl DisplayAs for CoalesceBatchesExec {
                     self.target_batch_size,
                 )?;
                 if let Some(fetch) = self.fetch {
-                    write!(f, ", limit={fetch}")?;
+                    write!(f, ", fetch={fetch}")?;
                 };
 
                 Ok(())
