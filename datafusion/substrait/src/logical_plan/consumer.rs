@@ -62,6 +62,7 @@ use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
+use datafusion::logical_expr::utils::group_window_expr_by_sort_keys;
 use datafusion::logical_expr::{
     col, expr, GroupingSet, Like, LogicalPlanBuilder, Partitioning, Repartition,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
@@ -1058,7 +1059,7 @@ pub async fn from_project_rel(
     p: &ProjectRel,
 ) -> Result<LogicalPlan> {
     if let Some(input) = p.input.as_ref() {
-        let mut input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
+        let input = consumer.consume_rel(input).await?;
         let original_schema = input.schema().clone();
 
         // Ensure that all expressions have a unique display name, so that
@@ -1091,9 +1092,11 @@ pub async fn from_project_rel(
             explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
 
-        if !window_exprs.is_empty() {
-            input = input.window(window_exprs)?;
-        }
+        let input = if !window_exprs.is_empty() {
+            LogicalPlanBuilder::window_plan(input, window_exprs)?
+        } else {
+            input
+        };
 
         let mut final_exprs: Vec<Expr> = vec![];
         for index in 0..original_schema.fields().len() {
@@ -1101,7 +1104,7 @@ pub async fn from_project_rel(
             final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
         final_exprs.append(&mut explicit_exprs);
-        input.project(final_exprs)?.build()
+        project(input, final_exprs)
     } else {
         not_impl_err!("Projection without an input is not supported")
     }
