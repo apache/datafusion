@@ -770,7 +770,12 @@ physical_plan
 32)└─────────────┬─────────────┘
 33)┌─────────────┴─────────────┐
 34)│       LazyMemoryExec      │
-35)└───────────────────────────┘
+35)│    --------------------   │
+36)│     batch_generators:     │
+37)│ generate_series: start=1, │
+38)│    end=1000, batch_size   │
+39)│           =8192           │
+40)└───────────────────────────┘
 
 query TT
 explain select 
@@ -1787,3 +1792,16 @@ physical_plan
 57)│       format: memory      │
 58)│          rows: 1          │
 59)└───────────────────────────┘
+
+# Test explain tree for LazyMemoryExec
+query TT
+EXPLAIN SELECT * FROM generate_series(1, 100)
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       LazyMemoryExec      │
+03)│    --------------------   │
+04)│     batch_generators:     │
+05)│ generate_series: start=1, │
+06)│  end=100, batch_size=8192 │
+07)└───────────────────────────┘
