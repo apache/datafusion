@@ -273,13 +273,14 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// made using a timer (being careful with the overhead-heavy system call needed to
     /// take the time), or by counting rows or batches.
     ///
-    /// The cancellation benchmark tracks some cases of how quickly queries can
+    /// The [cancellation benchmark] tracks some cases of how quickly queries can
     /// be cancelled.
     ///
     /// For more details see [`SpawnedTask`], [`JoinSet`] and [`RecordBatchReceiverStreamBuilder`]
     /// for structures to help ensure all background tasks are cancelled.
     ///
     /// [`spawn`]: tokio::task::spawn
+    /// [cancellation benchmark]: https://github.com/apache/datafusion/blob/main/benchmarks/README.md#cancellation
     /// [`JoinSet`]: tokio::task::JoinSet
     /// [`SpawnedTask`]: datafusion_common_runtime::SpawnedTask
     /// [`RecordBatchReceiverStreamBuilder`]: crate::stream::RecordBatchReceiverStreamBuilder
