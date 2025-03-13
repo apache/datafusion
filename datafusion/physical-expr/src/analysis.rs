@@ -302,6 +302,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{assert_contains, DFSchema};
     use datafusion_expr::{
         col, execution_props::ExecutionProps, interval_arithmetic::Interval, lit, Expr,
@@ -367,8 +368,13 @@ mod tests {
         for (expr, lower, upper) in test_cases {
             let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
             let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
-            let physical_expr =
-                create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
+            let physical_expr = create_physical_expr(
+                &expr,
+                &df_schema,
+                &ExecutionProps::new(),
+                ConfigOptions::default_singleton_arc(),
+            )
+            .unwrap();
             let analysis_result = analyze(
                 &physical_expr,
                 AnalysisContext::new(boundaries),
@@ -402,12 +408,18 @@ mod tests {
                 .and(col("a").gt(lit(20)))
                 .and(col("a").lt(lit(30))),
         ];
+        let config_options = ConfigOptions::default_singleton_arc();
 
         for expr in test_cases {
             let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
             let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
-            let physical_expr =
-                create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
+            let physical_expr = create_physical_expr(
+                &expr,
+                &df_schema,
+                &ExecutionProps::new(),
+                config_options,
+            )
+            .unwrap();
             let analysis_result = analyze(
                 &physical_expr,
                 AnalysisContext::new(boundaries),
@@ -428,8 +440,13 @@ mod tests {
         let expected_error = "Interval arithmetic does not support the operator OR";
         let boundaries = ExprBoundaries::try_new_unbounded(&schema).unwrap();
         let df_schema = DFSchema::try_from(Arc::clone(&schema)).unwrap();
-        let physical_expr =
-            create_physical_expr(&expr, &df_schema, &ExecutionProps::new()).unwrap();
+        let physical_expr = create_physical_expr(
+            &expr,
+            &df_schema,
+            &ExecutionProps::new(),
+            ConfigOptions::default_singleton_arc(),
+        )
+        .unwrap();
         let analysis_error = analyze(
             &physical_expr,
             AnalysisContext::new(boundaries),

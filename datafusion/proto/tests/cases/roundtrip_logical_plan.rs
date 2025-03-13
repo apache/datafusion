@@ -41,7 +41,9 @@ use datafusion::datasource::file_format::arrow::ArrowFormatFactory;
 use datafusion::datasource::file_format::csv::CsvFormatFactory;
 use datafusion::datasource::file_format::parquet::ParquetFormatFactory;
 use datafusion::datasource::file_format::{format_as_file_type, DefaultFileType};
-use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::execution::session_state::{
+    SessionStateBuilder, SessionStateOptimizerConfig,
+};
 use datafusion::execution::FunctionRegistry;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::expr_fn::{
@@ -2544,7 +2546,10 @@ async fn roundtrip_union_query() -> Result<()> {
     // proto deserialization only supports 2-way union, hence this plan has nested unions
     // apply the flatten unions optimizer rule to be able to compare
     let optimizer = Optimizer::with_rules(vec![Arc::new(EliminateNestedUnion::new())]);
-    let unnested = optimizer.optimize(logical_round_trip, &(ctx.state()), |_x, _y| {})?;
+    let session_state = ctx.state();
+    let session_optimizer_config = SessionStateOptimizerConfig::new(&session_state);
+    let unnested =
+        optimizer.optimize(logical_round_trip, &session_optimizer_config, |_x, _y| {})?;
     assert_eq!(
         format!("{}", plan.display_indent_schema()),
         format!("{}", unnested.display_indent_schema()),

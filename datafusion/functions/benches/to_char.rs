@@ -28,6 +28,7 @@ use rand::rngs::ThreadRng;
 use rand::seq::SliceRandom;
 use rand::Rng;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::ScalarValue::TimestampNanosecond;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
@@ -87,6 +88,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let batch_len = data_arr.len();
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns = ColumnarValue::Array(Arc::new(patterns(&mut rng)) as ArrayRef);
+        let config_options = ConfigOptions::default_singleton_arc();
 
         b.iter(|| {
             black_box(
@@ -95,6 +97,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![data.clone(), patterns.clone()],
                         number_rows: batch_len,
                         return_type: &DataType::Utf8,
+                        config_options,
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -108,6 +111,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let data = ColumnarValue::Array(Arc::new(data_arr) as ArrayRef);
         let patterns =
             ColumnarValue::Scalar(ScalarValue::Utf8(Some("%Y-%m-%d".to_string())));
+        let config_options = ConfigOptions::default_singleton_arc();
 
         b.iter(|| {
             black_box(
@@ -116,6 +120,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![data.clone(), patterns.clone()],
                         number_rows: batch_len,
                         return_type: &DataType::Utf8,
+                        config_options,
                     })
                     .expect("to_char should work on valid values"),
             )
@@ -135,6 +140,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let pattern = ColumnarValue::Scalar(ScalarValue::Utf8(Some(
             "%d-%m-%Y %H:%M:%S".to_string(),
         )));
+        let config_options = ConfigOptions::default_singleton_arc();
 
         b.iter(|| {
             black_box(
@@ -143,6 +149,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: vec![data.clone(), pattern.clone()],
                         number_rows: 1,
                         return_type: &DataType::Utf8,
+                        config_options,
                     })
                     .expect("to_char should work on valid values"),
             )

@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::execution_props::ExecutionProps;
@@ -69,7 +70,7 @@ impl OptimizerRule for SimplifyExpressions {
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
         let mut execution_props = ExecutionProps::new();
         execution_props.query_execution_start_time = config.query_execution_start_time();
-        Self::optimize_internal(plan, &execution_props)
+        Self::optimize_internal(plan, &execution_props, config.options())
     }
 }
 
@@ -77,6 +78,7 @@ impl SimplifyExpressions {
     fn optimize_internal(
         plan: LogicalPlan,
         execution_props: &ExecutionProps,
+        config_options: &Arc<ConfigOptions>,
     ) -> Result<Transformed<LogicalPlan>> {
         let schema = if !plan.inputs().is_empty() {
             DFSchemaRef::new(merge_schema(&plan.inputs()))
@@ -99,7 +101,8 @@ impl SimplifyExpressions {
             Arc::new(DFSchema::empty())
         };
 
-        let info = SimplifyContext::new(execution_props).with_schema(schema);
+        let info =
+            SimplifyContext::new(execution_props, config_options).with_schema(schema);
 
         // Inputs have already been rewritten (due to bottom-up traversal handled by Optimizer)
         // Just need to rewrite our own expressions

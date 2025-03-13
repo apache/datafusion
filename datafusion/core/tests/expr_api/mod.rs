@@ -22,6 +22,7 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field};
 use arrow::util::pretty::{pretty_format_batches, pretty_format_columns};
 use datafusion::prelude::*;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::simplify::SimplifyContext;
@@ -404,7 +405,8 @@ fn create_simplified_expr_test(expr: Expr, expected_expr: &str) {
     // Simplify the expression first
     let props = ExecutionProps::new();
     let simplify_context =
-        SimplifyContext::new(&props).with_schema(df_schema.clone().into());
+        SimplifyContext::new(&props, ConfigOptions::default_singleton_arc())
+            .with_schema(df_schema.clone().into());
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     let simplified = simplifier.simplify(expr).unwrap();
     create_expr_test(simplified, expected_expr);

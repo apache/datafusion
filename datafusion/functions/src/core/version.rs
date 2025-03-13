@@ -97,6 +97,7 @@ impl ScalarUDFImpl for VersionFunc {
 #[cfg(test)]
 mod test {
     use super::*;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ScalarUDF;
 
     #[tokio::test]
@@ -107,6 +108,7 @@ mod test {
                 args: vec![],
                 number_rows: 0,
                 return_type: &DataType::Utf8,
+                config_options: ConfigOptions::default_singleton(),
             })
             .unwrap();
 

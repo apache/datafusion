@@ -224,12 +224,14 @@ mod tests {
     use crate::datetime::make_date::MakeDateFunc;
     use arrow::array::{Array, Date32Array, Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::DataType;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
 
     #[test]
     fn test_make_date() {
+        let config_options = ConfigOptions::default_singleton();
         let args = datafusion_expr::ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(2024))),
@@ -238,6 +240,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Date32,
+            config_options,
         };
         let res = MakeDateFunc::new()
             .invoke_with_args(args)
@@ -257,6 +260,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Date32,
+            config_options,
         };
         let res = MakeDateFunc::new()
             .invoke_with_args(args)
@@ -276,6 +280,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Date32,
+            config_options,
         };
         let res = MakeDateFunc::new()
             .invoke_with_args(args)
@@ -299,6 +304,7 @@ mod tests {
             ],
             number_rows: batch_len,
             return_type: &DataType::Date32,
+            config_options,
         };
         let res = MakeDateFunc::new()
             .invoke_with_args(args)
@@ -325,6 +331,7 @@ mod tests {
             args: vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
             number_rows: 1,
             return_type: &DataType::Date32,
+            config_options,
         };
         let res = MakeDateFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -341,6 +348,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Date32,
+            config_options,
         };
         let res = MakeDateFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -357,6 +365,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Date32,
+            config_options,
         };
         let res = MakeDateFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -373,6 +382,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Date32,
+            config_options,
         };
         let res = MakeDateFunc::new().invoke_with_args(args);
         assert_eq!(

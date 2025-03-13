@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::simplify_expressions::ExprSimplifier;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -44,7 +45,7 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 /// 'Aggregate' of the subquery if they are missing, so that they can be
 /// evaluated by the parent operator as the join condition.
 #[derive(Debug)]
-pub struct PullUpCorrelatedExpr {
+pub struct PullUpCorrelatedExpr<'a> {
     pub join_filters: Vec<Expr>,
     /// mapping from the plan to its holding correlated columns
     pub correlated_subquery_cols_map: HashMap<LogicalPlan, BTreeSet<Column>>,
@@ -71,16 +72,12 @@ pub struct PullUpCorrelatedExpr {
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
     /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
+    /// config options
+    pub config_options: &'a Arc<ConfigOptions>,
 }
 
-impl Default for PullUpCorrelatedExpr {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PullUpCorrelatedExpr {
-    pub fn new() -> Self {
+impl<'a> PullUpCorrelatedExpr<'a> {
+    pub fn new(config_options: &'a Arc<ConfigOptions>) -> Self {
         Self {
             join_filters: vec![],
             correlated_subquery_cols_map: HashMap::new(),
@@ -91,6 +88,7 @@ impl PullUpCorrelatedExpr {
             need_handle_count_bug: false,
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
+            config_options,
         }
     }
 
@@ -113,6 +111,12 @@ impl PullUpCorrelatedExpr {
         self.exists_sub_query = exists_sub_query;
         self
     }
+
+    /// Set the config options
+    pub fn with_config_options(mut self, config_options: &'a Arc<ConfigOptions>) -> Self {
+        self.config_options = config_options;
+        self
+    }
 }
 
 /// Used to indicate the unmatched rows from the inner(subquery) table after the left out Join
@@ -126,7 +130,7 @@ pub const UN_MATCHED_ROW_INDICATOR: &str = "__always_true";
 /// 'ScalarValue(2)')
 pub type ExprResultMap = HashMap<String, Expr>;
 
-impl TreeNodeRewriter for PullUpCorrelatedExpr {
+impl TreeNodeRewriter for PullUpCorrelatedExpr<'_> {
     type Node = LogicalPlan;
 
     fn f_down(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
@@ -196,6 +200,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                             Arc::clone(plan_filter.input.schema()),
                             expr_result_map,
                             &mut expr_result_map_for_count_bug,
+                            self.config_options,
                         )?
                     } else {
                         None
@@ -254,6 +259,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         projection.input.schema(),
                         expr_result_map,
                         &mut expr_result_map_for_count_bug,
+                        self.config_options,
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
                         // has count bug
@@ -305,6 +311,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         &aggregate.aggr_expr,
                         aggregate.input.schema(),
                         &mut expr_result_map_for_count_bug,
+                        self.config_options,
                     )?;
                     if !expr_result_map_for_count_bug.is_empty() {
                         // has count bug
@@ -375,7 +382,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
     }
 }
 
-impl PullUpCorrelatedExpr {
+impl PullUpCorrelatedExpr<'_> {
     fn collect_missing_exprs(
         &self,
         exprs: &[Expr],
@@ -477,6 +484,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
     agg_expr: &[Expr],
     schema: &DFSchemaRef,
     expr_result_map_for_count_bug: &mut ExprResultMap,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<()> {
     for e in agg_expr.iter() {
         let result_expr = e
@@ -498,7 +506,8 @@ fn agg_exprs_evaluation_result_on_empty_batch(
 
         let result_expr = result_expr.unalias();
         let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
+        let info =
+            SimplifyContext::new(&props, config_options).with_schema(Arc::clone(schema));
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         if matches!(result_expr, Expr::Literal(ScalarValue::Int64(_))) {
@@ -514,6 +523,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
     schema: &DFSchemaRef,
     input_expr_result_map_for_count_bug: &ExprResultMap,
     expr_result_map_for_count_bug: &mut ExprResultMap,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<()> {
     for expr in proj_expr.iter() {
         let result_expr = expr
@@ -535,7 +545,8 @@ fn proj_exprs_evaluation_result_on_empty_batch(
 
         if result_expr.ne(expr) {
             let props = ExecutionProps::new();
-            let info = SimplifyContext::new(&props).with_schema(Arc::clone(schema));
+            let info = SimplifyContext::new(&props, config_options)
+                .with_schema(Arc::clone(schema));
             let simplifier = ExprSimplifier::new(info);
             let result_expr = simplifier.simplify(result_expr)?;
             let expr_name = match expr {
@@ -558,6 +569,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
     schema: DFSchemaRef,
     input_expr_result_map_for_count_bug: &ExprResultMap,
     expr_result_map_for_count_bug: &mut ExprResultMap,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<Option<Expr>> {
     let result_expr = filter_expr
         .clone()
@@ -576,7 +588,7 @@ fn filter_exprs_evaluation_result_on_empty_batch(
 
     let pull_up_expr = if result_expr.ne(filter_expr) {
         let props = ExecutionProps::new();
-        let info = SimplifyContext::new(&props).with_schema(schema);
+        let info = SimplifyContext::new(&props, config_options).with_schema(schema);
         let simplifier = ExprSimplifier::new(info);
         let result_expr = simplifier.simplify(result_expr)?;
         match &result_expr {

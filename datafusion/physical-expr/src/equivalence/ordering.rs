@@ -359,6 +359,7 @@ mod tests {
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::Result;
     use datafusion_expr::{Operator, ScalarUDF};
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -409,21 +410,25 @@ mod tests {
         let col_e = &col("e", &test_schema)?;
         let col_f = &col("f", &test_schema)?;
         let test_fun = Arc::new(ScalarUDF::new_from_impl(TestScalarUDF::new()));
+        let config_options = ConfigOptions::default_singleton_arc();
 
         let floor_a = Arc::new(ScalarFunctionExpr::try_new(
             Arc::clone(&test_fun),
             vec![Arc::clone(col_a)],
             &test_schema,
+            config_options,
         )?) as PhysicalExprRef;
         let floor_f = Arc::new(ScalarFunctionExpr::try_new(
             Arc::clone(&test_fun),
             vec![Arc::clone(col_f)],
             &test_schema,
+            config_options,
         )?) as PhysicalExprRef;
         let exp_a = Arc::new(ScalarFunctionExpr::try_new(
             Arc::clone(&test_fun),
             vec![Arc::clone(col_a)],
             &test_schema,
+            config_options,
         )?) as PhysicalExprRef;
 
         let a_plus_b = Arc::new(BinaryExpr::new(

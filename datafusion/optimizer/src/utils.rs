@@ -23,6 +23,7 @@ use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use arrow::array::{new_null_array, Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TransformedResult, TreeNode};
 use datafusion_common::{Column, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
@@ -74,6 +75,7 @@ pub fn log_plan(description: &str, plan: &LogicalPlan) {
 pub fn is_restrict_null_predicate<'a>(
     predicate: Expr,
     join_cols_of_predicate: impl IntoIterator<Item = &'a Column>,
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<bool> {
     if matches!(predicate, Expr::Column(_)) {
         return Ok(true);
@@ -94,8 +96,12 @@ pub fn is_restrict_null_predicate<'a>(
 
     let replaced_predicate = replace_col(predicate, &join_cols_to_replace)?;
     let coerced_predicate = coerce(replaced_predicate, &input_schema)?;
-    let phys_expr =
-        create_physical_expr(&coerced_predicate, &input_schema, &execution_props)?;
+    let phys_expr = create_physical_expr(
+        &coerced_predicate,
+        &input_schema,
+        &execution_props,
+        config_options,
+    )?;
 
     let result_type = phys_expr.data_type(&schema)?;
     if !matches!(&result_type, DataType::Boolean) {
@@ -217,8 +223,12 @@ mod tests {
         let column_a = Column::from_name("a");
         for (predicate, expected) in test_cases {
             let join_cols_of_predicate = std::iter::once(&column_a);
-            let actual =
-                is_restrict_null_predicate(predicate.clone(), join_cols_of_predicate)?;
+            let config_options = ConfigOptions::default_singleton_arc();
+            let actual = is_restrict_null_predicate(
+                predicate.clone(),
+                join_cols_of_predicate,
+                config_options,
+            )?;
             assert_eq!(actual, expected, "{}", predicate);
         }
 

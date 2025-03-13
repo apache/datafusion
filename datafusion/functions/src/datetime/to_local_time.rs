@@ -411,6 +411,7 @@ mod tests {
     use arrow::compute::kernels::cast_utils::string_to_timestamp_nanos;
     use arrow::datatypes::{DataType, TimeUnit};
     use chrono::NaiveDateTime;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
@@ -543,6 +544,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(input)],
                 number_rows: 1,
                 return_type: &expected.data_type(),
+                config_options: ConfigOptions::default_singleton(),
             })
             .unwrap();
         match res {
@@ -606,6 +608,7 @@ mod tests {
                 args: vec![ColumnarValue::Array(Arc::new(input))],
                 number_rows: batch_size,
                 return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                config_options: ConfigOptions::default_singleton(),
             };
             let result = ToLocalTimeFunc::new().invoke_with_args(args).unwrap();
             if let ColumnarValue::Array(result) = result {

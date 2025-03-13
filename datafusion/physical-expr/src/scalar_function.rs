@@ -31,7 +31,7 @@
 
 use std::any::Any;
 use std::fmt::{self, Debug, Formatter};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::expressions::Literal;
@@ -39,6 +39,7 @@ use crate::PhysicalExpr;
 
 use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::{DataType, Schema};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{internal_err, Result, ScalarValue};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::ExprProperties;
@@ -46,15 +47,17 @@ use datafusion_expr::type_coercion::functions::data_types_with_scalar_udf;
 use datafusion_expr::{
     expr_vec_fmt, ColumnarValue, ReturnTypeArgs, ScalarFunctionArgs, ScalarUDF,
 };
+use datafusion_physical_expr_common::physical_expr::{DynEq, DynHash};
+use itertools::Itertools;
 
 /// Physical expression of a scalar function
-#[derive(Eq, PartialEq, Hash)]
 pub struct ScalarFunctionExpr {
     fun: Arc<ScalarUDF>,
     name: String,
     args: Vec<Arc<dyn PhysicalExpr>>,
     return_type: DataType,
     nullable: bool,
+    config_options: Arc<ConfigOptions>,
 }
 
 impl Debug for ScalarFunctionExpr {
@@ -75,6 +78,7 @@ impl ScalarFunctionExpr {
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         return_type: DataType,
+        config_options: Arc<ConfigOptions>,
     ) -> Self {
         Self {
             fun,
@@ -82,6 +86,7 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             nullable: true,
+            config_options,
         }
     }
 
@@ -90,6 +95,7 @@ impl ScalarFunctionExpr {
         fun: Arc<ScalarUDF>,
         args: Vec<Arc<dyn PhysicalExpr>>,
         schema: &Schema,
+        config_options: &Arc<ConfigOptions>,
     ) -> Result<Self> {
         let name = fun.name().to_string();
         let arg_types = args
@@ -125,6 +131,7 @@ impl ScalarFunctionExpr {
             args,
             return_type,
             nullable,
+            config_options: Arc::clone(config_options),
         })
     }
 
@@ -164,6 +171,47 @@ impl fmt::Display for ScalarFunctionExpr {
     }
 }
 
+impl DynEq for ScalarFunctionExpr {
+    fn dyn_eq(&self, other: &dyn Any) -> bool {
+        other.downcast_ref::<Self>().is_some_and(|o| {
+            let eq = self.fun.eq(&o.fun);
+            let eq = eq && self.name.eq(&o.name);
+            let eq = eq && self.args.eq(&o.args);
+            let eq = eq && self.return_type.eq(&o.return_type);
+            let eq = eq && self.nullable.eq(&o.nullable);
+            let eq = eq
+                && self
+                    .config_options
+                    .entries()
+                    .iter()
+                    .sorted_by(|&l, &r| l.key.cmp(&r.key))
+                    .zip(
+                        o.config_options
+                            .entries()
+                            .iter()
+                            .sorted_by(|&l, &r| l.key.cmp(&r.key)),
+                    )
+                    .filter(|(l, r)| l.ne(r))
+                    .count()
+                    == 0;
+
+            eq
+        })
+    }
+}
+
+impl DynHash for ScalarFunctionExpr {
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        self.type_id().hash(&mut state);
+        self.fun.hash(&mut state);
+        self.name.hash(&mut state);
+        self.args.hash(&mut state);
+        self.return_type.hash(&mut state);
+        self.nullable.hash(&mut state);
+        self.config_options.entries().hash(&mut state);
+    }
+}
+
 impl PhysicalExpr for ScalarFunctionExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -195,6 +243,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
             args,
             number_rows: batch.num_rows(),
             return_type: &self.return_type,
+            config_options: &self.config_options,
         })?;
 
         if let ColumnarValue::Array(array) = &output {
@@ -228,6 +277,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
                 Arc::clone(&self.fun),
                 children,
                 self.return_type().clone(),
+                Arc::clone(&self.config_options),
             )
             .with_nullable(self.nullable),
         ))

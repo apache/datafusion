@@ -508,6 +508,7 @@ mod tests {
     use arrow::datatypes::{DataType, TimeUnit};
 
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
 
@@ -515,6 +516,7 @@ mod tests {
 
     #[test]
     fn test_date_bin() {
+        let config_options = ConfigOptions::default_singleton();
         let mut args = datafusion_expr::ScalarFunctionArgs {
             args: vec![
                 ColumnarValue::Scalar(ScalarValue::IntervalDayTime(Some(
@@ -528,6 +530,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert!(res.is_ok());
@@ -547,6 +550,7 @@ mod tests {
             ],
             number_rows: batch_len,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert!(res.is_ok());
@@ -563,6 +567,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert!(res.is_ok());
@@ -582,6 +587,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert!(res.is_ok());
@@ -600,6 +606,7 @@ mod tests {
             )))],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -616,6 +623,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -638,6 +646,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
 
         let res = DateBinFunc::new().invoke_with_args(args);
@@ -657,6 +666,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -673,6 +683,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -689,6 +700,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -710,6 +722,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -730,6 +743,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert!(res.is_ok());
@@ -753,6 +767,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -776,6 +791,7 @@ mod tests {
             ],
             number_rows: batch_len,
             return_type: &DataType::Timestamp(TimeUnit::Nanosecond, None),
+            config_options,
         };
         let res = DateBinFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -907,6 +923,7 @@ mod tests {
                         TimeUnit::Nanosecond,
                         tz_opt.clone(),
                     ),
+                    config_options: ConfigOptions::default_singleton(),
                 };
                 let result = DateBinFunc::new().invoke_with_args(args).unwrap();
                 if let ColumnarValue::Array(result) = result {

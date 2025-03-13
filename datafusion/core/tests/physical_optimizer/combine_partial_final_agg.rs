@@ -48,8 +48,7 @@ macro_rules! assert_optimized {
 
         // run optimizer
         let optimizer = CombinePartialFinalAggregate {};
-        let config = ConfigOptions::new();
-        let optimized = optimizer.optimize($PLAN, &config)?;
+        let optimized = optimizer.optimize($PLAN, ConfigOptions::default_singleton())?;
         // Now format correctly
         let plan = displayable(optimized.as_ref()).indent(true).to_string();
         let actual_lines = trim_plan_display(&plan);

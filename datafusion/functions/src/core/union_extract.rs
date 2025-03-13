@@ -171,6 +171,7 @@ fn find_field<'a>(fields: &'a UnionFields, name: &str) -> Result<(i8, &'a FieldR
 mod tests {
 
     use arrow::datatypes::{DataType, Field, UnionFields, UnionMode};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
@@ -188,6 +189,7 @@ mod tests {
                 Field::new("int", DataType::Int32, false),
             ],
         );
+        let config_options = ConfigOptions::default_singleton();
 
         let result = fun.invoke_with_args(ScalarFunctionArgs {
             args: vec![
@@ -200,6 +202,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Utf8,
+            config_options,
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -215,6 +218,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Utf8,
+            config_options,
         })?;
 
         assert_scalar(result, ScalarValue::Utf8(None));
@@ -230,6 +234,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Utf8,
+            config_options,
         })?;
 
         assert_scalar(result, ScalarValue::new_utf8("42"));

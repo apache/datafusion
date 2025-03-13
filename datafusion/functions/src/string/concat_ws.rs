@@ -407,6 +407,7 @@ mod tests {
     use arrow::datatypes::DataType::Utf8;
 
     use crate::string::concat_ws::ConcatWsFunc;
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
@@ -485,6 +486,7 @@ mod tests {
             args: vec![c0, c1, c2],
             number_rows: 3,
             return_type: &Utf8,
+            config_options: ConfigOptions::default_singleton(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;
@@ -515,6 +517,7 @@ mod tests {
             args: vec![c0, c1, c2],
             number_rows: 3,
             return_type: &Utf8,
+            config_options: ConfigOptions::default_singleton(),
         };
 
         let result = ConcatWsFunc::new().invoke_with_args(args)?;

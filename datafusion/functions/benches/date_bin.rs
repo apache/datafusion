@@ -21,12 +21,12 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, TimestampSecondArray};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::ScalarValue;
-use rand::rngs::ThreadRng;
-use rand::Rng;
-
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::datetime::date_bin;
+use rand::rngs::ThreadRng;
+use rand::Rng;
 
 fn timestamps(rng: &mut ThreadRng) -> TimestampSecondArray {
     let mut seconds = vec![];
@@ -48,6 +48,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let return_type = udf
             .return_type(&[interval.data_type(), timestamps.data_type()])
             .unwrap();
+        let config_options = ConfigOptions::default_singleton_arc();
 
         b.iter(|| {
             black_box(
@@ -55,6 +56,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: vec![interval.clone(), timestamps.clone()],
                     number_rows: batch_len,
                     return_type: &return_type,
+                    config_options,
                 })
                 .expect("date_bin should work on valid values"),
             )

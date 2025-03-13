@@ -23,6 +23,7 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
 use std::sync::Arc;
@@ -58,6 +59,8 @@ fn create_args<O: OffsetSizeTrait>(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let repeat = string::repeat();
+    let config_options = ConfigOptions::default_singleton_arc();
+
     for size in [1024, 4096] {
         // REPEAT 3 TIMES
         let repeat_times = 3;
@@ -79,6 +82,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
+                        config_options,
                     }))
                 })
             },
@@ -97,6 +101,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
+                        config_options,
                     }))
                 })
             },
@@ -115,6 +120,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
+                        config_options,
                     }))
                 })
             },
@@ -142,6 +148,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
+                        config_options,
                     }))
                 })
             },
@@ -160,6 +167,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
+                        config_options,
                     }))
                 })
             },
@@ -178,6 +186,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
+                        config_options,
                     }))
                 })
             },
@@ -205,6 +214,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         number_rows: repeat_times as usize,
                         return_type: &DataType::Utf8,
+                        config_options,
                     }))
                 })
             },

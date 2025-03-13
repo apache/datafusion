@@ -23,6 +23,7 @@
 
 extern crate wasm_bindgen;
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::lit;
@@ -64,8 +65,10 @@ pub fn basic_exprs() {
     // Simplify Expr (using datafusion-phys-expr and datafusion-optimizer)
     let schema = Arc::new(DFSchema::empty());
     let execution_props = ExecutionProps::new();
-    let simplifier =
-        ExprSimplifier::new(SimplifyContext::new(&execution_props).with_schema(schema));
+    let config_options = ConfigOptions::default_singleton_arc();
+    let simplifier = ExprSimplifier::new(
+        SimplifyContext::new(&execution_props, config_options).with_schema(schema),
+    );
     let simplified_expr = simplifier.simplify(expr).unwrap();
     log(&format!("Simplified Expr: {simplified_expr:?}"));
 }

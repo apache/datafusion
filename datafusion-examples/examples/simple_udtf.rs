@@ -23,6 +23,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::common::{plan_err, ScalarValue};
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
@@ -142,7 +143,8 @@ impl TableFunctionImpl for LocalCsvTableFunc {
             .map(|expr| {
                 // try to simplify the expression, so 1+2 becomes 3, for example
                 let execution_props = ExecutionProps::new();
-                let info = SimplifyContext::new(&execution_props);
+                let config_options = ConfigOptions::default_singleton_arc();
+                let info = SimplifyContext::new(&execution_props, config_options);
                 let expr = ExprSimplifier::new(info).simplify(expr.clone())?;
 
                 if let Expr::Literal(ScalarValue::Int64(Some(limit))) = expr {

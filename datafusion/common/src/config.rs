@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
 use std::str::FromStr;
+use std::sync::{Arc, LazyLock};
 
 use crate::error::_config_err;
 use crate::parsers::CompressionTypeVariant;
@@ -724,7 +725,7 @@ config_namespace! {
 }
 
 /// A key value pair, with a corresponding description
-#[derive(Debug)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct ConfigEntry {
     /// A unique string to identify this config value
     pub key: String,
@@ -777,7 +778,20 @@ impl ConfigField for ConfigOptions {
     }
 }
 
+static CONFIG_OPTIONS_SINGLETON: LazyLock<Arc<ConfigOptions>> =
+    LazyLock::new(|| Arc::new(ConfigOptions::default()));
+
 impl ConfigOptions {
+    /// this is a static singleton to be used for testing only where the default values are sufficient
+    pub fn default_singleton() -> &'static ConfigOptions {
+        CONFIG_OPTIONS_SINGLETON.as_ref()
+    }
+
+    /// this is a static singleton to be used for testing only where the default values are sufficient
+    pub fn default_singleton_arc() -> &'static Arc<ConfigOptions> {
+        &CONFIG_OPTIONS_SINGLETON
+    }
+
     /// Creates a new [`ConfigOptions`] with default values
     pub fn new() -> Self {
         Self::default()

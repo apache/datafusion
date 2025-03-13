@@ -33,13 +33,15 @@ use arrow::{
     datatypes::{DataType, Field, Fields, Schema},
     record_batch::RecordBatch,
 };
-use datafusion_expr::execution_props::ExecutionProps;
+
 use futures::stream::FuturesUnordered;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use log::{debug, trace};
 
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DataFusionError};
+use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
@@ -242,6 +244,7 @@ async fn prune_partitions(
     partitions: Vec<Partition>,
     filters: &[Expr],
     partition_cols: &[(String, DataType)],
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<Vec<Partition>> {
     if filters.is_empty() {
         return Ok(partitions);
@@ -293,7 +296,7 @@ async fn prune_partitions(
 
     // Applies `filter` to `batch` returning `None` on error
     let do_filter = |filter| -> Result<ArrayRef> {
-        let expr = create_physical_expr(filter, &df_schema, &props)?;
+        let expr = create_physical_expr(filter, &df_schema, &props, config_options)?;
         expr.evaluate(&batch)?.into_array(partitions.len())
     };
 
@@ -412,6 +415,7 @@ pub async fn pruned_partition_list<'a>(
     filters: &'a [Expr],
     file_extension: &'a str,
     partition_cols: &'a [(String, DataType)],
+    config_options: &Arc<ConfigOptions>,
 ) -> Result<BoxStream<'a, Result<PartitionedFile>>> {
     // if no partition col => simply list all the files
     if partition_cols.is_empty() {
@@ -436,8 +440,14 @@ pub async fn pruned_partition_list<'a>(
             .await?;
     debug!("Listed {} partitions", partitions.len());
 
-    let pruned =
-        prune_partitions(table_path, partitions, filters, partition_cols).await?;
+    let pruned = prune_partitions(
+        table_path,
+        partitions,
+        filters,
+        partition_cols,
+        config_options,
+    )
+    .await?;
 
     debug!("Pruning yielded {} partitions", pruned.len());
 
@@ -605,6 +615,7 @@ mod tests {
             &[filter],
             ".parquet",
             &[(String::from("mypartition"), DataType::Utf8)],
+            &Arc::clone(ConfigOptions::default_singleton_arc()),
         )
         .await
         .expect("partition pruning failed")
@@ -630,6 +641,7 @@ mod tests {
             &[filter],
             ".parquet",
             &[(String::from("mypartition"), DataType::Utf8)],
+            &Arc::clone(ConfigOptions::default_singleton_arc()),
         )
         .await
         .expect("partition pruning failed")
@@ -673,6 +685,7 @@ mod tests {
                 (String::from("part1"), DataType::Utf8),
                 (String::from("part2"), DataType::Utf8),
             ],
+            &Arc::clone(ConfigOptions::default_singleton_arc()),
         )
         .await
         .expect("partition pruning failed")
@@ -1016,10 +1029,17 @@ mod tests {
                 .unwrap();
         }
 
-        (Arc::new(memory), Arc::new(MockSession {}))
+        (
+            Arc::new(memory),
+            Arc::new(MockSession {
+                config: SessionConfig::new(),
+            }),
+        )
     }
 
-    struct MockSession {}
+    struct MockSession {
+        config: SessionConfig,
+    }
 
     #[async_trait]
     impl Session for MockSession {
@@ -1028,7 +1048,7 @@ mod tests {
         }
 
         fn config(&self) -> &SessionConfig {
-            unimplemented!()
+            &self.config
         }
 
         async fn create_physical_plan(

@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::common::config::ConfigOptions;
 use datafusion::common::{DFSchema, ScalarValue};
 use datafusion::execution::context::ExecutionProps;
 use datafusion::physical_expr::create_physical_expr;
@@ -188,7 +189,9 @@ impl PruningStatistics for MyCatalog {
 fn create_pruning_predicate(expr: Expr, schema: &SchemaRef) -> PruningPredicate {
     let df_schema = DFSchema::try_from(schema.as_ref().clone()).unwrap();
     let props = ExecutionProps::new();
-    let physical_expr = create_physical_expr(&expr, &df_schema, &props).unwrap();
+    let config_options = ConfigOptions::default_singleton_arc();
+    let physical_expr =
+        create_physical_expr(&expr, &df_schema, &props, config_options).unwrap();
     PruningPredicate::try_new(physical_expr, schema.clone()).unwrap()
 }
 

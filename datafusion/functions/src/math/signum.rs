@@ -140,6 +140,7 @@ mod test {
     use arrow::array::{ArrayRef, Float32Array, Float64Array};
     use arrow::datatypes::DataType;
     use datafusion_common::cast::{as_float32_array, as_float64_array};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use crate::math::signum::SignumFunc;
@@ -161,6 +162,7 @@ mod test {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
             number_rows: array.len(),
             return_type: &DataType::Float32,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)
@@ -205,6 +207,7 @@ mod test {
             args: vec![ColumnarValue::Array(Arc::clone(&array) as ArrayRef)],
             number_rows: array.len(),
             return_type: &DataType::Float64,
+            config_options: ConfigOptions::default_singleton(),
         };
         let result = SignumFunc::new()
             .invoke_with_args(args)

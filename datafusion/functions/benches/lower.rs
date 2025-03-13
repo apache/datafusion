@@ -23,6 +23,7 @@ use arrow::util::bench_util::{
     create_string_array_with_len, create_string_view_array_with_len,
 };
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use datafusion_common::config::ConfigOptions;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::string;
 use std::sync::Arc;
@@ -122,6 +123,8 @@ fn create_args5(
 
 fn criterion_benchmark(c: &mut Criterion) {
     let lower = string::lower();
+    let config_options = ConfigOptions::default_singleton();
+
     for size in [1024, 4096, 8192] {
         let args = create_args1(size, 32);
         c.bench_function(&format!("lower_all_values_are_ascii: {}", size), |b| {
@@ -131,6 +134,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     args: args_cloned,
                     number_rows: size,
                     return_type: &DataType::Utf8,
+                    config_options,
                 }))
             })
         });
@@ -145,6 +149,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         number_rows: size,
                         return_type: &DataType::Utf8,
+                        config_options,
                     }))
                 })
             },
@@ -160,6 +165,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                         args: args_cloned,
                         number_rows: size,
                         return_type: &DataType::Utf8,
+                        config_options,
                     }))
                 })
             },
@@ -185,6 +191,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 args: args_cloned,
                                 number_rows: size,
                                 return_type: &DataType::Utf8,
+                                config_options,
                             }))
                         }),
                     );
@@ -199,6 +206,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 args: args_cloned,
                                 number_rows: size,
                                 return_type: &DataType::Utf8,
+                                config_options,
                             }))
                         }),
                     );
@@ -213,6 +221,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                                 args: args_cloned,
                                 number_rows: size,
                                 return_type: &DataType::Utf8,
+                                config_options,
                             }))
                         }),
                     );

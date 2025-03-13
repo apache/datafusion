@@ -305,6 +305,7 @@ mod tests {
     };
     use arrow::datatypes::DataType;
     use chrono::{NaiveDateTime, Timelike};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::ScalarValue;
     use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
     use std::sync::Arc;
@@ -384,11 +385,13 @@ mod tests {
             ),
         ];
 
+        let config_options = ConfigOptions::default_singleton();
         for (value, format, expected) in scalar_data {
             let args = datafusion_expr::ScalarFunctionArgs {
                 args: vec![ColumnarValue::Scalar(value), ColumnarValue::Scalar(format)],
                 number_rows: 1,
                 return_type: &DataType::Utf8,
+                config_options,
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -472,6 +475,7 @@ mod tests {
                 ],
                 number_rows: batch_len,
                 return_type: &DataType::Utf8,
+                config_options,
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -603,6 +607,7 @@ mod tests {
                 ],
                 number_rows: batch_len,
                 return_type: &DataType::Utf8,
+                config_options,
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -625,6 +630,7 @@ mod tests {
                 ],
                 number_rows: batch_len,
                 return_type: &DataType::Utf8,
+                config_options,
             };
             let result = ToCharFunc::new()
                 .invoke_with_args(args)
@@ -647,6 +653,7 @@ mod tests {
             args: vec![ColumnarValue::Scalar(ScalarValue::Int32(Some(1)))],
             number_rows: 1,
             return_type: &DataType::Utf8,
+            config_options,
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(
@@ -662,6 +669,7 @@ mod tests {
             ],
             number_rows: 1,
             return_type: &DataType::Utf8,
+            config_options,
         };
         let result = ToCharFunc::new().invoke_with_args(args);
         assert_eq!(

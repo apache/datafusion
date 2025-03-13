@@ -20,6 +20,7 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::ops::Not;
+use std::sync::Arc;
 
 use arrow::{
     array::{new_null_array, AsArray},
@@ -29,6 +30,7 @@ use arrow::{
 
 use datafusion_common::{
     cast::{as_large_list_array, as_list_array},
+    config::ConfigOptions,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_common::{internal_err, DFSchema, DataFusionError, Result, ScalarValue};
@@ -71,6 +73,7 @@ use regex::Regex;
 /// use arrow::datatypes::{Schema, Field, DataType};
 /// use datafusion_expr::{col, lit};
 /// use datafusion_common::{DataFusionError, ToDFSchema};
+/// use datafusion_common::config::ConfigOptions;
 /// use datafusion_expr::execution_props::ExecutionProps;
 /// use datafusion_expr::simplify::SimplifyContext;
 /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
@@ -83,7 +86,8 @@ use regex::Regex;
 ///
 /// // Create the simplifier
 /// let props = ExecutionProps::new();
-/// let context = SimplifyContext::new(&props)
+/// let config_options = ConfigOptions::default_singleton_arc();
+/// let context = SimplifyContext::new(&props, config_options)
 ///    .with_schema(schema);
 /// let simplifier = ExprSimplifier::new(context);
 ///
@@ -142,7 +146,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// `b > 2`
     ///
     /// ```
+    /// use std::sync::Arc;
     /// use arrow::datatypes::DataType;
+    /// use datafusion_common::config::ConfigOptions;
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_common::Result;
     /// use datafusion_expr::execution_props::ExecutionProps;
@@ -150,14 +156,14 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::simplify::SimplifyInfo;
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
     /// use datafusion_common::DFSchema;
-    /// use std::sync::Arc;
     ///
     /// /// Simple implementation that provides `Simplifier` the information it needs
     /// /// See SimplifyContext for a structure that does this.
     /// #[derive(Default)]
-    /// struct Info {
+    /// struct Info<'a> {
     ///   execution_props: ExecutionProps,
-    /// };
+    ///   config_options: &'a Arc<ConfigOptions>,
+    /// }
     ///
     /// impl SimplifyInfo for Info {
     ///   fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
@@ -168,6 +174,9 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///   }
     ///   fn execution_props(&self) -> &ExecutionProps {
     ///     &self.execution_props
+    ///   }
+    ///   fn config_options(&self) -> &Arc<ConfigOptions> {
+    ///     self.config_options
     ///   }
     ///   fn get_data_type(&self, expr: &Expr) -> Result<DataType> {
     ///     Ok(DataType::Int32)
@@ -200,7 +209,10 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     pub fn simplify_with_cycle_count(&self, mut expr: Expr) -> Result<(Expr, u32)> {
         let mut simplifier = Simplifier::new(&self.info);
-        let mut const_evaluator = ConstEvaluator::try_new(self.info.execution_props())?;
+        let mut const_evaluator = ConstEvaluator::try_new(
+            self.info.execution_props(),
+            self.info.config_options(),
+        )?;
         let mut shorten_in_list_simplifier = ShortenInListSimplifier::new();
         let mut guarantee_rewriter = GuaranteeRewriter::new(&self.guarantees);
 
@@ -255,6 +267,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    /// use datafusion_common::config::ConfigOptions;
     /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::simplify::SimplifyContext;
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
@@ -268,7 +281,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// // Create the simplifier
     /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props)
+    /// let config_options = ConfigOptions::default_singleton_arc();
+    /// let context = SimplifyContext::new(&props, config_options)
     ///    .with_schema(schema);
     ///
     /// // Expression: (x >= 3) AND (y + 2 < 10) AND (z > 5)
@@ -314,6 +328,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_expr::interval_arithmetic::{Interval, NullableInterval};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    /// use datafusion_common::config::ConfigOptions;
     /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::simplify::SimplifyContext;
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
@@ -327,7 +342,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// // Create the simplifier
     /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props)
+    /// let config_options = ConfigOptions::default_singleton_arc();
+    /// let context = SimplifyContext::new(&props, config_options)
     ///    .with_schema(schema);
     /// let simplifier = ExprSimplifier::new(context);
     ///
@@ -373,6 +389,7 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// use arrow::datatypes::{DataType, Field, Schema};
     /// use datafusion_expr::{col, lit, Expr};
     /// use datafusion_common::{Result, ScalarValue, ToDFSchema};
+    /// use datafusion_common::config::ConfigOptions;
     /// use datafusion_expr::execution_props::ExecutionProps;
     /// use datafusion_expr::simplify::SimplifyContext;
     /// use datafusion_optimizer::simplify_expressions::ExprSimplifier;
@@ -384,7 +401,8 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// // Create the simplifier
     /// let props = ExecutionProps::new();
-    /// let context = SimplifyContext::new(&props)
+    /// let config_options = ConfigOptions::default_singleton_arc();
+    /// let context = SimplifyContext::new(&props, config_options)
     ///    .with_schema(schema);
     /// let simplifier = ExprSimplifier::new(context);
     ///
@@ -481,6 +499,7 @@ struct ConstEvaluator<'a> {
     can_evaluate: Vec<bool>,
 
     execution_props: &'a ExecutionProps,
+    config_options: &'a Arc<ConfigOptions>,
     input_schema: DFSchema,
     input_batch: RecordBatch,
 }
@@ -553,7 +572,10 @@ impl<'a> ConstEvaluator<'a> {
     /// Create a new `ConstantEvaluator`. Session constants (such as
     /// the time for `now()` are taken from the passed
     /// `execution_props`.
-    pub fn try_new(execution_props: &'a ExecutionProps) -> Result<Self> {
+    pub fn try_new(
+        execution_props: &'a ExecutionProps,
+        config_options: &'a Arc<ConfigOptions>,
+    ) -> Result<Self> {
         // The dummy column name is unused and doesn't matter as only
         // expressions without column references can be evaluated
         static DUMMY_COL_NAME: &str = ".";
@@ -561,11 +583,12 @@ impl<'a> ConstEvaluator<'a> {
         let input_schema = DFSchema::try_from(schema.clone())?;
         // Need a single "input" row to produce a single output row
         let col = new_null_array(&DataType::Null, 1);
-        let input_batch = RecordBatch::try_new(std::sync::Arc::new(schema), vec![col])?;
+        let input_batch = RecordBatch::try_new(Arc::new(schema), vec![col])?;
 
         Ok(Self {
             can_evaluate: vec![],
             execution_props,
+            config_options,
             input_schema,
             input_batch,
         })
@@ -636,11 +659,15 @@ impl<'a> ConstEvaluator<'a> {
             return ConstSimplifyResult::NotSimplified(s);
         }
 
-        let phys_expr =
-            match create_physical_expr(&expr, &self.input_schema, self.execution_props) {
-                Ok(e) => e,
-                Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
-            };
+        let phys_expr = match create_physical_expr(
+            &expr,
+            &self.input_schema,
+            self.execution_props,
+            self.config_options,
+        ) {
+            Ok(e) => e,
+            Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
+        };
         let col_val = match phys_expr.evaluate(&self.input_batch) {
             Ok(v) => v,
             Err(err) => return ConstSimplifyResult::SimplifyRuntimeError(err, expr),
@@ -2026,8 +2053,10 @@ mod tests {
     #[test]
     fn api_basic() {
         let props = ExecutionProps::new();
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(test_schema()));
+        let config_options = ConfigOptions::default_singleton_arc();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&props, config_options).with_schema(test_schema()),
+        );
 
         let expr = lit(1) + lit(2);
         let expected = lit(3);
@@ -2038,8 +2067,9 @@ mod tests {
     fn basic_coercion() {
         let schema = test_schema();
         let props = ExecutionProps::new();
+        let config_options = ConfigOptions::default_singleton_arc();
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&props).with_schema(Arc::clone(&schema)),
+            SimplifyContext::new(&props, config_options).with_schema(Arc::clone(&schema)),
         );
 
         // Note expr type is int32 (not int64)
@@ -2065,8 +2095,10 @@ mod tests {
     #[test]
     fn simplify_and_constant_prop() {
         let props = ExecutionProps::new();
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(test_schema()));
+        let config_options = ConfigOptions::default_singleton_arc();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&props, config_options).with_schema(test_schema()),
+        );
 
         // should be able to simplify to false
         // (i * (1 - 2)) > 0
@@ -2078,8 +2110,10 @@ mod tests {
     #[test]
     fn simplify_and_constant_prop_with_case() {
         let props = ExecutionProps::new();
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(test_schema()));
+        let config_options = ConfigOptions::default_singleton_arc();
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&props, config_options).with_schema(test_schema()),
+        );
 
         //   CASE
         //     WHEN i>5 AND false THEN i > 5
@@ -3179,8 +3213,9 @@ mod tests {
     fn try_simplify(expr: Expr) -> Result<Expr> {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
+        let config_options = ConfigOptions::default_singleton_arc();
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&execution_props).with_schema(schema),
+            SimplifyContext::new(&execution_props, config_options).with_schema(schema),
         );
         simplifier.simplify(expr)
     }
@@ -3192,8 +3227,9 @@ mod tests {
     fn try_simplify_with_cycle_count(expr: Expr) -> Result<(Expr, u32)> {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
+        let config_options = ConfigOptions::default_singleton_arc();
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&execution_props).with_schema(schema),
+            SimplifyContext::new(&execution_props, config_options).with_schema(schema),
         );
         simplifier.simplify_with_cycle_count(expr)
     }
@@ -3208,8 +3244,9 @@ mod tests {
     ) -> Expr {
         let schema = expr_test_schema();
         let execution_props = ExecutionProps::new();
+        let config_options = ConfigOptions::default_singleton_arc();
         let simplifier = ExprSimplifier::new(
-            SimplifyContext::new(&execution_props).with_schema(schema),
+            SimplifyContext::new(&execution_props, config_options).with_schema(schema),
         )
         .with_guarantees(guarantees);
         simplifier.simplify(expr).unwrap()
@@ -4089,9 +4126,11 @@ mod tests {
     #[test]
     fn simplify_common_factor_conjunction_in_disjunction() {
         let props = ExecutionProps::new();
+        let config_options = ConfigOptions::default_singleton_arc();
         let schema = boolean_test_schema();
-        let simplifier =
-            ExprSimplifier::new(SimplifyContext::new(&props).with_schema(schema));
+        let simplifier = ExprSimplifier::new(
+            SimplifyContext::new(&props, config_options).with_schema(schema),
+        );
 
         let a = || col("A");
         let b = || col("B");

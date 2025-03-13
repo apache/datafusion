@@ -18,6 +18,7 @@
 //! [`Optimizer`] and [`OptimizerRule`]
 
 use std::fmt::Debug;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -106,7 +107,7 @@ pub trait OptimizerConfig {
     /// Return alias generator used to generate unique aliases for subqueries
     fn alias_generator(&self) -> &Arc<AliasGenerator>;
 
-    fn options(&self) -> &ConfigOptions;
+    fn options(&self) -> &Arc<ConfigOptions>;
 
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
         None
@@ -124,7 +125,8 @@ pub struct OptimizerContext {
     /// Alias generator used to generate unique aliases for subqueries
     alias_generator: Arc<AliasGenerator>,
 
-    options: ConfigOptions,
+    /// configuration options
+    config_options: Arc<ConfigOptions>,
 }
 
 impl OptimizerContext {
@@ -136,13 +138,15 @@ impl OptimizerContext {
         Self {
             query_execution_start_time: Utc::now(),
             alias_generator: Arc::new(AliasGenerator::new()),
-            options,
+            config_options: Arc::new(options),
         }
     }
 
     /// Specify whether to enable the filter_null_keys rule
     pub fn filter_null_keys(mut self, filter_null_keys: bool) -> Self {
-        self.options.optimizer.filter_null_join_keys = filter_null_keys;
+        let mut config_options = self.config_options.deref().clone();
+        config_options.optimizer.filter_null_join_keys = filter_null_keys;
+        self.config_options = Arc::new(config_options);
         self
     }
 
@@ -159,13 +163,17 @@ impl OptimizerContext {
     /// Specify whether the optimizer should skip rules that produce
     /// errors, or fail the query
     pub fn with_skip_failing_rules(mut self, b: bool) -> Self {
-        self.options.optimizer.skip_failed_rules = b;
+        let mut config_options = self.config_options.deref().clone();
+        config_options.optimizer.skip_failed_rules = b;
+        self.config_options = Arc::new(config_options);
         self
     }
 
     /// Specify how many times to attempt to optimize the plan
     pub fn with_max_passes(mut self, v: u8) -> Self {
-        self.options.optimizer.max_passes = v as usize;
+        let mut config_options = self.config_options.deref().clone();
+        config_options.optimizer.max_passes = v as usize;
+        self.config_options = Arc::new(config_options);
         self
     }
 }
@@ -186,8 +194,8 @@ impl OptimizerConfig for OptimizerContext {
         &self.alias_generator
     }
 
-    fn options(&self) -> &ConfigOptions {
-        &self.options
+    fn options(&self) -> &Arc<ConfigOptions> {
+        &self.config_options
     }
 }
 

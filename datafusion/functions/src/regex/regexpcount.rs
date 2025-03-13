@@ -619,6 +619,7 @@ fn count_matches(
 mod tests {
     use super::*;
     use arrow::array::{GenericStringArray, StringViewArray};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ScalarFunctionArgs;
 
     #[test]
@@ -651,6 +652,7 @@ mod tests {
         let values = ["", "aabca", "abcabc", "abcAbcab", "abcabcabc"];
         let regex = "abc";
         let expected: Vec<i64> = vec![0, 1, 2, 1, 3];
+        let config_options = ConfigOptions::default_singleton();
 
         values.iter().enumerate().for_each(|(pos, &v)| {
             // utf8
@@ -661,6 +663,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
                 number_rows: 2,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -676,6 +679,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
                 number_rows: 2,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -691,6 +695,7 @@ mod tests {
                 args: vec![ColumnarValue::Scalar(v_sv), ColumnarValue::Scalar(regex_sv)],
                 number_rows: 2,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -706,6 +711,7 @@ mod tests {
         let regex = "abc";
         let start = 2;
         let expected: Vec<i64> = vec![0, 1, 1, 0, 2];
+        let config_options = ConfigOptions::default_singleton();
 
         values.iter().enumerate().for_each(|(pos, &v)| {
             // utf8
@@ -721,6 +727,7 @@ mod tests {
                 ],
                 number_rows: 3,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -740,6 +747,7 @@ mod tests {
                 ],
                 number_rows: 3,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -759,6 +767,7 @@ mod tests {
                 ],
                 number_rows: 3,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -775,6 +784,7 @@ mod tests {
         let start = 1;
         let flags = "i";
         let expected: Vec<i64> = vec![0, 1, 2, 2, 3];
+        let config_options = ConfigOptions::default_singleton();
 
         values.iter().enumerate().for_each(|(pos, &v)| {
             // utf8
@@ -792,6 +802,7 @@ mod tests {
                 ],
                 number_rows: 4,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -813,6 +824,7 @@ mod tests {
                 ],
                 number_rows: 4,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -834,6 +846,7 @@ mod tests {
                 ],
                 number_rows: 4,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -899,6 +912,7 @@ mod tests {
         let start = 5;
         let flags = ["", "i", "", "", "i"];
         let expected: Vec<i64> = vec![0, 0, 0, 1, 1];
+        let config_options = ConfigOptions::default_singleton();
 
         values.iter().enumerate().for_each(|(pos, &v)| {
             // utf8
@@ -916,6 +930,7 @@ mod tests {
                 ],
                 number_rows: 4,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -937,6 +952,7 @@ mod tests {
                 ],
                 number_rows: 4,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
@@ -958,6 +974,7 @@ mod tests {
                 ],
                 number_rows: 4,
                 return_type: &Int64,
+                config_options,
             });
             match re {
                 Ok(ColumnarValue::Scalar(ScalarValue::Int64(v))) => {
