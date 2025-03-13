@@ -55,20 +55,6 @@ for i in {1..5}; do
     ./bench.sh run $ARG1
     python3 results/lineprotocol.py $RESULTS_DIR/$ARG1.json >> $lp_file
 done
-
-echo "[[inputs.file]]
-  files = [ \"$lp_file\" ]
-  data_format = \"influx\"
-  name_override = \"datafusion_benchmarks\"
-
-[[outputs.influxdb_v2]]
-    alias = \"monitor-tools\"
-    urls = [\"https://us-east-1-2.aws.cloud2.influxdata.com\"]
-    token = \"$INFLUX_TOKEN\"
-    organization = \"5d59ccc5163fc318\"
-    bucket = \"performance_metrics\"
-" > telegraf.conf
-telegraf --config telegraf.conf --once
 }
 
 main
