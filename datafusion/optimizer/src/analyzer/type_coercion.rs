@@ -930,7 +930,7 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 /// This method presumes that the wildcard expansion is unneeded, or has already
 /// been applied.
 pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
-    let base_schema = inputs[0].schema().as_ref().clone().strip_qualifiers();
+    let base_schema = inputs[0].schema();
     let mut union_datatypes = base_schema
         .fields()
         .iter()
@@ -989,15 +989,15 @@ pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
         }
     }
     let union_qualified_fields = izip!(
-        base_schema.iter(),
+        base_schema.fields(),
         union_datatypes.into_iter(),
         union_nullabilities,
         union_field_meta.into_iter()
     )
-    .map(|((qualifier, field), datatype, nullable, metadata)| {
+    .map(|(field, datatype, nullable, metadata)| {
         let mut field = Field::new(field.name().clone(), datatype, nullable);
         field.set_metadata(metadata);
-        (qualifier.cloned(), field.into())
+        (None, field.into())
     })
     .collect::<Vec<_>>();
 
