@@ -24,7 +24,7 @@ use std::fmt::Formatter;
 
 use arrow::datatypes::SchemaRef;
 
-use datafusion_common::display::GraphvizBuilder;
+use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
@@ -310,6 +310,21 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: self.show_metrics,
             show_statistics: self.show_statistics,
             show_schema: self.show_schema,
+        }
+    }
+
+    #[deprecated(since = "47.0.0", note = "indent() or tree_render() instead")]
+    pub fn to_stringified(
+        &self,
+        verbose: bool,
+        plan_type: PlanType,
+        explain_format: DisplayFormatType,
+    ) -> StringifiedPlan {
+        match (&explain_format, &plan_type) {
+            (DisplayFormatType::TreeRender, PlanType::FinalPhysicalPlan) => {
+                StringifiedPlan::new(plan_type, self.tree_render().to_string())
+            }
+            _ => StringifiedPlan::new(plan_type, self.indent(verbose).to_string()),
         }
     }
 }
