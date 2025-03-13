@@ -261,14 +261,16 @@ pub trait ExecutionPlan: Debug + DisplayAs + Send + Sync {
     /// Thus, [`spawn`] is disallowed, and instead use [`SpawnedTask`].
     ///
     /// To enable timely cancellation, the [`Stream`] that is returned must not
-    /// block the CPU and must yield back to the tokio runtime regularly.
-    /// [`ExecutionPlan`] implementations should follow [the guideline of not
-    /// spending a long time without reaching an `await`/yield point][async-guideline].
-    /// This can be achieved by manually returning [`Poll::Pending`] in regular
-    /// intervals, or the use of [`tokio::task::yield_now()`] (as appropriate).
-    /// Determination for "regularly" may be made using a timer (being careful
-    /// with the  overhead-heavy syscall needed to take the time) or by
-    /// counting rows or batches.
+    /// block the CPU indefinitely and must yield back to the tokio runtime regularly.
+    /// In a typical [`ExecutionPlan`], this automatically happens unless there are
+    /// special circumstances; e.g. when the computational complexity of processing a
+    /// batch is superlinear. See this [general guideline][async-guideline] for more context
+    /// on this point, which explains why one should avoid spending a long time without
+    /// reaching an `await`/yield point in asynchronous runtimes.
+    /// This can be achieved by manually returning [`Poll::Pending`] and setting up wakers appropriately, or the use of [`tokio::task::yield_now()`] when appropriate.
+    /// In special cases that warrant manual yielding, determination for "regularly" may be
+    /// made using a timer (being careful with the  overhead-heavy system call needed to
+    /// take the time), or by counting rows or batches.
     ///
     /// The cancellation benchmark tracks some cases of how quickly queries can
     /// be cancelled.
