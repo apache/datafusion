@@ -1051,7 +1051,6 @@ mod test {
     use arrow::datatypes::DataType::Utf8;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 
-    use crate::analyzer::expand_wildcard_rule::ExpandWildcardRule;
     use crate::analyzer::type_coercion::{
         coerce_case_expression, TypeCoercion, TypeCoercionRewriter,
     };
@@ -1064,9 +1063,9 @@ mod test {
     use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
-        cast, col, create_udaf, is_true, lit, wildcard, AccumulatorFactoryFunction,
-        AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter,
-        LogicalPlan, Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+        cast, col, create_udaf, is_true, lit, AccumulatorFactoryFunction, AggregateUDF,
+        BinaryExpr, Case, ColumnarValue, Expr, ExprSchemable, Filter, LogicalPlan,
+        Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
         SimpleAggregateUDF, Subquery, Union, Volatility,
     };
     use datafusion_functions_aggregate::average::AvgAccumulator;
@@ -1129,19 +1128,12 @@ mod test {
         let analyzed_union = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
             .execute_and_check(union, &ConfigOptions::default(), |_, _| {})?;
         let top_level_plan = LogicalPlan::Projection(Projection::try_new(
-            vec![wildcard()],
+            vec![col("a")],
             Arc::new(analyzed_union),
         )?);
-        let expanded_plan =
-            Analyzer::with_rules(vec![Arc::new(ExpandWildcardRule::new())])
-                .execute_and_check(
-                    top_level_plan,
-                    &ConfigOptions::default(),
-                    |_, _| {},
-                )?;
 
         let expected = "Projection: a\n  Union\n    Projection: CAST(datafusion.test.foo.a AS Int64) AS a\n      EmptyRelation\n    EmptyRelation";
-        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), expanded_plan, expected)
+        assert_analyzed_plan_eq(Arc::new(TypeCoercion::new()), top_level_plan, expected)
     }
 
     fn coerce_on_output_if_viewtype(plan: LogicalPlan, expected: &str) -> Result<()> {
