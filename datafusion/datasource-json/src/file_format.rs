@@ -325,8 +325,10 @@ impl DisplayAs for JsonSink {
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                if !self.config.file_groups.is_empty() {
+                    FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
+                }
+                Ok(())
             }
         }
     }

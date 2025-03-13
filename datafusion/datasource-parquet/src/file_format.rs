@@ -466,7 +466,6 @@ impl FileFormat for ParquetFormat {
 }
 
 /// Coerces the file schema if the table schema uses a view type.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn coerce_file_schema_to_view_type(
     table_schema: &Schema,
     file_schema: &Schema,
@@ -516,7 +515,6 @@ pub fn coerce_file_schema_to_view_type(
 /// If the table schema uses a string type, coerce the file schema to use a string type.
 ///
 /// See [ParquetFormat::binary_as_string] for details
-#[cfg(not(target_arch = "wasm32"))]
 pub fn coerce_file_schema_to_string_type(
     table_schema: &Schema,
     file_schema: &Schema,
@@ -800,21 +798,6 @@ fn get_col_stats(
             }
         })
         .collect()
-}
-
-/// Deprecated
-/// Use [`statistics_from_parquet_meta_calc`] instead.
-/// This method was deprecated because it didn't need to be async so a new method was created
-/// that exposes a synchronous API.
-#[deprecated(
-    since = "40.0.0",
-    note = "please use `statistics_from_parquet_meta_calc` instead"
-)]
-pub async fn statistics_from_parquet_meta(
-    metadata: &ParquetMetaData,
-    table_schema: SchemaRef,
-) -> Result<Statistics> {
-    statistics_from_parquet_meta_calc(metadata, table_schema)
 }
 
 fn summarize_min_max_null_counts(

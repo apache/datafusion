@@ -52,6 +52,7 @@ pub trait DataSource: Send + Sync + Debug {
         context: Arc<TaskContext>,
     ) -> datafusion_common::Result<SendableRecordBatchStream>;
     fn as_any(&self) -> &dyn Any;
+    /// Format this source for display in explain plans
     fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> fmt::Result;
 
     /// Return a copy of this DataSource with a new partitioning scheme
@@ -103,7 +104,7 @@ impl DisplayAs for DataSourceExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "DataSourceExec: ")?;
             }
-            DisplayFormatType::TreeRender => write!(f, "")?,
+            DisplayFormatType::TreeRender => {}
         }
         self.data_source.fmt_as(t, f)
     }
