@@ -88,7 +88,6 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::unnest::ListUnnest;
-use datafusion_physical_plan::DisplayFormatType;
 
 use crate::schema_equivalence::schema_satisfied_by;
 use async_trait::async_trait;
@@ -1755,13 +1754,12 @@ impl DefaultPhysicalPlanner {
                     |_plan, _optimizer| {},
                 )?;
 
-                stringified_plans.push(
-                    displayable(optimized_plan.as_ref()).to_stringified(
-                        e.verbose,
-                        FinalPhysicalPlan,
-                        DisplayFormatType::TreeRender,
-                    ),
-                );
+                stringified_plans.push(StringifiedPlan::new(
+                    FinalPhysicalPlan,
+                    displayable(optimized_plan.as_ref())
+                        .tree_render()
+                        .to_string(),
+                ));
             }
             ExplainFormat::PostgresJSON => {
                 stringified_plans.push(StringifiedPlan::new(
@@ -1794,7 +1792,6 @@ impl DefaultPhysicalPlanner {
             }
         }
 
-        let display_format = DisplayFormatType::Default;
         if !config.logical_plan_only && e.logical_optimization_succeeded {
             match self
                 .create_initial_plan(e.plan.as_ref(), session_state)
@@ -1802,41 +1799,35 @@ impl DefaultPhysicalPlanner {
             {
                 Ok(input) => {
                     // Include statistics / schema if enabled
-                    stringified_plans.push(
+                    stringified_plans.push(StringifiedPlan::new(
+                        InitialPhysicalPlan,
                         displayable(input.as_ref())
                             .set_show_statistics(config.show_statistics)
                             .set_show_schema(config.show_schema)
-                            .to_stringified(
-                                e.verbose,
-                                InitialPhysicalPlan,
-                                display_format,
-                            ),
-                    );
+                            .indent(e.verbose)
+                            .to_string(),
+                    ));
 
                     // Show statistics + schema in verbose output even if not
                     // explicitly requested
                     if e.verbose {
                         if !config.show_statistics {
-                            stringified_plans.push(
+                            stringified_plans.push(StringifiedPlan::new(
+                                InitialPhysicalPlanWithStats,
                                 displayable(input.as_ref())
                                     .set_show_statistics(true)
-                                    .to_stringified(
-                                        e.verbose,
-                                        InitialPhysicalPlanWithStats,
-                                        display_format,
-                                    ),
-                            );
+                                    .indent(e.verbose)
+                                    .to_string(),
+                            ));
                         }
                         if !config.show_schema {
-                            stringified_plans.push(
+                            stringified_plans.push(StringifiedPlan::new(
+                                InitialPhysicalPlanWithSchema,
                                 displayable(input.as_ref())
                                     .set_show_schema(true)
-                                    .to_stringified(
-                                        e.verbose,
-                                        InitialPhysicalPlanWithSchema,
-                                        display_format,
-                                    ),
-                            );
+                                    .indent(e.verbose)
+                                    .to_string(),
+                            ));
                         }
                     }
 
@@ -1846,52 +1837,50 @@ impl DefaultPhysicalPlanner {
                         |plan, optimizer| {
                             let optimizer_name = optimizer.name().to_string();
                             let plan_type = OptimizedPhysicalPlan { optimizer_name };
-                            stringified_plans.push(
+                            stringified_plans.push(StringifiedPlan::new(
+                                plan_type,
                                 displayable(plan)
                                     .set_show_statistics(config.show_statistics)
                                     .set_show_schema(config.show_schema)
-                                    .to_stringified(e.verbose, plan_type, display_format),
-                            );
+                                    .indent(e.verbose)
+                                    .to_string(),
+                            ));
                         },
                     );
                     match optimized_plan {
                         Ok(input) => {
                             // This plan will includes statistics if show_statistics is on
-                            stringified_plans.push(
+                            stringified_plans.push(StringifiedPlan::new(
+                                FinalPhysicalPlan,
                                 displayable(input.as_ref())
                                     .set_show_statistics(config.show_statistics)
                                     .set_show_schema(config.show_schema)
-                                    .to_stringified(
-                                        e.verbose,
-                                        FinalPhysicalPlan,
-                                        display_format,
-                                    ),
-                            );
+                                    .indent(e.verbose)
+                                    .to_string(),
+                            ));
 
                             // Show statistics + schema in verbose output even if not
                             // explicitly requested
                             if e.verbose {
                                 if !config.show_statistics {
-                                    stringified_plans.push(
+                                    stringified_plans.push(StringifiedPlan::new(
+                                        FinalPhysicalPlanWithStats,
                                         displayable(input.as_ref())
                                             .set_show_statistics(true)
-                                            .to_stringified(
-                                                e.verbose,
-                                                FinalPhysicalPlanWithStats,
-                                                display_format,
-                                            ),
-                                    );
+                                            .indent(e.verbose)
+                                            .to_string(),
+                                    ));
                                 }
                                 if !config.show_schema {
-                                    stringified_plans.push(
+                                    stringified_plans.push(StringifiedPlan::new(
+                                        FinalPhysicalPlanWithSchema,
+                                        // This will include schema if show_schema is on
+                                        // and will be set to true if verbose is on
                                         displayable(input.as_ref())
                                             .set_show_schema(true)
-                                            .to_stringified(
-                                                e.verbose,
-                                                FinalPhysicalPlanWithSchema,
-                                                display_format,
-                                            ),
-                                    );
+                                            .indent(e.verbose)
+                                            .to_string(),
+                                    ));
                                 }
                             }
                         }
