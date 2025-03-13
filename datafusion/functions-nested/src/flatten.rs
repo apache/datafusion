@@ -29,8 +29,7 @@ use datafusion_common::cast::{
 };
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ArrayFunctionSignature, ColumnarValue, Documentation, ScalarUDFImpl, Signature,
-    TypeSignature, Volatility,
+    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -76,12 +75,7 @@ impl Default for Flatten {
 impl Flatten {
     pub fn new() -> Self {
         Self {
-            signature: Signature {
-                type_signature: TypeSignature::ArraySignature(
-                    ArrayFunctionSignature::RecursiveArray,
-                ),
-                volatility: Volatility::Immutable,
-            },
+            signature: Signature::array(Volatility::Immutable),
             aliases: vec![],
         }
     }
