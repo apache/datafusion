@@ -1044,7 +1044,7 @@ mod tests {
             "Gustavo Cerati",
         ]);
         let initials = StringArray::from(vec!["AC", "CG", "FP", "GC"]);
-        let file_columns = vec![
+        let file_columns = [
             Arc::new(first_names) as ArrayRef,
             Arc::new(initials),
             Arc::new(last_names),
