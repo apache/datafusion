@@ -27,7 +27,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 #[user_doc(
-    doc_section(label = "String Functions"),
+    doc_section(label = "Spark String Functions"),
     description = "Returns the ASCII code point of the first character of string.",
     syntax_example = "ascii(str)",
     sql_example = r#"```sql

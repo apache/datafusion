@@ -26,7 +26,7 @@ make_udf_function!(expm1::SparkExpm1, spark_expm1);
 pub mod expr_fn {
     use datafusion_functions::export_functions;
 
-    export_functions!((spark_expm1, "Returns exp(expr) - 1", arg1));
+    export_functions!((spark_expm1, "Returns exp(expr) - 1 as a Float64.", arg1));
 }
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {

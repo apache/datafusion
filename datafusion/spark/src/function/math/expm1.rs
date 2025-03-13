@@ -15,19 +15,42 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::function::error_utils::{
+    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
+};
 use arrow::array::{ArrayRef, AsArray};
 use arrow::datatypes::{DataType, Float64Type};
 use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_macros::user_doc;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::function::error_utils::{
-    invalid_arg_count_exec_err, unsupported_data_type_exec_err,
-};
-
+#[user_doc(
+    doc_section(label = "Spark Math Functions"),
+    description = "Returns exp(expr) - 1 as a Float64.",
+    syntax_example = "expm1(expr)",
+    sql_example = r#"```sql
+> select expm1(0);
++--------------------+
+| expm1(0)           |
++--------------------+
+| 0.0                |
++--------------------+
+> select expm1(1);
++----------------+
+| expm1(1)       |
++----------------+
+| 50             |
++----------------+
+```"#,
+    argument(
+        name = "expr",
+        description = "An expression that evaluates to a numeric."
+    )
+)]
 #[derive(Debug)]
 pub struct SparkExpm1 {
     signature: Signature,
