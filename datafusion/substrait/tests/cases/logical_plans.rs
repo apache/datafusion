@@ -24,6 +24,7 @@ mod tests {
     use datafusion::dataframe::DataFrame;
     use datafusion::prelude::SessionContext;
     use datafusion_substrait::logical_plan::consumer::from_substrait_plan;
+    use serde_json::error::Category::Data;
 
     #[tokio::test]
     async fn scalar_function_compound_signature() -> Result<()> {
@@ -71,6 +72,30 @@ mod tests {
             \n  WindowAggr: windowExpr=[[sum(DATA.D) PARTITION BY [DATA.PART] ORDER BY [DATA.ORD ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND UNBOUNDED FOLLOWING]]\
             \n    TableScan: DATA"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn double_window_function() -> Result<()> {
+        // Confirms a WindowExpr can be repeated in the same project
+
+        // File generated with substrait-java's Isthmus:
+        // ./isthmus-cli/build/graal/isthmus --create "create table data (a int)" "select ROW_NUMBER() OVER (), ROW_NUMBER() OVER () AS aliased from data";
+        let proto_plan =
+            read_json("tests/testdata/test_plans/double_window.substrait.json");
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_eq!(
+            format!("{}", plan),
+            "Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS EXPR$0, row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW__temp__0 AS ALIASED\
+            \n  WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]\
+            \n    TableScan: DATA"
+        );
+
+        // Execute the plan to ensure physical plan validity
+        DataFrame::new(ctx.state(), plan).show().await?;
+
         Ok(())
     }
 
