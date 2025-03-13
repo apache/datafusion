@@ -1725,6 +1725,22 @@ physical_plan
 09)│          rows: 1          │
 10)└───────────────────────────┘
 
+query TT
+explain COPY (VALUES (1, 'foo', 1, '2023-01-01'), (2, 'bar', 2, '2023-01-02'), (3, 'baz', 3, '2023-01-03'))
+TO 'test_files/scratch/explain_tree/2.csv';
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│        DataSinkExec       │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│       DataSourceExec      │
+06)│    --------------------   │
+07)│        bytes: 2672        │
+08)│       format: memory      │
+09)│          rows: 1          │
+10)└───────────────────────────┘
+
 # Test explain tree rendering for CoalesceBatchesExec with limit
 statement ok
 CREATE TABLE IF NOT EXISTS t1 (a INT) AS VALUES(1),(2),(3),(4),(5),(6),(7),(8),(9),(10);
