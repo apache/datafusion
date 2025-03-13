@@ -29,9 +29,10 @@ use datafusion_common::instant::Instant;
 use futures::stream::StreamExt;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
-use rand::distributions::uniform::SampleUniform;
-use rand::distributions::Alphanumeric;
+use rand::distr::uniform::SampleUniform;
+use rand::distr::Alphanumeric;
 use rand::prelude::*;
+use rand::rng;
 use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
@@ -97,13 +98,13 @@ fn generate_string_dictionary(
     len: usize,
     valid_percent: f64,
 ) -> ArrayRef {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let strings: Vec<_> = (0..cardinality).map(|x| format!("{prefix}#{x}")).collect();
 
     Arc::new(DictionaryArray::<Int32Type>::from_iter((0..len).map(
         |_| {
-            rng.gen_bool(valid_percent)
-                .then(|| strings[rng.gen_range(0..cardinality)].as_str())
+            rng.random_bool(valid_percent)
+                .then(|| strings[rng.random_range(0..cardinality)].as_str())
         },
     )))
 }
@@ -113,10 +114,10 @@ fn generate_strings(
     len: usize,
     valid_percent: f64,
 ) -> ArrayRef {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     Arc::new(StringArray::from_iter((0..len).map(|_| {
-        rng.gen_bool(valid_percent).then(|| {
-            let string_len = rng.gen_range(string_length_range.clone());
+        rng.random_bool(valid_percent).then(|| {
+            let string_len = rng.random_range(string_length_range.clone());
             (0..string_len)
                 .map(|_| char::from(rng.sample(Alphanumeric)))
                 .collect::<String>()
@@ -133,10 +134,10 @@ where
     T: ArrowPrimitiveType,
     T::Native: SampleUniform,
 {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     Arc::new(PrimitiveArray::<T>::from_iter((0..len).map(|_| {
-        rng.gen_bool(valid_percent)
-            .then(|| rng.gen_range(range.clone()))
+        rng.random_bool(valid_percent)
+            .then(|| rng.random_range(range.clone()))
     })))
 }
 
