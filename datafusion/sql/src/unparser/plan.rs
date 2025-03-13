@@ -641,19 +641,101 @@ impl Unparser<'_> {
                     &mut right_relation,
                 )?;
 
-                let Ok(Some(relation)) = right_relation.build() else {
-                    return internal_err!("Failed to build right relation");
-                };
+                match join.join_type {
+                    JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+                        let mut query_builder = QueryBuilder::default();
+                        let mut from = TableWithJoinsBuilder::default();
+                        let mut exists_select: SelectBuilder = SelectBuilder::default();
+                        from.relation(right_relation);
+                        exists_select.push_from(from);
+                        if let Some(filter) = &join.filter {
+                            exists_select.selection(Some(self.expr_to_sql(filter)?));
+                        }
+                        for (left, right) in &join.on {
+                            exists_select.selection(Some(
+                                self.expr_to_sql(&left.clone().eq(right.clone()))?,
+                            ));
+                        }
+                        exists_select.projection(vec![ast::SelectItem::UnnamedExpr(
+                            ast::Expr::Value(ast::Value::Number("1".to_string(), false)),
+                        )]);
+                        query_builder.body(Box::new(SetExpr::Select(Box::new(
+                            exists_select.build()?,
+                        ))));
 
-                let ast_join = ast::Join {
-                    relation,
-                    global: false,
-                    join_operator: self
-                        .join_operator_to_sql(join.join_type, join_constraint)?,
+                        let negated = match join.join_type {
+                            JoinType::LeftSemi => false,
+                            JoinType::LeftAnti => true,
+                            JoinType::LeftMark => false,
+                            _ => unreachable!(),
+                        };
+                        let exists_expr = ast::Expr::Exists {
+                            subquery: Box::new(query_builder.build()?),
+                            negated,
+                        };
+                        if join.join_type == JoinType::LeftMark {
+                            let (table_ref, _) = right_plan.schema().qualified_field(0);
+                            let column = self
+                                .col_to_sql(&Column::new(table_ref.cloned(), "mark"))?;
+                            select.replace_mark(&column, &exists_expr);
+                        } else {
+                            select.selection(Some(exists_expr));
+                        }
+                    }
+                    JoinType::RightSemi | JoinType::RightAnti => {
+                        let mut query_builder = QueryBuilder::default();
+                        let mut from = TableWithJoinsBuilder::default();
+                        let mut exists_select = SelectBuilder::default();
+                        from.relation(right_relation);
+                        let Some(mut left_from) = select.pop_from() else {
+                            return internal_err!("Failed to pop left relation");
+                        };
+                        left_from.relation(relation.clone());
+                        select.push_from(from);
+                        exists_select.push_from(left_from);
+                        let negated = match join.join_type {
+                            JoinType::RightSemi => false,
+                            JoinType::RightAnti => true,
+                            _ => unreachable!(),
+                        };
+                        if let Some(filter) = &join.filter {
+                            exists_select.selection(Some(self.expr_to_sql(filter)?));
+                        }
+                        for (left, right) in &join.on {
+                            exists_select.selection(Some(
+                                self.expr_to_sql(&left.clone().eq(right.clone()))?,
+                            ));
+                        }
+                        exists_select.projection(vec![ast::SelectItem::UnnamedExpr(
+                            ast::Expr::Value(ast::Value::Number("1".to_string(), false)),
+                        )]);
+                        query_builder.body(Box::new(SetExpr::Select(Box::new(
+                            exists_select.build()?,
+                        ))));
+
+                        select.selection(Some(ast::Expr::Exists {
+                            subquery: Box::new(query_builder.build()?),
+                            negated,
+                        }));
+                    }
+                    JoinType::Inner
+                    | JoinType::Left
+                    | JoinType::Right
+                    | JoinType::Full => {
+                        let Ok(Some(relation)) = right_relation.build() else {
+                            return internal_err!("Failed to build right relation");
+                        };
+                        let ast_join = ast::Join {
+                            relation,
+                            global: false,
+                            join_operator: self
+                                .join_operator_to_sql(join.join_type, join_constraint)?,
+                        };
+                        let mut from = select.pop_from().unwrap();
+                        from.push_join(ast_join);
+                        select.push_from(from);
+                    }
                 };
-                let mut from = select.pop_from().unwrap();
-                from.push_join(ast_join);
-                select.push_from(from);
 
                 Ok(())
             }

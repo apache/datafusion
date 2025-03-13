@@ -674,7 +674,7 @@ impl Unparser<'_> {
         }
     }
 
-    fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
+    pub fn col_to_sql(&self, col: &Column) -> Result<ast::Expr> {
         if let Some(table_ref) = &col.relation {
             let mut id = if self.dialect.full_qualified_col() {
                 table_ref.to_vec()
