@@ -74,7 +74,7 @@ impl SparkAscii {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec!["spark_ascii".to_string()],
+            aliases: vec![],
         }
     }
 }
@@ -85,7 +85,7 @@ impl ScalarUDFImpl for SparkAscii {
     }
 
     fn name(&self) -> &str {
-        "ascii"
+        "spark_ascii"
     }
 
     fn signature(&self) -> &Signature {

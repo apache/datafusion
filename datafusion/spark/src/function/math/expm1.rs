@@ -67,7 +67,7 @@ impl SparkExpm1 {
     pub fn new() -> Self {
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
-            aliases: vec!["spark_expm1".to_string()],
+            aliases: vec![],
         }
     }
 }
@@ -78,7 +78,7 @@ impl ScalarUDFImpl for SparkExpm1 {
     }
 
     fn name(&self) -> &str {
-        "expm1"
+        "spark_expm1"
     }
 
     fn signature(&self) -> &Signature {
