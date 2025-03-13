@@ -82,8 +82,13 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Check datafusion-common (default features)
+        run: cargo check --profile ci --all-targets -p datafusion-common
+      #
+      # Note: Only check libraries (not --all-targets) to cover end user APIs
+      #
       - name: Check datafusion-common (no-default-features)
-        run: cargo check --profile ci --all-targets --no-default-features -p datafusion-common
+        run: cargo check --profile ci --no-default-features -p datafusion-common
         # Note: don't check other feature flags as datafusion-common is not typically used standalone
 
   # Check datafusion-substrait features
@@ -102,16 +107,21 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Check datafusion-substrait (default features)
+        run: cargo check --profile ci --all-targets -p datafusion-substrait
+        #
+        # Note: Only check libraries (not --all-targets) to cover end user APIs
+        #
       - name: Check datafusion-substrait (no-default-features)
-        run: cargo check --profile ci --all-targets --no-default-features -p datafusion-substrait
+        run: cargo check --profile ci --no-default-features -p datafusion-substrait
       - name: Check datafusion-substrait (physical)
-        run: cargo check --profile ci --all-targets --no-default-features -p datafusion-substrait --features=physical
+        run: cargo check --profile ci --no-default-features -p datafusion-substrait --features=physical
       - name: Install cmake
         run: |
           # note the builder setup runs apt-get update / installs protobuf compiler
           apt-get install -y cmake
       - name: Check datafusion-substrait (protoc)
-        run: cargo check --profile ci --all-targets --no-default-features -p datafusion-substrait --features=protoc
+        run: cargo check --profile ci --no-default-features -p datafusion-substrait --features=protoc
 
   # Check datafusion-proto features
   #
@@ -129,14 +139,19 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Check datafusion-proto (default features)
+        run: cargo check --profile ci --all-targets -p datafusion-proto
+      #
+      # Note: Only check libraries (not --all-targets) to cover end user APIs
+      #
       - name: Check datafusion-proto (no-default-features)
-        run: cargo check --profile ci --all-targets --no-default-features -p datafusion-proto
+        run: cargo check --profile ci --no-default-features -p datafusion-proto
       - name: Check datafusion-proto (json)
-        run: cargo check --profile ci --all-targets --no-default-features -p datafusion-proto --features=json
+        run: cargo check --profile ci  --no-default-features -p datafusion-proto --features=json
       - name: Check datafusion-proto (parquet)
-        run: cargo check --profile ci --all-targets --no-default-features -p datafusion-proto --features=parquet
+        run: cargo check --profile ci --no-default-features -p datafusion-proto --features=parquet
       - name: Check datafusion-proto (avro)
-        run: cargo check --profile ci --all-targets --no-default-features -p datafusion-proto --features=avro
+        run: cargo check --profile ci --no-default-features -p datafusion-proto --features=avro
 
 
   # Check datafusion crate features
@@ -144,7 +159,7 @@ jobs:
   # Ensure via `cargo check` that the crate can be built with a
   # subset of the features packages enabled.
   linux-cargo-check-datafusion:
-    name: cargo check datafusion
+    name: cargo check datafusion features
     needs: linux-build-lib
     runs-on: ubuntu-latest
     container:
@@ -155,38 +170,54 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Check datafusion (default features)
+        run: cargo check --profile ci --all-targets -p datafusion
+      #
+      # Note: Only check libraries (not --all-targets) to cover end user APIs
+      #
       - name: Check datafusion (no-default-features)
-        # Some of the test binaries require the parquet feature still
-        #run: cargo check --all-targets --no-default-features -p datafusion
         run: cargo check --profile ci --no-default-features -p datafusion
-
       - name: Check datafusion (nested_expressions)
-        run: cargo check --profile ci --no-default-features --features=nested_expressions -p datafusion
-
-      - name: Check datafusion (crypto)
-        run: cargo check --profile ci --no-default-features --features=crypto_expressions -p datafusion
-
+        run: cargo check --profile ci --no-default-features -p datafusion --features=nested_expressions
+      - name: Check datafusion (array_expressions)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=array_expressions
+      - name: Check datafusion (avro)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=avro
+      - name: Check datafusion (backtrace)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=backtrace
+      - name: Check datafusion (compression)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=compression
+      - name: Check datafusion (crypto_expressions)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=crypto_expressions
       - name: Check datafusion (datetime_expressions)
-        run: cargo check --profile ci --no-default-features --features=datetime_expressions -p datafusion
-
+        run: cargo check --profile ci --no-default-features -p datafusion --features=datetime_expressions
       - name: Check datafusion (encoding_expressions)
-        run: cargo check --profile ci --no-default-features --features=encoding_expressions -p datafusion
-
+        run: cargo check --profile ci --no-default-features -p datafusion --features=encoding_expressions
+      - name: Check datafusion (force_hash_collisions)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=force_hash_collisions
       - name: Check datafusion (math_expressions)
-        run: cargo check --profile ci --no-default-features --features=math_expressions -p datafusion
-
+        run: cargo check --profile ci --no-default-features -p datafusion --features=math_expressions
+      - name: Check datafusion (parquet)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=parquet
+      - name: Check datafusion (pyarrow)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=pyarrow
       - name: Check datafusion (regex_expressions)
-        run: cargo check --profile ci --no-default-features --features=regex_expressions -p datafusion
-
+        run: cargo check --profile ci --no-default-features -p datafusion --features=regex_expressions
+      - name: Check datafusion (recursive_protection)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=recursive_protection
+      - name: Check datafusion (serde)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=serde
       - name: Check datafusion (string_expressions)
-        run: cargo check --profile ci --no-default-features --features=string_expressions -p datafusion
+        run: cargo check --profile ci --no-default-features -p datafusion --features=string_expressions
+      - name: Check datafusion (unicode_expressions)
+        run: cargo check --profile ci --no-default-features -p datafusion --features=unicode_expressions
 
   # Check datafusion-functions crate features
   #
   # Ensure via `cargo check` that the crate can be built with a
   # subset of the features packages enabled.
   linux-cargo-check-datafusion-functions:
-    name: cargo check functions
+    name: cargo check datafusion-functions features
     needs: linux-build-lib
     runs-on: ubuntu-latest
     container:
@@ -197,26 +228,30 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+      - name: Check datafusion-functions (default features)
+        run: cargo check --profile ci --all-targets -p datafusion-functions
+      #
+      # Note: Only check libraries (not --all-targets) to cover end user APIs
+      #
       - name: Check datafusion-functions (no-default-features)
-        run: cargo check --profile ci --all-targets --no-default-features -p datafusion-functions
-
-      - name: Check datafusion-functions (crypto)
-        run: cargo check --profile ci --all-targets --no-default-features --features=crypto_expressions -p datafusion-functions
-
+        run: cargo check --profile ci --no-default-features -p datafusion-functions
+      # Fails due https://github.com/apache/datafusion/issues/15207
+      #- name: Check datafusion-functions (core_expressions)
+      #  run: cargo check --profile ci --no-default-features -p datafusion-functions --features=core_expressions
+      - name: Check datafusion-functions (crypto_expressions)
+        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=crypto_expressions
       - name: Check datafusion-functions (datetime_expressions)
-        run: cargo check --profile ci --all-targets --no-default-features --features=datetime_expressions -p datafusion-functions
-
+        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=datetime_expressions
       - name: Check datafusion-functions (encoding_expressions)
-        run: cargo check --profile ci --all-targets --no-default-features --features=encoding_expressions -p datafusion-functions
-
+        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=encoding_expressions
       - name: Check datafusion-functions (math_expressions)
-        run: cargo check --profile ci --all-targets --no-default-features --features=math_expressions -p datafusion-functions
-
+        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=math_expressions
       - name: Check datafusion-functions (regex_expressions)
-        run: cargo check --profile ci --all-targets --no-default-features --features=regex_expressions -p datafusion-functions
-
+        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=regex_expressions
       - name: Check datafusion-functions (string_expressions)
-        run: cargo check --profile ci --all-targets --no-default-features --features=string_expressions -p datafusion-functions
+        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=string_expressions
+      - name: Check datafusion-functions (unicode_expressions)
+        run: cargo check --profile ci --no-default-features -p datafusion-functions --features=unicode_expressions
 
   # Run tests
   linux-test:
