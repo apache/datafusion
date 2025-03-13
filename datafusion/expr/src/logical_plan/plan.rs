@@ -54,9 +54,9 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, TableReference,
-    UnnestOptions,
+    DFSchema, DFSchemaRef, DataFusionError, Dependency, FieldId, FunctionalDependence,
+    FunctionalDependencies, ParamValues, QualifiedSchema, Result, ScalarValue,
+    TableReference, UnnestOptions,
 };
 use indexmap::IndexSet;
 
@@ -2183,7 +2183,8 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
         DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
             .with_functional_dependencies(calc_func_dependencies_for_project(
                 exprs, input,
-            )?)?;
+            )?)?
+            .with_metadata_schema(input.schema().metadata_schema().clone());
 
     Ok(Arc::new(schema))
 }
@@ -2214,10 +2215,16 @@ impl SubqueryAlias {
         // Since schema is the same, other than qualifier, we can use existing
         // functional dependencies:
         let func_dependencies = plan.schema().functional_dependencies().clone();
-        let schema = DFSchemaRef::new(
-            DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
-                .with_functional_dependencies(func_dependencies)?,
-        );
+        let mut schema = DFSchema::try_from_qualified_schema(alias.clone(), &schema)?
+            .with_functional_dependencies(func_dependencies)?
+            .with_metadata_schema(plan.schema().metadata_schema().clone());
+        if let Some(metadata) = plan.schema().metadata_schema() {
+            schema = schema.with_metadata_schema(Some(QualifiedSchema::new_with_table(
+                metadata.schema(),
+                &alias.clone(),
+            )));
+        }
+        let schema = DFSchemaRef::new(schema);
         Ok(SubqueryAlias {
             input: plan,
             alias,
@@ -2598,18 +2605,33 @@ impl TableScan {
             table_source.constraints(),
             schema.fields.len(),
         );
-        let projected_schema = projection
+        let metadata = table_source.metadata_columns();
+        let mut projected_schema = projection
             .as_ref()
             .map(|p| {
                 let projected_func_dependencies =
                     func_dependencies.project_functional_dependencies(p, p.len());
-
+                let qualified_fields: Result<Vec<_>, _> = p
+                    .iter()
+                    .map(|i| match FieldId::from(*i) {
+                        FieldId::Metadata(i) => {
+                            if let Some(metadata) = &metadata {
+                                Ok((
+                                    Some(table_name.clone()),
+                                    Arc::new(metadata.field(i).clone()),
+                                ))
+                            } else {
+                                plan_err!("table doesn't support metadata column")
+                            }
+                        }
+                        FieldId::Normal(i) => Ok((
+                            Some(table_name.clone()),
+                            Arc::new(schema.field(i).clone()),
+                        )),
+                    })
+                    .collect();
                 let df_schema = DFSchema::new_with_metadata(
-                    p.iter()
-                        .map(|i| {
-                            (Some(table_name.clone()), Arc::new(schema.field(*i).clone()))
-                        })
-                        .collect(),
+                    qualified_fields?,
                     schema.metadata.clone(),
                 )?;
                 df_schema.with_functional_dependencies(projected_func_dependencies)
@@ -2619,6 +2641,11 @@ impl TableScan {
                     DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?;
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
+        if let Some(metadata) = metadata {
+            projected_schema = projected_schema.with_metadata_schema(Some(
+                QualifiedSchema::new_with_table(metadata, &table_name),
+            ));
+        }
         let projected_schema = Arc::new(projected_schema);
 
         Ok(Self {
