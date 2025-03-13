@@ -21,7 +21,7 @@
 # etc and orchestrates gathering data and run the benchmark binary to
 # collect benchmarks from the current main and last 5 major releases.
 
-trap 'cd ..; rm -rf working; git checkout main' EXIT #checkout to main on exit
+trap 'git checkout main' EXIT #checkout to main on exit
 ARG1=$1
 
 main(){
