@@ -96,7 +96,6 @@ impl Analyzer {
     /// Create a new analyzer using the recommended list of rules
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
-            Arc::new(InlineTableScan::new()),
             Arc::new(ResolveGroupingFunction::new()),
             Arc::new(TypeCoercion::new()),
         ];

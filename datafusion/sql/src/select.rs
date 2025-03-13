@@ -550,7 +550,29 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             0 => Ok(LogicalPlanBuilder::empty(true).build()?),
             1 => {
                 let input = from.remove(0);
-                self.plan_table_with_joins(input, planner_context)
+                let table = self.plan_table_with_joins(input, planner_context)?;
+
+                // inline table scan
+                let table = match table {
+                    LogicalPlan::TableScan(table_scan)
+                        if table_scan.filters.is_empty() =>
+                    {
+                        if let Some(sub_plan) = table_scan.source.get_logical_plan() {
+                            let sub_plan = sub_plan.into_owned();
+                            LogicalPlanBuilder::from(sub_plan)
+                                // Ensures that the reference to the inlined table remains the
+                                // same, meaning we don't have to change any of the parent nodes
+                                // that reference this table.
+                                .alias(table_scan.table_name)?
+                                .build()?
+                        } else {
+                            LogicalPlan::TableScan(table_scan)
+                        }
+                    }
+                    table => table,
+                };
+
+                Ok(table)
             }
             _ => {
                 let mut from = from.into_iter();
@@ -863,6 +885,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
+}
+
+fn generate_projection_expr(
+    projection: &Option<Vec<usize>>,
+    sub_plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    let mut exprs = vec![];
+    if let Some(projection) = projection {
+        for i in projection {
+            exprs.push(Expr::Column(Column::from(
+                sub_plan.schema().qualified_field(*i),
+            )));
+        }
+    } else {
+        let expanded = expand_wildcard(sub_plan.schema(), sub_plan, None)?;
+        exprs.extend(expanded);
+    }
+    Ok(exprs)
 }
 
 // If there are any multiple-defined windows, we raise an error.
