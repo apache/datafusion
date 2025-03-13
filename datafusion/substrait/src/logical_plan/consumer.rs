@@ -1074,6 +1074,9 @@ pub async fn from_project_rel(
         // leaving only explicit expressions.
 
         let mut explicit_exprs: Vec<Expr> = vec![];
+        // For WindowFunctions, we need to wrap them in a Window relation. If there are duplicates,
+        // we can do the window'ing only once, then the project will duplicate the result.
+        let mut window_exprs: HashSet<Expr> = HashSet::new();
         for expr in &p.expressions {
             let e = consumer
                 .consume_expression(expr, input.clone().schema())
@@ -1083,9 +1086,13 @@ pub async fn from_project_rel(
                 // Adding the same expression here and in the project below
                 // works because the project's builder uses columnize_expr(..)
                 // to transform it into a column reference
-                input = input.window(vec![e.clone()])?
+                window_exprs.insert(e.clone());
             }
             explicit_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
+        }
+
+        if !window_exprs.is_empty() {
+            input = input.window(window_exprs)?;
         }
 
         let mut final_exprs: Vec<Expr> = vec![];
