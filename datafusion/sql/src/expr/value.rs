@@ -47,7 +47,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
-            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(lit(s)),
+            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => {
+                let lit_val = if let Ok(parsed) = s.parse::<i64>() {
+                    lit(parsed)
+                } else if let Ok(parsed) = s.parse::<f32>() {
+                    lit(parsed)
+                } else if let Ok(parsed) = s.parse::<f64>() {
+                    lit(parsed)
+                } else {
+                    lit(s)
+                };
+
+                Ok(lit_val)
+            }
             Value::Null => Ok(Expr::Literal(ScalarValue::Null)),
             Value::Boolean(n) => Ok(lit(n)),
             Value::Placeholder(param) => {
