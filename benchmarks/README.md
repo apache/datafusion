@@ -30,8 +30,8 @@ its performance against other engines. For competitive benchmarking,
 DataFusion is included in the benchmark setups for several popular
 benchmarks that compare performance with other engines. For example:
 
-- [ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
-- [H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
+- [ClickBench][ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
+- [H2o.ai ][H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
 
 [ClickBench]: https://github.com/ClickHouse/ClickBench/tree/main
 [H2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
@@ -364,9 +364,9 @@ done dropping runtime in 83.531417ms
 
 ## ClickBench
 
-The ClickBench[1] benchmarks are widely cited in the industry and
+The ClickBench[1][1] benchmarks are widely cited in the industry and
 focus on grouping / aggregation / filtering. This runner uses the
-scripts and queries from [2].
+scripts and queries from [2][2].
 
 [1]: https://github.com/ClickHouse/ClickBench
 [2]: https://github.com/ClickHouse/ClickBench/tree/main/datafusion
@@ -467,8 +467,8 @@ See paper [How Good Are Query Optimizers, Really](http://www.vldb.org/pvldb/vol9
 Run the tpch benchmark.
 
 This benchmarks is derived from the [TPC-H][1] version
-[2.17.1]. The data and answers are generated using `tpch-gen` from
-[2].
+[2.17.1][2.17.1]. The data and answers are generated using `tpch-gen` from
+[2][2].
 
 [1]: http://www.tpc.org/tpch/
 [2]: https://github.com/databricks/tpch-dbgen.git,
@@ -482,7 +482,7 @@ When the memory limit is exceeded, the aggregation intermediate results will be 
 
 External aggregation benchmarks run several aggregation queries with different memory limits, on TPCH `lineitem` table. Queries can be found in [`external_aggr.rs`](src/bin/external_aggr.rs).
 
-This benchmark is inspired by [DuckDB's external aggregation paper](https://hannes.muehleisen.org/publications/icde2024-out-of-core-kuiper-boncz-muehleisen.pdf), specifically Section VI.
+This benchmark is inspired by [DuckDB&#39;s external aggregation paper](https://hannes.muehleisen.org/publications/icde2024-out-of-core-kuiper-boncz-muehleisen.pdf), specifically Section VI.
 
 ### External Aggregation Example Runs
 
@@ -613,6 +613,16 @@ For example, to run query 1 with the small data generated above:
 ```bash
 cargo run --release --bin dfbench -- h2o --join-paths ./benchmarks/data/h2o/J1_1e7_NA_0.csv,./benchmarks/data/h2o/J1_1e7_1e1_0.csv,./benchmarks/data/h2o/J1_1e7_1e4_0.csv,./benchmarks/data/h2o/J1_1e7_1e7_NA.csv --queries-path ./benchmarks/queries/h2o/join.sql --query 1
 ```
+
+### Collect Benchmarks
+
+Collect benchmarks of current main and 5 previous releases.
+
+```bash
+./collect_bench.sh [benchmark_name](optional)
+```
+
+Note: `benchmark_name` can be any benchmark defined in bench.sh. Defaults to `all` just like bench.sh.
 
 [1]: http://www.tpc.org/tpch/
 [2]: https://www1.nyc.gov/site/tlc/about/tlc-trip-record-data.page
