@@ -37,13 +37,11 @@ name = "datafusion_spark"
 
 [dependencies]
 arrow = { workspace = true }
-arrow-ord = { workspace = true }
 datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
 datafusion-expr = { workspace = true }
-datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-aggregate = { workspace = true }
 datafusion-functions-aggregate-common = { workspace = true }
@@ -52,10 +50,4 @@ datafusion-functions-table = { workspace = true }
 datafusion-functions-window = { workspace = true }
 datafusion-functions-window-common = { workspace = true }
 datafusion-macros = { workspace = true }
-datafusion-physical-expr-common = { workspace = true }
-itertools = { workspace = true, features = ["use_std"] }
 log = { workspace = true }
-
-[dev-dependencies]
-criterion = { workspace = true, features = ["async_tokio"] }
-rand = { workspace = true }
