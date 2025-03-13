@@ -950,7 +950,7 @@ fn select_with_having_refers_to_invalid_column() {
                    HAVING first_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-            "Error during planning: HAVING clause references non-aggregate values: Expression person.first_name could not be resolved from available columns: person.id, max(person.age)",
+            "Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: Expression person.first_name could not be resolved from available columns: person.id, max(person.age), it must be in GROUP BY or an aggregate function",
             err.strip_backtrace()
         );
 }
@@ -974,7 +974,7 @@ fn select_with_having_with_aggregate_not_in_select() {
                    HAVING MAX(age) > 100";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-            "Error during planning: Projection references non-aggregate values: Expression person.first_name could not be resolved from available columns: max(person.age)",
+            "Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: Expression person.first_name could not be resolved from available columns: max(person.age), it must be in GROUP BY or an aggregate function",
             err.strip_backtrace()
         );
 }
@@ -1010,7 +1010,7 @@ fn select_aggregate_with_having_referencing_column_not_in_select() {
                    HAVING first_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: HAVING clause references non-aggregate values: Expression person.first_name could not be resolved from available columns: count(*)",
+        "Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: Expression person.first_name could not be resolved from available columns: count(*), it must be in GROUP BY or an aggregate function",
         err.strip_backtrace()
     );
 }
@@ -1131,7 +1131,7 @@ fn select_aggregate_with_group_by_with_having_referencing_column_not_in_group_by
                    HAVING MAX(age) > 10 AND last_name = 'M'";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: HAVING clause references non-aggregate values: Expression person.last_name could not be resolved from available columns: person.first_name, max(person.age)",
+        "Error during planning: Column in HAVING must be in GROUP BY or an aggregate function: Expression person.last_name could not be resolved from available columns: person.first_name, max(person.age), it must be in GROUP BY or an aggregate function",
         err.strip_backtrace()
     );
 }
@@ -1563,7 +1563,7 @@ fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_not_res
     let sql = "SELECT ((age + 1) / 2) * (age + 9), MIN(first_name) FROM person GROUP BY age + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.age could not be resolved from available columns: person.age + Int64(1), min(person.first_name)",
+        "Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: Expression person.age could not be resolved from available columns: person.age + Int64(1), min(person.first_name), it must be in GROUP BY or an aggregate function",
             err.strip_backtrace()
         );
 }
@@ -1573,7 +1573,7 @@ fn select_simple_aggregate_with_groupby_non_column_expression_and_its_column_sel
     let sql = "SELECT age, MIN(first_name) FROM person GROUP BY age + 1";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression person.age could not be resolved from available columns: person.age + Int64(1), min(person.first_name)",
+        "Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: Expression person.age could not be resolved from available columns: person.age + Int64(1), min(person.first_name), it must be in GROUP BY or an aggregate function",
             err.strip_backtrace()
         );
 }
@@ -1843,7 +1843,7 @@ fn select_7480_2() {
     let sql = "SELECT c1, c13, MIN(c12) FROM aggregate_test_100 GROUP BY c1";
     let err = logical_plan(sql).expect_err("query should have failed");
     assert_eq!(
-        "Error during planning: Projection references non-aggregate values: Expression aggregate_test_100.c13 could not be resolved from available columns: aggregate_test_100.c1, min(aggregate_test_100.c12)",
+        "Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: Expression aggregate_test_100.c13 could not be resolved from available columns: aggregate_test_100.c1, min(aggregate_test_100.c12), it must be in GROUP BY or an aggregate function",
         err.strip_backtrace()
     );
 }
@@ -3224,7 +3224,7 @@ fn lateral_left_join() {
 
 #[test]
 fn lateral_nested_left_join() {
-    let sql = "SELECT * FROM 
+    let sql = "SELECT * FROM
             j1, \
             (j2 LEFT JOIN LATERAL (SELECT * FROM j3 WHERE j1_id + j2_id = j3_id) AS j3 ON(true))";
     let expected = "Projection: *\

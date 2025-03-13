@@ -152,12 +152,6 @@ fn expand_exprlist(input: &LogicalPlan, expr: Vec<Expr>) -> Result<Vec<Expr>> {
 
                     projected_expr.extend(expanded);
                 } else {
-                    validate_columns_in_group_by_or_aggregate(
-                        has_group_by,
-                        &vec![e.clone()],
-                        &group_by_columns,
-                        &aggregate_columns,
-                    )?;
                     projected_expr.push(e.clone());
                 }
             }
@@ -222,7 +216,7 @@ fn validate_columns_in_group_by_or_aggregate(
                 let name = &col.name;
                 if !group_by_columns.contains(e) && !aggregate_columns.contains(e) {
                     return Err(SchemaError(
-                        datafusion_common::SchemaError::GroupByColumnInvalid {
+                        datafusion_common::SchemaError::GroupByOrAggregateColumnInvalid {
                             column: (name.clone().to_string()),
                         },
                         Box::new(None),

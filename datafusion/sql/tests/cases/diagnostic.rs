@@ -190,7 +190,7 @@ fn test_missing_non_aggregate_in_group_by() -> Result<()> {
     assert_eq!(diag.span, Some(spans["a"]));
     assert_eq!(
         diag.helps[0].message,
-        "add 'person.first_name' to GROUP BY clause"
+        "Either add 'person.first_name' to GROUP BY clause, or use an aggregare function like ANY_VALUE(person.first_name)"
     );
     Ok(())
 }

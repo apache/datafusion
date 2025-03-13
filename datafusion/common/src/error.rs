@@ -181,7 +181,7 @@ pub enum SchemaError {
         field: Box<Column>,
         valid_fields: Vec<Column>,
     },
-    GroupByColumnInvalid {
+    GroupByOrAggregateColumnInvalid {
         column: String,
     },
 }
@@ -263,7 +263,7 @@ impl Display for SchemaError {
                     )
                 }
             }
-            Self::GroupByColumnInvalid { column } => {
+            Self::GroupByOrAggregateColumnInvalid { column } => {
                 write!(
                     f,
                     "While expanding wildcard, column '{}' must appear in the GROUP BY clause or must be part of an aggregate function",
