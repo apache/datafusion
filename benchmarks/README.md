@@ -30,11 +30,11 @@ its performance against other engines. For competitive benchmarking,
 DataFusion is included in the benchmark setups for several popular
 benchmarks that compare performance with other engines. For example:
 
-- [ClickBench][ClickBench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
-- [H2o.ai ][H2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
+- [ClickBench][clickbench] scripts are in the [ClickBench repo](https://github.com/ClickHouse/ClickBench/tree/main/datafusion)
+- [H2o.ai ][h2o.ai `db-benchmark`] scripts are in [db-benchmark](https://github.com/apache/datafusion/tree/main/benchmarks/src/h2o.rs)
 
-[ClickBench]: https://github.com/ClickHouse/ClickBench/tree/main
-[H2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
+[clickbench]: https://github.com/ClickHouse/ClickBench/tree/main
+[h2o.ai `db-benchmark`]: https://github.com/h2oai/db-benchmark
 
 # Running the benchmarks
 
@@ -467,8 +467,8 @@ See paper [How Good Are Query Optimizers, Really](http://www.vldb.org/pvldb/vol9
 Run the tpch benchmark.
 
 This benchmarks is derived from the [TPC-H][1] version
-[2.17.1][2.17.1]. The data and answers are generated using `tpch-gen` from
-[2][2].
+[2.17.1]. The data and answers are generated using `tpch-gen` from
+[2].
 
 [1]: http://www.tpc.org/tpch/
 [2]: https://github.com/databricks/tpch-dbgen.git,
