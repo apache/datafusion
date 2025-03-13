@@ -19,7 +19,7 @@
 use super::basic::{sha512, utf8_or_binary_to_binary_type};
 use arrow::datatypes::DataType;
 use datafusion_common::{
-    types::{logical_binary, logical_string},
+    types::{logical_binary, logical_string, NativeType},
     Result,
 };
 use datafusion_expr::{
@@ -58,14 +58,14 @@ impl SHA512Func {
     pub fn new() -> Self {
         Self {
             signature: Signature::one_of(
-                vec![
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
+                vec![TypeSignature::Coercible(vec![Coercion::new_implicit(
+                    TypeSignatureClass::Native(logical_binary()),
+                    vec![
                         TypeSignatureClass::Native(logical_string()),
-                    )]),
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
                         TypeSignatureClass::Native(logical_binary()),
-                    )]),
-                ],
+                    ],
+                    NativeType::Binary,
+                )])],
                 Volatility::Immutable,
             ),
         }
