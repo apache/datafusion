@@ -363,6 +363,7 @@ pub(super) fn inject_column_aliases(
                 expr: Box::new(expr.clone()),
                 relation,
                 name: col_alias.value,
+                metadata: None,
             })
         })
         .collect::<Vec<_>>();

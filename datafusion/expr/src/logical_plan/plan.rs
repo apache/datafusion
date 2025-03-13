@@ -38,9 +38,8 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_len, exprlist_to_fields, find_base_plan,
-    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    split_conjunction,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
+    grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Execute,
@@ -3497,11 +3496,10 @@ fn calc_func_dependencies_for_project(
         .flatten()
         .collect::<Vec<_>>();
 
-    let len = exprlist_len(exprs, input.schema(), Some(find_base_plan(input).schema()))?;
     Ok(input
         .schema()
         .functional_dependencies()
-        .project_functional_dependencies(&proj_indices, len))
+        .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
 /// Sorts its input according to a list of sort expressions.

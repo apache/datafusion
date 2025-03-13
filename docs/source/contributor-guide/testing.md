@@ -58,6 +58,18 @@ Like similar systems such as [DuckDB](https://duckdb.org/dev/testing), DataFusio
 
 DataFusion has integrated [sqlite's test suite](https://sqlite.org/sqllogictest/doc/trunk/about.wiki) as a supplemental test suite that is run whenever a PR is merged into DataFusion. To run it manually please refer to the [README](https://github.com/apache/datafusion/blob/main/datafusion/sqllogictest/README.md#running-tests-sqlite) file for instructions.
 
+## Snapshot testing
+
+[Insta](https://github.com/mitsuhiko/insta) is used for snapshot testing. Snapshots are generated
+and compared on each test run. If the output changes, tests will fail.
+
+To review the changes, you can use Insta CLI:
+
+```shell
+cargo install cargo-insta
+cargo insta review
+```
+
 ## Extended Tests
 
 In addition to the standard CI test suite that is run on all PRs prior to merge,
