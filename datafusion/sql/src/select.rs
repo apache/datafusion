@@ -29,15 +29,12 @@ use crate::utils::{
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{not_impl_err, plan_err, Column, Result};
-use datafusion_common::{not_impl_err, plan_err, Column, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
 use datafusion_expr::utils::{
-    expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
-    find_aggregate_exprs, find_window_exprs,
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_window_exprs,
 };

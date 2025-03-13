@@ -575,7 +575,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
             }
-            SQLDataType::UnsignedBigInt(_) | SQLDataType::UnsignedInt8(_) => Ok(DataType::UInt64),
+            SQLDataType::BigIntUnsigned(_) | SQLDataType::Int8Unsigned(_) => Ok(DataType::UInt64),
             SQLDataType::Float(_) => Ok(DataType::Float32),
             SQLDataType::Real | SQLDataType::Float4 => Ok(DataType::Float32),
             SQLDataType::Double(ExactNumberInfo::None) | SQLDataType::DoublePrecision | SQLDataType::Float8 => Ok(DataType::Float64),
