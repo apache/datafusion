@@ -114,3 +114,33 @@ impl ScalarUDFImpl for SparkExpm1 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::function::math::expm1::SparkExpm1;
+    use crate::function::utils::test::test_scalar_function;
+    use arrow::array::{Array, Float64Array};
+    use arrow::datatypes::DataType::Float64;
+    use datafusion_common::{Result, ScalarValue};
+    use datafusion_expr::{ColumnarValue, ScalarUDFImpl};
+
+    macro_rules! test_expm1_float64_invoke {
+        ($INPUT:expr, $EXPECTED:expr) => {
+            test_scalar_function!(
+                SparkExpm1::new(),
+                vec![ColumnarValue::Scalar(ScalarValue::Float64($INPUT))],
+                $EXPECTED,
+                f64,
+                Float64,
+                Float64Array
+            );
+        };
+    }
+
+    #[test]
+    fn test_expm1_invoke() -> Result<()> {
+        test_expm1_float64_invoke!(Some(0f64), Ok(Some(0.0f64)));
+        test_expm1_float64_invoke!(Some(1f64), Ok(Some(1.7182818284590453f64)));
+        Ok(())
+    }
+}

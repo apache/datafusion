@@ -15,13 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
-use arrow::datatypes::DataType;
-
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::function::Hint;
-use datafusion_expr::ColumnarValue;
-
 #[cfg(test)]
 pub mod test {
     /// $FUNC ScalarUDFImpl to test
@@ -32,27 +25,27 @@ pub mod test {
     /// $ARRAY_TYPE is the column type after function applied
     macro_rules! test_scalar_function {
         ($FUNC:expr, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $EXPECTED_DATA_TYPE:expr, $ARRAY_TYPE:ident) => {
-            let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
+            let expected: datafusion_common::Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
             let func = $FUNC;
 
             let type_array = $ARGS.iter().map(|arg| arg.data_type()).collect::<Vec<_>>();
             let cardinality = $ARGS
                 .iter()
                 .fold(Option::<usize>::None, |acc, arg| match arg {
-                    ColumnarValue::Scalar(_) => acc,
-                    ColumnarValue::Array(a) => Some(a.len()),
+                    datafusion_expr::ColumnarValue::Scalar(_) => acc,
+                    datafusion_expr::ColumnarValue::Array(a) => Some(a.len()),
                 })
                 .unwrap_or(1);
 
             let scalar_arguments = $ARGS.iter().map(|arg| match arg {
-                ColumnarValue::Scalar(scalar) => Some(scalar.clone()),
-                ColumnarValue::Array(_) => None,
+                datafusion_expr::ColumnarValue::Scalar(scalar) => Some(scalar.clone()),
+                datafusion_expr::ColumnarValue::Array(_) => None,
             }).collect::<Vec<_>>();
             let scalar_arguments_refs = scalar_arguments.iter().map(|arg| arg.as_ref()).collect::<Vec<_>>();
 
             let nullables = $ARGS.iter().map(|arg| match arg {
-                ColumnarValue::Scalar(scalar) => scalar.is_null(),
-                ColumnarValue::Array(a) => a.null_count() > 0,
+                datafusion_expr::ColumnarValue::Scalar(scalar) => scalar.is_null(),
+                datafusion_expr::ColumnarValue::Array(a) => a.null_count() > 0,
             }).collect::<Vec<_>>();
 
             let return_info = func.return_type_from_args(datafusion_expr::ReturnTypeArgs {
@@ -103,6 +96,5 @@ pub mod test {
         };
     }
 
-    use super::*;
     pub(crate) use test_scalar_function;
 }

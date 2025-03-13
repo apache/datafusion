@@ -2451,6 +2451,7 @@ dependencies = [
  "arrow",
  "arrow-ord",
  "criterion",
+ "datafusion-catalog",
  "datafusion-common",
  "datafusion-doc",
  "datafusion-execution",

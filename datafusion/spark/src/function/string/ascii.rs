@@ -196,62 +196,12 @@ mod tests {
         };
     }
 
-    macro_rules! test_ascii_int_invoke {
-        ($INPUT:expr, $EXPECTED:expr) => {
-            test_scalar_function!(
-                SparkAscii::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::Int32($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-        };
-    }
-
-    macro_rules! test_ascii_binary_invoke {
-        ($INPUT:expr, $EXPECTED:expr) => {
-            test_scalar_function!(
-                SparkAscii::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::Binary($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-
-            test_scalar_function!(
-                SparkAscii::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::BinaryView($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-
-            test_scalar_function!(
-                SparkAscii::new(),
-                vec![ColumnarValue::Scalar(ScalarValue::LargeBinary($INPUT))],
-                $EXPECTED,
-                i32,
-                Int32,
-                Int32Array
-            );
-        };
-    }
-
     #[test]
     fn test_ascii_invoke() -> Result<()> {
         test_ascii_string_invoke!(Some(String::from("x")), Ok(Some(120)));
         test_ascii_string_invoke!(Some(String::from("a")), Ok(Some(97)));
         test_ascii_string_invoke!(Some(String::from("")), Ok(Some(0)));
         test_ascii_string_invoke!(None, Ok(None));
-
-        test_ascii_int_invoke!(Some(2), Ok(Some(50)));
-        test_ascii_int_invoke!(None, Ok(None));
-
-        test_ascii_binary_invoke!(Some(b"DataFusion".to_vec()), Ok(Some(50)));
-        test_ascii_binary_invoke!(None, Ok(None));
 
         Ok(())
     }

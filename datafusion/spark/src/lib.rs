@@ -46,3 +46,103 @@
 //![`Expr`]: datafusion_expr::Expr
 
 pub mod function;
+
+use datafusion_common::Result;
+use datafusion_execution::FunctionRegistry;
+use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
+use log::debug;
+use std::sync::Arc;
+
+/// Fluent-style API for creating `Expr`s
+#[allow(unused)]
+pub mod expr_fn {
+    pub use super::function::aggregate::expr_fn::*;
+    pub use super::function::array::expr_fn::*;
+    pub use super::function::bitwise::expr_fn::*;
+    pub use super::function::collection::expr_fn::*;
+    pub use super::function::conditional::expr_fn::*;
+    pub use super::function::conversion::expr_fn::*;
+    pub use super::function::csv::expr_fn::*;
+    pub use super::function::datetime::expr_fn::*;
+    pub use super::function::generator::expr_fn::*;
+    pub use super::function::hash::expr_fn::*;
+    pub use super::function::json::expr_fn::*;
+    pub use super::function::lambda::expr_fn::*;
+    pub use super::function::map::expr_fn::*;
+    pub use super::function::math::expr_fn::*;
+    pub use super::function::misc::expr_fn::*;
+    pub use super::function::predicate::expr_fn::*;
+    pub use super::function::r#struct::expr_fn::*;
+    pub use super::function::string::expr_fn::*;
+    pub use super::function::table::expr_fn::*;
+    pub use super::function::url::expr_fn::*;
+    pub use super::function::window::expr_fn::*;
+    pub use super::function::xml::expr_fn::*;
+}
+
+/// Returns all default scalar functions
+pub fn all_default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
+    function::array::functions()
+        .into_iter()
+        .chain(function::bitwise::functions())
+        .chain(function::collection::functions())
+        .chain(function::conditional::functions())
+        .chain(function::conversion::functions())
+        .chain(function::csv::functions())
+        .chain(function::datetime::functions())
+        .chain(function::generator::functions())
+        .chain(function::hash::functions())
+        .chain(function::json::functions())
+        .chain(function::lambda::functions())
+        .chain(function::map::functions())
+        .chain(function::math::functions())
+        .chain(function::misc::functions())
+        .chain(function::predicate::functions())
+        .chain(function::string::functions())
+        .chain(function::r#struct::functions())
+        .chain(function::url::functions())
+        .chain(function::xml::functions())
+        .collect::<Vec<_>>()
+}
+
+/// Returns all default aggregate functions
+pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
+    function::aggregate::functions()
+}
+
+/// Returns all default window functions
+pub fn all_default_window_functions() -> Vec<Arc<WindowUDF>> {
+    function::window::functions()
+}
+
+/// Registers all enabled packages with a [`FunctionRegistry`]
+pub fn register_all(registry: &mut dyn FunctionRegistry) -> Result<()> {
+    let scalar_functions: Vec<Arc<ScalarUDF>> = all_default_scalar_functions();
+    scalar_functions.into_iter().try_for_each(|udf| {
+        let existing_udf = registry.register_udf(udf)?;
+        if let Some(existing_udf) = existing_udf {
+            debug!("Overwrite existing UDF: {}", existing_udf.name());
+        }
+        Ok(()) as Result<()>
+    })?;
+
+    let aggregate_functions: Vec<Arc<AggregateUDF>> = all_default_aggregate_functions();
+    aggregate_functions.into_iter().try_for_each(|udf| {
+        let existing_udaf = registry.register_udaf(udf)?;
+        if let Some(existing_udaf) = existing_udaf {
+            debug!("Overwrite existing UDAF: {}", existing_udaf.name());
+        }
+        Ok(()) as Result<()>
+    })?;
+
+    let window_functions: Vec<Arc<WindowUDF>> = all_default_window_functions();
+    window_functions.into_iter().try_for_each(|udf| {
+        let existing_udwf = registry.register_udwf(udf)?;
+        if let Some(existing_udwf) = existing_udwf {
+            debug!("Overwrite existing UDWF: {}", existing_udwf.name());
+        }
+        Ok(()) as Result<()>
+    })?;
+
+    Ok(())
+}

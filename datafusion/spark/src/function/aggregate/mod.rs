@@ -14,3 +14,12 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+use datafusion_expr::AggregateUDF;
+use std::sync::Arc;
+
+pub mod expr_fn {}
+
+pub fn functions() -> Vec<Arc<AggregateUDF>> {
+    vec![]
+}

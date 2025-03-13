@@ -16,3 +16,23 @@
 // under the License.
 
 pub mod ascii;
+
+use datafusion_expr::ScalarUDF;
+use datafusion_functions::make_udf_function;
+use std::sync::Arc;
+
+make_udf_function!(ascii::SparkAscii, spark_ascii);
+
+pub mod expr_fn {
+    use datafusion_functions::export_functions;
+
+    export_functions!((
+        spark_ascii,
+        "Returns the ASCII code point of the first character of string.",
+        arg1
+    ));
+}
+
+pub fn functions() -> Vec<Arc<ScalarUDF>> {
+    vec![spark_ascii()]
+}

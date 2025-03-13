@@ -38,6 +38,7 @@ name = "datafusion_spark"
 [dependencies]
 arrow = { workspace = true }
 arrow-ord = { workspace = true }
+datafusion-catalog = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-doc = { workspace = true }
 datafusion-execution = { workspace = true }
