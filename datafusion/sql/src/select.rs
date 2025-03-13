@@ -887,24 +887,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
-fn generate_projection_expr(
-    projection: &Option<Vec<usize>>,
-    sub_plan: &LogicalPlan,
-) -> Result<Vec<Expr>> {
-    let mut exprs = vec![];
-    if let Some(projection) = projection {
-        for i in projection {
-            exprs.push(Expr::Column(Column::from(
-                sub_plan.schema().qualified_field(*i),
-            )));
-        }
-    } else {
-        let expanded = expand_wildcard(sub_plan.schema(), sub_plan, None)?;
-        exprs.extend(expanded);
-    }
-    Ok(exprs)
-}
-
 // If there are any multiple-defined windows, we raise an error.
 fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()> {
     for (i, window_def_i) in window_defs.iter().enumerate() {
