@@ -19,7 +19,7 @@ use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
 
 use std::fmt::{Debug, Formatter, Result as FmtResult};
 
-use crate::PartitionedFile;
+use crate::{ListingTableUrl, PartitionedFile};
 
 /// A wrapper to customize partitioned file display
 ///
@@ -91,6 +91,36 @@ impl DisplayAs for FileGroupDisplay<'_> {
     }
 }
 
+/// A wrapper to customize table paths display
+///
+/// Prints in the format:
+/// ```text
+/// table_path1, table_path2, ...
+/// ```
+#[derive(Debug)]
+pub struct TablePathsDisplay<'a>(pub &'a [ListingTableUrl]);
+
+impl DisplayAs for TablePathsDisplay<'_> {
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> FmtResult {
+        match t {
+            DisplayFormatType::Default | DisplayFormatType::TreeRender => {
+                // To avoid showing too many paths
+                let max_paths = 5;
+                fmt_up_to_n_elements(self.0, max_paths, f, |path, f| {
+                    write!(f, "{}", path.as_str())
+                })?;
+            }
+            DisplayFormatType::Verbose => {
+                fmt_elements_split_by_commas(self.0.iter(), f, |path, f| {
+                    write!(f, "{}", path.as_str())
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// helper to format an array of up to N elements
 fn fmt_up_to_n_elements<E, F>(
     elements: &[E],
@@ -139,6 +169,7 @@ mod tests {
     use object_store::{path::Path, ObjectMeta};
 
     use chrono::Utc;
+    use url::Url;
 
     #[test]
     fn file_groups_display_empty() {
@@ -291,5 +322,87 @@ mod tests {
             extensions: None,
             metadata_size_hint: None,
         }
+    }
+
+    #[test]
+    fn table_paths_display_empty() {
+        let expected = "";
+        assert_eq!(DefaultDisplay(TablePathsDisplay(&[])).to_string(), expected);
+    }
+
+    #[test]
+    fn table_paths_display_one() {
+        let url = Url::parse("file:///foo/bar.csv").unwrap();
+        let table_path = ListingTableUrl::parse(url).unwrap();
+        let paths = [table_path];
+
+        let expected = "file:///foo/bar.csv";
+        assert_eq!(
+            DefaultDisplay(TablePathsDisplay(&paths)).to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn table_paths_display_many_default() {
+        let urls = vec![
+            Url::parse("file:///foo/a.csv").unwrap(),
+            Url::parse("file:///foo/b.csv").unwrap(),
+            Url::parse("file:///foo/c.csv").unwrap(),
+        ];
+        let paths: Vec<_> = urls
+            .into_iter()
+            .map(|url| ListingTableUrl::parse(url).unwrap())
+            .collect();
+
+        let expected = "file:///foo/a.csv, file:///foo/b.csv, file:///foo/c.csv";
+        assert_eq!(
+            DefaultDisplay(TablePathsDisplay(&paths)).to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn table_paths_display_too_many_default() {
+        let urls = vec![
+            Url::parse("file:///foo/a.csv").unwrap(),
+            Url::parse("file:///foo/b.csv").unwrap(),
+            Url::parse("file:///foo/c.csv").unwrap(),
+            Url::parse("file:///foo/d.csv").unwrap(),
+            Url::parse("file:///foo/e.csv").unwrap(),
+            Url::parse("file:///foo/f.csv").unwrap(),
+        ];
+        let paths: Vec<_> = urls
+            .into_iter()
+            .map(|url| ListingTableUrl::parse(url).unwrap())
+            .collect();
+
+        let expected = "file:///foo/a.csv, file:///foo/b.csv, file:///foo/c.csv, file:///foo/d.csv, file:///foo/e.csv, ...";
+        assert_eq!(
+            DefaultDisplay(TablePathsDisplay(&paths)).to_string(),
+            expected
+        );
+    }
+
+    #[test]
+    fn table_paths_display_too_many_verbose() {
+        let urls = vec![
+            Url::parse("file:///foo/a.csv").unwrap(),
+            Url::parse("file:///foo/b.csv").unwrap(),
+            Url::parse("file:///foo/c.csv").unwrap(),
+            Url::parse("file:///foo/d.csv").unwrap(),
+            Url::parse("file:///foo/e.csv").unwrap(),
+            Url::parse("file:///foo/f.csv").unwrap(),
+        ];
+        let paths: Vec<_> = urls
+            .into_iter()
+            .map(|url| ListingTableUrl::parse(url).unwrap())
+            .collect();
+
+        let expected = "file:///foo/a.csv, file:///foo/b.csv, file:///foo/c.csv, file:///foo/d.csv, file:///foo/e.csv, file:///foo/f.csv";
+        assert_eq!(
+            VerboseDisplay(TablePathsDisplay(&paths)).to_string(),
+            expected
+        );
     }
 }
