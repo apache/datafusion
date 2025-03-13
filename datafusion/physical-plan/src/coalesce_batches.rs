@@ -117,14 +117,17 @@ impl DisplayAs for CoalesceBatchesExec {
                     self.target_batch_size,
                 )?;
                 if let Some(fetch) = self.fetch {
-                    write!(f, ", fetch={fetch}")?;
+                    write!(f, ", limit={fetch}")?;
                 };
 
                 Ok(())
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                writeln!(f, "target_batch_size={}", self.target_batch_size)?;
+                if let Some(fetch) = self.fetch {
+                    write!(f, "limit={fetch}")?;
+                };
+                Ok(())
             }
         }
     }
