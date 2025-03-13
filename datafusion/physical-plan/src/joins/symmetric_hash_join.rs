@@ -380,6 +380,20 @@ impl DisplayAs for SymmetricHashJoinExec {
                     self.mode, self.join_type, on, display_filter
                 )
             }
+            DisplayFormatType::TreeRender => {
+                let on = self
+                    .on
+                    .iter()
+                    .map(|(c1, c2)| format!("({} = {})", c1, c2))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                writeln!(f, "mode={:?}", self.mode)?;
+                if *self.join_type() != JoinType::Inner {
+                    writeln!(f, "join_type={:?}", self.join_type)?;
+                }
+                writeln!(f, "on={}", on)
+            }
         }
     }
 }

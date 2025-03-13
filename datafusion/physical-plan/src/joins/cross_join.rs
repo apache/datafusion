@@ -240,6 +240,10 @@ impl DisplayAs for CrossJoinExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "CrossJoinExec")
             }
+            DisplayFormatType::TreeRender => {
+                // no extra info to display
+                Ok(())
+            }
         }
     }
 }

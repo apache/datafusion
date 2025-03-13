@@ -17,9 +17,10 @@
 
 extern crate criterion;
 
+use arrow::datatypes::DataType;
 use arrow::util::bench_util::create_string_array_with_len;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs};
 use datafusion_functions::encoding;
 use std::sync::Arc;
 
@@ -29,35 +30,49 @@ fn criterion_benchmark(c: &mut Criterion) {
         let str_array = Arc::new(create_string_array_with_len::<i32>(size, 0.2, 32));
         c.bench_function(&format!("base64_decode/{size}"), |b| {
             let method = ColumnarValue::Scalar("base64".into());
-            // TODO: use invoke_with_args
             let encoded = encoding::encode()
-                .invoke_batch(
-                    &[ColumnarValue::Array(str_array.clone()), method.clone()],
-                    size,
-                )
+                .invoke_with_args(ScalarFunctionArgs {
+                    args: vec![ColumnarValue::Array(str_array.clone()), method.clone()],
+                    number_rows: size,
+                    return_type: &DataType::Utf8,
+                })
                 .unwrap();
 
             let args = vec![encoded, method];
             b.iter(|| {
-                // TODO use invoke_with_args
-                black_box(decode.invoke_batch(&args, size).unwrap())
+                black_box(
+                    decode
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::Utf8,
+                        })
+                        .unwrap(),
+                )
             })
         });
 
         c.bench_function(&format!("hex_decode/{size}"), |b| {
             let method = ColumnarValue::Scalar("hex".into());
-            // TODO use invoke_with_args
             let encoded = encoding::encode()
-                .invoke_batch(
-                    &[ColumnarValue::Array(str_array.clone()), method.clone()],
-                    size,
-                )
+                .invoke_with_args(ScalarFunctionArgs {
+                    args: vec![ColumnarValue::Array(str_array.clone()), method.clone()],
+                    number_rows: size,
+                    return_type: &DataType::Utf8,
+                })
                 .unwrap();
 
             let args = vec![encoded, method];
             b.iter(|| {
-                // TODO use invoke_with_args
-                black_box(decode.invoke_batch(&args, size).unwrap())
+                black_box(
+                    decode
+                        .invoke_with_args(ScalarFunctionArgs {
+                            args: args.clone(),
+                            number_rows: size,
+                            return_type: &DataType::Utf8,
+                        })
+                        .unwrap(),
+                )
             })
         });
     }

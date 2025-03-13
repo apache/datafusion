@@ -506,6 +506,18 @@ impl DisplayAs for RepartitionExec {
                 }
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                writeln!(f, "partitioning_scheme={}", self.partitioning(),)?;
+                writeln!(
+                    f,
+                    "output_partition_count={}",
+                    self.input.output_partitioning().partition_count()
+                )?;
+                if self.preserve_order {
+                    writeln!(f, "preserve_order={}", self.preserve_order)?;
+                }
+                Ok(())
+            }
         }
     }
 }

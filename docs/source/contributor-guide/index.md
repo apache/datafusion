@@ -32,7 +32,7 @@ community as well as get more familiar with Rust and the relevant codebases.
 
 ## Development Environment
 
-You can find how to setup build and testing environment [here](https://datafusion.apache.org/user-guide/example-usage.html)
+You can find how to setup build and testing environment [here](https://datafusion.apache.org/contributor-guide/development_environment.html)
 
 ## Finding and Creating Issues to Work On
 

@@ -172,28 +172,12 @@ impl ScalarUDF {
     ///
     ///  # Notes
     ///
-    /// If a function implement [`ScalarUDFImpl::return_type_from_exprs`],
+    /// If a function implement [`ScalarUDFImpl::return_type_from_args`],
     /// its [`ScalarUDFImpl::return_type`] should raise an error.
     ///
     /// See [`ScalarUDFImpl::return_type`] for more details.
     pub fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         self.inner.return_type(arg_types)
-    }
-
-    /// The datatype this function returns given the input argument input types.
-    /// This function is used when the input arguments are [`Expr`]s.
-    ///
-    ///
-    /// See [`ScalarUDFImpl::return_type_from_exprs`] for more details.
-    #[allow(deprecated)]
-    pub fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        schema: &dyn ExprSchema,
-        arg_types: &[DataType],
-    ) -> Result<DataType> {
-        // If the implementation provides a return_type_from_exprs, use it
-        self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
     /// Return the datatype this function returns given the input argument types.
@@ -225,11 +209,13 @@ impl ScalarUDF {
         self.inner.is_nullable(args, schema)
     }
 
+    #[deprecated(since = "46.0.0", note = "Use `invoke_with_args` instead")]
     pub fn invoke_batch(
         &self,
         args: &[ColumnarValue],
         number_rows: usize,
     ) -> Result<ColumnarValue> {
+        #[allow(deprecated)]
         self.inner.invoke_batch(args, number_rows)
     }
 
@@ -244,7 +230,7 @@ impl ScalarUDF {
     ///
     /// Note: This method is deprecated and will be removed in future releases.
     /// User defined functions should implement [`Self::invoke_with_args`] instead.
-    #[deprecated(since = "42.1.0", note = "Use `invoke_batch` instead")]
+    #[deprecated(since = "42.1.0", note = "Use `invoke_with_args` instead")]
     pub fn invoke_no_args(&self, number_rows: usize) -> Result<ColumnarValue> {
         #[allow(deprecated)]
         self.inner.invoke_no_args(number_rows)
@@ -252,7 +238,7 @@ impl ScalarUDF {
 
     /// Returns a `ScalarFunctionImplementation` that can invoke the function
     /// during execution
-    #[deprecated(since = "42.0.0", note = "Use `invoke_batch` instead")]
+    #[deprecated(since = "42.0.0", note = "Use `invoke_with_args` instead")]
     pub fn fun(&self) -> ScalarFunctionImplementation {
         let captured = Arc::clone(&self.inner);
         #[allow(deprecated)]
@@ -349,7 +335,7 @@ pub struct ScalarFunctionArgs<'a> {
     pub args: Vec<ColumnarValue>,
     /// The number of rows in record batch being evaluated
     pub number_rows: usize,
-    /// The return type of the scalar function returned (from `return_type` or `return_type_from_exprs`)
+    /// The return type of the scalar function returned (from `return_type` or `return_type_from_args`)
     /// when creating the physical expression from the logical expression
     pub return_type: &'a DataType,
 }
@@ -538,16 +524,6 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// [`DataFusionError::Internal`]: datafusion_common::DataFusionError::Internal
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType>;
 
-    #[deprecated(since = "45.0.0", note = "Use `return_type_from_args` instead")]
-    fn return_type_from_exprs(
-        &self,
-        _args: &[Expr],
-        _schema: &dyn ExprSchema,
-        arg_types: &[DataType],
-    ) -> Result<DataType> {
-        self.return_type(arg_types)
-    }
-
     /// What type will be returned by this function, given the arguments?
     ///
     /// By default, this function calls [`Self::return_type`] with the
@@ -613,6 +589,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// User defined functions should implement [`Self::invoke_with_args`] instead.
     ///
     /// See <https://github.com/apache/datafusion/issues/13515> for more details.
+    #[deprecated(since = "46.0.0", note = "Use `invoke_with_args` instead")]
     fn invoke_batch(
         &self,
         args: &[ColumnarValue],
@@ -643,6 +620,7 @@ pub trait ScalarUDFImpl: Debug + Send + Sync {
     /// [`ColumnarValue::values_to_arrays`] can be used to convert the arguments
     /// to arrays, which will likely be simpler code, but be slower.
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        #[allow(deprecated)]
         self.invoke_batch(&args.args, args.number_rows)
     }
 
@@ -883,16 +861,6 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
 
     fn aliases(&self) -> &[String] {
         &self.aliases
-    }
-
-    #[allow(deprecated)]
-    fn return_type_from_exprs(
-        &self,
-        args: &[Expr],
-        schema: &dyn ExprSchema,
-        arg_types: &[DataType],
-    ) -> Result<DataType> {
-        self.inner.return_type_from_exprs(args, schema, arg_types)
     }
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {

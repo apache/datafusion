@@ -185,6 +185,21 @@ impl DisplayAs for SortPreservingMergeExec {
 
                 Ok(())
             }
+            DisplayFormatType::TreeRender => {
+                for (i, e) in self.expr().iter().enumerate() {
+                    let e = e.to_string();
+                    if i == self.expr().len() - 1 {
+                        writeln!(f, "{e}")?;
+                    } else {
+                        write!(f, "{e}, ")?;
+                    }
+                }
+                if let Some(fetch) = self.fetch {
+                    writeln!(f, "limit={fetch}")?;
+                };
+
+                Ok(())
+            }
         }
     }
 }
@@ -1382,6 +1397,10 @@ mod tests {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
                     write!(f, "CongestedExec",).unwrap()
+                }
+                DisplayFormatType::TreeRender => {
+                    // TODO: collect info
+                    write!(f, "").unwrap()
                 }
             }
             Ok(())

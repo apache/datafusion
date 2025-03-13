@@ -1393,3 +1393,61 @@ item1 1970-01-01T00:00:03 75
 
 statement ok
 drop table source_table;
+
+statement count 0
+drop table t1;
+
+statement count 0
+drop table t2;
+
+statement count 0
+drop table t3;
+
+# test count wildcard
+statement count 0
+create table t1(a int) as values (1);
+
+statement count 0
+create table t2(b int) as values (1);
+
+query I
+SELECT a FROM t1 WHERE EXISTS (SELECT count(*) FROM t2)
+----
+1
+
+query TT
+explain SELECT a FROM t1 WHERE EXISTS (SELECT count(*) FROM t2)
+----
+logical_plan
+01)LeftSemi Join: 
+02)--TableScan: t1 projection=[a]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: 
+05)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+06)--------TableScan: t2 projection=[]
+
+statement count 0
+drop table t1;
+
+statement count 0
+drop table t2;
+
+
+# test exists_subquery_wildcard
+statement count 0
+create table person(id int, last_name int, state int);
+
+query TT
+explain SELECT id FROM person p WHERE EXISTS 
+    (SELECT * FROM person WHERE last_name = p.last_name AND state = p.state)
+----
+logical_plan
+01)Projection: p.id
+02)--LeftSemi Join: p.last_name = __correlated_sq_1.last_name, p.state = __correlated_sq_1.state
+03)----SubqueryAlias: p
+04)------TableScan: person projection=[id, last_name, state]
+05)----SubqueryAlias: __correlated_sq_1
+06)------TableScan: person projection=[last_name, state]
+
+statement count 0
+drop table person;

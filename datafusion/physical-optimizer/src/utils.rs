@@ -31,6 +31,10 @@ use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 /// This utility function adds a `SortExec` above an operator according to the
 /// given ordering requirements while preserving the original partitioning.
+///
+/// Note that this updates the plan in both the [`PlanContext.children`] and
+/// the [`PlanContext.plan`]'s children. Therefore its not required to sync
+/// the child plans with [`PlanContext::update_plan_from_children`].
 pub fn add_sort_above<T: Clone + Default>(
     node: PlanContext<T>,
     sort_requirements: LexRequirement,

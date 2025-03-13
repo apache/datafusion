@@ -167,6 +167,17 @@ impl DisplayAs for ProjectionExec {
 
                 write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
             }
+            DisplayFormatType::TreeRender => {
+                for (i, (e, alias)) in self.expr().iter().enumerate() {
+                    let e = e.to_string();
+                    if &e == alias {
+                        writeln!(f, "expr{i}={e}")?;
+                    } else {
+                        writeln!(f, "{alias}={e}")?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }

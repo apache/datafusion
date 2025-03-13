@@ -21,7 +21,7 @@ use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
-    col, lit, table_scan, wildcard, EmptyRelation, Expr, Extension, LogicalPlan,
+    cast, col, lit, table_scan, wildcard, EmptyRelation, Expr, Extension, LogicalPlan,
     LogicalPlanBuilder, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
 use datafusion_functions::unicode;
@@ -37,6 +37,7 @@ use datafusion_sql::unparser::dialect::{
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 use sqlparser::ast::Statement;
 use std::hash::Hash;
+use std::ops::Add;
 use std::sync::Arc;
 use std::{fmt, vec};
 
@@ -324,9 +325,9 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             unparser_dialect: Box::new(UnparserMySqlDialect {}),
         },
         TestStatementWithDialect {
-            sql: "select * from (select * from j1 limit 10);",
+            sql: "select j1_id from (select j1_id from j1 limit 10);",
             expected:
-                "SELECT * FROM (SELECT * FROM `j1` LIMIT 10) AS `derived_limit`",
+                "SELECT `j1`.`j1_id` FROM (SELECT `j1`.`j1_id` FROM `j1` LIMIT 10) AS `derived_limit`",
             parser_dialect: Box::new(MySqlDialect {}),
             unparser_dialect: Box::new(UnparserMySqlDialect {}),
         },
@@ -526,85 +527,79 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM (SELECT j1_id + 1 FROM j1) AS temp_j(id2)",
-            expected: r#"SELECT * FROM (SELECT (`j1`.`j1_id` + 1) AS `id2` FROM `j1`) AS `temp_j`"#,
+            expected: r#"SELECT `temp_j`.`id2` FROM (SELECT (`j1`.`j1_id` + 1) AS `id2` FROM `j1`) AS `temp_j`"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(SqliteDialect {}),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM (SELECT j1_id FROM j1 LIMIT 1) AS temp_j(id2)",
-            expected: r#"SELECT * FROM (SELECT `j1`.`j1_id` AS `id2` FROM `j1` LIMIT 1) AS `temp_j`"#,
+            expected: r#"SELECT `temp_j`.`id2` FROM (SELECT `j1`.`j1_id` AS `id2` FROM `j1` LIMIT 1) AS `temp_j`"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(SqliteDialect {}),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3])",
-            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
+            expected: r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))" FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))")"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
-            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS t1 (c1)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(UnparserDefaultDialect {}),
-        },
-        TestStatementWithDialect {
-            sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
-            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS t1 (c1)"#,
+            expected: r#"SELECT t1.c1 FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS t1 (c1)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3]), j1",
-            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
+            expected: r#"SELECT "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))", j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") CROSS JOIN j1"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
-            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)"#,
+            expected: r#"SELECT u.c1, j1.j1_id, j1.j1_string FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
-            expected: r#"SELECT * FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) UNION ALL SELECT * FROM (SELECT UNNEST([4, 5, 6]) AS "UNNEST(make_array(Int64(4),Int64(5),Int64(6)))") AS u (c1)"#,
+            expected: r#"SELECT u.c1 FROM (SELECT UNNEST([1, 2, 3]) AS "UNNEST(make_array(Int64(1),Int64(2),Int64(3)))") AS u (c1) UNION ALL SELECT u.c1 FROM (SELECT UNNEST([4, 5, 6]) AS "UNNEST(make_array(Int64(4),Int64(5),Int64(6)))") AS u (c1)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3])",
-            expected: r#"SELECT * FROM UNNEST([1, 2, 3])"#,
+            expected: r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))) FROM UNNEST([1, 2, 3])"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
-            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+            expected: r#"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3]) AS t1 (c1)",
-            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
+            expected: r#"SELECT t1.c1 FROM UNNEST([1, 2, 3]) AS t1 (c1)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3]), j1",
-            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) CROSS JOIN j1"#,
+            expected: r#"SELECT UNNEST(make_array(Int64(1),Int64(2),Int64(3))), j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) CROSS JOIN j1"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) JOIN j1 ON u.c1 = j1.j1_id",
-            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)"#,
+            expected: r#"SELECT u.c1, j1.j1_id, j1.j1_string FROM UNNEST([1, 2, 3]) AS u (c1) INNER JOIN j1 ON (u.c1 = j1.j1_id)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM UNNEST([1,2,3]) u(c1) UNION ALL SELECT * FROM UNNEST([4,5,6]) u(c1)",
-            expected: r#"SELECT * FROM UNNEST([1, 2, 3]) AS u (c1) UNION ALL SELECT * FROM UNNEST([4, 5, 6]) AS u (c1)"#,
+            expected: r#"SELECT u.c1 FROM UNNEST([1, 2, 3]) AS u (c1) UNION ALL SELECT u.c1 FROM UNNEST([4, 5, 6]) AS u (c1)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
@@ -628,25 +623,25 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
-            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)"#,
+            expected: r#"SELECT u.array_col, u.struct_col, UNNEST(outer_ref(u.array_col)) FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
-            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS t1 (c1)"#,
+            expected: r#"SELECT u.array_col, u.struct_col, t1.c1 FROM unnest_table AS u CROSS JOIN UNNEST(u.array_col) AS t1 (c1)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
-            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))")"#,
+            expected: r#"SELECT u.array_col, u.struct_col, "UNNEST(outer_ref(u.array_col))" FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))")"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
         TestStatementWithDialect {
             sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col) AS t1 (c1)",
-            expected: r#"SELECT * FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))") AS t1 (c1)"#,
+            expected: r#"SELECT u.array_col, u.struct_col, t1.c1 FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))") AS t1 (c1)"#,
             parser_dialect: Box::new(GenericDialect {}),
             unparser_dialect: Box::new(UnparserDefaultDialect {}),
         },
@@ -1456,13 +1451,13 @@ fn test_unnest_to_sql() {
 fn test_join_with_no_conditions() {
     sql_round_trip(
         GenericDialect {},
-        "SELECT * FROM j1 JOIN j2",
-        "SELECT * FROM j1 CROSS JOIN j2",
+        "SELECT j1.j1_id, j1.j1_string FROM j1 JOIN j2",
+        "SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2",
     );
     sql_round_trip(
         GenericDialect {},
-        "SELECT * FROM j1 CROSS JOIN j2",
-        "SELECT * FROM j1 CROSS JOIN j2",
+        "SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2",
+        "SELECT j1.j1_id, j1.j1_string FROM j1 CROSS JOIN j2",
     );
 }
 
@@ -1563,7 +1558,7 @@ fn test_unparse_extension_to_statement() -> Result<()> {
         Arc::new(UnusedUnparser {}),
     ]);
     let sql = unparser.plan_to_sql(&extension)?;
-    let expected = "SELECT * FROM j1";
+    let expected = "SELECT j1.j1_id, j1.j1_string FROM j1";
     assert_eq!(sql.to_string(), expected);
 
     if let Some(err) = plan_to_sql(&extension).err() {
@@ -1626,7 +1621,8 @@ fn test_unparse_extension_to_sql() -> Result<()> {
         Arc::new(UnusedUnparser {}),
     ]);
     let sql = unparser.plan_to_sql(&plan)?;
-    let expected = "SELECT j1.j1_id AS user_id FROM (SELECT * FROM j1)";
+    let expected =
+        "SELECT j1.j1_id AS user_id FROM (SELECT j1.j1_id, j1.j1_string FROM j1)";
     assert_eq!(sql.to_string(), expected);
 
     if let Some(err) = plan_to_sql(&plan).err() {
@@ -1685,5 +1681,68 @@ fn test_unparse_optimized_multi_union() -> Result<()> {
         panic!("Expected error")
     }
 
+    Ok(())
+}
+
+/// Test unparse the optimized plan from the following SQL:
+/// ```
+/// SELECT
+///   customer_view.c_custkey,
+///   customer_view.c_name,
+///   customer_view.custkey_plus
+/// FROM
+///   (
+///     SELECT
+///       customer.c_custkey,
+///       customer.c_name,
+///       customer.custkey_plus
+///     FROM
+///       (
+///         SELECT
+///           customer.c_custkey,
+///           CAST(customer.c_custkey AS BIGINT) + 1 AS custkey_plus,
+///           customer.c_name
+///         FROM
+///           (
+///             SELECT
+///               customer.c_custkey AS c_custkey,
+///               customer.c_name AS c_name
+///             FROM
+///               customer
+///           ) AS customer
+///       ) AS customer
+///   ) AS customer_view
+/// ```
+#[test]
+fn test_unparse_subquery_alias_with_table_pushdown() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("c_custkey", DataType::Int32, false),
+        Field::new("c_name", DataType::Utf8, false),
+    ]);
+
+    let table_scan = table_scan(Some("customer"), &schema, Some(vec![0, 1]))?.build()?;
+
+    let plan = LogicalPlanBuilder::from(table_scan)
+        .alias("customer")?
+        .project(vec![
+            col("customer.c_custkey"),
+            cast(col("customer.c_custkey"), DataType::Int64)
+                .add(lit(1))
+                .alias("custkey_plus"),
+            col("customer.c_name"),
+        ])?
+        .alias("customer")?
+        .project(vec![
+            col("customer.c_custkey"),
+            col("customer.c_name"),
+            col("customer.custkey_plus"),
+        ])?
+        .alias("customer_view")?
+        .build()?;
+
+    let unparser = Unparser::default();
+    let sql = unparser.plan_to_sql(&plan)?;
+    let expected = "SELECT customer_view.c_custkey, customer_view.c_name, customer_view.custkey_plus FROM (SELECT customer.c_custkey, (CAST(customer.c_custkey AS BIGINT) + 1) AS custkey_plus, customer.c_name FROM (SELECT customer.c_custkey, customer.c_name FROM customer AS customer) AS customer) AS customer_view";
+    assert_eq!(sql.to_string(), expected);
     Ok(())
 }

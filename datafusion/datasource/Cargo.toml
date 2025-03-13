@@ -31,14 +31,13 @@ version.workspace = true
 all-features = true
 
 [features]
-# Temporary feature while I move things around
-avro = []
+parquet = ["dep:parquet", "tempfile"]
 compression = ["async-compression", "xz2", "bzip2", "flate2", "zstd", "tokio-util"]
 default = ["compression"]
 
 [dependencies]
 arrow = { workspace = true }
-async-compression = { version = "0.4.0", features = [
+async-compression = { version = "0.4.19", features = [
     "bzip2",
     "gzip",
     "xz",
@@ -63,7 +62,9 @@ glob = "0.3.0"
 itertools = { workspace = true }
 log = { workspace = true }
 object_store = { workspace = true }
+parquet = { workspace = true, optional = true }
 rand = { workspace = true }
+tempfile = { workspace = true, optional = true }
 tokio = { workspace = true }
 tokio-util = { version = "0.7.4", features = ["io"], optional = true }
 url = { workspace = true }

@@ -38,9 +38,8 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::{DmlStatement, Statement};
 use crate::utils::{
-    enumerate_grouping_sets, exprlist_len, exprlist_to_fields, find_base_plan,
-    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    split_conjunction,
+    enumerate_grouping_sets, exprlist_to_fields, find_out_reference_exprs,
+    grouping_set_expr_count, grouping_set_to_exprlist, split_conjunction,
 };
 use crate::{
     build_join_schema, expr_vec_fmt, BinaryExpr, CreateMemoryTable, CreateView, Execute,
@@ -903,7 +902,7 @@ impl LogicalPlan {
                 let (left, right) = self.only_two_inputs(inputs)?;
                 let schema = build_join_schema(left.schema(), right.schema(), join_type)?;
 
-                let equi_expr_count = on.len();
+                let equi_expr_count = on.len() * 2;
                 assert!(expr.len() >= equi_expr_count);
 
                 // Assume that the last expr, if any,
@@ -917,17 +916,16 @@ impl LogicalPlan {
                 // The first part of expr is equi-exprs,
                 // and the struct of each equi-expr is like `left-expr = right-expr`.
                 assert_eq!(expr.len(), equi_expr_count);
-                let new_on = expr.into_iter().map(|equi_expr| {
+                let mut new_on = Vec::with_capacity(on.len());
+                let mut iter = expr.into_iter();
+                while let Some(left) = iter.next() {
+                    let Some(right) = iter.next() else {
+                        internal_err!("Expected a pair of expressions to construct the join on expression")?
+                    };
+
                     // SimplifyExpression rule may add alias to the equi_expr.
-                    let unalias_expr = equi_expr.clone().unalias();
-                    if let Expr::BinaryExpr(BinaryExpr { left, op: Operator::Eq, right }) = unalias_expr {
-                        Ok((*left, *right))
-                    } else {
-                        internal_err!(
-                            "The front part expressions should be an binary equality expression, actual:{equi_expr}"
-                        )
-                    }
-                }).collect::<Result<Vec<(Expr, Expr)>>>()?;
+                    new_on.push((left.unalias(), right.unalias()));
+                }
 
                 Ok(LogicalPlan::Join(Join {
                     left: Arc::new(left),
@@ -2141,6 +2139,7 @@ impl Projection {
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
+        #[expect(deprecated)]
         if !expr.iter().any(|e| matches!(e, Expr::Wildcard { .. }))
             && expr.len() != schema.fields().len()
         {
@@ -3451,6 +3450,7 @@ fn calc_func_dependencies_for_project(
     let proj_indices = exprs
         .iter()
         .map(|expr| match expr {
+            #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => {
                 let wildcard_fields = exprlist_to_fields(
                     vec![&Expr::Wildcard {
@@ -3493,11 +3493,10 @@ fn calc_func_dependencies_for_project(
         .flatten()
         .collect::<Vec<_>>();
 
-    let len = exprlist_len(exprs, input.schema(), Some(find_base_plan(input).schema()))?;
     Ok(input
         .schema()
         .functional_dependencies()
-        .project_functional_dependencies(&proj_indices, len))
+        .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
 /// Sorts its input according to a list of sort expressions.
@@ -3778,7 +3777,8 @@ mod tests {
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
     use crate::{
-        col, exists, in_subquery, lit, placeholder, scalar_subquery, GroupingSet,
+        binary_expr, col, exists, in_subquery, lit, placeholder, scalar_subquery,
+        GroupingSet,
     };
 
     use datafusion_common::tree_node::{
@@ -4629,5 +4629,111 @@ digraph {
 
         let parameter_type = params.clone().get(placeholder_value).unwrap().clone();
         assert_eq!(parameter_type, None);
+    }
+
+    #[test]
+    fn test_join_with_new_exprs() -> Result<()> {
+        fn create_test_join(
+            on: Vec<(Expr, Expr)>,
+            filter: Option<Expr>,
+        ) -> Result<LogicalPlan> {
+            let schema = Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Int32, false),
+            ]);
+
+            let left_schema = DFSchema::try_from_qualified_schema("t1", &schema)?;
+            let right_schema = DFSchema::try_from_qualified_schema("t2", &schema)?;
+
+            Ok(LogicalPlan::Join(Join {
+                left: Arc::new(
+                    table_scan(Some("t1"), left_schema.as_arrow(), None)?.build()?,
+                ),
+                right: Arc::new(
+                    table_scan(Some("t2"), right_schema.as_arrow(), None)?.build()?,
+                ),
+                on,
+                filter,
+                join_type: JoinType::Inner,
+                join_constraint: JoinConstraint::On,
+                schema: Arc::new(left_schema.join(&right_schema)?),
+                null_equals_null: false,
+            }))
+        }
+
+        {
+            let join = create_test_join(vec![(col("t1.a"), (col("t2.a")))], None)?;
+            let LogicalPlan::Join(join) = join.with_new_exprs(
+                join.expressions(),
+                join.inputs().into_iter().cloned().collect(),
+            )?
+            else {
+                unreachable!()
+            };
+            assert_eq!(join.on, vec![(col("t1.a"), (col("t2.a")))]);
+            assert_eq!(join.filter, None);
+        }
+
+        {
+            let join = create_test_join(vec![], Some(col("t1.a").gt(col("t2.a"))))?;
+            let LogicalPlan::Join(join) = join.with_new_exprs(
+                join.expressions(),
+                join.inputs().into_iter().cloned().collect(),
+            )?
+            else {
+                unreachable!()
+            };
+            assert_eq!(join.on, vec![]);
+            assert_eq!(join.filter, Some(col("t1.a").gt(col("t2.a"))));
+        }
+
+        {
+            let join = create_test_join(
+                vec![(col("t1.a"), (col("t2.a")))],
+                Some(col("t1.b").gt(col("t2.b"))),
+            )?;
+            let LogicalPlan::Join(join) = join.with_new_exprs(
+                join.expressions(),
+                join.inputs().into_iter().cloned().collect(),
+            )?
+            else {
+                unreachable!()
+            };
+            assert_eq!(join.on, vec![(col("t1.a"), (col("t2.a")))]);
+            assert_eq!(join.filter, Some(col("t1.b").gt(col("t2.b"))));
+        }
+
+        {
+            let join = create_test_join(
+                vec![(col("t1.a"), (col("t2.a"))), (col("t1.b"), (col("t2.b")))],
+                None,
+            )?;
+            let LogicalPlan::Join(join) = join.with_new_exprs(
+                vec![
+                    binary_expr(col("t1.a"), Operator::Plus, lit(1)),
+                    binary_expr(col("t2.a"), Operator::Plus, lit(2)),
+                    col("t1.b"),
+                    col("t2.b"),
+                    lit(true),
+                ],
+                join.inputs().into_iter().cloned().collect(),
+            )?
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                join.on,
+                vec![
+                    (
+                        binary_expr(col("t1.a"), Operator::Plus, lit(1)),
+                        binary_expr(col("t2.a"), Operator::Plus, lit(2))
+                    ),
+                    (col("t1.b"), (col("t2.b")))
+                ]
+            );
+            assert_eq!(join.filter, Some(lit(true)));
+        }
+
+        Ok(())
     }
 }
