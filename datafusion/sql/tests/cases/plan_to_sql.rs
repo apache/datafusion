@@ -21,9 +21,8 @@ use datafusion_expr::test::function_stub::{
     count_udaf, max_udaf, min_udaf, sum, sum_udaf,
 };
 use datafusion_expr::{
-    cast, cast, col, col, lit, lit, table_scan, table_scan, wildcard, wildcard,
-    EmptyRelation, EmptyRelation, Expr, Expr, Extension, Extension, LogicalPlan,
-    LogicalPlan, LogicalPlanBuilder, Union, UserDefinedLogicalNode,
+    cast, col, lit, table_scan, wildcard,
+    EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Union, UserDefinedLogicalNode,
     UserDefinedLogicalNodeCore,
 };
 use datafusion_functions::unicode;
@@ -39,7 +38,6 @@ use datafusion_sql::unparser::dialect::{
 use datafusion_sql::unparser::{expr_to_sql, plan_to_sql, Unparser};
 use sqlparser::ast::Statement;
 use std::hash::Hash;
-use std::ops::Add;
 use std::ops::Add;
 use std::sync::Arc;
 use std::{fmt, vec};
