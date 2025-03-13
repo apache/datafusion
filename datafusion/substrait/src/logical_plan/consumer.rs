@@ -62,7 +62,6 @@ use datafusion::common::scalar::ScalarStructBuilder;
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr::InList;
-use datafusion::logical_expr::utils::group_window_expr_by_sort_keys;
 use datafusion::logical_expr::{
     col, expr, GroupingSet, Like, LogicalPlanBuilder, Partitioning, Repartition,
     WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
