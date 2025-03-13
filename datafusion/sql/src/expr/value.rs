@@ -48,11 +48,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match value {
             Value::Number(n, _) => self.parse_sql_number(&n, false),
             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => {
-                let lit_val = if let Ok(parsed) = s.parse::<i64>() {
+                let lit_val = if let Some(parsed) = s.parse::<i64>().ok().filter(|p| p.to_string() == s) {
                     lit(parsed)
-                } else if let Ok(parsed) = s.parse::<f32>() {
+                } else if let Some(parsed) = s.parse::<f32>().ok().filter(|p| p.to_string() == s) {
                     lit(parsed)
-                } else if let Ok(parsed) = s.parse::<f64>() {
+                } else if let Some(parsed) = s.parse::<f64>().ok().filter(|p| p.to_string() == s) {
                     lit(parsed)
                 } else {
                     lit(s)
