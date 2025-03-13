@@ -65,8 +65,8 @@ mod tests {
         DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
-    use datafusion_expr::{col, lit, when, Expr};
-    use datafusion_functions::expr_fn::{concat, get_field};
+    use datafusion_expr::{cast, col, lit, when, Expr};
+    use datafusion_functions::expr_fn::{concat, get_field, substring};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_expr::{expressions, PhysicalExpr, ScalarFunctionExpr};
     use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
@@ -75,6 +75,7 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
     use futures::StreamExt;
+    use itertools::Itertools;
     use object_store::local::LocalFileSystem;
     use object_store::path::Path;
     use object_store::{ObjectMeta, ObjectStore};
@@ -989,24 +990,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pre_computed_expression_pushdwon() {
+    async fn test_pre_computed_expression_pushdown() {
         let table_schema = Schema::new(vec![
             Field::new("first_name", DataType::Utf8, false),
             Field::new("last_name", DataType::Utf8, false),
         ]);
 
-        let expr: Expr = concat(vec![col("first_name"), lit(" "), col("last_name")]);
-        let phys_expr = logical2physical(&expr, &table_schema);
-        let pre_computed_column_name =
-            PreComputedExpressionRewriter::expr_to_column_name(&phys_expr);
+        let full_name_expr: Expr =
+            concat(vec![col("first_name"), lit(" "), col("last_name")]);
+        let pre_computed_full_name_column_name =
+            PreComputedExpressionRewriter::expr_to_column_name(&logical2physical(
+                &full_name_expr,
+                &table_schema,
+            ));
+        // Note that this casting and having to explictily specify the types has nothing to do with what we are actually testing.
+        // It's just a side effect of how `RoundTrip` is implemented.
+        let initials_expr: Expr = cast(
+            concat(vec![
+                substring(
+                    col("first_name"),
+                    lit(ScalarValue::Int64(Some(0))),
+                    lit(ScalarValue::Int64(Some(1))),
+                ),
+                substring(
+                    col("last_name"),
+                    lit(ScalarValue::Int64(Some(0))),
+                    lit(ScalarValue::Int64(Some(1))),
+                ),
+            ]),
+            DataType::Utf8,
+        );
+        let pre_computed_initials_column_name =
+            PreComputedExpressionRewriter::expr_to_column_name(&logical2physical(
+                &initials_expr,
+                &table_schema,
+            ));
 
-        let file_schema = Schema::new(vec![
+        // Add pre-computed columns to the schema
+        let file_schema_fields = vec![
             Field::new("first_name", DataType::Utf8, false),
+            // Pre-compute initials
+            Field::new(pre_computed_initials_column_name, DataType::Utf8, false),
             Field::new("last_name", DataType::Utf8, false),
             // Pre-compute the full name
-            Field::new(pre_computed_column_name, DataType::Utf8, false),
-        ]);
-
+            Field::new(pre_computed_full_name_column_name, DataType::Utf8, false),
+        ];
         let first_names = StringArray::from(vec!["Andrés", "Charly", "Fito", "Gustavo"]);
         let last_names = StringArray::from(vec!["Calamaro", "Garcia", "Paez", "Cerati"]);
         let full_names = StringArray::from(vec![
@@ -1015,44 +1043,120 @@ mod tests {
             "Fito Paez",
             "Gustavo Cerati",
         ]);
-
-        let batch = RecordBatch::try_new(
-            Arc::new(file_schema.clone()),
-            vec![
-                Arc::new(first_names),
-                Arc::new(last_names),
-                Arc::new(full_names),
-            ],
-        )
-        .unwrap();
-
-        let filter = expr.eq(lit("Gustavo Cerati"));
-
-        // Read/write them files
-        // Since we set `with_page_index_predicate` we expect 2 rows per page -> at least 2 pages
-        let rt = RoundTrip::new()
-            .with_predicate(filter)
-            .with_pushdown_predicate()
-            .with_page_index_predicate()
-            .with_filter_rewriter(Arc::new(PreComputedExpressionRewriter))
-            .with_schema(Arc::new(table_schema))
-            .round_trip(vec![batch])
-            .await;
-
-        #[rustfmt::skip]
-        let expected = [
-            "+------------+-----------+",
-            "| first_name | last_name |",
-            "+------------+-----------+",
-            "| Gustavo    | Cerati    |",
-            "+------------+-----------+",
+        let initials = StringArray::from(vec!["AC", "CG", "FP", "GC"]);
+        let file_columns = vec![
+            Arc::new(first_names) as ArrayRef,
+            Arc::new(initials),
+            Arc::new(last_names),
+            Arc::new(full_names),
         ];
-        assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
-        let metrics = rt.parquet_exec.metrics().unwrap();
-        // Prove that the filter is getting pushed down into the page index of the pre-computed column
-        assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
-        // And remaining rows are pruned by filter pushdown
-        assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
+
+        // Take the opportunity to test variations of column ordering in the file.
+        // They should all work but exercise different code paths w.r.t. building the filter expression's schema.
+        let column_orders = [0usize, 1, 2, 3];
+        for column_order in column_orders
+            .iter()
+            .permutations(column_orders.len())
+            .unique()
+        {
+            // re-order the fields based on the permutation
+            let file_schema_fields = vec![
+                file_schema_fields[*column_order[0]].clone(),
+                file_schema_fields[*column_order[1]].clone(),
+                file_schema_fields[*column_order[2]].clone(),
+                file_schema_fields[*column_order[3]].clone(),
+            ];
+            let file_schema = Schema::new(file_schema_fields.clone());
+            let file_columns = vec![
+                file_columns[*column_order[0]].clone(),
+                file_columns[*column_order[1]].clone(),
+                file_columns[*column_order[2]].clone(),
+                file_columns[*column_order[3]].clone(),
+            ];
+
+            let batch = RecordBatch::try_new(Arc::new(file_schema.clone()), file_columns)
+                .unwrap();
+
+            let filter = full_name_expr.clone().eq(lit("Gustavo Cerati"));
+
+            // Read/write the files
+            // Since we set `with_page_index_predicate` we expect 2 rows per page -> at least 2 pages
+            let rt = RoundTrip::new()
+                .with_predicate(filter)
+                .with_pushdown_predicate()
+                .with_page_index_predicate()
+                .with_filter_rewriter(Arc::new(PreComputedExpressionRewriter))
+                .with_schema(Arc::new(table_schema.clone()))
+                .round_trip(vec![batch.clone()])
+                .await;
+
+            #[rustfmt::skip]
+            let expected = [
+                "+------------+-----------+",
+                "| first_name | last_name |",
+                "+------------+-----------+",
+                "| Gustavo    | Cerati    |",
+                "+------------+-----------+",
+            ];
+            assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+            let metrics = rt.parquet_exec.metrics().unwrap();
+            // Prove that the filter is getting pushed down into the page index of the pre-computed column
+            assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
+            // And remaining rows are pruned by filter pushdown
+            assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
+
+            let filter = initials_expr.clone().eq(lit("CG"));
+
+            // Read/write the files
+            // Since we set `with_page_index_predicate` we expect 2 rows per page -> at least 2 pages
+            let rt = RoundTrip::new()
+                .with_predicate(filter)
+                .with_pushdown_predicate()
+                .with_page_index_predicate()
+                .with_filter_rewriter(Arc::new(PreComputedExpressionRewriter))
+                .with_schema(Arc::new(table_schema.clone()))
+                .round_trip(vec![batch.clone()])
+                .await;
+
+            #[rustfmt::skip]
+            let expected = [
+                "+------------+-----------+",
+                "| first_name | last_name |",
+                "+------------+-----------+",
+                "| Charly     | Garcia    |",
+                "+------------+-----------+",
+            ];
+            assert_batches_sorted_eq!(expected, &rt.batches.unwrap());
+            let metrics = rt.parquet_exec.metrics().unwrap();
+            // Prove that the filter is getting pushed down into the page index of the pre-computed column
+            assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 2);
+            // And remaining rows are pruned by filter pushdown
+            assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 1);
+
+            // Test with multiple filters being rewritten
+            let filter = full_name_expr
+                .clone()
+                .eq(lit("Gustavo Cerati"))
+                .and(initials_expr.clone().eq(lit("AC"))); // should have no matches
+
+            // Read/write the files
+            // Since we set `with_page_index_predicate` we expect 2 rows per page -> at least 2 pages
+            let rt = RoundTrip::new()
+                .with_predicate(filter)
+                .with_pushdown_predicate()
+                .with_page_index_predicate()
+                .with_filter_rewriter(Arc::new(PreComputedExpressionRewriter))
+                .with_schema(Arc::new(table_schema.clone()))
+                .round_trip(vec![batch])
+                .await;
+
+            assert!(&rt.batches.unwrap().is_empty());
+            let metrics = rt.parquet_exec.metrics().unwrap();
+            // Prove that the filter is getting pushed down into the page index of the pre-computed column
+            assert_eq!(get_value(&metrics, "page_index_rows_pruned"), 4);
+            // And remaining rows are pruned by filter pushdown
+            assert_eq!(get_value(&metrics, "pushdown_rows_pruned"), 0);
+        }
     }
 
     #[tokio::test]
