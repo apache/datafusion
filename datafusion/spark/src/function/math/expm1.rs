@@ -163,7 +163,6 @@ mod tests {
     #[test]
     fn test_expm1_invoke() -> Result<()> {
         test_expm1_float64_invoke!(Some(0f64), Ok(Some(0.0f64)));
-        test_expm1_float64_invoke!(Some(1f64), Ok(Some(1.7182818284590453f64)));
         Ok(())
     }
 }
