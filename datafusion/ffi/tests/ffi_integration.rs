@@ -38,19 +38,20 @@ mod tests {
     pub fn compute_library_path<M: RootModule>(
         target_path: &Path,
     ) -> std::io::Result<std::path::PathBuf> {
-        let debug_dir = target_path.join("debug");
-        let release_dir = target_path.join("release");
-        let ci_dir = target_path.join("ci");
-
-        let debug_path = M::get_library_path(&debug_dir.join("deps"));
-        let release_path = M::get_library_path(&release_dir.join("deps"));
-        let ci_path = M::get_library_path(&ci_dir.join("deps"));
-
-        let all_paths = vec![
-            (debug_dir.clone(), debug_path),
-            (release_dir, release_path),
-            (ci_dir, ci_path),
-        ];
+        let all_paths = [
+            "debug",
+            "release",
+            "ci",
+            "llvm-cov-target/debug",
+            "llvm-cov-target/ci",
+        ]
+        .iter()
+        .map(|build_type| {
+            let dir = target_path.join(build_type);
+            let path = M::get_library_path(&dir.join("deps"));
+            (dir, path)
+        })
+        .collect::<Vec<_>>();
 
         let best_path = all_paths
             .into_iter()
@@ -59,7 +60,7 @@ mod tests {
             .filter_map(|(dir, meta)| meta.modified().map(|m| (dir, m)).ok())
             .max_by_key(|(_, date)| *date)
             .map(|(dir, _)| dir)
-            .unwrap_or(debug_dir);
+            .unwrap_or_else(|| target_path.join("debug"));
 
         Ok(best_path)
     }

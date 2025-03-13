@@ -255,7 +255,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
           TEST_STORAGE_INTEGRATION: 1
           AWS_ALLOW_HTTP: true
-        run: cargo llvm-cov --no-cfg-coverage --json --output-path ./coverage.json --profile ci --exclude datafusion-examples --exclude ffi_example_table_provider --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
+        run: cargo llvm-cov --json --output-path ./coverage.json --profile ci --exclude datafusion-examples --exclude ffi_example_table_provider --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
