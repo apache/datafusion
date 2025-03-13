@@ -214,7 +214,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
     pub fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
-        let union_schema = Arc::new(coerce_union_schema(&union_plan.inputs)?);
+        let union_schema = Arc::new(coerce_union_schema_with_schema(&union_plan.inputs, &union_plan.schema)?);
         let new_inputs = union_plan
             .inputs
             .into_iter()
@@ -930,7 +930,9 @@ fn coerce_case_expression(case: Case, schema: &DFSchema) -> Result<Case> {
 /// This method presumes that the wildcard expansion is unneeded, or has already
 /// been applied.
 pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
-    let base_schema = inputs[0].schema();
+    coerce_union_schema_with_schema(&inputs[1..], inputs[0].schema())
+}
+fn coerce_union_schema_with_schema(inputs: &[Arc<LogicalPlan>], base_schema: &DFSchemaRef) -> Result<DFSchema> {
     let mut union_datatypes = base_schema
         .fields()
         .iter()
@@ -949,7 +951,7 @@ pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
 
     let mut metadata = base_schema.metadata().clone();
 
-    for (i, plan) in inputs.iter().enumerate().skip(1) {
+    for (i, plan) in inputs.iter().enumerate() {
         let plan_schema = plan.schema();
         metadata.extend(plan_schema.metadata().clone());
 
