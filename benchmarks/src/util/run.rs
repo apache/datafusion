@@ -24,7 +24,6 @@ use std::{
     path::Path,
     time::{Duration, SystemTime},
 };
-use std::process::Command;
 
 fn serialize_start_time<S>(start_time: &SystemTime, ser: S) -> Result<S::Ok, S::Error>
 where
@@ -50,9 +49,6 @@ pub struct RunContext {
     pub benchmark_version: String,
     /// DataFusion crate version
     pub datafusion_version: String,
-    /// DataFusion crate commit timestamp
-    #[serde(serialize_with = "serialize_start_time")]
-    pub datafusion_commit_timestamp: SystemTime,
     /// Number of CPU cores
     pub num_cpus: usize,
     /// Start time
@@ -70,21 +66,9 @@ impl Default for RunContext {
 
 impl RunContext {
     pub fn new() -> Self {
-        let commit_timestamp = Command::new("git")
-            .args(&["log", "-1", "--format=%ct"])
-            .output()
-            .expect("failed to execute git command")
-            .stdout;
-        let commit_timestamp = String::from_utf8(commit_timestamp)
-            .expect("failed to convert git output to string")
-            .trim()
-            .parse::<u64>()
-            .expect("failed to parse commit timestamp");
-
         Self {
             benchmark_version: env!("CARGO_PKG_VERSION").to_owned(),
             datafusion_version: DATAFUSION_VERSION.to_owned(),
-            datafusion_commit_timestamp: SystemTime::UNIX_EPOCH + Duration::from_secs(commit_timestamp),
             num_cpus: get_available_parallelism(),
             start_time: SystemTime::now(),
             arguments: std::env::args().skip(1).collect::<Vec<String>>(),

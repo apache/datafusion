@@ -25,21 +25,12 @@ trap 'cd ..; rm -rf working; git checkout main' EXIT #checkout to main on exit
 ARG1=$1
 
 main(){
-
-mkdir -p working
-cp bench.sh working/
-cp collect_bench.sh working/
-cp lineprotocol.py working/
-cp -r data working/
-cp -r queries working/
-cp -r src working/
-
-cd working 
-
 timestamp=$(date +%s)
-lp_file="../results/$ARG1-$timestamp.lp"
-mkdir -p ../results
+lp_file="results/$ARG1-$timestamp.lp"
+mkdir -p results
 touch $lp_file
+
+cp lineprotocol.py results/
 
 git fetch upstream main
 git checkout main
@@ -52,8 +43,8 @@ major_version=$(echo "$output" | grep -oE '[0-9]+' | head -n1)
 # run for current main
 echo "current major version: $major_version"  
 export RESULTS_DIR="results/$major_version.0.0"
-DATAFUSION_DIR=../../ ./bench.sh run $ARG1
-python3 lineprotocol.py ../$RESULTS_DIR/$ARG1.json >> $lp_file
+./bench.sh run $ARG1
+python3 results/lineprotocol.py $RESULTS_DIR/$ARG1.json >> $lp_file
 
 run for last 5 major releases
 for i in {1..5}; do
@@ -61,8 +52,8 @@ for i in {1..5}; do
     git fetch upstream $((major_version-i)).0.0
     git checkout $((major_version-i)).0.0
     export RESULTS_DIR="results/$((major_version-i)).0.0"
-    DATAFUSION_DIR=../../ ./bench.sh run $ARG1
-    python3 lineprotocol.py ../$RESULTS_DIR/$ARG1.json >> $lp_file
+    ./bench.sh run $ARG1
+    python3 results/lineprotocol.py $RESULTS_DIR/$ARG1.json >> $lp_file
 done
 
 echo "[[inputs.file]]
