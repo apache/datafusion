@@ -322,6 +322,7 @@ impl Unparser<'_> {
         }
     }
 
+    #[recursive::recursive]
     fn select_to_sql_recursively(
         &self,
         plan: &LogicalPlan,
