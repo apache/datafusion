@@ -33,6 +33,12 @@ Shows the execution plan of a statement.
 If you need more detailed output, use `EXPLAIN VERBOSE`.
 Note that `EXPLAIN VERBOSE` only supports the `indent` format.
 
+The optional `[FORMAT format]` clause controls how the plan is displayed as
+explained below. If this clause is not specified, the plan is displayed using
+the format from the [configuration value] `datafusion.explain.format`.
+
+[configuration value]: ../configs.md
+
 ### `indent` format (default)
 
 The `indent` format shows both the logical and physical plan, with one line for
