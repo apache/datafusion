@@ -159,13 +159,12 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     ///
     /// /// Simple implementation that provides `Simplifier` the information it needs
     /// /// See SimplifyContext for a structure that does this.
-    /// #[derive(Default)]
     /// struct Info<'a> {
     ///   execution_props: ExecutionProps,
     ///   config_options: &'a Arc<ConfigOptions>,
     /// }
     ///
-    /// impl SimplifyInfo for Info {
+    /// impl SimplifyInfo for Info<'_> {
     ///   fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
     ///     Ok(false)
     ///   }
@@ -184,7 +183,12 @@ impl<S: SimplifyInfo> ExprSimplifier<S> {
     /// }
     ///
     /// // Create the simplifier
-    /// let simplifier = ExprSimplifier::new(Info::default());
+    /// let config_options = Arc::new(ConfigOptions::new());
+    /// let info = Info {
+    ///     execution_props: ExecutionProps::new(),
+    ///     config_options: &config_options,
+    /// };
+    /// let simplifier = ExprSimplifier::new(info);
     ///
     /// // b < 2
     /// let b_lt_2 = col("b").gt(lit(2));
