@@ -306,7 +306,7 @@ CREATE TABLE aggregate_test_100_utf8view AS SELECT
       c5
 FROM aggregate_test_100;
 
-# Test approx_distinct for varchar / int
+# Test approx_distinct for varchar(with Utf8View) / int
 query III
 SELECT c2, approx_distinct(c1), approx_distinct(c5) FROM aggregate_test_100_utf8view GROUP BY c2 ORDER BY c2;
 ----

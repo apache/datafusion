@@ -139,7 +139,6 @@ impl<T> StringViewHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
 {
-    /// new approx_distinct accumulator
     pub fn new() -> Self {
         Self {
             hll: HyperLogLog::new(),
