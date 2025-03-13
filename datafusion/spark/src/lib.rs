@@ -47,6 +47,7 @@
 
 pub mod function;
 
+use datafusion_catalog::TableFunction;
 use datafusion_common::Result;
 use datafusion_execution::FunctionRegistry;
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
@@ -113,6 +114,11 @@ pub fn all_default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
 /// Returns all default window functions
 pub fn all_default_window_functions() -> Vec<Arc<WindowUDF>> {
     function::window::functions()
+}
+
+/// Returns all default table functions
+pub fn all_default_table_functions() -> Vec<Arc<TableFunction>> {
+    function::table::functions()
 }
 
 /// Registers all enabled packages with a [`FunctionRegistry`]

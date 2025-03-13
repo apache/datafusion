@@ -20,3 +20,14 @@ under the License.
 # datafusion-spark: Spark-compatible Expressions
 
 This crate provides Apache Spark-compatible expressions for use with DataFusion.
+
+## Testing Guide
+
+When testing functions by directly invoking them (e.g., `test_scalar_function!()`), input coercion (from the `signature`
+or `coerce_types`) is not applied.
+
+Therefore, direct invocation tests should only be used to verify that the function is correctly implemented.
+
+Please be sure to add additional tests beyond direct invocation.
+For more detailed testing guidelines, refer to
+the [Spark SQLLogicTest README](../sqllogictest/test_files/spark/README.md).
