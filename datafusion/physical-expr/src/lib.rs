@@ -36,10 +36,6 @@ mod partitioning;
 mod physical_expr;
 pub mod planner;
 mod scalar_function;
-pub mod udf {
-    #[allow(deprecated)]
-    pub use crate::scalar_function::create_physical_expr;
-}
 pub mod statistics;
 pub mod utils;
 pub mod window;

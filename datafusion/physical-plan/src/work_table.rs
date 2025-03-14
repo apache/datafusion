@@ -163,8 +163,7 @@ impl DisplayAs for WorkTableExec {
                 write!(f, "WorkTableExec: name={}", self.name)
             }
             DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
+                write!(f, "name={}", self.name)
             }
         }
     }

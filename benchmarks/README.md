@@ -333,7 +333,8 @@ The output of `dfbench` help includes a description of each benchmark, which is 
 
 ## Cancellation
 
-Test performance of cancelling queries
+Test performance of cancelling queries.
+
 Queries in DataFusion should stop executing "quickly" after they are
 cancelled (the output stream is dropped).
 

@@ -18,7 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use crate::hyperloglog::HyperLogLog;
-use arrow::array::BinaryArray;
+use arrow::array::{BinaryArray, StringViewArray};
 use arrow::array::{
     GenericBinaryArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
@@ -127,6 +127,27 @@ where
 }
 
 #[derive(Debug)]
+struct StringViewHLLAccumulator<T>
+where
+    T: OffsetSizeTrait,
+{
+    hll: HyperLogLog<String>,
+    phantom_data: PhantomData<T>,
+}
+
+impl<T> StringViewHLLAccumulator<T>
+where
+    T: OffsetSizeTrait,
+{
+    pub fn new() -> Self {
+        Self {
+            hll: HyperLogLog::new(),
+            phantom_data: PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
 struct BinaryHLLAccumulator<T>
 where
     T: OffsetSizeTrait,
@@ -191,6 +212,21 @@ where
         // flatten because we would skip nulls
         self.hll
             .extend(array.into_iter().flatten().map(|v| v.to_vec()));
+        Ok(())
+    }
+
+    default_accumulator_impl!();
+}
+
+impl<T> Accumulator for StringViewHLLAccumulator<T>
+where
+    T: OffsetSizeTrait,
+{
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array: &StringViewArray = downcast_value!(values[0], StringViewArray);
+        // flatten because we would skip nulls
+        self.hll
+            .extend(array.iter().flatten().map(|s| s.to_string()));
         Ok(())
     }
 
@@ -311,6 +347,7 @@ impl AggregateUDFImpl for ApproxDistinct {
             DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::new()),
             DataType::Utf8 => Box::new(StringHLLAccumulator::<i32>::new()),
             DataType::LargeUtf8 => Box::new(StringHLLAccumulator::<i64>::new()),
+            DataType::Utf8View => Box::new(StringViewHLLAccumulator::<i32>::new()),
             DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
             other => {
