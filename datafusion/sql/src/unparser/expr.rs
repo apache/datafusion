@@ -94,6 +94,7 @@ impl Unparser<'_> {
         Ok(root_expr)
     }
 
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn expr_to_sql_inner(&self, expr: &Expr) -> Result<ast::Expr> {
         match expr {
             Expr::InList(InList {
