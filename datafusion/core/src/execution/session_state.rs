@@ -436,16 +436,16 @@ impl SessionState {
 
     /// Resolve all table references in the SQL statement. Does not include CTE references.
     ///
-    /// See [`datafusion_catalog::resolve_table_references`] for more information.
+    /// See [`datafusion_sql::resolve::resolve_table_references`] for more information.
     ///
-    /// [`datafusion_catalog::resolve_table_references`]: datafusion_catalog::resolve_table_references
+    /// [`datafusion_sql::resolve::resolve_table_references`]: datafusion_sql::resolve::resolve_table_references
     pub fn resolve_table_references(
         &self,
         statement: &Statement,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization =
             self.config.options().sql_parser.enable_ident_normalization;
-        let (table_refs, _) = datafusion_catalog::resolve_table_references(
+        let (table_refs, _) = datafusion_sql::resolve::resolve_table_references(
             statement,
             enable_ident_normalization,
         )?;
