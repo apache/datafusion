@@ -94,7 +94,7 @@ impl DisplayAs for CoalescePartitionsExec {
             },
             DisplayFormatType::TreeRender => match self.fetch {
                 Some(fetch) => {
-                    write!(f, "fetch: {fetch}")
+                    write!(f, "limit: {fetch}")
                 }
                 None => write!(f, ""),
             },
