@@ -47,7 +47,7 @@ use datafusion_common::{
     not_impl_err, DataFusionError, GetExt, Statistics, DEFAULT_ARROW_EXTENSION,
 };
 use datafusion_common_runtime::SpawnedTask;
-use datafusion_datasource::display::{FileGroupDisplay, TablePathsDisplay};
+use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
@@ -302,10 +302,8 @@ impl DisplayAs for ArrowFileSink {
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
-                if !self.config.table_paths.is_empty() {
-                    TablePathsDisplay(&self.config.table_paths).fmt_as(t, f)?;
-                }
-                Ok(())
+                writeln!(f, "format: arrow")?;
+                write!(f, "file={}", &self.config.original_url)
             }
         }
     }

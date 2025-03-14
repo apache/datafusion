@@ -502,6 +502,7 @@ impl DefaultPhysicalPlanner {
                 partition_by,
                 options: source_option_tuples,
             }) => {
+                let original_url = output_url.clone();
                 let input_exec = children.one()?;
                 let parsed_url = ListingTableUrl::parse(output_url)?;
                 let object_store_url = parsed_url.object_store();
@@ -531,6 +532,7 @@ impl DefaultPhysicalPlanner {
 
                 // Set file sink related options
                 let config = FileSinkConfig {
+                    original_url,
                     object_store_url,
                     table_paths: vec![parsed_url],
                     file_groups: vec![],

@@ -37,7 +37,7 @@ use datafusion_common::{
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::decoder::Decoder;
-use datafusion_datasource::display::{FileGroupDisplay, TablePathsDisplay};
+use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
@@ -325,10 +325,8 @@ impl DisplayAs for JsonSink {
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
-                if !self.config.table_paths.is_empty() {
-                    TablePathsDisplay(&self.config.table_paths).fmt_as(t, f)?;
-                }
-                Ok(())
+                writeln!(f, "format: json")?;
+                write!(f, "file={}", &self.config.original_url)
             }
         }
     }

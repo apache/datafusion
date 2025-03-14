@@ -1037,6 +1037,7 @@ impl TableProvider for ListingTable {
 
         // Sink related option, apart from format
         let config = FileSinkConfig {
+            original_url: String::default(),
             object_store_url: self.table_paths()[0].object_store(),
             table_paths: self.table_paths().clone(),
             file_groups,
