@@ -192,10 +192,6 @@ impl SelectBuilder {
     ///
     /// * `existing_expr` - The expression to replace
     /// * `value` - The new expression to set as the selection
-    ///
-    /// # Returns
-    ///
-    /// A mutable reference to self for method chaining
     pub fn replace_mark(
         &mut self,
         existing_expr: &ast::Expr,

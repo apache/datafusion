@@ -1752,6 +1752,7 @@ fn test_unparse_subquery_alias_with_table_pushdown() -> Result<()> {
 
 #[test]
 fn test_unparse_left_anti_join() -> Result<()> {
+    // select t1.d from t1 where c not in (select c from t2)
     let schema = Schema::new(vec![
         Field::new("c", DataType::Int32, false),
         Field::new("d", DataType::Int32, false),
@@ -1782,12 +1783,13 @@ fn test_unparse_left_anti_join() -> Result<()> {
 
 #[test]
 fn test_unparse_left_semi_join() -> Result<()> {
+    // select t1.d from t1 where c in (select c from t2)
     let schema = Schema::new(vec![
         Field::new("c", DataType::Int32, false),
         Field::new("d", DataType::Int32, false),
     ]);
 
-    // LeftAnti Join: t1.c = __correlated_sq_1.c
+    // LeftSemi Join: t1.c = __correlated_sq_1.c
     //   TableScan: t1 projection=[c]
     //   SubqueryAlias: __correlated_sq_1
     //     TableScan: t2 projection=[c]
@@ -1812,14 +1814,14 @@ fn test_unparse_left_semi_join() -> Result<()> {
 
 #[test]
 fn test_unparse_left_mark_join() -> Result<()> {
-    // select t1.id from t1 where t1.id < 0 OR exists(SELECT t2.id FROM t2 WHERE t1.id = t2.id)
+    // select t1.d from t1 where t1.d < 0 OR exists (select 1 from t2 where t1.c = t2.c)
     let schema = Schema::new(vec![
         Field::new("c", DataType::Int32, false),
         Field::new("d", DataType::Int32, false),
     ]);
     // Filter: __correlated_sq_1.mark OR t1.d < Int32(0)
     //   Projection: t1.d
-    //     LeftMark Join:  Filter: t1.id = __correlated_sq_1.id
+    //     LeftMark Join:  Filter: t1.c = __correlated_sq_1.c
     //       TableScan: t1 projection=[c, d]
     //       SubqueryAlias: __correlated_sq_1
     //         TableScan: t2 projection=[c]
@@ -1830,7 +1832,7 @@ fn test_unparse_left_mark_join() -> Result<()> {
         .join_on(
             subquery,
             datafusion_expr::JoinType::LeftMark,
-            vec![col("t1.id").eq(col("__correlated_sq_1.id"))],
+            vec![col("t1.c").eq(col("__correlated_sq_1.c"))],
         )?
         .project(vec![col("t1.d")])?
         .filter(col("mark").or(col("t1.d").lt(lit(0))))?
@@ -1838,16 +1840,22 @@ fn test_unparse_left_mark_join() -> Result<()> {
 
     let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
     let sql = unparser.plan_to_sql(&plan)?;
-    assert_eq!("SELECT \"t1\".\"d\" FROM \"t1\" WHERE (EXISTS (SELECT 1 FROM \"t2\" AS \"__correlated_sq_1\" WHERE (\"t1\".\"id\" = \"__correlated_sq_1\".\"id\")) OR (\"t1\".\"d\" < 0))", sql.to_string());
+    assert_eq!("SELECT \"t1\".\"d\" FROM \"t1\" WHERE (EXISTS (SELECT 1 FROM \"t2\" AS \"__correlated_sq_1\" WHERE (\"t1\".\"c\" = \"__correlated_sq_1\".\"c\")) OR (\"t1\".\"d\" < 0))", sql.to_string());
     Ok(())
 }
 
 #[test]
 fn test_unparse_right_semi_join() -> Result<()> {
+    // select t2.c, t2.d from t1 right semi join t2 on t1.c = t2.c where t2.c <= 1
     let schema = Schema::new(vec![
         Field::new("c", DataType::Int32, false),
         Field::new("d", DataType::Int32, false),
     ]);
+    // Filter: t2.c <= Int64(1)
+    //   RightSemi Join: t1.c = t2.c
+    //     TableScan: t1 projection=[c, d]
+    //     Projection: t2.c, t2.d
+    //       TableScan: t2 projection=[c, d]
     let left = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
     let right_table_scan = table_scan(Some("t2"), &schema, Some(vec![0, 1]))?.build()?;
     let right = LogicalPlanBuilder::from(right_table_scan)
@@ -1863,20 +1871,26 @@ fn test_unparse_right_semi_join() -> Result<()> {
             ),
             None,
         )?
-        .filter(col("t1.c").lt_eq(lit(1i64)))?
+        .filter(col("t2.c").lt_eq(lit(1i64)))?
         .build()?;
     let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
     let sql = unparser.plan_to_sql(&plan)?;
-    assert_eq!("SELECT \"t2\".\"c\", \"t2\".\"d\" FROM \"t1\" WHERE (\"t1\".\"c\" <= 1) AND EXISTS (SELECT 1 FROM \"t1\" WHERE (\"t1\".\"c\" = \"t2\".\"c\"))", sql.to_string());
+    assert_eq!("SELECT \"t2\".\"c\", \"t2\".\"d\" FROM \"t2\" WHERE (\"t2\".\"c\" <= 1) AND EXISTS (SELECT 1 FROM \"t1\" WHERE (\"t1\".\"c\" = \"t2\".\"c\"))", sql.to_string());
     Ok(())
 }
 
 #[test]
 fn test_unparse_right_anti_join() -> Result<()> {
+    // select t2.c, t2.d from t1 right anti join t2 on t1.c = t2.c where t2.c <= 1
     let schema = Schema::new(vec![
         Field::new("c", DataType::Int32, false),
         Field::new("d", DataType::Int32, false),
     ]);
+    // Filter: t2.c <= Int64(1)
+    //   RightAnti Join: t1.c = t2.c
+    //     TableScan: t1 projection=[c, d]
+    //     Projection: t2.c, t2.d
+    //       TableScan: t2 projection=[c, d]
     let left = table_scan(Some("t1"), &schema, Some(vec![0, 1]))?.build()?;
     let right_table_scan = table_scan(Some("t2"), &schema, Some(vec![0, 1]))?.build()?;
     let right = LogicalPlanBuilder::from(right_table_scan)
@@ -1892,10 +1906,10 @@ fn test_unparse_right_anti_join() -> Result<()> {
             ),
             None,
         )?
-        .filter(col("t1.c").lt_eq(lit(1i64)))?
+        .filter(col("t2.c").lt_eq(lit(1i64)))?
         .build()?;
     let unparser = Unparser::new(&UnparserPostgreSqlDialect {});
     let sql = unparser.plan_to_sql(&plan)?;
-    assert_eq!("SELECT \"t2\".\"c\", \"t2\".\"d\" FROM \"t1\" WHERE (\"t1\".\"c\" <= 1) AND NOT EXISTS (SELECT 1 FROM \"t1\" WHERE (\"t1\".\"c\" = \"t2\".\"c\"))", sql.to_string());
+    assert_eq!("SELECT \"t2\".\"c\", \"t2\".\"d\" FROM \"t2\" WHERE (\"t2\".\"c\" <= 1) AND NOT EXISTS (SELECT 1 FROM \"t1\" WHERE (\"t1\".\"c\" = \"t2\".\"c\"))", sql.to_string());
     Ok(())
 }
