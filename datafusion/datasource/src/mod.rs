@@ -28,6 +28,7 @@ pub mod decoder;
 pub mod display;
 pub mod file;
 pub mod file_compression_type;
+pub mod file_expr_rewriter;
 pub mod file_format;
 pub mod file_groups;
 pub mod file_meta;
