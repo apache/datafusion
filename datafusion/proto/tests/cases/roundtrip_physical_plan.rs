@@ -1281,6 +1281,7 @@ fn roundtrip_json_sink() -> Result<()> {
     let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
 
     let file_sink_config = FileSinkConfig {
+        original_url: String::default(),
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
         table_paths: vec![ListingTableUrl::parse("file:///")?],
@@ -1317,6 +1318,7 @@ fn roundtrip_csv_sink() -> Result<()> {
     let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
 
     let file_sink_config = FileSinkConfig {
+        original_url: String::default(),
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
         table_paths: vec![ListingTableUrl::parse("file:///")?],
@@ -1372,6 +1374,7 @@ fn roundtrip_parquet_sink() -> Result<()> {
     let input = Arc::new(PlaceholderRowExec::new(schema.clone()));
 
     let file_sink_config = FileSinkConfig {
+        original_url: String::default(),
         object_store_url: ObjectStoreUrl::local_filesystem(),
         file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
         table_paths: vec![ListingTableUrl::parse("file:///")?],

@@ -1373,6 +1373,7 @@ mod tests {
         let object_store_url = ObjectStoreUrl::local_filesystem();
 
         let file_sink_config = FileSinkConfig {
+            original_url: String::default(),
             object_store_url: object_store_url.clone(),
             file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
             table_paths: vec![ListingTableUrl::parse(table_path)?],
@@ -1458,6 +1459,7 @@ mod tests {
 
         // set file config to include partitioning on field_a
         let file_sink_config = FileSinkConfig {
+            original_url: String::default(),
             object_store_url: object_store_url.clone(),
             file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
             table_paths: vec![ListingTableUrl::parse("file:///")?],
@@ -1541,6 +1543,7 @@ mod tests {
             let object_store_url = ObjectStoreUrl::local_filesystem();
 
             let file_sink_config = FileSinkConfig {
+                original_url: String::default(),
                 object_store_url: object_store_url.clone(),
                 file_groups: vec![PartitionedFile::new("/tmp".to_string(), 1)],
                 table_paths: vec![ListingTableUrl::parse("file:///")?],
