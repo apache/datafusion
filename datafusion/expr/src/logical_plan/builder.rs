@@ -465,9 +465,21 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
-        TableScan::try_new(table_name, table_source, projection, filters, None)
-            .map(LogicalPlan::TableScan)
-            .map(Self::new)
+        let table_scan =
+            TableScan::try_new(table_name, table_source, projection, filters, None)?;
+        
+        // Inline TableScan
+        if table_scan.filters.is_empty() {
+            if let Some(p) = table_scan.source.get_logical_plan() {
+                let sub_plan = p.into_owned();
+                // Ensures that the reference to the inlined table remains the
+                // same, meaning we don't have to change any of the parent nodes
+                // that reference this table.
+                return Self::new(sub_plan).alias(table_scan.table_name);
+            }
+        }
+
+        Ok(Self::new(LogicalPlan::TableScan(table_scan)))
     }
 
     /// Convert a table provider into a builder with a TableScan with filter and fetch

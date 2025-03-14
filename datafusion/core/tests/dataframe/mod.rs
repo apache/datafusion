@@ -1563,8 +1563,12 @@ async fn with_column_join_same_columns() -> Result<()> {
         \n  Limit: skip=0, fetch=1\
         \n    Sort: t1.c1 ASC NULLS FIRST\
         \n      Inner Join: t1.c1 = t2.c1\
-        \n        TableScan: t1\
-        \n        TableScan: t2",
+        \n        SubqueryAlias: t1\
+        \n          Projection: aggregate_test_100.c1\
+        \n            TableScan: aggregate_test_100\
+        \n        SubqueryAlias: t2\
+        \n          Projection: aggregate_test_100.c1\
+        \n            TableScan: aggregate_test_100",
         format!("{}", df_with_column.logical_plan())
     );
 
@@ -1573,8 +1577,10 @@ async fn with_column_join_same_columns() -> Result<()> {
         Projection: t1.c1, t2.c1, Boolean(true) AS new_column\
         \n  Sort: t1.c1 ASC NULLS FIRST, fetch=1\
         \n    Inner Join: t1.c1 = t2.c1\
-        \n      TableScan: t1 projection=[c1]\
-        \n      TableScan: t2 projection=[c1]",
+        \n      SubqueryAlias: t1\
+        \n        TableScan: aggregate_test_100 projection=[c1]\
+        \n      SubqueryAlias: t2\
+        \n        TableScan: aggregate_test_100 projection=[c1]",
         format!("{}", df_with_column.clone().into_optimized_plan()?)
     );
 
@@ -1725,8 +1731,12 @@ async fn with_column_renamed_join() -> Result<()> {
         \n  Limit: skip=0, fetch=1\
         \n    Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST\
         \n      Inner Join: t1.c1 = t2.c1\
-        \n        TableScan: t1\
-        \n        TableScan: t2",
+        \n        SubqueryAlias: t1\
+        \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
+        \n            TableScan: aggregate_test_100\
+        \n        SubqueryAlias: t2\
+        \n          Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3\
+        \n            TableScan: aggregate_test_100",
                format!("{}", df_renamed.logical_plan())
     );
 
@@ -1734,8 +1744,10 @@ async fn with_column_renamed_join() -> Result<()> {
         Projection: t1.c1 AS AAA, t1.c2, t1.c3, t2.c1, t2.c2, t2.c3\
         \n  Sort: t1.c1 ASC NULLS FIRST, t1.c2 ASC NULLS FIRST, t1.c3 ASC NULLS FIRST, t2.c1 ASC NULLS FIRST, t2.c2 ASC NULLS FIRST, t2.c3 ASC NULLS FIRST, fetch=1\
         \n    Inner Join: t1.c1 = t2.c1\
-        \n      TableScan: t1 projection=[c1, c2, c3]\
-        \n      TableScan: t2 projection=[c1, c2, c3]",
+        \n      SubqueryAlias: t1\
+        \n        TableScan: aggregate_test_100 projection=[c1, c2, c3]\
+        \n      SubqueryAlias: t2\
+        \n        TableScan: aggregate_test_100 projection=[c1, c2, c3]",
                format!("{}", df_renamed.clone().into_optimized_plan()?)
     );
 
