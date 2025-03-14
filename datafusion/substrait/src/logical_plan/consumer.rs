@@ -24,7 +24,8 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::common::{
     not_impl_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, TableReference,
+    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, Spans,
+    TableReference,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort, WindowFunctionParams};
@@ -2280,6 +2281,7 @@ pub async fn from_subquery(
                             subquery: Subquery {
                                 subquery: Arc::new(haystack_expr),
                                 outer_ref_columns: outer_refs,
+                                spans: Spans::new(),
                             },
                             negated: false,
                         }))
@@ -2298,6 +2300,7 @@ pub async fn from_subquery(
                 Ok(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(plan),
                     outer_ref_columns,
+                    spans: Spans::new(),
                 }))
             }
             SubqueryType::SetPredicate(predicate) => {
@@ -2313,6 +2316,7 @@ pub async fn from_subquery(
                             Subquery {
                                 subquery: Arc::new(plan),
                                 outer_ref_columns,
+                                spans: Spans::new(),
                             },
                             false,
                         )))

@@ -18,7 +18,6 @@
 #######
 # Setup test data table
 #######
-
 # TopK aggregation
 statement ok
 CREATE TABLE traces(trace_id varchar, timestamp bigint, other bigint) AS VALUES
@@ -213,6 +212,63 @@ b 0 -2
 a -1 -1
 NULL 0 0
 c 1 2
+
+
+# Setting to map varchar to utf8view, to test PR https://github.com/apache/datafusion/pull/15152
+# Before the PR, the test case would not work because the Utf8View will not be supported by the TopK aggregation
+statement ok
+CREATE TABLE traces_utf8view
+AS SELECT
+  arrow_cast(trace_id, 'Utf8View') as trace_id,
+  timestamp,
+  other
+FROM traces;
+
+query TT
+explain select trace_id, MAX(timestamp) from traces_utf8view group by trace_id order by MAX(timestamp) desc limit 4;
+----
+logical_plan
+01)Sort: max(traces_utf8view.timestamp) DESC NULLS FIRST, fetch=4
+02)--Aggregate: groupBy=[[traces_utf8view.trace_id]], aggr=[[max(traces_utf8view.timestamp)]]
+03)----TableScan: traces_utf8view projection=[trace_id, timestamp]
+physical_plan
+01)SortPreservingMergeExec: [max(traces_utf8view.timestamp)@1 DESC], fetch=4
+02)--SortExec: TopK(fetch=4), expr=[max(traces_utf8view.timestamp)@1 DESC], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces_utf8view.timestamp)], lim=[4]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces_utf8view.timestamp)], lim=[4]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+
+# Also add LargeUtf8 to test PR https://github.com/apache/datafusion/pull/15152
+# Before the PR, the test case would not work because the LargeUtf8 will not be supported by the TopK aggregation
+statement ok
+CREATE TABLE traces_largeutf8
+AS SELECT
+  arrow_cast(trace_id, 'LargeUtf8') as trace_id,
+  timestamp,
+  other
+FROM traces;
+
+query TT
+explain select trace_id, MAX(timestamp) from traces_largeutf8 group by trace_id order by MAX(timestamp) desc limit 4;
+----
+logical_plan
+01)Sort: max(traces_largeutf8.timestamp) DESC NULLS FIRST, fetch=4
+02)--Aggregate: groupBy=[[traces_largeutf8.trace_id]], aggr=[[max(traces_largeutf8.timestamp)]]
+03)----TableScan: traces_largeutf8 projection=[trace_id, timestamp]
+physical_plan
+01)SortPreservingMergeExec: [max(traces_largeutf8.timestamp)@1 DESC], fetch=4
+02)--SortExec: TopK(fetch=4), expr=[max(traces_largeutf8.timestamp)@1 DESC], preserve_partitioning=[true]
+03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces_largeutf8.timestamp)], lim=[4]
+04)------CoalesceBatchesExec: target_batch_size=8192
+05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces_largeutf8.timestamp)], lim=[4]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
 
 statement ok
 drop table traces;
