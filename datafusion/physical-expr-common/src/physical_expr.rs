@@ -267,6 +267,12 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
         Ok(ExprProperties::new_unknown())
     }
 
+    /// Format this `PhysicalExpr` in nice human readable "SQL" format
+    ///
+    /// Specifically, this format is designed to be readable by humans, at the
+    /// expense of details. Use `Display` or `Debug` for more detailed
+    /// representation.
+    /// 
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result;
 }
 
