@@ -568,8 +568,10 @@ impl Unparser<'_> {
             LogicalPlan::Join(join) => {
                 let mut table_scan_filters = vec![];
                 let (left_plan, right_plan) = match join.join_type {
-                    JoinType::RightSemi | JoinType::RightAnti => (&join.right, &join.left),
-                    _ => (&join.left, &join.right)
+                    JoinType::RightSemi | JoinType::RightAnti => {
+                        (&join.right, &join.left)
+                    }
+                    _ => (&join.left, &join.right),
                 };
 
                 let left_plan =
@@ -647,7 +649,11 @@ impl Unparser<'_> {
                 )?;
 
                 match join.join_type {
-                    JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark | JoinType::RightSemi | JoinType::RightAnti => {
+                    JoinType::LeftSemi
+                    | JoinType::LeftAnti
+                    | JoinType::LeftMark
+                    | JoinType::RightSemi
+                    | JoinType::RightAnti => {
                         let mut query_builder = QueryBuilder::default();
                         let mut from = TableWithJoinsBuilder::default();
                         let mut exists_select: SelectBuilder = SelectBuilder::default();
