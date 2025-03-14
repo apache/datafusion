@@ -47,9 +47,10 @@ pub use crate::logical_expr::TableType;
 pub use datafusion_execution::object_store;
 pub use statistics::get_statistics_with_limit;
 
-use arrow::compute::SortOptions;
 use arrow::datatypes::Schema;
+use datafusion_common::sort::AdvSortOptions;
 use datafusion_common::{plan_err, Result};
+use datafusion_expr::registry::ExtensionTypeRegistry;
 use datafusion_expr::{Expr, SortExpr};
 use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 
@@ -93,6 +94,7 @@ use datafusion_physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 /// let result = create_ordering(&schema, &sort_exprs).unwrap();
 /// ```
 pub fn create_ordering(
+    extension_types: &impl ExtensionTypeRegistry,
     schema: &Schema,
     sort_order: &[Vec<SortExpr>],
 ) -> Result<Vec<LexOrdering>> {
@@ -105,9 +107,16 @@ pub fn create_ordering(
             match &sort.expr {
                 Expr::Column(col) => match expressions::col(&col.name, schema) {
                     Ok(expr) => {
+                        let ordering = schema
+                            .field_with_name(&col.name)?
+                            .extension_type_name()
+                            .and_then(|ext| extension_types.get_extension_type(ext).ok())
+                            .map(|ext| ext.planning_information().ordering.clone())
+                            .unwrap_or_default();
                         sort_exprs.push(PhysicalSortExpr {
                             expr,
-                            options: SortOptions {
+                            options: AdvSortOptions {
+                                ordering,
                                 descending: !sort.asc,
                                 nulls_first: sort.nulls_first,
                             },

@@ -23,8 +23,8 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Float32Array, Float64Array, RecordBatch, UInt32Array};
-use arrow::compute::SortOptions;
-use arrow::compute::{lexsort_to_indices, take_record_batch, SortColumn};
+use arrow::compute::{lexsort_to_indices, take_record_batch};
+use arrow::compute::{SortColumn, SortOptions};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::utils::{compare_rows, get_row_at_idx};
 use datafusion_common::{exec_err, plan_datafusion_err, DataFusionError, Result};
@@ -36,6 +36,8 @@ use datafusion_physical_expr::equivalence::{EquivalenceClass, ProjectionMapping}
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 use itertools::izip;
 use rand::prelude::*;
 
@@ -108,7 +110,8 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
     let mut rng = StdRng::seed_from_u64(seed);
     let mut remaining_exprs = col_exprs[0..4].to_vec(); // only a, b, c, d are sorted
 
-    let options_asc = SortOptions {
+    let options_asc = AdvSortOptions {
+        ordering: SortOrdering::Default,
         descending: false,
         nulls_first: false,
     };
@@ -121,7 +124,7 @@ pub fn create_random_schema(seed: u64) -> Result<(SchemaRef, EquivalenceProperti
             .drain(0..n_sort_expr)
             .map(|expr| PhysicalSortExpr {
                 expr: Arc::clone(expr),
-                options: options_asc,
+                options: options_asc.clone(),
             })
             .collect();
 
@@ -267,7 +270,7 @@ pub fn is_table_same_after_sort(
             let values = expr_result.into_array(new_batch.num_rows())?;
             Ok(SortColumn {
                 values,
-                options: Some(order_expr.options),
+                options: Some(order_expr.options.to_arrow().unwrap()),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -394,7 +397,7 @@ pub fn generate_table_for_eq_properties(
                 (
                     SortColumn {
                         values: arr,
-                        options: Some(*options),
+                        options: Some(options.to_arrow().unwrap()),
                     },
                     idx,
                 )
@@ -502,7 +505,7 @@ pub fn convert_to_sort_exprs(
         .iter()
         .map(|(expr, options)| PhysicalSortExpr {
             expr: Arc::clone(*expr),
-            options: *options,
+            options: AdvSortOptions::with_default_ordering(*options),
         })
         .collect()
 }
@@ -580,7 +583,7 @@ impl ScalarUDFImpl for TestScalarUDF {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        Ok(input[0].sort_properties)
+        Ok(input[0].sort_properties.clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

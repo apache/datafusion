@@ -72,6 +72,8 @@ use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
+use datafusion_common::sort::AdvSortOptions;
+use datafusion_common::types::SortOrdering;
 use futures::{Stream, StreamExt};
 
 /// Join execution plan that executes equi-join predicates on multiple partitions using Sort-Merge
@@ -188,11 +190,19 @@ impl SortMergeJoinExec {
             .map(|((l, r), sort_op)| {
                 let left = PhysicalSortExpr {
                     expr: Arc::clone(l),
-                    options: *sort_op,
+                    options: AdvSortOptions::new(
+                        SortOrdering::Default,
+                        sort_op.descending,
+                        sort_op.nulls_first,
+                    ),
                 };
                 let right = PhysicalSortExpr {
                     expr: Arc::clone(r),
-                    options: *sort_op,
+                    options: AdvSortOptions::new(
+                        SortOrdering::Default,
+                        sort_op.descending,
+                        sort_op.nulls_first,
+                    ),
                 };
                 (left, right)
             })

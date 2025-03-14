@@ -1607,12 +1607,11 @@ mod tests {
 
 #[cfg(test)]
 mod test {
-    use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema};
-
     use super::*;
     use crate::test::TestMemoryExec;
     use crate::union::UnionExec;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::sort::AdvSortOptions;
 
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -1709,7 +1708,7 @@ mod test {
     }
 
     fn sort_exprs(schema: &Schema) -> LexOrdering {
-        let options = SortOptions::default();
+        let options = AdvSortOptions::default();
         LexOrdering::new(vec![PhysicalSortExpr {
             expr: col("c0", schema).unwrap(),
             options,

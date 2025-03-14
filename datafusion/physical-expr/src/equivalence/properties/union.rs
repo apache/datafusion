@@ -313,7 +313,8 @@ fn advance_if_matches_constant(
 ) -> Option<PhysicalSortExpr> {
     let expr = iter.peek()?;
     let const_expr = constants.iter().find(|c| c.eq_expr(expr))?;
-    let found_expr = PhysicalSortExpr::new(Arc::clone(const_expr.expr()), expr.options);
+    let found_expr =
+        PhysicalSortExpr::new(Arc::clone(const_expr.expr()), expr.options.clone());
     iter.next();
     Some(found_expr)
 }

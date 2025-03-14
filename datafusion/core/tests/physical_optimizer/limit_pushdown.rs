@@ -17,10 +17,10 @@
 
 use std::sync::Arc;
 
-use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
+use datafusion_common::sort::AdvSortOptions;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::BinaryExpr;
@@ -317,7 +317,7 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> Result<()> {
     let sort = sort_exec(
         vec![PhysicalSortExpr {
             expr: col("c1", &schema)?,
-            options: SortOptions::default(),
+            options: AdvSortOptions::default(),
         }],
         repartition,
     );

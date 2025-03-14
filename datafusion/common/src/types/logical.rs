@@ -17,8 +17,12 @@
 
 use super::NativeType;
 use crate::error::Result;
+use arrow::array::{make_comparator, ArrayRef, DynComparator};
+use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use core::fmt;
+use std::fmt::Debug;
+use std::hash::Hasher;
 use std::{cmp::Ordering, hash::Hash, sync::Arc};
 
 /// Signature that uniquely identifies a type among other types.
@@ -78,6 +82,7 @@ pub type LogicalTypeRef = Arc<dyn LogicalType>;
 pub trait LogicalType: Sync + Send {
     /// Get the native backing type of this logical type.
     fn native(&self) -> &NativeType;
+
     /// Get the unique type signature for this logical type. Logical types with identical
     /// signatures are considered equal.
     fn signature(&self) -> TypeSignature<'_>;
@@ -87,13 +92,21 @@ pub trait LogicalType: Sync + Send {
     fn default_cast_for(&self, origin: &DataType) -> Result<DataType> {
         self.native().default_cast_for(origin)
     }
+
+    /// Returns a [LogicalTypePlanningInformation] for this logical type.
+    ///
+    /// The default implementation returns the planning information of the underlying [NativeType].
+    fn planning_information(&self) -> LogicalTypePlanningInformation {
+        self.native().planning_information()
+    }
 }
 
-impl fmt::Debug for dyn LogicalType {
+impl Debug for dyn LogicalType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("LogicalType")
             .field(&self.signature())
             .field(&self.native())
+            .field(&self.planning_information())
             .finish()
     }
 }
@@ -127,8 +140,83 @@ impl Ord for dyn LogicalType {
 }
 
 impl Hash for dyn LogicalType {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    fn hash<H: Hasher>(&self, state: &mut H) {
         self.signature().hash(state);
         self.native().hash(state);
     }
+}
+
+/// Encapsulates information on how planning should be done in the presence of a logical type.
+#[derive(Clone, Debug)]
+pub struct LogicalTypePlanningInformation {
+    /// Specifies an ordering on elements of this logical type.
+    pub ordering: SortOrdering,
+}
+
+/// Specifies how a logical type should be sorted.
+#[derive(Clone, Debug, Default)]
+pub enum SortOrdering {
+    /// Use the default arrow comparison.
+    #[default]
+    Default,
+    /// Use a custom comparison.
+    ///
+    /// Using a custom sorting allows users to override the default order of elements or implement
+    /// ordering for values that do not have a natural order (e.g., unions). It is expected that
+    /// the custom ordering handles all native types for the [LogicalType].
+    Custom(Arc<dyn CustomOrdering>),
+}
+
+impl SortOrdering {
+    pub fn dyn_comparator(
+        &self,
+        array: ArrayRef,
+        options: SortOptions,
+    ) -> Result<DynComparator> {
+        Ok(match self {
+            SortOrdering::Default => {
+                make_comparator(array.as_ref(), array.as_ref(), options)?
+            }
+            SortOrdering::Custom(c) => c.dyn_comparator(array, options)?,
+        })
+    }
+}
+
+impl PartialEq for SortOrdering {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (SortOrdering::Default, SortOrdering::Default) => true,
+            (SortOrdering::Custom(c1), SortOrdering::Custom(c2)) => {
+                c1.ordering_id() == c2.ordering_id()
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for SortOrdering {}
+
+impl Hash for SortOrdering {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            SortOrdering::Default => state.write_u8(1),
+            SortOrdering::Custom(ordering) => ordering.ordering_id().hash(state),
+        }
+    }
+}
+
+/// A [CustomOrdering] can implement non-standard comparisons between values. This ability can be
+/// used to customize algorithms that must compare elements. The most prominent example is sorting.
+pub trait CustomOrdering: Debug + Send + Sync {
+    /// Returns the ordering id.
+    ///
+    /// The ordering id is used to establish equality between instances of [CustomOrdering].
+    fn ordering_id(&self) -> &str;
+
+    /// Returns a [DynComparator] over the given `array` adhering to the given `options`.
+    fn dyn_comparator(
+        &self,
+        array: ArrayRef,
+        options: SortOptions,
+    ) -> Result<DynComparator>;
 }

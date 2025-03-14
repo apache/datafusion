@@ -162,7 +162,7 @@ impl PhysicalExpr for NegativeExpr {
     /// The ordering of a [`NegativeExpr`] is simply the reverse of its child.
     fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
         Ok(ExprProperties {
-            sort_properties: -children[0].sort_properties,
+            sort_properties: -children[0].sort_properties.clone(),
             range: children[0].range.clone().arithmetic_negate()?,
             preserves_lex_ordering: false,
         })

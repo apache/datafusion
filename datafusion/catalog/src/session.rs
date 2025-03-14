@@ -22,6 +22,7 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_expr::execution_props::ExecutionProps;
+use datafusion_expr::registry::MemoryExtensionTypeRegistry;
 use datafusion_expr::{AggregateUDF, Expr, LogicalPlan, ScalarUDF, WindowUDF};
 use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
 use parking_lot::{Mutex, RwLock};
@@ -113,6 +114,9 @@ pub trait Session: Send + Sync {
     /// Return reference to window functions
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>>;
 
+    /// Return reference to extension types
+    fn extension_types(&self) -> &MemoryExtensionTypeRegistry;
+
     /// Return the runtime env
     fn runtime_env(&self) -> &Arc<RuntimeEnv>;
 
@@ -145,6 +149,7 @@ impl From<&dyn Session> for TaskContext {
             state.scalar_functions().clone(),
             state.aggregate_functions().clone(),
             state.window_functions().clone(),
+            state.extension_types().clone(),
             state.runtime_env().clone(),
         )
     }

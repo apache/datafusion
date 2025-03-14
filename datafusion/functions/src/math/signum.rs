@@ -86,7 +86,7 @@ impl ScalarUDFImpl for SignumFunc {
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
         // Non-decreasing for all real numbers x.
-        Ok(input[0].sort_properties)
+        Ok(input[0].sort_properties.clone())
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {

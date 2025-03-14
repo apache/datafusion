@@ -55,6 +55,7 @@ use datafusion_physical_expr::{
 
 use async_trait::async_trait;
 use datafusion_catalog::Session;
+use datafusion_expr::registry::EmptyExtensionTypeRegistry;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -816,7 +817,11 @@ impl ListingTable {
 
     /// If file_sort_order is specified, creates the appropriate physical expressions
     fn try_create_output_ordering(&self) -> Result<Vec<LexOrdering>> {
-        create_ordering(&self.table_schema, &self.options.file_sort_order)
+        create_ordering(
+            &EmptyExtensionTypeRegistry::new(),
+            &self.table_schema,
+            &self.options.file_sort_order,
+        )
     }
 }
 
@@ -1194,7 +1199,6 @@ mod tests {
         test::{columns, object_store::register_test_store},
     };
 
-    use arrow::compute::SortOptions;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::stats::Precision;
     use datafusion_common::{assert_contains, ScalarValue};
@@ -1204,6 +1208,8 @@ mod tests {
     use datafusion_physical_plan::ExecutionPlanProperties;
 
     use crate::test::object_store::{ensure_head_concurrency, make_test_store_and_state};
+    use datafusion_common::sort::AdvSortOptions;
+    use datafusion_common::types::SortOrdering;
     use tempfile::TempDir;
     use url::Url;
 
@@ -1314,7 +1320,8 @@ mod tests {
                 Ok(vec![LexOrdering::new(
                         vec![PhysicalSortExpr {
                             expr: physical_col("string_col", &schema).unwrap(),
-                            options: SortOptions {
+                            options: AdvSortOptions {
+                                ordering: SortOrdering::default(),
                                 descending: false,
                                 nulls_first: false,
                             },

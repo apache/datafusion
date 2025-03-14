@@ -18,6 +18,7 @@
 //! [`WindowUDF`]: User Defined Window Functions
 
 use arrow::compute::SortOptions;
+use arrow::datatypes::{DataType, Field};
 use std::cmp::Ordering;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{
@@ -25,8 +26,6 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
     sync::Arc,
 };
-
-use arrow::datatypes::{DataType, Field};
 
 use crate::expr::WindowFunction;
 use crate::{
