@@ -52,6 +52,7 @@ mod tests {
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_meta::FileMeta;
     use datafusion_datasource::file_scan_config::FileScanConfig;
+    use datafusion_datasource::schema_adapter::{DefaultSchemaAdapterFactory, MissingColumnGenerator, MissingColumnGeneratorFactory, SchemaAdapterFactory};
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::{FileRange, PartitionedFile};
@@ -90,6 +91,7 @@ mod tests {
     /// options.
     #[derive(Debug, Default)]
     struct RoundTrip {
+        schema_adapter_factory: Option<Arc<dyn SchemaAdapterFactory>>,
         projection: Option<Vec<usize>>,
         schema: Option<SchemaRef>,
         predicate: Option<Expr>,
@@ -100,6 +102,11 @@ mod tests {
     impl RoundTrip {
         fn new() -> Self {
             Default::default()
+        }
+
+        fn with_schema_adapter_factory(mut self, schema_adapter_factory: Arc<dyn SchemaAdapterFactory>) -> Self {
+            self.schema_adapter_factory = Some(schema_adapter_factory);
+            self
         }
 
         fn with_projection(mut self, projection: Vec<usize>) -> Self {
@@ -143,6 +150,7 @@ mod tests {
                 predicate,
                 pushdown_predicate,
                 page_index_predicate,
+                schema_adapter_factory,
             } = self;
 
             let file_schema = match schema {
@@ -172,6 +180,10 @@ mod tests {
                 source = source
                     .with_pushdown_filters(true)
                     .with_reorder_filters(true);
+            }
+
+            if let Some(schema_adapter_factory) = schema_adapter_factory {
+                source = source.with_schema_adapter_factory(schema_adapter_factory);
             }
 
             if page_index_predicate {
@@ -222,6 +234,97 @@ mod tests {
             RecordBatch::new_empty(Arc::new(Schema::empty())),
             |batch, (field_name, arr)| add_to_batch(&batch, field_name, arr.clone()),
         )
+    }
+
+    #[tokio::test]
+    async fn test_pushdown_with_column_generators() {
+        #[derive(Debug, Clone)]
+        struct ConstantMissingColumnGenerator {
+            default_value: ScalarValue,
+        }
+
+        impl MissingColumnGenerator for ConstantMissingColumnGenerator {
+            fn dependencies(&self) -> Vec<String> {
+                vec![]
+            }
+
+            fn generate(&self, batch: RecordBatch) -> Result<ArrayRef> {
+                let num_rows = batch.num_rows();
+                let array = self.default_value.to_array_of_size(num_rows)?;
+                Ok(array)
+            }
+        }
+
+        #[derive(Debug, Clone)]
+        struct ConstantMissingColumnGeneratorFactory {
+            column: String,
+            default_value: ScalarValue,
+        }
+
+        impl MissingColumnGeneratorFactory for ConstantMissingColumnGeneratorFactory {
+            fn create(
+                &self,
+                field: &Field,
+                _file_schema: &Schema,
+            ) -> Option<Arc<dyn MissingColumnGenerator + Send + Sync>> {
+                if *field.name() == self.column {
+                    Some(Arc::new(ConstantMissingColumnGenerator {
+                        default_value: self.default_value.clone(),
+                    }))
+                } else {
+                    None
+                }
+            }
+        }
+
+        let c1: ArrayRef =
+            Arc::new(Int32Array::from(vec![1, 2, 3]));
+
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+        ]));
+
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(file_schema.clone(), vec![c1]).unwrap();
+
+        let filter = col("c2").eq(lit(1_i32));
+
+        let missing_column_generator_factory = Arc::new(ConstantMissingColumnGeneratorFactory {
+            column: "c2".to_string(),
+            default_value: ScalarValue::Int32(Some(1)),
+        });
+
+        let schema_adapter_factory = Arc::new(
+            DefaultSchemaAdapterFactory::default()
+                .with_column_generator(missing_column_generator_factory)
+        );
+
+        let read = RoundTrip::new()
+            .with_schema(table_schema)
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .with_schema_adapter_factory(schema_adapter_factory)
+            .round_trip_to_batches(vec![batch])
+            .await
+            .unwrap();
+        let expected = [
+            "+-----+----+----+",
+            "| c1  | c3 | c2 |",
+            "+-----+----+----+",
+            "|     |    |    |",
+            "|     | 10 | 1  |",
+            "|     | 20 |    |",
+            "|     | 20 | 2  |",
+            "| Foo | 10 |    |",
+            "| bar |    |    |",
+            "+-----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &read);
+
     }
 
     #[tokio::test]

@@ -352,36 +352,36 @@ impl TreeNodeRewriter for PushdownChecker<'_> {
         Ok(Transformed::no(node))
     }
 
-    /// After visiting all children, rewrite column references to nulls if
-    /// they are not in the file schema.
-    /// We do this because they won't be relevant if they're not in the file schema, since that's
-    /// the only thing we're dealing with here as this is only used for the parquet pushdown during
-    /// scanning
-    fn f_up(
-        &mut self,
-        expr: Arc<dyn PhysicalExpr>,
-    ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
-            // if the expression is a column, is it in the file schema?
-            if self.file_schema.field_with_name(column.name()).is_err() {
-                return self
-                    .table_schema
-                    .field_with_name(column.name())
-                    .and_then(|field| {
-                        // Replace the column reference with a NULL (using the type from the table schema)
-                        // e.g. `column = 'foo'` is rewritten be transformed to `NULL = 'foo'`
-                        //
-                        // See comments on `FilterCandidateBuilder` for more information
-                        let null_value = ScalarValue::try_from(field.data_type())?;
-                        Ok(Transformed::yes(Arc::new(Literal::new(null_value)) as _))
-                    })
-                    // If the column is not in the table schema, should throw the error
-                    .map_err(|e| arrow_datafusion_err!(e));
-            }
-        }
+    // /// After visiting all children, rewrite column references to nulls if
+    // /// they are not in the file schema.
+    // /// We do this because they won't be relevant if they're not in the file schema, since that's
+    // /// the only thing we're dealing with here as this is only used for the parquet pushdown during
+    // /// scanning
+    // fn f_up(
+    //     &mut self,
+    //     expr: Arc<dyn PhysicalExpr>,
+    // ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+    //     if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+    //         // if the expression is a column, is it in the file schema?
+    //         if self.file_schema.field_with_name(column.name()).is_err() {
+    //             return self
+    //                 .table_schema
+    //                 .field_with_name(column.name())
+    //                 .and_then(|field| {
+    //                     // Replace the column reference with a NULL (using the type from the table schema)
+    //                     // e.g. `column = 'foo'` is rewritten be transformed to `NULL = 'foo'`
+    //                     //
+    //                     // See comments on `FilterCandidateBuilder` for more information
+    //                     let null_value = ScalarValue::try_from(field.data_type())?;
+    //                     Ok(Transformed::yes(Arc::new(Literal::new(null_value)) as _))
+    //                 })
+    //                 // If the column is not in the table schema, should throw the error
+    //                 .map_err(|e| arrow_datafusion_err!(e));
+    //         }
+    //     }
 
-        Ok(Transformed::no(expr))
-    }
+    //     Ok(Transformed::no(expr))
+    // }
 }
 
 type ProjectionAndExpr = (BTreeSet<usize>, Arc<dyn PhysicalExpr>);
