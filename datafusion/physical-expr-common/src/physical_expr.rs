@@ -53,6 +53,12 @@ pub type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 /// * [`SessionContext::create_physical_expr`]: A high level API
 /// * [`create_physical_expr`]: A low level API
 ///
+/// # Formatting `PhysicalExpr` as strings
+/// There are three ways to format `PhysicalExpr` as a string:
+/// * [`Debug`]: Standard Rust debugging format (e.g. `Constant { value: ... }`)
+/// * [`Display`]: Detailed SQL-like format that shows expression structure (e.g. (`Utf8 ("foobar")`). This is often used for debugging and tests
+/// * [`Self::fmt_sql`]: SQL-like human readable format (e.g. ('foobar')`)
+///
 /// [`SessionContext::create_physical_expr`]: https://docs.rs/datafusion/latest/datafusion/execution/context/struct.SessionContext.html#method.create_physical_expr
 /// [`PhysicalPlanner`]: https://docs.rs/datafusion/latest/datafusion/physical_planner/trait.PhysicalPlanner.html
 /// [`Expr`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.Expr.html
@@ -272,7 +278,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug + DynEq + DynHash {
     /// Specifically, this format is designed to be readable by humans, at the
     /// expense of details. Use `Display` or `Debug` for more detailed
     /// representation.
-    /// 
+    ///
     fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result;
 }
 
