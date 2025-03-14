@@ -55,7 +55,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, TableReference,
+    FunctionalDependencies, ParamValues, Result, ScalarValue, Spans, TableReference,
     UnnestOptions,
 };
 use indexmap::IndexSet;
@@ -939,7 +939,9 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Subquery(Subquery {
-                outer_ref_columns, ..
+                outer_ref_columns,
+                spans,
+                ..
             }) => {
                 self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
@@ -947,6 +949,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Subquery(Subquery {
                     subquery: Arc::new(subquery),
                     outer_ref_columns: outer_ref_columns.clone(),
+                    spans: spans.clone(),
                 }))
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
@@ -3615,6 +3618,8 @@ pub struct Subquery {
     pub subquery: Arc<LogicalPlan>,
     /// The outer references used in the subquery
     pub outer_ref_columns: Vec<Expr>,
+    /// Span information for subquery projection columns
+    pub spans: Spans,
 }
 
 impl Normalizeable for Subquery {
@@ -3649,6 +3654,7 @@ impl Subquery {
         Subquery {
             subquery: plan,
             outer_ref_columns: self.outer_ref_columns.clone(),
+            spans: Spans::new(),
         }
     }
 }
