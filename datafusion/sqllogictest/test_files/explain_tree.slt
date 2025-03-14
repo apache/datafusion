@@ -133,6 +133,11 @@ AS SELECT
 FROM
   hashjoin_datatype_table_t2_source
 
+statement ok
+CREATE TABLE limit_table AS
+SELECT * FROM table1
+UNION ALL SELECT * FROM table1
+
 ######## Begin Queries ########
 
 # Filter
@@ -245,6 +250,21 @@ physical_plan
 10)│          files: 1         │
 11)│        format: csv        │
 12)└───────────────────────────┘
+
+query TT
+explain SELECT * FROM limit_table LIMIT 10;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│   CoalescePartitionsExec  │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│       DataSourceExec      │
+06)│    --------------------   │
+07)│        bytes: 3120        │
+08)│       format: memory      │
+09)│          rows: 2          │
+10)└───────────────────────────┘
 
 # 2 Joins
 query TT
