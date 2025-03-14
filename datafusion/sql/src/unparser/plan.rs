@@ -567,14 +567,18 @@ impl Unparser<'_> {
             }
             LogicalPlan::Join(join) => {
                 let mut table_scan_filters = vec![];
+                let (left_plan, right_plan) = match join.join_type {
+                    JoinType::RightSemi | JoinType::RightAnti => (&join.right, &join.left),
+                    _ => (&join.left, &join.right)
+                };
 
                 let left_plan =
-                    match try_transform_to_simple_table_scan_with_filters(&join.left)? {
+                    match try_transform_to_simple_table_scan_with_filters(left_plan)? {
                         Some((plan, filters)) => {
                             table_scan_filters.extend(filters);
                             Arc::new(plan)
                         }
-                        None => Arc::clone(&join.left),
+                        None => Arc::clone(left_plan),
                     };
 
                 self.select_to_sql_recursively(
@@ -585,12 +589,12 @@ impl Unparser<'_> {
                 )?;
 
                 let right_plan =
-                    match try_transform_to_simple_table_scan_with_filters(&join.right)? {
+                    match try_transform_to_simple_table_scan_with_filters(right_plan)? {
                         Some((plan, filters)) => {
                             table_scan_filters.extend(filters);
                             Arc::new(plan)
                         }
-                        None => Arc::clone(&join.right),
+                        None => Arc::clone(right_plan),
                     };
 
                 let mut right_relation = RelationBuilder::default();
@@ -643,7 +647,7 @@ impl Unparser<'_> {
                 )?;
 
                 match join.join_type {
-                    JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+                    JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark | JoinType::RightSemi | JoinType::RightAnti => {
                         let mut query_builder = QueryBuilder::default();
                         let mut from = TableWithJoinsBuilder::default();
                         let mut exists_select: SelectBuilder = SelectBuilder::default();
@@ -668,6 +672,8 @@ impl Unparser<'_> {
                             JoinType::LeftSemi => false,
                             JoinType::LeftAnti => true,
                             JoinType::LeftMark => false,
+                            JoinType::RightSemi => false,
+                            JoinType::RightAnti => true,
                             _ => unreachable!(),
                         };
                         let exists_expr = ast::Expr::Exists {
@@ -682,42 +688,6 @@ impl Unparser<'_> {
                         } else {
                             select.selection(Some(exists_expr));
                         }
-                    }
-                    JoinType::RightSemi | JoinType::RightAnti => {
-                        let mut query_builder = QueryBuilder::default();
-                        let mut from = TableWithJoinsBuilder::default();
-                        let mut exists_select = SelectBuilder::default();
-                        from.relation(right_relation);
-                        let Some(mut left_from) = select.pop_from() else {
-                            return internal_err!("Failed to pop left relation");
-                        };
-                        left_from.relation(relation.clone());
-                        select.push_from(from);
-                        exists_select.push_from(left_from);
-                        let negated = match join.join_type {
-                            JoinType::RightSemi => false,
-                            JoinType::RightAnti => true,
-                            _ => unreachable!(),
-                        };
-                        if let Some(filter) = &join.filter {
-                            exists_select.selection(Some(self.expr_to_sql(filter)?));
-                        }
-                        for (left, right) in &join.on {
-                            exists_select.selection(Some(
-                                self.expr_to_sql(&left.clone().eq(right.clone()))?,
-                            ));
-                        }
-                        exists_select.projection(vec![ast::SelectItem::UnnamedExpr(
-                            ast::Expr::Value(ast::Value::Number("1".to_string(), false)),
-                        )]);
-                        query_builder.body(Box::new(SetExpr::Select(Box::new(
-                            exists_select.build()?,
-                        ))));
-
-                        select.selection(Some(ast::Expr::Exists {
-                            subquery: Box::new(query_builder.build()?),
-                            negated,
-                        }));
                     }
                     JoinType::Inner
                     | JoinType::Left
