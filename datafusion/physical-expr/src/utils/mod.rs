@@ -16,9 +16,7 @@
 // under the License.
 
 mod guarantee;
-mod sql_formatter;
 pub use guarantee::{Guarantee, LiteralGuarantee};
-pub use sql_formatter::sql_formatter;
 
 use std::borrow::Borrow;
 use std::sync::Arc;

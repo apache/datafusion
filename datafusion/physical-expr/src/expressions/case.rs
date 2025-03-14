@@ -598,7 +598,6 @@ mod tests {
     use super::*;
 
     use crate::expressions::{binary, cast, col, lit, BinaryExpr};
-    use crate::utils::sql_formatter;
     use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
@@ -607,6 +606,7 @@ mod tests {
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_expr::Operator;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
     fn case_with_expr() -> Result<()> {
@@ -1425,7 +1425,7 @@ mod tests {
             "CASE WHEN a@0 = foo THEN 123.3 ELSE TRY_CAST(999 AS Float64) END"
         );
 
-        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
         assert_eq!(
             sql_string,
             "CASE WHEN a = foo THEN 123.3 ELSE TRY_CAST(999 AS Float64) END"

@@ -793,12 +793,10 @@ pub fn similar_to(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        expressions::{col, lit, try_cast, Column, Literal},
-        utils::sql_formatter,
-    };
+    use crate::expressions::{col, lit, try_cast, Column, Literal};
 
     use datafusion_common::plan_datafusion_err;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     /// Performs a binary operation, applying any type coercion necessary
     fn binary_op(
@@ -4718,7 +4716,7 @@ mod tests {
         )?;
         let display_string = simple_expr.to_string();
         assert_eq!(display_string, "a@0 + b@1");
-        let sql_string = sql_formatter(&simple_expr).to_string();
+        let sql_string = fmt_sql(&simple_expr).to_string();
         assert_eq!(sql_string, "a + b");
 
         // Test nested expressions with different operator precedence
@@ -4735,7 +4733,7 @@ mod tests {
         )?;
         let display_string = nested_expr.to_string();
         assert_eq!(display_string, "(a@0 + b@1) * b@1");
-        let sql_string = sql_formatter(&nested_expr).to_string();
+        let sql_string = fmt_sql(&nested_expr).to_string();
         assert_eq!(sql_string, "(a + b) * b");
 
         // Test nested expressions with same operator precedence
@@ -4752,7 +4750,7 @@ mod tests {
         )?;
         let display_string = nested_same_prec.to_string();
         assert_eq!(display_string, "a@0 + b@1 + b@1");
-        let sql_string = sql_formatter(&nested_same_prec).to_string();
+        let sql_string = fmt_sql(&nested_same_prec).to_string();
         assert_eq!(sql_string, "a + b + b");
 
         // Test with literals
@@ -4764,7 +4762,7 @@ mod tests {
         )?;
         let display_string = lit_expr.to_string();
         assert_eq!(display_string, "a@0 = 42");
-        let sql_string = sql_formatter(&lit_expr).to_string();
+        let sql_string = fmt_sql(&lit_expr).to_string();
         assert_eq!(sql_string, "a = 42");
 
         Ok(())

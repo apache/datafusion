@@ -109,13 +109,12 @@ pub fn lit<T: datafusion_expr::Literal>(value: T) -> Arc<dyn PhysicalExpr> {
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::sql_formatter;
-
     use super::*;
 
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
     use datafusion_common::cast::as_int32_array;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
     fn literal_i32() -> Result<()> {
@@ -149,7 +148,7 @@ mod tests {
         let expr = lit(42i32);
         let display_string = expr.to_string();
         assert_eq!(display_string, "42");
-        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
         assert_eq!(sql_string, "42");
 
         Ok(())

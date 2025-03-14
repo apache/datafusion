@@ -188,10 +188,10 @@ pub fn like(
 mod test {
     use super::*;
     use crate::expressions::col;
-    use crate::utils::sql_formatter;
     use arrow::array::*;
     use arrow::datatypes::Field;
     use datafusion_common::cast::as_boolean_array;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     macro_rules! test_like {
         ($A_VEC:expr, $B_VEC:expr, $VEC:expr, $NULLABLE: expr, $NEGATED:expr, $CASE_INSENSITIVE:expr,) => {{
@@ -284,7 +284,7 @@ mod test {
         assert_eq!(display_string, "a@0 LIKE b@1");
 
         // fmt_sql format
-        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
         assert_eq!(sql_string, "a LIKE b");
 
         Ok(())

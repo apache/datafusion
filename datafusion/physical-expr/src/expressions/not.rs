@@ -192,12 +192,10 @@ mod tests {
     use std::sync::LazyLock;
 
     use super::*;
-    use crate::{
-        expressions::{col, Column},
-        utils::sql_formatter,
-    };
+    use crate::expressions::{col, Column};
 
     use arrow::{array::BooleanArray, datatypes::*};
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     #[test]
     fn neg_op() -> Result<()> {
@@ -339,7 +337,7 @@ mod tests {
         let display_string = expr.to_string();
         assert_eq!(display_string, "NOT a@0");
 
-        let sql_string = sql_formatter(expr.as_ref()).to_string();
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
         assert_eq!(sql_string, "NOT a");
 
         Ok(())

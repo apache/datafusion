@@ -48,6 +48,7 @@ use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::PhysicalExprRef;
 
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::stream::{Stream, StreamExt};
 use itertools::Itertools;
 use log::trace;
@@ -169,17 +170,11 @@ impl DisplayAs for ProjectionExec {
             }
             DisplayFormatType::TreeRender => {
                 for (i, (e, alias)) in self.expr().iter().enumerate() {
-                    if e.as_any().downcast_ref::<Column>().is_some() {
-                        e.fmt_sql(f)?;
-                        writeln!(f)?;
+                    let expr_sql = fmt_sql(e.as_ref());
+                    if &e.to_string() == alias {
+                        writeln!(f, "expr{i}={expr_sql}")?;
                     } else {
-                        if &e.to_string() == alias {
-                            write!(f, "expr{i}=")?;
-                        } else {
-                            write!(f, "{alias}=")?;
-                        }
-                        e.fmt_sql(f)?;
-                        writeln!(f)?;
+                        writeln!(f, "{alias}={expr_sql}")?;
                     }
                 }
 

@@ -201,7 +201,6 @@ pub fn negative(
 mod tests {
     use super::*;
     use crate::expressions::{col, Column};
-    use crate::utils::sql_formatter;
 
     use arrow::array::*;
     use arrow::datatypes::DataType::{Float32, Float64, Int16, Int32, Int64, Int8};
@@ -209,6 +208,7 @@ mod tests {
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::{DataFusionError, ScalarValue};
 
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use paste::paste;
 
     macro_rules! test_array_negative_op {
@@ -392,7 +392,7 @@ mod tests {
         let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
         let display_string = expr.to_string();
         assert_eq!(display_string, "(- a@0)");
-        let sql_string = sql_formatter(&expr).to_string();
+        let sql_string = fmt_sql(&expr).to_string();
         assert_eq!(sql_string, "(- a)");
 
         Ok(())
