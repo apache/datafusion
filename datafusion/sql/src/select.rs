@@ -550,29 +550,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             0 => Ok(LogicalPlanBuilder::empty(true).build()?),
             1 => {
                 let input = from.remove(0);
-                let table = self.plan_table_with_joins(input, planner_context)?;
-
-                // inline table scan
-                let table = match table {
-                    LogicalPlan::TableScan(table_scan)
-                        if table_scan.filters.is_empty() =>
-                    {
-                        if let Some(sub_plan) = table_scan.source.get_logical_plan() {
-                            let sub_plan = sub_plan.into_owned();
-                            LogicalPlanBuilder::from(sub_plan)
-                                // Ensures that the reference to the inlined table remains the
-                                // same, meaning we don't have to change any of the parent nodes
-                                // that reference this table.
-                                .alias(table_scan.table_name)?
-                                .build()?
-                        } else {
-                            LogicalPlan::TableScan(table_scan)
-                        }
-                    }
-                    table => table,
-                };
-
-                Ok(table)
+                self.plan_table_with_joins(input, planner_context)
             }
             _ => {
                 let mut from = from.into_iter();

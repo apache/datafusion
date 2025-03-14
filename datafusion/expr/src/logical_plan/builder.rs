@@ -467,7 +467,7 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let table_scan =
             TableScan::try_new(table_name, table_source, projection, filters, None)?;
-        
+
         // Inline TableScan
         if table_scan.filters.is_empty() {
             if let Some(p) = table_scan.source.get_logical_plan() {
