@@ -26,18 +26,9 @@
 //! Implementations
 //! * Information schema: [`information_schema`]
 //! * Simple memory based catalog: [`MemoryCatalogProviderList`], [`MemoryCatalogProvider`], [`MemorySchemaProvider`]
+//! * Listing schema: [`listing_schema`]
 
 pub mod memory;
-#[deprecated(
-    since = "46.0.0",
-    note = "use datafusion_sql::resolve::resolve_table_references"
-)]
-pub use datafusion_sql::resolve::resolve_table_references;
-#[deprecated(
-    since = "46.0.0",
-    note = "use datafusion_common::{ResolvedTableReference, TableReference}"
-)]
-pub use datafusion_sql::{ResolvedTableReference, TableReference};
 pub use memory::{
     MemoryCatalogProvider, MemoryCatalogProviderList, MemorySchemaProvider,
 };
@@ -45,6 +36,7 @@ mod r#async;
 mod catalog;
 mod dynamic_file;
 pub mod information_schema;
+pub mod listing_schema;
 mod schema;
 mod session;
 mod table;
