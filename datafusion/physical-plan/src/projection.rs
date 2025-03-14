@@ -171,6 +171,7 @@ impl DisplayAs for ProjectionExec {
                 for (i, (e, alias)) in self.expr().iter().enumerate() {
                     if e.as_any().downcast_ref::<Column>().is_some() {
                         e.fmt_sql(f)?;
+                        writeln!(f)?;
                     } else {
                         if &e.to_string() == alias {
                             write!(f, "expr{i}=")?;

@@ -736,40 +736,42 @@ physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
 03)│    --------------------   │
-04)│ v1sum(t1.v1) ORDER BY [t1 │
-05)│  .v1 ASC NULLS LAST] ROWS │
-06)│   BETWEEN 1 PRECEDING AND │
-07)│         CURRENT ROW       │
-08)└─────────────┬─────────────┘
-09)┌─────────────┴─────────────┐
-10)│    BoundedWindowAggExec   │
-11)│    --------------------   │
-12)│        mode: Sorted       │
-13)│                           │
-14)│        select_list:       │
-15)│ sum(t1.v1) ORDER BY [t1.v1│
-16)│    ASC NULLS LAST] ROWS   │
-17)│     BETWEEN 1 PRECEDING   │
-18)│       AND CURRENT ROW     │
-19)└─────────────┬─────────────┘
-20)┌─────────────┴─────────────┐
-21)│          SortExec         │
-22)│    --------------------   │
-23)│    v1@0 ASC NULLS LAST    │
-24)└─────────────┬─────────────┘
-25)┌─────────────┴─────────────┐
-26)│       ProjectionExec      │
-27)│    --------------------   │
-28)│           value           │
-29)└─────────────┬─────────────┘
-30)┌─────────────┴─────────────┐
-31)│       LazyMemoryExec      │
-32)│    --------------------   │
-33)│     batch_generators:     │
-34)│ generate_series: start=1, │
-35)│    end=1000, batch_size   │
-36)│           =8192           │
-37)└───────────────────────────┘
+04)│ sum(t1.v1) ORDER BY [t1.v1│
+05)│    ASC NULLS LAST] ROWS   │
+06)│     BETWEEN 1 PRECEDING   │
+07)│       AND CURRENT ROW     │
+08)│                           │
+09)│             v1            │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│    BoundedWindowAggExec   │
+13)│    --------------------   │
+14)│        mode: Sorted       │
+15)│                           │
+16)│        select_list:       │
+17)│ sum(t1.v1) ORDER BY [t1.v1│
+18)│    ASC NULLS LAST] ROWS   │
+19)│     BETWEEN 1 PRECEDING   │
+20)│       AND CURRENT ROW     │
+21)└─────────────┬─────────────┘
+22)┌─────────────┴─────────────┐
+23)│          SortExec         │
+24)│    --------------------   │
+25)│    v1@0 ASC NULLS LAST    │
+26)└─────────────┬─────────────┘
+27)┌─────────────┴─────────────┐
+28)│       ProjectionExec      │
+29)│    --------------------   │
+30)│           value           │
+31)└─────────────┬─────────────┘
+32)┌─────────────┴─────────────┐
+33)│       LazyMemoryExec      │
+34)│    --------------------   │
+35)│     batch_generators:     │
+36)│ generate_series: start=1, │
+37)│    end=1000, batch_size   │
+38)│           =8192           │
+39)└───────────────────────────┘
 
 query TT
 explain select 
@@ -784,10 +786,10 @@ physical_plan
 04)│    count(Int64(1)) ROWS   │
 05)│      BETWEEN UNBOUNDED    │
 06)│   PRECEDING AND UNBOUNDED │
-07)│    FOLLOWINGrow_number()  │
-08)│        ROWS BETWEEN       │
-09)│          UNBOUNDED        │
-10)│        PRECEDING AND      │
+07)│          FOLLOWING        │
+08)│                           │
+09)│ row_number() ROWS BETWEEN │
+10)│   UNBOUNDED PRECEDING AND │
 11)│     UNBOUNDED FOLLOWING   │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
@@ -853,25 +855,29 @@ physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
 03)│    --------------------   │
-04)│ int_colbigint_colsum_col: │
-05)│  CAST(int_col AS Int64) + │
-06)│         bigint_col        │
-07)└─────────────┬─────────────┘
-08)┌─────────────┴─────────────┐
-09)│      RepartitionExec      │
-10)│    --------------------   │
-11)│  output_partition_count:  │
-12)│             1             │
-13)│                           │
-14)│    partitioning_scheme:   │
-15)│     RoundRobinBatch(4)    │
-16)└─────────────┬─────────────┘
-17)┌─────────────┴─────────────┐
-18)│       DataSourceExec      │
-19)│    --------------------   │
-20)│          files: 1         │
-21)│        format: csv        │
-22)└───────────────────────────┘
+04)│         bigint_col        │
+05)│                           │
+06)│          int_col          │
+07)│                           │
+08)│          sum_col:         │
+09)│  CAST(int_col AS Int64) + │
+10)│         bigint_col        │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│      RepartitionExec      │
+14)│    --------------------   │
+15)│  output_partition_count:  │
+16)│             1             │
+17)│                           │
+18)│    partitioning_scheme:   │
+19)│     RoundRobinBatch(4)    │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│       DataSourceExec      │
+23)│    --------------------   │
+24)│          files: 1         │
+25)│        format: csv        │
+26)└───────────────────────────┘
 
 query TT
 explain select 
@@ -887,54 +893,56 @@ physical_plan
 05)│    .int_col DESC NULLS    │
 06)│    FIRST] RANGE BETWEEN   │
 07)│   UNBOUNDED PRECEDING AND │
-08)│   CURRENT ROWrow_number() │
-09)│      ORDER BY [table1     │
-10)│     .int_col ASC NULLS    │
-11)│     LAST] RANGE BETWEEN   │
-12)│     UNBOUNDED PRECEDING   │
-13)│       AND CURRENT ROW     │
-14)└─────────────┬─────────────┘
-15)┌─────────────┴─────────────┐
-16)│    BoundedWindowAggExec   │
-17)│    --------------------   │
-18)│        mode: Sorted       │
-19)│                           │
-20)│        select_list:       │
-21)│   row_number() ORDER BY   │
-22)│    [table1.int_col ASC    │
-23)│      NULLS LAST] RANGE    │
-24)│      BETWEEN UNBOUNDED    │
-25)│    PRECEDING AND CURRENT  │
-26)│             ROW           │
-27)└─────────────┬─────────────┘
-28)┌─────────────┴─────────────┐
-29)│          SortExec         │
-30)│    --------------------   │
-31)│  int_col@0 ASC NULLS LAST │
-32)└─────────────┬─────────────┘
-33)┌─────────────┴─────────────┐
-34)│    BoundedWindowAggExec   │
-35)│    --------------------   │
-36)│        mode: Sorted       │
-37)│                           │
-38)│        select_list:       │
-39)│  rank() ORDER BY [table1  │
-40)│    .int_col DESC NULLS    │
-41)│    FIRST] RANGE BETWEEN   │
-42)│   UNBOUNDED PRECEDING AND │
-43)│         CURRENT ROW       │
-44)└─────────────┬─────────────┘
-45)┌─────────────┴─────────────┐
-46)│          SortExec         │
-47)│    --------------------   │
-48)│       int_col@0 DESC      │
-49)└─────────────┬─────────────┘
-50)┌─────────────┴─────────────┐
-51)│       DataSourceExec      │
-52)│    --------------------   │
-53)│          files: 1         │
-54)│        format: csv        │
-55)└───────────────────────────┘
+08)│         CURRENT ROW       │
+09)│                           │
+10)│   row_number() ORDER BY   │
+11)│    [table1.int_col ASC    │
+12)│      NULLS LAST] RANGE    │
+13)│      BETWEEN UNBOUNDED    │
+14)│    PRECEDING AND CURRENT  │
+15)│             ROW           │
+16)└─────────────┬─────────────┘
+17)┌─────────────┴─────────────┐
+18)│    BoundedWindowAggExec   │
+19)│    --------------------   │
+20)│        mode: Sorted       │
+21)│                           │
+22)│        select_list:       │
+23)│   row_number() ORDER BY   │
+24)│    [table1.int_col ASC    │
+25)│      NULLS LAST] RANGE    │
+26)│      BETWEEN UNBOUNDED    │
+27)│    PRECEDING AND CURRENT  │
+28)│             ROW           │
+29)└─────────────┬─────────────┘
+30)┌─────────────┴─────────────┐
+31)│          SortExec         │
+32)│    --------------------   │
+33)│  int_col@0 ASC NULLS LAST │
+34)└─────────────┬─────────────┘
+35)┌─────────────┴─────────────┐
+36)│    BoundedWindowAggExec   │
+37)│    --------------------   │
+38)│        mode: Sorted       │
+39)│                           │
+40)│        select_list:       │
+41)│  rank() ORDER BY [table1  │
+42)│    .int_col DESC NULLS    │
+43)│    FIRST] RANGE BETWEEN   │
+44)│   UNBOUNDED PRECEDING AND │
+45)│         CURRENT ROW       │
+46)└─────────────┬─────────────┘
+47)┌─────────────┴─────────────┐
+48)│          SortExec         │
+49)│    --------------------   │
+50)│       int_col@0 DESC      │
+51)└─────────────┬─────────────┘
+52)┌─────────────┴─────────────┐
+53)│       DataSourceExec      │
+54)│    --------------------   │
+55)│          files: 1         │
+56)│        format: csv        │
+57)└───────────────────────────┘
 
 # Query with projection on parquet
 query TT
@@ -944,25 +952,29 @@ physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
 03)│    --------------------   │
-04)│ int_colbigint_colsum_col: │
-05)│  CAST(int_col AS Int64) + │
-06)│         bigint_col        │
-07)└─────────────┬─────────────┘
-08)┌─────────────┴─────────────┐
-09)│      RepartitionExec      │
-10)│    --------------------   │
-11)│  output_partition_count:  │
-12)│             1             │
-13)│                           │
-14)│    partitioning_scheme:   │
-15)│     RoundRobinBatch(4)    │
-16)└─────────────┬─────────────┘
-17)┌─────────────┴─────────────┐
-18)│       DataSourceExec      │
-19)│    --------------------   │
-20)│          files: 1         │
-21)│      format: parquet      │
-22)└───────────────────────────┘
+04)│         bigint_col        │
+05)│                           │
+06)│          int_col          │
+07)│                           │
+08)│          sum_col:         │
+09)│  CAST(int_col AS Int64) + │
+10)│         bigint_col        │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│      RepartitionExec      │
+14)│    --------------------   │
+15)│  output_partition_count:  │
+16)│             1             │
+17)│                           │
+18)│    partitioning_scheme:   │
+19)│     RoundRobinBatch(4)    │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│       DataSourceExec      │
+23)│    --------------------   │
+24)│          files: 1         │
+25)│      format: parquet      │
+26)└───────────────────────────┘
 
 
 # Query with projection on memory
@@ -973,17 +985,21 @@ physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
 03)│    --------------------   │
-04)│ int_colbigint_colsum_col: │
-05)│  CAST(int_col AS Int64) + │
-06)│         bigint_col        │
-07)└─────────────┬─────────────┘
-08)┌─────────────┴─────────────┐
-09)│       DataSourceExec      │
-10)│    --------------------   │
-11)│        bytes: 1560        │
-12)│       format: memory      │
-13)│          rows: 1          │
-14)└───────────────────────────┘
+04)│         bigint_col        │
+05)│                           │
+06)│          int_col          │
+07)│                           │
+08)│          sum_col:         │
+09)│  CAST(int_col AS Int64) + │
+10)│         bigint_col        │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│       DataSourceExec      │
+14)│    --------------------   │
+15)│        bytes: 1560        │
+16)│       format: memory      │
+17)│          rows: 1          │
+18)└───────────────────────────┘
 
 # Query with projection on json
 query TT
@@ -993,24 +1009,28 @@ physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
 03)│    --------------------   │
-04)│ int_colbigint_colsum_col: │
-05)│    int_col + bigint_col   │
-06)└─────────────┬─────────────┘
-07)┌─────────────┴─────────────┐
-08)│      RepartitionExec      │
-09)│    --------------------   │
-10)│  output_partition_count:  │
-11)│             1             │
-12)│                           │
-13)│    partitioning_scheme:   │
-14)│     RoundRobinBatch(4)    │
-15)└─────────────┬─────────────┘
-16)┌─────────────┴─────────────┐
-17)│       DataSourceExec      │
-18)│    --------------------   │
-19)│          files: 1         │
-20)│        format: json       │
-21)└───────────────────────────┘
+04)│         bigint_col        │
+05)│                           │
+06)│          int_col          │
+07)│                           │
+08)│          sum_col:         │
+09)│    int_col + bigint_col   │
+10)└─────────────┬─────────────┘
+11)┌─────────────┴─────────────┐
+12)│      RepartitionExec      │
+13)│    --------------------   │
+14)│  output_partition_count:  │
+15)│             1             │
+16)│                           │
+17)│    partitioning_scheme:   │
+18)│     RoundRobinBatch(4)    │
+19)└─────────────┬─────────────┘
+20)┌─────────────┴─────────────┐
+21)│       DataSourceExec      │
+22)│    --------------------   │
+23)│          files: 1         │
+24)│        format: json       │
+25)└───────────────────────────┘
 
 
 # Query with projection on arrow
@@ -1021,25 +1041,29 @@ physical_plan
 01)┌───────────────────────────┐
 02)│       ProjectionExec      │
 03)│    --------------------   │
-04)│ int_colbigint_colsum_col: │
-05)│  CAST(int_col AS Int64) + │
-06)│         bigint_col        │
-07)└─────────────┬─────────────┘
-08)┌─────────────┴─────────────┐
-09)│      RepartitionExec      │
-10)│    --------------------   │
-11)│  output_partition_count:  │
-12)│             1             │
-13)│                           │
-14)│    partitioning_scheme:   │
-15)│     RoundRobinBatch(4)    │
-16)└─────────────┬─────────────┘
-17)┌─────────────┴─────────────┐
-18)│       DataSourceExec      │
-19)│    --------------------   │
-20)│          files: 1         │
-21)│       format: arrow       │
-22)└───────────────────────────┘
+04)│         bigint_col        │
+05)│                           │
+06)│          int_col          │
+07)│                           │
+08)│          sum_col:         │
+09)│  CAST(int_col AS Int64) + │
+10)│         bigint_col        │
+11)└─────────────┬─────────────┘
+12)┌─────────────┴─────────────┐
+13)│      RepartitionExec      │
+14)│    --------------------   │
+15)│  output_partition_count:  │
+16)│             1             │
+17)│                           │
+18)│    partitioning_scheme:   │
+19)│     RoundRobinBatch(4)    │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│       DataSourceExec      │
+23)│    --------------------   │
+24)│          files: 1         │
+25)│       format: arrow       │
+26)└───────────────────────────┘
 
 # Query with PartialSortExec.
 query TT
@@ -1125,28 +1149,34 @@ physical_plan
 33)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 34)│       ProjectionExec      ││      RepartitionExec      │
 35)│    --------------------   ││    --------------------   │
-36)│int_colstring_colbigint_col││  output_partition_count:  │
-37)│    date_colCAST(table1    ││             1             │
-38)│       .string_col AS      ││                           │
-39)│         Utf8View):        ││    partitioning_scheme:   │
-40)│     CAST(string_col AS    ││     RoundRobinBatch(4)    │
-41)│          Utf8View)        ││                           │
-42)└─────────────┬─────────────┘└─────────────┬─────────────┘
-43)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-44)│      RepartitionExec      ││       DataSourceExec      │
-45)│    --------------------   ││    --------------------   │
-46)│  output_partition_count:  ││          files: 1         │
-47)│             1             ││      format: parquet      │
-48)│                           ││                           │
-49)│    partitioning_scheme:   ││                           │
-50)│     RoundRobinBatch(4)    ││                           │
-51)└─────────────┬─────────────┘└───────────────────────────┘
-52)┌─────────────┴─────────────┐
-53)│       DataSourceExec      │
-54)│    --------------------   │
-55)│          files: 1         │
-56)│        format: csv        │
-57)└───────────────────────────┘
+36)│ CAST(table1.string_col AS ││  output_partition_count:  │
+37)│         Utf8View):        ││             1             │
+38)│     CAST(string_col AS    ││                           │
+39)│          Utf8View)        ││    partitioning_scheme:   │
+40)│                           ││     RoundRobinBatch(4)    │
+41)│         bigint_col        ││                           │
+42)│                           ││                           │
+43)│          date_col         ││                           │
+44)│                           ││                           │
+45)│          int_col          ││                           │
+46)│                           ││                           │
+47)│         string_col        ││                           │
+48)└─────────────┬─────────────┘└─────────────┬─────────────┘
+49)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+50)│      RepartitionExec      ││       DataSourceExec      │
+51)│    --------------------   ││    --------------------   │
+52)│  output_partition_count:  ││          files: 1         │
+53)│             1             ││      format: parquet      │
+54)│                           ││                           │
+55)│    partitioning_scheme:   ││                           │
+56)│     RoundRobinBatch(4)    ││                           │
+57)└─────────────┬─────────────┘└───────────────────────────┘
+58)┌─────────────┴─────────────┐
+59)│       DataSourceExec      │
+60)│    --------------------   │
+61)│          files: 1         │
+62)│        format: csv        │
+63)└───────────────────────────┘
 
 # Query with outer hash join.
 query TT
@@ -1190,28 +1220,34 @@ physical_plan
 35)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 36)│       ProjectionExec      ││      RepartitionExec      │
 37)│    --------------------   ││    --------------------   │
-38)│int_colstring_colbigint_col││  output_partition_count:  │
-39)│    date_colCAST(table1    ││             1             │
-40)│       .string_col AS      ││                           │
-41)│         Utf8View):        ││    partitioning_scheme:   │
-42)│     CAST(string_col AS    ││     RoundRobinBatch(4)    │
-43)│          Utf8View)        ││                           │
-44)└─────────────┬─────────────┘└─────────────┬─────────────┘
-45)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
-46)│      RepartitionExec      ││       DataSourceExec      │
-47)│    --------------------   ││    --------------------   │
-48)│  output_partition_count:  ││          files: 1         │
-49)│             1             ││      format: parquet      │
-50)│                           ││                           │
-51)│    partitioning_scheme:   ││                           │
-52)│     RoundRobinBatch(4)    ││                           │
-53)└─────────────┬─────────────┘└───────────────────────────┘
-54)┌─────────────┴─────────────┐
-55)│       DataSourceExec      │
-56)│    --------------------   │
-57)│          files: 1         │
-58)│        format: csv        │
-59)└───────────────────────────┘
+38)│ CAST(table1.string_col AS ││  output_partition_count:  │
+39)│         Utf8View):        ││             1             │
+40)│     CAST(string_col AS    ││                           │
+41)│          Utf8View)        ││    partitioning_scheme:   │
+42)│                           ││     RoundRobinBatch(4)    │
+43)│         bigint_col        ││                           │
+44)│                           ││                           │
+45)│          date_col         ││                           │
+46)│                           ││                           │
+47)│          int_col          ││                           │
+48)│                           ││                           │
+49)│         string_col        ││                           │
+50)└─────────────┬─────────────┘└─────────────┬─────────────┘
+51)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+52)│      RepartitionExec      ││       DataSourceExec      │
+53)│    --------------------   ││    --------------------   │
+54)│  output_partition_count:  ││          files: 1         │
+55)│             1             ││      format: parquet      │
+56)│                           ││                           │
+57)│    partitioning_scheme:   ││                           │
+58)│     RoundRobinBatch(4)    ││                           │
+59)└─────────────┬─────────────┘└───────────────────────────┘
+60)┌─────────────┴─────────────┐
+61)│       DataSourceExec      │
+62)│    --------------------   │
+63)│          files: 1         │
+64)│        format: csv        │
+65)└───────────────────────────┘
 
 # Query with nested loop join.
 query TT
