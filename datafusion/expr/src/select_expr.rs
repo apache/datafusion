@@ -53,7 +53,7 @@ impl From<Column> for SelectExpr {
 }
 
 /// Create an [`SelectExpr::Expression`] from an optional qualifier and a [`FieldRef`]. This is
-/// useful for creating [`SelectExpr::Expression`] from a [`DFSchema`].
+/// useful for creating [`SelectExpr::Expression`] from a `DFSchema`.
 ///
 /// See example on [`Expr`]
 impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for SelectExpr {
