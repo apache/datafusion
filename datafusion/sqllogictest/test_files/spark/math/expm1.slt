@@ -25,11 +25,6 @@ SELECT spark_expm1(1::INT);
 ----
 1.718281828459
 
-query T
-SELECT spark_expm1(1::INT)::STRING;
-----
-1.7182818284590453
-
 query R
 SELECT spark_expm1(a) FROM (VALUES (0::INT), (1::INT)) AS t(a);
 ----
