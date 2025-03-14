@@ -125,7 +125,7 @@ jobs:
           rust-version: stable
       - name: Run sqllogictest
         run: |
-          cargo test --profile release-nonlto --test sqllogictests -- --include-sqlite
+          cargo test --features backtrace --profile release-nonlto --test sqllogictests -- --include-sqlite
           cargo clean
 
 
