@@ -169,13 +169,17 @@ impl DisplayAs for ProjectionExec {
             }
             DisplayFormatType::TreeRender => {
                 for (i, (e, alias)) in self.expr().iter().enumerate() {
-                    if &e.to_string() == alias {
-                        write!(f, "expr{i}=")?;
+                    if e.as_any().downcast_ref::<Column>().is_some() {
+                        e.fmt_sql(f)?;
                     } else {
-                        write!(f, "{alias}=")?;
+                        if &e.to_string() == alias {
+                            write!(f, "expr{i}=")?;
+                        } else {
+                            write!(f, "{alias}=")?;
+                        }
+                        e.fmt_sql(f)?;
+                        writeln!(f)?;
                     }
-                    e.fmt_sql(f)?;
-                    writeln!(f)?;
                 }
 
                 Ok(())
