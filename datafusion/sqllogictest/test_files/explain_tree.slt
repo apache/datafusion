@@ -133,6 +133,12 @@ AS SELECT
 FROM
   hashjoin_datatype_table_t2_source
 
+statement ok
+CREATE TABLE limit_table AS
+SELECT * FROM table1
+UNION ALL SELECT * FROM table1
+UNION ALL SELECT * FROM table1;
+
 ######## Begin Queries ########
 
 # Filter
@@ -245,6 +251,72 @@ physical_plan
 10)│          files: 1         │
 11)│        format: csv        │
 12)└───────────────────────────┘
+
+query TT
+explain VERBOSE
+SELECT /*+ REPARTITION(4) */ *
+FROM limit_table
+LIMIT 10;
+----
+initial_physical_plan
+01)GlobalLimitExec: skip=0, fetch=10
+02)--LocalLimitExec: fetch=10
+03)----DataSourceExec: partitions=3, partition_sizes=[1, 1, 1]
+initial_physical_plan_with_stats
+01)GlobalLimitExec: skip=0, fetch=10, statistics=[Rows=Exact(9), Bytes=Exact(4680), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
+02)--LocalLimitExec: fetch=10, statistics=[Rows=Exact(9), Bytes=Exact(4680), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
+03)----DataSourceExec: partitions=3, partition_sizes=[1, 1, 1], statistics=[Rows=Exact(9), Bytes=Exact(4680), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
+initial_physical_plan_with_schema
+01)GlobalLimitExec: skip=0, fetch=10, schema=[int_col:Int32;N, string_col:Utf8;N, bigint_col:Int64;N, date_col:Date32;N]
+02)--LocalLimitExec: fetch=10, schema=[int_col:Int32;N, string_col:Utf8;N, bigint_col:Int64;N, date_col:Date32;N]
+03)----DataSourceExec: partitions=3, partition_sizes=[1, 1, 1], schema=[int_col:Int32;N, string_col:Utf8;N, bigint_col:Int64;N, date_col:Date32;N]
+physical_plan after OutputRequirements
+01)OutputRequirementExec
+02)--GlobalLimitExec: skip=0, fetch=10
+03)----LocalLimitExec: fetch=10
+04)------DataSourceExec: partitions=3, partition_sizes=[1, 1, 1]
+physical_plan after aggregate_statistics SAME TEXT AS ABOVE
+physical_plan after join_selection SAME TEXT AS ABOVE
+physical_plan after LimitedDistinctAggregation SAME TEXT AS ABOVE
+physical_plan after EnforceDistribution
+01)OutputRequirementExec
+02)--GlobalLimitExec: skip=0, fetch=10
+03)----CoalescePartitionsExec
+04)------LocalLimitExec: fetch=10
+05)--------DataSourceExec: partitions=3, partition_sizes=[1, 1, 1]
+physical_plan after CombinePartialFinalAggregate SAME TEXT AS ABOVE
+physical_plan after EnforceSorting SAME TEXT AS ABOVE
+physical_plan after OptimizeAggregateOrder SAME TEXT AS ABOVE
+physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
+physical_plan after coalesce_batches SAME TEXT AS ABOVE
+physical_plan after OutputRequirements
+01)GlobalLimitExec: skip=0, fetch=10
+02)--CoalescePartitionsExec
+03)----LocalLimitExec: fetch=10
+04)------DataSourceExec: partitions=3, partition_sizes=[1, 1, 1]
+physical_plan after LimitAggregation SAME TEXT AS ABOVE
+physical_plan after LimitPushdown
+01)CoalescePartitionsExec: fetch=10
+02)--DataSourceExec: partitions=3, partition_sizes=[1, 1, 1], fetch=10
+physical_plan after ProjectionPushdown SAME TEXT AS ABOVE
+physical_plan after SanityCheckPlan SAME TEXT AS ABOVE
+physical_plan
+01)┌───────────────────────────┐
+02)│   CoalescePartitionsExec  │
+03)└─────────────┬─────────────┘
+04)┌─────────────┴─────────────┐
+05)│       DataSourceExec      │
+06)│    --------------------   │
+07)│        bytes: 4680        │
+08)│       format: memory      │
+09)│          rows: 3          │
+10)└───────────────────────────┘
+physical_plan_with_stats
+01)CoalescePartitionsExec: fetch=10, statistics=[Rows=Exact(9), Bytes=Exact(4680), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
+02)--DataSourceExec: partitions=3, partition_sizes=[1, 1, 1], fetch=10, statistics=[Rows=Exact(9), Bytes=Exact(4680), [(Col[0]: Null=Exact(0)),(Col[1]: Null=Exact(0)),(Col[2]: Null=Exact(0)),(Col[3]: Null=Exact(0))]]
+physical_plan_with_schema
+01)CoalescePartitionsExec: fetch=10, schema=[int_col:Int32;N, string_col:Utf8;N, bigint_col:Int64;N, date_col:Date32;N]
+02)--DataSourceExec: partitions=3, partition_sizes=[1, 1, 1], fetch=10, schema=[int_col:Int32;N, string_col:Utf8;N, bigint_col:Int64;N, date_col:Date32;N]
 
 # 2 Joins
 query TT
