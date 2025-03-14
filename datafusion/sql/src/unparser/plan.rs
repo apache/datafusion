@@ -49,6 +49,7 @@ use datafusion_expr::{
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
     UserDefinedLogicalNode,
 };
+use recursive;
 use sqlparser::ast::{self, Ident, SetExpr, TableAliasColumnDef};
 use std::sync::Arc;
 
