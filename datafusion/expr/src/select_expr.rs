@@ -45,15 +45,15 @@ impl From<Expr> for SelectExpr {
     }
 }
 
-/// Create an [`Expr`] from a [`Column`]
+/// Create an [`SelectExpr::Expression`] from a [`Column`]
 impl From<Column> for SelectExpr {
     fn from(value: Column) -> Self {
         Expr::Column(value).into()
     }
 }
 
-/// Create an [`Expr`] from an optional qualifier and a [`FieldRef`]. This is
-/// useful for creating [`Expr`] from a [`DFSchema`].
+/// Create an [`SelectExpr::Expression`] from an optional qualifier and a [`FieldRef`]. This is
+/// useful for creating [`SelectExpr::Expression`] from a [`DFSchema`].
 ///
 /// See example on [`Expr`]
 impl<'a> From<(Option<&'a TableReference>, &'a FieldRef)> for SelectExpr {
