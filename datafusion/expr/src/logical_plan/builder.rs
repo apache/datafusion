@@ -51,7 +51,6 @@ use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
     exec_err, get_target_functional_dependencies, internal_err, not_impl_err,
     plan_datafusion_err, plan_err, Column, Constraints, DFSchema, DFSchemaRef,
@@ -778,31 +777,8 @@ impl LogicalPlanBuilder {
             is_distinct,
         )?;
 
-        let mut sort_exprs = normalize_sorts(sorts, &plan)?;
-        if matches!(&plan, LogicalPlan::Union(_))
-            || matches!(&plan, LogicalPlan::Distinct(distinct) if matches!(**distinct.input(), LogicalPlan::Union(_)))
-        {
-            sort_exprs = sort_exprs
-                .into_iter()
-                .map(|sort_expr| {
-                    let inner_expr = sort_expr.expr.clone();
-                    let qualifiers_removed = inner_expr
-                        .transform_up(|expr| {
-                            if let Expr::Column(mut col) = expr {
-                                col.relation = None;
-                                Ok(Transformed::yes(Expr::Column(col)))
-                            } else {
-                                Ok(Transformed::no(expr))
-                            }
-                        })
-                        .data()?;
-                    Ok(sort_expr.with_expr(qualifiers_removed))
-                })
-                .collect::<Result<_>>()?
-        };
-
         let sort_plan = LogicalPlan::Sort(Sort {
-            expr: sort_exprs,
+            expr: normalize_sorts(sorts, &plan)?,
             input: Arc::new(plan),
             fetch,
         });
