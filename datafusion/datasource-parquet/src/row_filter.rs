@@ -684,7 +684,7 @@ mod test {
 
         let table_ref = Arc::new(table_schema.clone());
         let schema_adapter =
-            DefaultSchemaAdapterFactory.create(Arc::clone(&table_ref), table_ref);
+            DefaultSchemaAdapterFactory::default().create(Arc::clone(&table_ref), table_ref);
         let (schema_mapping, _) = schema_adapter
             .map_schema(&file_schema)
             .expect("creating schema mapping");
