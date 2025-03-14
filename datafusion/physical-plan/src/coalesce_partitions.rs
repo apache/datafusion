@@ -97,7 +97,7 @@ impl DisplayAs for CoalescePartitionsExec {
                     write!(f, "fetch: {fetch}")
                 }
                 None => write!(f, ""),
-            }
+            },
         }
     }
 }
