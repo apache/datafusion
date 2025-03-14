@@ -1394,6 +1394,117 @@ drop table table4;
 statement ok
 drop table table5;
 
+# Create table for InterleaveExec
+statement ok
+CREATE TABLE t1(
+  id INT,
+  name TEXT
+) as VALUES
+  (1, 'Alex'),
+  (2, 'Bob'),
+  (3, 'Alice')
+;
+
+statement ok
+CREATE TABLE t2(
+  id TINYINT,
+  name TEXT
+) as VALUES
+  (1, 'Alex'),
+  (2, 'Bob'),
+  (3, 'John')
+;
+
+# Test explain tree for InterleaveExec
+query TT
+EXPLAIN
+SELECT count(*) FROM (
+    SELECT distinct name FROM t1
+    UNION ALL
+    SELECT distinct name FROM t2
+) GROUP BY name
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│         count(*):         │
+05)│     count(Int64(1))@1     │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│       AggregateExec       │
+09)│    --------------------   │
+10)│   aggr: count(Int64(1))   │
+11)│                           │
+12)│         group_by:         │
+13)│       name@0 as name      │
+14)│                           │
+15)│           mode:           │
+16)│     SinglePartitioned     │
+17)└─────────────┬─────────────┘
+18)┌─────────────┴─────────────┐
+19)│       InterleaveExec      ├──────────────┐
+20)└─────────────┬─────────────┘              │
+21)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+22)│       AggregateExec       ││       AggregateExec       │
+23)│    --------------------   ││    --------------------   │
+24)│            aggr           ││            aggr           │
+25)│                           ││                           │
+26)│         group_by:         ││         group_by:         │
+27)│       name@0 as name      ││       name@0 as name      │
+28)│                           ││                           │
+29)│           mode:           ││           mode:           │
+30)│      FinalPartitioned     ││      FinalPartitioned     │
+31)└─────────────┬─────────────┘└─────────────┬─────────────┘
+32)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+33)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    │
+34)│    --------------------   ││    --------------------   │
+35)│     target_batch_size:    ││     target_batch_size:    │
+36)│            8192           ││            8192           │
+37)└─────────────┬─────────────┘└─────────────┬─────────────┘
+38)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+39)│      RepartitionExec      ││      RepartitionExec      │
+40)│    --------------------   ││    --------------------   │
+41)│  output_partition_count:  ││  output_partition_count:  │
+42)│             4             ││             4             │
+43)│                           ││                           │
+44)│    partitioning_scheme:   ││    partitioning_scheme:   │
+45)│     Hash([name@0], 4)     ││     Hash([name@0], 4)     │
+46)└─────────────┬─────────────┘└─────────────┬─────────────┘
+47)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+48)│      RepartitionExec      ││      RepartitionExec      │
+49)│    --------------------   ││    --------------------   │
+50)│  output_partition_count:  ││  output_partition_count:  │
+51)│             1             ││             1             │
+52)│                           ││                           │
+53)│    partitioning_scheme:   ││    partitioning_scheme:   │
+54)│     RoundRobinBatch(4)    ││     RoundRobinBatch(4)    │
+55)└─────────────┬─────────────┘└─────────────┬─────────────┘
+56)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+57)│       AggregateExec       ││       AggregateExec       │
+58)│    --------------------   ││    --------------------   │
+59)│            aggr           ││            aggr           │
+60)│                           ││                           │
+61)│         group_by:         ││         group_by:         │
+62)│       name@0 as name      ││       name@0 as name      │
+63)│                           ││                           │
+64)│       mode: Partial       ││       mode: Partial       │
+65)└─────────────┬─────────────┘└─────────────┬─────────────┘
+66)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+67)│       DataSourceExec      ││       DataSourceExec      │
+68)│    --------------------   ││    --------------------   │
+69)│        bytes: 1320        ││        bytes: 1312        │
+70)│       format: memory      ││       format: memory      │
+71)│          rows: 1          ││          rows: 1          │
+72)└───────────────────────────┘└───────────────────────────┘
+
+# cleanup
+statement ok
+drop table t1;
+
+statement ok
+drop table t2;
+
 # Test on StreamingTableExec
 # prepare table
 statement ok
