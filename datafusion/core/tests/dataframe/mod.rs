@@ -72,7 +72,7 @@ use datafusion_expr::expr::{GroupingSet, Sort, WindowFunction};
 use datafusion_expr::var_provider::{VarProvider, VarType};
 use datafusion_expr::{
     cast, col, create_udf, exists, in_subquery, lit, out_ref_col, placeholder,
-    scalar_subquery, when, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
+    scalar_subquery, when, wildcard, Expr, ExprFunctionExt, ExprSchemable, LogicalPlan,
     ScalarFunctionImplementation, WindowFrame, WindowFrameBound, WindowFrameUnits,
     WindowFunctionDefinition,
 };
@@ -267,6 +267,26 @@ async fn select_expr() -> Result<()> {
 
     // the two plans should be identical
     assert_same_plan(&plan, &sql_plan);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn select_all() -> Result<()> {
+    // build plan using `select_expr``
+    let t = test_table().await?;
+
+    let df = t.select([wildcard()])?;
+
+    let plan = format!("{}", df.logical_plan().display_indent());
+    let r = df.collect().await?;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].num_rows(), 100);
+
+    let expected_string = "Projection: aggregate_test_100.c1, aggregate_test_100.c2, aggregate_test_100.c3, aggregate_test_100.c4, aggregate_test_100.c5, aggregate_test_100.c6, aggregate_test_100.c7, aggregate_test_100.c8, aggregate_test_100.c9, aggregate_test_100.c10, aggregate_test_100.c11, aggregate_test_100.c12, aggregate_test_100.c13\
+    \n  TableScan: aggregate_test_100";
+
+    assert_eq!(expected_string, &plan);
 
     Ok(())
 }
