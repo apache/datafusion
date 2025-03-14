@@ -25,7 +25,6 @@ use arrow::array::{new_null_array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::plan_err;
-use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -131,7 +130,7 @@ pub trait MissingColumnGenerator: Debug + Send + Sync {
     /// Otherwise, it should return the generated column as an `ArrayRef`.
     /// No casting or post processing is done by this method, so the generated column should match the data type
     /// of the `field` it is being generated for.
-    /// The order of 
+    /// The order of
     fn generate(&self, batch: RecordBatch) -> datafusion_common::Result<ArrayRef>;
 
     /// Returns a list of column names that this generator depends on to generate the missing column.
@@ -140,7 +139,8 @@ pub trait MissingColumnGenerator: Debug + Send + Sync {
     fn dependencies(&self) -> Vec<String>;
 }
 
-pub type ColumnGeneratorFactories = Vec<Arc<dyn MissingColumnGeneratorFactory + Send + Sync>>;
+pub type ColumnGeneratorFactories =
+    Vec<Arc<dyn MissingColumnGeneratorFactory + Send + Sync>>;
 
 #[derive(Debug)]
 enum FieldSource {
@@ -254,7 +254,10 @@ impl DefaultSchemaAdapterFactory {
     /// the same schema for both the projected table schema and the table
     /// schema.
     pub fn from_schema(table_schema: SchemaRef) -> Box<dyn SchemaAdapter> {
-        Self { column_generators: vec![] }.create(Arc::clone(&table_schema), table_schema)
+        Self {
+            column_generators: vec![],
+        }
+        .create(Arc::clone(&table_schema), table_schema)
     }
 
     pub fn with_column_generator(
@@ -263,14 +266,15 @@ impl DefaultSchemaAdapterFactory {
     ) -> Self {
         let mut generators = self.column_generators;
         generators.push(generator);
-        Self { column_generators: generators }
+        Self {
+            column_generators: generators,
+        }
     }
 
-    pub fn with_column_generators(
-        self,
-        generators: ColumnGeneratorFactories,
-    ) -> Self {
-        Self { column_generators: generators }
+    pub fn with_column_generators(self, generators: ColumnGeneratorFactories) -> Self {
+        Self {
+            column_generators: generators,
+        }
     }
 }
 
@@ -324,7 +328,10 @@ impl SchemaAdapter for DefaultSchemaAdapter {
     ///
     /// Returns a [`SchemaMapping`] that can be applied to the output batch
     /// along with an ordered list of columns to project from the file
-    fn map_schema(&self, file_schema: &Schema) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
+    fn map_schema(
+        &self,
+        file_schema: &Schema,
+    ) -> datafusion_common::Result<(Arc<dyn SchemaMapper>, Vec<usize>)> {
         // Projection is the indexes into the file schema that we need to read
         // Note that readers will NOT respect the order of the columns in projection
         let mut projection = Vec::with_capacity(file_schema.fields().len());
@@ -333,56 +340,59 @@ impl SchemaAdapter for DefaultSchemaAdapter {
         // TODO can we refactor this away?
         let mut dependency_projection = Vec::with_capacity(file_schema.fields().len());
 
-        let field_sources: Vec<_> = self
-            .projected_table_schema
-            .fields()
-            .iter()
-            .map(|table_field| {
-                if let Some((file_idx, file_field)) = file_schema.fields.find(table_field.name()) {
-                    match can_cast_types(file_field.data_type(), table_field.data_type()) {
-                        true => {
-                            projection.push(file_idx);
-                        }
-                        false => {
-                            return plan_err!(
-                                "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
-                                file_field.name(),
-                                file_field.data_type(),
-                                table_field.data_type()
-                            )
-                        }
+        let mut field_sources = Vec::with_capacity(file_schema.fields().len());
+        // For each field in the projected table schema, check if it exists in the file schema
+        // and if not, check if we can generate it using one of the column generators
+        // If we can't generate it, then we need to fill it with nulls
+        // If we can't fill it with nulls, then we have a schema error
+        for table_field in self.projected_table_schema.fields() {
+            if let Some((file_idx, file_field)) = file_schema.fields.find(table_field.name()) {
+                // If the field exists in the file schema, check if we can cast it to the table schema
+                match can_cast_types(file_field.data_type(), table_field.data_type()) {
+                    true => {
+                        projection.push(file_idx);
                     }
-                    let projected_idx = projection.len();
-                    Ok(FieldSource::Table(projected_idx))
-                } else if let Some((generator, dependencies)) = self.column_generators.iter().find_map(|factory| {
-                    if let Some(generator) = factory.create(table_field, file_schema) {
-                        let dependencies = generator.dependencies();
-                        dependencies.into_iter().map(|dep| {
-                            file_schema.index_of(&dep).map_err(|_| {
-                                plan_err!(
-                                    "Generator for column {} depends on column {} which is not present in the file schema, columns present in the file schema are: {:?}",
-                                    table_field.name(), dep, file_schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>()
-                                )
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                        Ok(Some((generator, dependencies)))
-                    } else {
-                        Ok(None)
+                    false => {
+                        return plan_err!(
+                            "Cannot cast file schema field {} of type {:?} to table schema field of type {:?}",
+                            file_field.name(),
+                            file_field.data_type(),
+                            table_field.data_type()
+                        )
                     }
-                }) {
-                    dependency_projection.extend(dependencies);
-                    Ok(FieldSource::Generated(generator))
-                } else if table_field.is_nullable() {
-                    Ok(FieldSource::Null)
-                } else {
-                    plan_err!(
-                        "Column {} is missing from the file schema, cannot be generated, and is non-nullable",
-                        table_field.name()
-                    )
                 }
-            })
-            .try_collect()?;
+                let projected_idx = projection.len();
+                field_sources.push(FieldSource::Table(projected_idx));
+            } else if let Some(Ok(generator)) = self.column_generators.iter().find_map(|factory| {
+                factory.create(table_field, file_schema).map(|generator| {
+                    let dependencies = generator.dependencies();
+                    // Check that all of the dependencies are present in the file schema, if not raise an error
+                    for dep in &dependencies {
+                        if let Ok(dep_idx) = file_schema.index_of(dep) {
+                            dependency_projection.push(dep_idx);
+                        } else {
+                            return plan_err!(
+                                "Generated column {} depends on column {} but column {} is not present in the file schema, columns present: {:?}",
+                                table_field.name(),
+                                dep,
+                                dep,
+                                file_schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>()
+                            );
+                        }
+                    }
+                    Ok(generator)
+                })
+            }) {
+                field_sources.push(FieldSource::Generated(generator));
+            } else if table_field.is_nullable() {
+                field_sources.push(FieldSource::Null);
+            } else {
+                return plan_err!(
+                    "Column {} is missing from the file schema, cannot be generated, and is non-nullable",
+                    table_field.name()
+                )
+            }
+        }
 
         for dep in dependency_projection {
             if !projection.contains(&dep) {
@@ -390,7 +400,8 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             }
         }
 
-        let (sorted_projection, field_sources) = sort_projections_and_sources(&projection, field_sources);
+        let (sorted_projection, field_sources) =
+            sort_projections_and_sources(&projection, field_sources);
 
         Ok((
             Arc::new(SchemaMapping {
@@ -402,7 +413,6 @@ impl SchemaAdapter for DefaultSchemaAdapter {
         ))
     }
 }
-
 
 /// The parquet reader needs projections to be sorted (it does not respect the order of the columns in the projection, only the values)
 /// This function adjusts the projections and mappings so that they all reference sorted projections
@@ -423,7 +433,9 @@ fn sort_projections_and_sources(
     // Create a mapping from old positions to new positions in the projected schema
     let mut position_mapping = vec![0; projection.len()];
     for (old_pos, &proj_val) in projection.iter().enumerate() {
-        position_mapping[old_pos] = *new_position_map.get(&proj_val).expect("should always be present");
+        position_mapping[old_pos] = *new_position_map
+            .get(&proj_val)
+            .expect("should always be present");
     }
 
     // Update field_sources to reflect the new positions
@@ -435,7 +447,6 @@ fn sort_projections_and_sources(
 
     (sorted_projection, field_sources)
 }
-
 
 /// The SchemaMapping struct holds a mapping from the file schema to the table
 /// schema and any necessary type conversions.
@@ -485,7 +496,10 @@ impl SchemaMapper for SchemaMapping {
         let batch_rows = batch.num_rows();
         let batch_cols = batch.columns().to_vec();
 
-        debug_assert_eq!(self.projected_table_schema.fields().len(), self.field_sources.len());
+        debug_assert_eq!(
+            self.projected_table_schema.fields().len(),
+            self.field_sources.len()
+        );
 
         let cols = self
             .projected_table_schema
@@ -499,7 +513,9 @@ impl SchemaMapper for SchemaMapping {
             .map(|(field, source)| -> datafusion_common::Result<_> {
                 let column = match source {
                     FieldSource::Table(file_idx) => batch_cols[*file_idx].clone(),
-                    FieldSource::Generated(generator) => generator.generate(batch.clone())?,
+                    FieldSource::Generated(generator) => {
+                        generator.generate(batch.clone())?
+                    }
                     FieldSource::Null => {
                         debug_assert!(field.is_nullable());
                         new_null_array(field.data_type(), batch_rows)
