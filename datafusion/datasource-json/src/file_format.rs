@@ -325,10 +325,8 @@ impl DisplayAs for JsonSink {
                 write!(f, ")")
             }
             DisplayFormatType::TreeRender => {
-                if !self.config.file_groups.is_empty() {
-                    FileGroupDisplay(&self.config.file_groups).fmt_as(t, f)?;
-                }
-                Ok(())
+                writeln!(f, "format: json")?;
+                write!(f, "file={}", &self.config.original_url)
             }
         }
     }
