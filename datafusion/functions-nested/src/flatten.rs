@@ -27,9 +27,11 @@ use arrow::datatypes::{
 use datafusion_common::cast::{
     as_generic_list_array, as_large_list_array, as_list_array,
 };
+use datafusion_common::utils::ListCoercion;
 use datafusion_common::{exec_err, utils::take_function_args, Result};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarUDFImpl, Signature, Volatility,
+    ArrayFunctionArgument, ArrayFunctionSignature, ColumnarValue, Documentation,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
 use datafusion_macros::user_doc;
 use std::any::Any;
@@ -75,7 +77,15 @@ impl Default for Flatten {
 impl Flatten {
     pub fn new() -> Self {
         Self {
-            signature: Signature::array(Volatility::Immutable),
+            signature: Signature {
+                type_signature: TypeSignature::ArraySignature(
+                    ArrayFunctionSignature::Array {
+                        arguments: vec![ArrayFunctionArgument::Array],
+                        array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    },
+                ),
+                volatility: Volatility::Immutable,
+            },
             aliases: vec![],
         }
     }
