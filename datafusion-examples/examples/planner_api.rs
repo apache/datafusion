@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::error::Result;
+use datafusion::execution::session_state::SessionStateOptimizerConfig;
 use datafusion::logical_expr::{LogicalPlan, PlanType};
 use datafusion::physical_plan::{displayable, DisplayFormatType};
 use datafusion::physical_planner::DefaultPhysicalPlanner;
@@ -97,17 +98,19 @@ async fn to_physical_plan_step_by_step_demo(
     ctx: &SessionContext,
 ) -> Result<()> {
     // First analyze the logical plan
-    let analyzed_logical_plan = ctx.state().analyzer().execute_and_check(
+    let session_state = ctx.state();
+    let analyzed_logical_plan = session_state.analyzer().execute_and_check(
         input,
-        ctx.state().config_options(),
+        session_state.config_options(),
         |_, _| (),
     )?;
     println!("Analyzed logical plan:\n\n{:?}\n\n", analyzed_logical_plan);
 
     // Optimize the analyzed logical plan
-    let optimized_logical_plan = ctx.state().optimizer().optimize(
+    let session_optimizer_config = SessionStateOptimizerConfig::new(&session_state);
+    let optimized_logical_plan = session_state.optimizer().optimize(
         analyzed_logical_plan,
-        &ctx.state(),
+        &session_optimizer_config,
         |_, _| (),
     )?;
     println!(
@@ -116,10 +119,9 @@ async fn to_physical_plan_step_by_step_demo(
     );
 
     // Create the physical plan
-    let physical_plan = ctx
-        .state()
+    let physical_plan = session_state
         .query_planner()
-        .create_physical_plan(&optimized_logical_plan, &ctx.state())
+        .create_physical_plan(&optimized_logical_plan, &session_state)
         .await?;
     println!(
         "Final physical plan:\n\n{}\n\n",
@@ -139,7 +141,7 @@ async fn to_physical_plan_step_by_step_demo(
     // on DefaultPhysicalPlanner. Not all planners will provide this feature.
     let planner = DefaultPhysicalPlanner::default();
     let physical_plan =
-        planner.optimize_physical_plan(physical_plan, &ctx.state(), |_, _| {})?;
+        planner.optimize_physical_plan(physical_plan, &session_state, |_, _| {})?;
     println!(
         "Optimized physical plan:\n\n{}\n\n",
         displayable(physical_plan.as_ref())

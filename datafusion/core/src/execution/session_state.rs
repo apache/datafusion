@@ -560,7 +560,7 @@ impl SessionState {
             // analyze & capture output of each rule
             let analyzer_result = self.analyzer.execute_and_check(
                 e.plan.as_ref().clone(),
-                self.options(),
+                self.config_options(),
                 |analyzed_plan, analyzer| {
                     let analyzer_name = analyzer.name().to_string();
                     let plan_type = PlanType::AnalyzedLogicalPlan { analyzer_name };
@@ -590,9 +590,10 @@ impl SessionState {
                 .push(analyzed_plan.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
 
             // optimize the child plan, capturing the output of each optimizer
+            let session_optimizer_config = SessionStateOptimizerConfig::new(self);
             let optimized_plan = self.optimizer.optimize(
                 analyzed_plan,
-                self,
+                &session_optimizer_config,
                 |optimized_plan, optimizer| {
                     let optimizer_name = optimizer.name().to_string();
                     let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
@@ -620,10 +621,12 @@ impl SessionState {
         } else {
             let analyzed_plan = self.analyzer.execute_and_check(
                 plan.clone(),
-                self.options(),
+                self.config_options(),
                 |_, _| {},
             )?;
-            self.optimizer.optimize(analyzed_plan, self, |_, _| {})
+            let session_optimizer_config = SessionStateOptimizerConfig::new(self);
+            self.optimizer
+                .optimize(analyzed_plan, &session_optimizer_config, |_, _| {})
         }
     }
 
@@ -666,19 +669,24 @@ impl SessionState {
         expr: Expr,
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
-        let simplifier =
-            ExprSimplifier::new(SessionSimplifyProvider::new(self, df_schema));
+        let config_options = Arc::new(self.config_options().clone());
+        let simplifier = ExprSimplifier::new(SessionSimplifyProvider::new(
+            self,
+            df_schema,
+            &config_options,
+        ));
         // apply type coercion here to ensure types match
         let mut expr = simplifier.coerce(expr, df_schema)?;
 
         // rewrite Exprs to functions if necessary
-        let config_options = self.config_options();
         for rewrite in self.analyzer.function_rewrites() {
             expr = expr
-                .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
+                .transform_up(|expr| {
+                    rewrite.rewrite(expr, df_schema, self.config_options())
+                })?
                 .data;
         }
-        create_physical_expr(&expr, df_schema, self.execution_props())
+        create_physical_expr(&expr, df_schema, self.execution_props(), &config_options)
     }
 
     /// Return the session ID
@@ -1853,7 +1861,26 @@ impl FunctionRegistry for SessionState {
     }
 }
 
-impl OptimizerConfig for SessionState {
+/// An [`OptimizerConfig`] for use with [`SessionState`]
+pub struct SessionStateOptimizerConfig<'a> {
+    execution_props: &'a ExecutionProps,
+    config_options: Arc<ConfigOptions>,
+    function_registry: Option<&'a dyn FunctionRegistry>,
+}
+
+impl<'a> SessionStateOptimizerConfig<'a> {
+    /// Create optimizer config
+    pub fn new(session_state: &'a SessionState) -> Self {
+        let config_options = Arc::new(session_state.config.options().clone());
+        Self {
+            execution_props: &session_state.execution_props,
+            config_options,
+            function_registry: Some(session_state),
+        }
+    }
+}
+
+impl OptimizerConfig for SessionStateOptimizerConfig<'_> {
     fn query_execution_start_time(&self) -> DateTime<Utc> {
         self.execution_props.query_execution_start_time
     }
@@ -1862,12 +1889,12 @@ impl OptimizerConfig for SessionState {
         &self.execution_props.alias_generator
     }
 
-    fn options(&self) -> &ConfigOptions {
-        self.config_options()
+    fn options(&self) -> &Arc<ConfigOptions> {
+        &self.config_options
     }
 
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
-        Some(self)
+        self.function_registry
     }
 }
 
@@ -1909,11 +1936,20 @@ impl QueryPlanner for DefaultQueryPlanner {
 struct SessionSimplifyProvider<'a> {
     state: &'a SessionState,
     df_schema: &'a DFSchema,
+    config_options: &'a Arc<ConfigOptions>,
 }
 
 impl<'a> SessionSimplifyProvider<'a> {
-    fn new(state: &'a SessionState, df_schema: &'a DFSchema) -> Self {
-        Self { state, df_schema }
+    fn new(
+        state: &'a SessionState,
+        df_schema: &'a DFSchema,
+        config_options: &'a Arc<ConfigOptions>,
+    ) -> Self {
+        Self {
+            state,
+            df_schema,
+            config_options,
+        }
     }
 }
 
@@ -1928,6 +1964,10 @@ impl SimplifyInfo for SessionSimplifyProvider<'_> {
 
     fn execution_props(&self) -> &ExecutionProps {
         self.state.execution_props()
+    }
+
+    fn config_options(&self) -> &Arc<ConfigOptions> {
+        self.config_options
     }
 
     fn get_data_type(&self, expr: &Expr) -> datafusion_common::Result<DataType> {

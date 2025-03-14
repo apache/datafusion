@@ -28,7 +28,7 @@ use arrow::{
     ffi::{from_ffi, to_ffi, FFI_ArrowSchema},
 };
 use datafusion::{
-    error::DataFusionError,
+    config::ConfigOptions, error::DataFusionError,
     logical_expr::type_coercion::functions::data_types_with_scalar_udf,
 };
 use datafusion::{
@@ -78,7 +78,7 @@ pub struct FFI_ScalarUDF {
     /// See [`ScalarUDFImpl`] for details on short_circuits
     pub short_circuits: bool,
 
-    /// Performs type coersion. To simply this interface, all UDFs are treated as having
+    /// Performs type coercion. To simply this interface, all UDFs are treated as having
     /// user defined signatures, which will in turn call coerce_types to be called. This
     /// call should be transparent to most users as the internal function performs the
     /// appropriate calls on the underlying [`ScalarUDF`]
@@ -157,10 +157,14 @@ unsafe extern "C" fn invoke_with_args_fn_wrapper(
     let args = rresult_return!(args);
     let return_type = rresult_return!(DataType::try_from(&return_type.0));
 
+    // TODO Extend FFI to get the config_options
+    let config_options = ConfigOptions::new();
+
     let args = ScalarFunctionArgs {
         args,
         number_rows,
         return_type: &return_type,
+        config_options: &config_options,
     };
 
     let result = rresult_return!(udf
@@ -286,6 +290,7 @@ impl ScalarUDFImpl for ForeignScalarUDF {
             args,
             number_rows,
             return_type,
+            config_options: _config_options,
         } = invoke_args;
 
         let args = args

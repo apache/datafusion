@@ -24,6 +24,7 @@ use crate::{
     ColumnarValue, Documentation, Expr, ScalarFunctionImplementation, Signature,
 };
 use arrow::datatypes::DataType;
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::{not_impl_err, ExprSchema, Result, ScalarValue};
 use datafusion_expr_common::interval_arithmetic::Interval;
 use std::any::Any;
@@ -338,6 +339,8 @@ pub struct ScalarFunctionArgs<'a> {
     /// The return type of the scalar function returned (from `return_type` or `return_type_from_args`)
     /// when creating the physical expression from the logical expression
     pub return_type: &'a DataType,
+    // The config options which can be used to lookup configuration properties
+    pub config_options: &'a ConfigOptions,
 }
 
 /// Information about arguments passed to the function

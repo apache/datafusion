@@ -1863,7 +1863,6 @@ async fn test_multiple_sort_window_exec() -> Result<()> {
 // EnforceDistribution may invalidate ordering invariant.
 async fn test_commutativity() -> Result<()> {
     let schema = create_test_schema()?;
-    let config = ConfigOptions::new();
 
     let memory_exec = memory_exec(&schema);
     let sort_exprs = LexOrdering::new(vec![sort_expr("nullable_col", &schema)]);
@@ -1890,7 +1889,7 @@ async fn test_commutativity() -> Result<()> {
         Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
     ];
     for rule in rules {
-        plan = rule.optimize(plan, &config)?;
+        plan = rule.optimize(plan, ConfigOptions::default_singleton())?;
     }
     let first_plan = plan.clone();
 
@@ -1901,7 +1900,7 @@ async fn test_commutativity() -> Result<()> {
         Arc::new(EnforceSorting::new()) as Arc<dyn PhysicalOptimizerRule>,
     ];
     for rule in rules {
-        plan = rule.optimize(plan, &config)?;
+        plan = rule.optimize(plan, ConfigOptions::default_singleton())?;
     }
     let second_plan = plan.clone();
 

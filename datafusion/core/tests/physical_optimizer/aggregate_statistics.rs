@@ -67,8 +67,8 @@ async fn assert_count_optim_success(
     let task_ctx = Arc::new(TaskContext::default());
     let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
 
-    let config = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &config)?;
+    let optimized = AggregateStatistics::new()
+        .optimize(Arc::clone(&plan), ConfigOptions::default_singleton())?;
 
     // A ProjectionExec is a sign that the count optimization was applied
     assert!(optimized.as_any().is::<ProjectionExec>());
@@ -264,8 +264,8 @@ async fn test_count_inexact_stat() -> Result<()> {
         Arc::clone(&schema),
     )?;
 
-    let conf = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+    let optimized = AggregateStatistics::new()
+        .optimize(Arc::new(final_agg), ConfigOptions::default_singleton())?;
 
     // check that the original ExecutionPlan was not replaced
     assert!(optimized.as_any().is::<AggregateExec>());
@@ -308,8 +308,8 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
         Arc::clone(&schema),
     )?;
 
-    let conf = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+    let optimized = AggregateStatistics::new()
+        .optimize(Arc::new(final_agg), ConfigOptions::default_singleton())?;
 
     // check that the original ExecutionPlan was not replaced
     assert!(optimized.as_any().is::<AggregateExec>());

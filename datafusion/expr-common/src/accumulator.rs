@@ -26,7 +26,7 @@ use std::fmt::Debug;
 /// `Accumulator`s are stateful objects that implement a single group. They
 /// aggregate values from multiple rows together into a final output aggregate.
 ///
-/// [`GroupsAccumulator]` is an additional more performant (but also complex) API
+/// [`GroupsAccumulator`] is an additional more performant (but also complex) API
 /// that manages state for multiple groups at once.
 ///
 /// An accumulator knows how to:
@@ -42,7 +42,7 @@ use std::fmt::Debug;
 ///   [`state`] and combine the state from multiple accumulators
 ///   via [`merge_batch`], as part of efficient multi-phase grouping.
 ///
-/// [`GroupsAccumulator`]: crate::GroupsAccumulator
+/// [`GroupsAccumulator`]: crate::groups_accumulator::GroupsAccumulator
 /// [`update_batch`]: Self::update_batch
 /// [`retract_batch`]: Self::retract_batch
 /// [`state`]: Self::state
