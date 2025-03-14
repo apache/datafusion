@@ -32,9 +32,9 @@ pub enum SelectExpr {
 impl fmt::Display for SelectExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            SelectExpr::Wildcard(_) => write!(f, "*"),
-            SelectExpr::QualifiedWildcard(table, _) => write!(f, "{}.*", table),
-            SelectExpr::Expression(expr) => write!(f, "{}", expr),
+            SelectExpr::Wildcard(opt) => write!(f, "*{opt}"),
+            SelectExpr::QualifiedWildcard(table, opt) => write!(f, "{table}.*{opt}"),
+            SelectExpr::Expression(expr) => write!(f, "{expr}"),
         }
     }
 }
