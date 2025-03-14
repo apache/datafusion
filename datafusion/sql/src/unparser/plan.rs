@@ -49,7 +49,6 @@ use datafusion_expr::{
     LogicalPlanBuilder, Operator, Projection, SortExpr, TableScan, Unnest,
     UserDefinedLogicalNode,
 };
-use recursive;
 use sqlparser::ast::{self, Ident, SetExpr, TableAliasColumnDef};
 use std::sync::Arc;
 
@@ -323,7 +322,7 @@ impl Unparser<'_> {
         }
     }
 
-    #[recursive::recursive]
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn select_to_sql_recursively(
         &self,
         plan: &LogicalPlan,
