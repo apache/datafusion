@@ -348,6 +348,8 @@ jobs:
         run: rustup toolchain install nightly
       - name: Install cargo-llvm-cov
         run: cargo +nightly install cargo-llvm-cov
+      - name: Install Protobuf Compiler
+        run: sudo apt-get install -y protobuf-compiler
       - name: Run doctests
         run: cargo +nightly llvm-cov --doctests --profile ci --doc --features avro,json
       - name: Upload coverage reports to Codecov
