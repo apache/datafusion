@@ -36,7 +36,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::utils::get_at_indices;
 use datafusion_common::{
     internal_err, plan_datafusion_err, plan_err, Column, DFSchema, DFSchemaRef, HashMap,
-    Result, TableReference,
+    Result, ScalarValue, TableReference,
 };
 
 use indexmap::IndexSet;
@@ -1000,6 +1000,107 @@ pub fn can_hash(data_type: &DataType) -> bool {
     }
 }
 
+/// Metadata for the columns should be null
+pub type NullColumnsSet<'a> = HashSet<(Option<&'a TableReference>, &'a String)>;
+
+/// Determines if an expression will always evaluate to null
+pub fn evaluates_to_null(expr: &Expr, null_columns: &NullColumnsSet<'_>) -> bool {
+    match expr {
+        Expr::Alias(e) => evaluates_to_null(&e.expr, null_columns),
+        Expr::Column(e) => null_columns.contains(&(e.relation.as_ref(), &e.name)),
+        Expr::Literal(e) => matches!(e, ScalarValue::Null),
+        Expr::BinaryExpr(e) => match e.op {
+            Operator::Gt
+            | Operator::GtEq
+            | Operator::Lt
+            | Operator::LtEq
+            | Operator::Eq
+            | Operator::NotEq
+            | Operator::Plus
+            | Operator::Minus
+            | Operator::Multiply
+            | Operator::Divide
+            | Operator::Modulo
+            | Operator::RegexMatch
+            | Operator::RegexIMatch
+            | Operator::RegexNotMatch
+            | Operator::RegexNotIMatch
+            | Operator::LikeMatch
+            | Operator::ILikeMatch
+            | Operator::NotLikeMatch
+            | Operator::NotILikeMatch
+            | Operator::BitwiseAnd
+            | Operator::BitwiseOr
+            | Operator::BitwiseXor
+            | Operator::BitwiseShiftRight
+            | Operator::BitwiseShiftLeft
+            | Operator::StringConcat
+            | Operator::ArrowAt
+            | Operator::AtArrow => {
+                evaluates_to_null(&e.left, null_columns)
+                    || evaluates_to_null(&e.right, null_columns)
+            }
+            // always returns true or false.
+            Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => false,
+            _ => false,
+        },
+        Expr::Like(e) | Expr::SimilarTo(e) => {
+            evaluates_to_null(&e.expr, null_columns)
+                && evaluates_to_null(&e.pattern, null_columns)
+        }
+        Expr::Not(e) => evaluates_to_null(e, null_columns),
+        Expr::IsNotTrue(_)
+        | Expr::IsNotFalse(_)
+        | Expr::IsNotNull(_)
+        | Expr::IsNull(_)
+        | Expr::IsUnknown(_)
+        | Expr::IsNotUnknown(_)
+        | Expr::IsTrue(_)
+        | Expr::IsFalse(_) => false,
+        Expr::Between(e) => {
+            evaluates_to_null(&e.expr, null_columns)
+                && evaluates_to_null(&e.low, null_columns)
+                && evaluates_to_null(&e.high, null_columns)
+        }
+        Expr::Case(e) => {
+            e.when_then_expr
+                .iter()
+                .all(|(_, x)| evaluates_to_null(x, null_columns))
+                && e.else_expr
+                    .as_ref()
+                    .is_some_and(|else_expr| evaluates_to_null(else_expr, null_columns))
+        }
+        Expr::Negative(e) => evaluates_to_null(e, null_columns),
+        Expr::Cast(e) => evaluates_to_null(&e.expr, null_columns),
+        Expr::TryCast(e) => evaluates_to_null(&e.expr, null_columns),
+        // always returns true or false.
+        Expr::Exists(..) => false,
+        _ => false,
+    }
+}
+
+/// Determines if an expression will always evaluate to a non-true value.
+pub fn evaluates_to_not_true(expr: &Expr, null_columns: &NullColumnsSet<'_>) -> bool {
+    match expr {
+        Expr::BinaryExpr(e) => match e.op {
+            Operator::And => {
+                evaluates_to_not_true(&e.left, null_columns)
+                    || evaluates_to_not_true(&e.right, null_columns)
+            }
+            Operator::Or => {
+                evaluates_to_not_true(&e.left, null_columns)
+                    && evaluates_to_not_true(&e.right, null_columns)
+            }
+            _ => evaluates_to_null(expr, null_columns),
+        },
+        Expr::IsNotNull(e)
+        | Expr::IsFalse(e)
+        | Expr::IsTrue(e)
+        | Expr::IsNotUnknown(e) => evaluates_to_null(e, null_columns),
+        _ => evaluates_to_null(expr, null_columns),
+    }
+}
+
 /// Check whether all columns are from the schema.
 pub fn check_all_columns_from_schema(
     columns: &HashSet<&Column>,
@@ -1841,5 +1942,78 @@ mod tests {
         let list_union_type =
             DataType::List(Arc::new(Field::new("my_union", union_type, true)));
         assert!(!can_hash(&list_union_type));
+    }
+
+    #[test]
+    fn test_evaluates_to_null() {
+        let col_a = Column::from_name("a");
+
+        let null_columns = HashSet::from([(col_a.relation.as_ref(), &col_a.name)]);
+
+        // column in null_columns
+        assert!(evaluates_to_null(
+            &Expr::Column(col_a.clone()),
+            &null_columns
+        ));
+
+        // a = 1 and b = 2
+        assert!(!evaluates_to_null(
+            &col("a").eq(lit(1)).and(col("b").eq(lit(2))),
+            &null_columns
+        ));
+
+        // a = 1 or b = 2
+        assert!(!evaluates_to_null(
+            &col("a").eq(lit(1)).or(col("b").eq(lit(2))),
+            &null_columns
+        ));
+
+        // a is not false
+        assert!(!evaluates_to_null(&col("a").is_not_false(), &null_columns));
+
+        // a is false
+        assert!(!evaluates_to_null(&col("a").is_false(), &null_columns));
+
+        // a is not null
+        assert!(!evaluates_to_null(&col("a").is_not_null(), &null_columns));
+    }
+
+    #[test]
+    fn test_evaluates_to_not_true() {
+        let col_a = Column::from_name("a");
+        let null_columns = HashSet::from([(col_a.relation.as_ref(), &col_a.name)]);
+
+        // column in null_columns
+        assert!(evaluates_to_not_true(
+            &Expr::Column(col_a.clone()),
+            &null_columns
+        ));
+
+        // a = 1 and b = 2
+        assert!(evaluates_to_not_true(
+            &col("a").eq(lit(1)).and(col("b").eq(lit(2))),
+            &null_columns
+        ));
+
+        // a = 1 or b = 2
+        assert!(!evaluates_to_not_true(
+            &col("a").eq(lit(1)).or(col("b").eq(lit(2))),
+            &null_columns
+        ));
+
+        // a is not false
+        assert!(!evaluates_to_not_true(
+            &col("a").is_not_false(),
+            &null_columns
+        ));
+
+        // a is false
+        assert!(evaluates_to_not_true(&col("a").is_false(), &null_columns));
+
+        // a is not null
+        assert!(evaluates_to_not_true(
+            &col("a").is_not_null(),
+            &null_columns
+        ));
     }
 }
