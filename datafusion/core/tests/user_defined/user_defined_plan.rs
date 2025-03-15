@@ -120,13 +120,12 @@ async fn setup_table(ctx: SessionContext) -> Result<SessionContext> {
         OPTIONS('format.has_header' 'false')
     ";
 
-    let result = exec_sql(&ctx, sql).await?;
+    let expected = vec!["++", "++"];
 
-    insta::assert_snapshot!(result, @r###"
-    ++
-    ++
-    "###);
+    let s = exec_sql(&ctx, sql).await?;
+    let actual = s.lines().collect::<Vec<_>>();
 
+    assert_eq!(expected, actual, "Creating table");
     Ok(ctx)
 }
 
@@ -137,13 +136,12 @@ async fn setup_table_without_schemas(ctx: SessionContext) -> Result<SessionConte
         OPTIONS('format.has_header' 'false')
     ";
 
-    let result = exec_sql(&ctx, sql).await?;
+    let expected = vec!["++", "++"];
 
-    insta::assert_snapshot!(result, @r###"
-    ++
-    ++
-    "###);
+    let s = exec_sql(&ctx, sql).await?;
+    let actual = s.lines().collect::<Vec<_>>();
 
+    assert_eq!(expected, actual, "Creating table");
     Ok(ctx)
 }
 
@@ -157,12 +155,13 @@ const QUERY2: &str = "SELECT 42, arrow_typeof(42)";
 // Run the query using the specified execution context and compare it
 // to the known result
 async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result<()> {
-    let result = exec_sql(&ctx, QUERY).await?;
+    let s = exec_sql(&ctx, QUERY).await?;
+    let actual = s.lines().collect::<Vec<_>>().join("\n");
 
     insta::with_settings!({
         description => description,
     }, {
-        insta::assert_snapshot!(result, @r###"
+        insta::assert_snapshot!(actual, @r###"
         +-------------+---------+
         | customer_id | revenue |
         +-------------+---------+
@@ -182,12 +181,13 @@ async fn run_and_compare_query_with_analyzer_rule(
     ctx: SessionContext,
     description: &str,
 ) -> Result<()> {
-    let result = exec_sql(&ctx, QUERY2).await?;
+    let s = exec_sql(&ctx, QUERY2).await?;
+    let actual = s.lines().collect::<Vec<_>>().join("\n");
 
     insta::with_settings!({
         description => description,
     }, {
-        insta::assert_snapshot!(result, @r###"
+        insta::assert_snapshot!(actual, @r###"
         +------------+--------------------------+
         | UInt64(42) | arrow_typeof(UInt64(42)) |
         +------------+--------------------------+
@@ -205,12 +205,13 @@ async fn run_and_compare_query_with_auto_schemas(
     ctx: SessionContext,
     description: &str,
 ) -> Result<()> {
-    let result = exec_sql(&ctx, QUERY1).await?;
+    let s = exec_sql(&ctx, QUERY1).await?;
+    let actual = s.lines().collect::<Vec<_>>().join("\n");
 
     insta::with_settings!({
         description => description,
     }, {
-        insta::assert_snapshot!(result, @r###"
+        insta::assert_snapshot!(actual, @r###"
         +----------+----------+
         | column_1 | column_2 |
         +----------+----------+

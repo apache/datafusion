@@ -382,7 +382,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
 
-    insta::assert_snapshot!(fmt_batches(&alias_result), @r###""
+    insta::assert_snapshot!(fmt_batches(&alias_result), @r###"
     +------------+
     | dummy(t.i) |
     +------------+

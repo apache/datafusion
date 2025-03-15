@@ -30,7 +30,6 @@ use datafusion_physical_plan::{
     execution_plan::{Boundedness, EmissionType},
     DisplayAs, ExecutionPlan, PlanProperties,
 };
-use insta::assert_debug_snapshot;
 
 #[tokio::test]
 async fn insert_operation_is_passed_correctly_to_table_provider() {
@@ -40,26 +39,24 @@ async fn insert_operation_is_passed_correctly_to_table_provider() {
     ctx.register_table("testing", table_provider.clone())
         .unwrap();
 
-    let test_cases = vec![
-        ("INSERT INTO testing (column) VALUES (1)", "insert_append"),
-        (
-            "INSERT OVERWRITE testing (column) VALUES (1)",
-            "insert_overwrite",
-        ),
-        ("REPLACE INTO testing (column) VALUES (1)", "insert_replace"),
-        (
-            "INSERT OR REPLACE INTO testing (column) VALUES (1)",
-            "insert_or_replace",
-        ),
-    ];
+    let sql = "INSERT INTO testing (column) VALUES (1)";
+    assert_insert_op(&ctx, sql, InsertOp::Append).await;
 
-    for (sql, snapshot_name) in test_cases {
-        let df = ctx.sql(sql).await.unwrap();
-        let plan = df.create_physical_plan().await.unwrap();
-        let exec = plan.as_any().downcast_ref::<TestInsertExec>().unwrap();
+    let sql = "INSERT OVERWRITE testing (column) VALUES (1)";
+    assert_insert_op(&ctx, sql, InsertOp::Overwrite).await;
 
-        assert_debug_snapshot!(snapshot_name, exec.op);
-    }
+    let sql = "REPLACE INTO testing (column) VALUES (1)";
+    assert_insert_op(&ctx, sql, InsertOp::Replace).await;
+
+    let sql = "INSERT OR REPLACE INTO testing (column) VALUES (1)";
+    assert_insert_op(&ctx, sql, InsertOp::Replace).await;
+}
+
+async fn assert_insert_op(ctx: &SessionContext, sql: &str, insert_op: InsertOp) {
+    let df = ctx.sql(sql).await.unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+    let exec = plan.as_any().downcast_ref::<TestInsertExec>().unwrap();
+    assert_eq!(exec.op, insert_op);
 }
 
 fn session_ctx_with_dialect(dialect: impl Into<String>) -> SessionContext {
