@@ -547,6 +547,11 @@ impl SessionState {
         &self.optimizer
     }
 
+    /// Returns the [`ExprPlanner`]s for this session
+    pub fn expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &self.expr_planners
+    }
+
     /// Returns the [`QueryPlanner`] for this session
     pub fn query_planner(&self) -> &Arc<dyn QueryPlanner + Send + Sync> {
         &self.query_planner
@@ -1626,7 +1631,7 @@ struct SessionContextProvider<'a> {
 
 impl ContextProvider for SessionContextProvider<'_> {
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        &self.state.expr_planners
+        self.state.expr_planners()
     }
 
     fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
