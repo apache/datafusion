@@ -136,7 +136,12 @@ impl ListingTableUrl {
     }
 
     /// Creates a new [`ListingTableUrl`] from a url and optional glob expression
-    fn try_new(url: Url, glob: Option<Pattern>) -> Result<Self> {
+    ///
+    /// [`Self::parse`] supports glob expression only for file system paths.
+    /// However, some applications may want to support glob expression for URLs with a scheme.
+    /// The application can split the URL into a base URL and a glob expression and use this method
+    /// to create a [`ListingTableUrl`].
+    pub fn try_new(url: Url, glob: Option<Pattern>) -> Result<Self> {
         let prefix = Path::from_url_path(url.path())?;
         Ok(Self { url, prefix, glob })
     }
