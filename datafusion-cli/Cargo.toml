@@ -67,7 +67,7 @@ url = { workspace = true }
 [dev-dependencies]
 assert_cmd = "2.0"
 ctor = { workspace = true }
-insta = { version = "1.41.1", features = ["glob", "filters"] }
+insta = { workspace = true }
 insta-cmd = "0.6.0"
 predicates = "3.0"
 rstest = { workspace = true }

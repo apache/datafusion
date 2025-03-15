@@ -155,6 +155,7 @@ parquet = { version = "54.2.1", default-features = false, features = [
 pbjson = { version = "0.7.0" }
 pbjson-types = "0.7"
 # Should match arrow-flight's version of prost.
+insta = { version = "1.41.1", features = ["glob", "filters"] }
 prost = "0.13.1"
 rand = "0.8.5"
 recursive = "0.1.1"
@@ -197,6 +198,7 @@ incremental = false
 [workspace.lints.clippy]
 # Detects large stack-allocated futures that may cause stack overflow crashes (see threshold in clippy.toml)
 large_futures = "warn"
+used_underscore_binding = "warn"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tarpaulin)"] }
