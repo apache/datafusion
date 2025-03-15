@@ -17,14 +17,14 @@
 
 use core::fmt;
 
-use sqlparser::ast;
 use sqlparser::ast::helpers::attached_token::AttachedToken;
+use sqlparser::ast::{self, OrderByKind, SelectFlavor};
 
 #[derive(Clone)]
 pub struct QueryBuilder {
     with: Option<ast::With>,
     body: Option<Box<ast::SetExpr>>,
-    order_by: Vec<ast::OrderByExpr>,
+    order_by_kind: Option<OrderByKind>,
     limit: Option<ast::Expr>,
     limit_by: Vec<ast::Expr>,
     offset: Option<ast::Offset>,
@@ -46,8 +46,8 @@ impl QueryBuilder {
     pub fn take_body(&mut self) -> Option<Box<ast::SetExpr>> {
         self.body.take()
     }
-    pub fn order_by(&mut self, value: Vec<ast::OrderByExpr>) -> &mut Self {
-        self.order_by = value;
+    pub fn order_by(&mut self, value: OrderByKind) -> &mut Self {
+        self.order_by_kind = Some(value);
         self
     }
     pub fn limit(&mut self, value: Option<ast::Expr>) -> &mut Self {
@@ -75,14 +75,13 @@ impl QueryBuilder {
         self
     }
     pub fn build(&self) -> Result<ast::Query, BuilderError> {
-        let order_by = if self.order_by.is_empty() {
-            None
-        } else {
-            Some(ast::OrderBy {
-                exprs: self.order_by.clone(),
+        let order_by = self
+            .order_by_kind
+            .as_ref()
+            .map(|order_by_kind| ast::OrderBy {
+                kind: order_by_kind.clone(),
                 interpolate: None,
-            })
-        };
+            });
 
         Ok(ast::Query {
             with: self.with.clone(),
@@ -105,7 +104,7 @@ impl QueryBuilder {
         Self {
             with: Default::default(),
             body: Default::default(),
-            order_by: Default::default(),
+            order_by_kind: Default::default(),
             limit: Default::default(),
             limit_by: Default::default(),
             offset: Default::default(),
@@ -138,6 +137,7 @@ pub struct SelectBuilder {
     named_window: Vec<ast::NamedWindowDefinition>,
     qualify: Option<ast::Expr>,
     value_table_mode: Option<ast::ValueTableMode>,
+    flavor: Option<SelectFlavor>,
 }
 
 #[allow(dead_code)]
@@ -264,6 +264,10 @@ impl SelectBuilder {
             window_before_qualify: false,
             prewhere: None,
             select_token: AttachedToken::empty(),
+            flavor: match self.flavor {
+                Some(ref value) => value.clone(),
+                None => return Err(Into::into(UninitializedFieldError::from("flavor"))),
+            },
         })
     }
     fn create_empty() -> Self {
@@ -283,6 +287,7 @@ impl SelectBuilder {
             named_window: Default::default(),
             qualify: Default::default(),
             value_table_mode: Default::default(),
+            flavor: Some(SelectFlavor::Standard),
         }
     }
 }
@@ -422,6 +427,7 @@ pub struct TableRelationBuilder {
     with_hints: Vec<ast::Expr>,
     version: Option<ast::TableVersion>,
     partitions: Vec<ast::Ident>,
+    index_hints: Vec<ast::TableIndexHints>,
 }
 
 #[allow(dead_code)]
@@ -450,6 +456,10 @@ impl TableRelationBuilder {
         self.partitions = value;
         self
     }
+    pub fn index_hints(&mut self, value: Vec<ast::TableIndexHints>) -> &mut Self {
+        self.index_hints = value;
+        self
+    }
     pub fn build(&self) -> Result<ast::TableFactor, BuilderError> {
         Ok(ast::TableFactor::Table {
             name: match self.name {
@@ -467,6 +477,7 @@ impl TableRelationBuilder {
             with_ordinality: false,
             json_path: None,
             sample: None,
+            index_hints: self.index_hints.clone(),
         })
     }
     fn create_empty() -> Self {
@@ -477,6 +488,7 @@ impl TableRelationBuilder {
             with_hints: Default::default(),
             version: Default::default(),
             partitions: Default::default(),
+            index_hints: Default::default(),
         }
     }
 }
