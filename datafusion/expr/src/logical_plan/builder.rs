@@ -465,8 +465,35 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
     ) -> Result<Self> {
+        Self::scan_with_filters_inner(table_name, table_source, projection, filters, None)
+    }
+
+    /// Convert a table provider into a builder with a TableScan with filter and fetch
+    pub fn scan_with_filters_fetch(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+    ) -> Result<Self> {
+        Self::scan_with_filters_inner(
+            table_name,
+            table_source,
+            projection,
+            filters,
+            fetch,
+        )
+    }
+
+    fn scan_with_filters_inner(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        filters: Vec<Expr>,
+        fetch: Option<usize>,
+    ) -> Result<Self> {
         let table_scan =
-            TableScan::try_new(table_name, table_source, projection, filters, None)?;
+            TableScan::try_new(table_name, table_source, projection, filters, fetch)?;
 
         // Inline TableScan
         if table_scan.filters.is_empty() {
@@ -480,19 +507,6 @@ impl LogicalPlanBuilder {
         }
 
         Ok(Self::new(LogicalPlan::TableScan(table_scan)))
-    }
-
-    /// Convert a table provider into a builder with a TableScan with filter and fetch
-    pub fn scan_with_filters_fetch(
-        table_name: impl Into<TableReference>,
-        table_source: Arc<dyn TableSource>,
-        projection: Option<Vec<usize>>,
-        filters: Vec<Expr>,
-        fetch: Option<usize>,
-    ) -> Result<Self> {
-        TableScan::try_new(table_name, table_source, projection, filters, fetch)
-            .map(LogicalPlan::TableScan)
-            .map(Self::new)
     }
 
     /// Wrap a plan in a window
