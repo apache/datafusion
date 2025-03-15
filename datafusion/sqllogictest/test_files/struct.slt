@@ -286,7 +286,7 @@ drop table struct_values;
 statement ok
 CREATE OR REPLACE VIEW complex_view AS 
 SELECT {
-    'user': {
+    'user_information': {
         'info': {
             'personal': {
                 'name': 'John Doe',
@@ -347,22 +347,22 @@ SELECT {
 } AS complex_data;
 
 query T
-SELECT complex_data.user.info.personal.name FROM complex_view;
+SELECT complex_data.user_information.info.personal.name FROM complex_view;
 ----
 John Doe
 
 query I
-SELECT complex_data.user.info.personal.age FROM complex_view;
+SELECT complex_data.user_information.info.personal.age FROM complex_view;
 ----
 30
 
 query T
-SELECT complex_data.user.info.address.city FROM complex_view;
+SELECT complex_data.user_information.info.address.city FROM complex_view;
 ----
 Anytown
 
 query T
-SELECT complex_data.user.preferences.languages[2] FROM complex_view;
+SELECT complex_data.user_information.preferences.languages[2] FROM complex_view;
 ----
 es
 

@@ -942,18 +942,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 returning,
                 or,
             } => {
-                let from =
+                let froms =
                     from.map(|update_table_from_kind| match update_table_from_kind {
-                        UpdateTableFromKind::BeforeSet(from) => from[0].clone(),
-                        UpdateTableFromKind::AfterSet(from) => from[0].clone(),
+                        UpdateTableFromKind::BeforeSet(froms) => froms.clone(),
+                        UpdateTableFromKind::AfterSet(froms) => froms.clone(),
                     });
+                // TODO: support multiple tables in UPDATE SET FROM
+                if froms.clone().is_some_and(|f| f.len() > 1) {
+                    println!("---------------------------------------------");
+                    plan_err!("Multiple tables in UPDATE SET FROM not yet supported")?;
+                }
+                let update_from = froms.map(|f| f.first().unwrap().clone());
                 if returning.is_some() {
                     plan_err!("Update-returning clause not yet supported")?;
                 }
                 if or.is_some() {
                     plan_err!("ON conflict not supported")?;
                 }
-                self.update_to_plan(table, assignments, from, selection)
+                self.update_to_plan(table, assignments, update_from, selection)
             }
 
             Statement::Delete(Delete {

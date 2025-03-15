@@ -186,6 +186,7 @@ pub(crate) fn is_lateral_join(join: &Join) -> Result<bool> {
     let is_lateral_syntax = is_lateral(&join.relation);
     let is_apply_syntax = match join.join_operator {
         JoinOperator::FullOuter(..)
+        | JoinOperator::Right(..)
         | JoinOperator::RightOuter(..)
         | JoinOperator::RightAnti(..)
         | JoinOperator::RightSemi(..)
