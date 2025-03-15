@@ -85,7 +85,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         check_conflicting_windows(&select.named_window)?;
         match_window_definitions(&mut select.projection, &select.named_window)?;
         // Process the SELECT expressions
-        let select_exprs = self.prepare_select_exprs(
+        let mut select_exprs = self.prepare_select_exprs(
             &base_plan,
             select.projection,
             empty_from,
@@ -116,7 +116,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             true,
             Some(base_plan.schema().as_ref()),
         )?;
-        let order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
+        let mut order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
+        let add_missing_columns = Self::add_missing_order_by_exprs(
+            &mut select_exprs,
+            projected_plan.schema(),
+            matches!(select.distinct, Some(Distinct::Distinct)),
+            &mut order_by_rex,
+        )?;
 
         // This alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
@@ -268,7 +274,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 // Build the final plan
                 LogicalPlanBuilder::from(base_plan)
-                    .distinct_on(on_expr, select_exprs, None)?
+                    .distinct_on(on_expr, select_exprs.clone(), None)?
                     .build()
             }
         }?;
@@ -293,7 +299,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
-        self.order_by(plan, order_by_rex)
+        let plan = self.order_by(plan, order_by_rex)?;
+        // if add missing columns, we MUST remove unused columns in project
+        if add_missing_columns {
+            LogicalPlanBuilder::from(plan)
+                .project(
+                    projected_plan
+                        .schema()
+                        .columns()
+                        .into_iter()
+                        .map(Expr::Column),
+                )?
+                .build()
+        } else {
+            Ok(plan)
+        }
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
