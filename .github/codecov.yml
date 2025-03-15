@@ -2,3 +2,15 @@ comment:
   layout: "condensed_header, condensed_files, condensed_footer"
   hide_project_coverage: TRUE
   after_n_builds: 6 # linux-test, linux-test-datafusion-cli, sqllogictest-postgres, macos-aarch64, test-datafusion-pyarrow, linux-test-doc
+
+coverage:
+  status:
+    project: off
+    patch:
+      datafusion:
+        informational: true # not to annoy devs during adoption
+        paths:
+          - datafusion
+      datafusion-cli:
+        paths:
+          - datafusion-cli
