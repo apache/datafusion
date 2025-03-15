@@ -239,7 +239,7 @@ jobs:
         env:
           RUST_BACKTRACE: 1
         run: |
-          cargo llvm-cov test --json --output-path ./coverage.json test \
+          cargo llvm-cov test --lcov --output-path ./coverage.txt test \
             --profile ci \
             --exclude datafusion-examples \
             --exclude ffi_example_table_provider \
@@ -253,7 +253,7 @@ jobs:
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: ./coverage.json
+          files: ./coverage.txt
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
       - name: Verify Working Directory Clean
