@@ -36,6 +36,7 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::type_coercion::{DefaultTypeCoercion, TypeCoercion};
 use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -100,6 +101,11 @@ impl SessionStateDefaults {
         ];
 
         expr_planners
+    }
+
+    /// Default type coercion used in DataFusion
+    pub fn default_type_coercions() -> Vec<Arc<dyn TypeCoercion>> {
+        vec![Arc::new(DefaultTypeCoercion)]
     }
 
     /// returns the list of default [`ScalarUDF']'s

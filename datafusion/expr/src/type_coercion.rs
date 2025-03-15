@@ -37,9 +37,20 @@ pub mod aggregates {
 pub mod functions;
 pub mod other;
 
+use datafusion_common::DFSchema;
+use datafusion_common::Result;
 pub use datafusion_expr_common::type_coercion::binary;
 
 use arrow::datatypes::DataType;
+use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
+
+use crate::BinaryExpr;
+use crate::Expr;
+use crate::ExprSchemable;
+use crate::LogicalPlan;
+
+use std::fmt::Debug;
+
 /// Determine whether the given data type `dt` represents signed numeric values.
 pub fn is_signed_numeric(dt: &DataType) -> bool {
     matches!(
@@ -87,4 +98,42 @@ pub fn is_utf8_or_large_utf8(dt: &DataType) -> bool {
 /// Determine whether the given data type `dt` is a `Decimal`.
 pub fn is_decimal(dt: &DataType) -> bool {
     matches!(dt, DataType::Decimal128(_, _) | DataType::Decimal256(_, _))
+}
+
+#[derive(Debug)]
+pub struct DefaultTypeCoercion;
+impl TypeCoercion for DefaultTypeCoercion {}
+
+// Send and Sync because of trait Session
+pub trait TypeCoercion: Debug + Send + Sync {
+    fn coerce_binary_expr(
+        &self,
+        expr: BinaryExpr,
+        schema: &DFSchema,
+    ) -> Result<TypeCoerceResult<BinaryExpr>> {
+        let BinaryExpr { left, op, right } = expr;
+
+        let (left_type, right_type) = BinaryTypeCoercer::new(
+            &left.get_type(schema)?,
+            &op,
+            &right.get_type(schema)?,
+        )
+        .get_input_types()?;
+
+        Ok(TypeCoerceResult::CoercedExpr(Expr::BinaryExpr(
+            BinaryExpr::new(
+                Box::new(left.cast_to(&left_type, schema)?),
+                op,
+                Box::new(right.cast_to(&right_type, schema)?),
+            ),
+        )))
+    }
+}
+
+/// Result of planning a raw expr with [`ExprPlanner`]
+pub enum TypeCoerceResult<T> {
+    CoercedExpr(Expr),
+    CoercedPlan(LogicalPlan),
+    /// The raw expression could not be planned, and is returned unmodified
+    Original(T),
 }

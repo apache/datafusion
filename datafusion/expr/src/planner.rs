@@ -28,8 +28,8 @@ use datafusion_common::{
 use sqlparser::ast::{self, NullTreatment};
 
 use crate::{
-    AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr, TableSource, WindowFrame,
-    WindowFunctionDefinition, WindowUDF,
+    type_coercion::TypeCoercion, AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr,
+    TableSource, WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 
 /// Provides the `SQL` query planner meta-data about tables and
@@ -81,6 +81,10 @@ pub trait ContextProvider {
 
     /// Return [`ExprPlanner`] extensions for planning expressions
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
+        &[]
+    }
+
+    fn get_type_coercions(&self) -> &[Arc<dyn TypeCoercion>] {
         &[]
     }
 

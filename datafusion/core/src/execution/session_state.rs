@@ -54,6 +54,7 @@ use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::planner::{ExprPlanner, TypePlanner};
 use datafusion_expr::registry::{FunctionRegistry, SerializerRegistry};
 use datafusion_expr::simplify::SimplifyInfo;
+use datafusion_expr::type_coercion::TypeCoercion;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
 use datafusion_expr::{
     AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ScalarUDF, TableSource,
@@ -130,6 +131,8 @@ pub struct SessionState {
     analyzer: Analyzer,
     /// Provides support for customizing the SQL planner, e.g. to add support for custom operators like `->>` or `?`
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
+    /// Provides support for customizing the SQL type coercion
+    type_coercions: Vec<Arc<dyn TypeCoercion>>,
     /// Provides support for customizing the SQL type planning
     type_planner: Option<Arc<dyn TypePlanner>>,
     /// Responsible for optimizing a logical plan
@@ -196,6 +199,7 @@ impl Debug for SessionState {
             .field("table_factories", &self.table_factories)
             .field("function_factory", &self.function_factory)
             .field("expr_planners", &self.expr_planners)
+            .field("type_coercions", &self.type_coercions)
             .field("type_planner", &self.type_planner)
             .field("query_planners", &self.query_planner)
             .field("analyzer", &self.analyzer)
@@ -881,6 +885,7 @@ pub struct SessionStateBuilder {
     session_id: Option<String>,
     analyzer: Option<Analyzer>,
     expr_planners: Option<Vec<Arc<dyn ExprPlanner>>>,
+    type_coercions: Option<Vec<Arc<dyn TypeCoercion>>>,
     type_planner: Option<Arc<dyn TypePlanner>>,
     optimizer: Option<Optimizer>,
     physical_optimizers: Option<PhysicalOptimizer>,
@@ -917,6 +922,7 @@ impl SessionStateBuilder {
             session_id: None,
             analyzer: None,
             expr_planners: None,
+            type_coercions: None,
             type_planner: None,
             optimizer: None,
             physical_optimizers: None,
@@ -966,6 +972,7 @@ impl SessionStateBuilder {
             session_id: None,
             analyzer: Some(existing.analyzer),
             expr_planners: Some(existing.expr_planners),
+            type_coercions: Some(existing.type_coercions),
             type_planner: existing.type_planner,
             optimizer: Some(existing.optimizer),
             physical_optimizers: Some(existing.physical_optimizers),
@@ -1009,6 +1016,10 @@ impl SessionStateBuilder {
         self.expr_planners
             .get_or_insert_with(Vec::new)
             .extend(SessionStateDefaults::default_expr_planners());
+
+        self.type_coercions
+            .get_or_insert_with(Vec::new)
+            .extend(SessionStateDefaults::default_type_coercions());
 
         self.scalar_functions
             .get_or_insert_with(Vec::new)
@@ -1318,6 +1329,7 @@ impl SessionStateBuilder {
             session_id,
             analyzer,
             expr_planners,
+            type_coercions,
             type_planner,
             optimizer,
             physical_optimizers,
@@ -1347,6 +1359,7 @@ impl SessionStateBuilder {
             session_id: session_id.unwrap_or(Uuid::new_v4().to_string()),
             analyzer: analyzer.unwrap_or_default(),
             expr_planners: expr_planners.unwrap_or_default(),
+            type_coercions: type_coercions.unwrap_or_default(),
             type_planner,
             optimizer: optimizer.unwrap_or_default(),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
@@ -1625,6 +1638,10 @@ struct SessionContextProvider<'a> {
 impl ContextProvider for SessionContextProvider<'_> {
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
         &self.state.expr_planners
+    }
+
+    fn get_type_coercions(&self) -> &[Arc<dyn TypeCoercion>] {
+        &self.state.type_coercions
     }
 
     fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {
