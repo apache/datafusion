@@ -447,7 +447,7 @@ fn assert_valid_optimization(
     plan: &LogicalPlan,
     prev_schema: &Arc<DFSchema>,
 ) -> Result<()> {
-    // verify invariant: optimizer passes should not change the schema
+    // verify invariant: optimizer passes should not change the schema if the schema can't be cast from the previous schema.
     // Refer to <https://datafusion.apache.org/contributor-guide/specification/invariants.html#logical-schema-is-invariant-under-logical-optimization>
     assert_expected_schema(prev_schema, plan)?;
 
