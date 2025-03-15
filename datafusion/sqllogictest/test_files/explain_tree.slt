@@ -134,6 +134,26 @@ FROM
   hashjoin_datatype_table_t2_source
 
 statement ok
+CREATE UNBOUNDED EXTERNAL TABLE sink_table (
+        c1  VARCHAR NOT NULL,
+        c2  TINYINT NOT NULL,
+        c3  SMALLINT NOT NULL,
+        c4  SMALLINT NOT NULL,
+        c5  INTEGER NOT NULL,
+        c6  BIGINT NOT NULL,
+        c7  SMALLINT NOT NULL,
+        c8  INT NOT NULL,
+        c9  INT UNSIGNED NOT NULL,
+        c10 BIGINT UNSIGNED NOT NULL,
+        c11 FLOAT NOT NULL,
+        c12 DOUBLE NOT NULL,
+        c13 VARCHAR NOT NULL
+    )
+STORED AS CSV
+LOCATION '../../testing/data/csv/aggregate_test_100.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
 CREATE TABLE limit_table AS
 SELECT * FROM table1
 UNION ALL SELECT * FROM table1
@@ -257,14 +277,16 @@ explain SELECT * FROM limit_table LIMIT 10;
 physical_plan
 01)┌───────────────────────────┐
 02)│   CoalescePartitionsExec  │
-03)└─────────────┬─────────────┘
-04)┌─────────────┴─────────────┐
-05)│       DataSourceExec      │
-06)│    --------------------   │
-07)│        bytes: 3120        │
-08)│       format: memory      │
-09)│          rows: 2          │
-10)└───────────────────────────┘
+03)│    --------------------   │
+04)│         limit: 10         │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│       DataSourceExec      │
+08)│    --------------------   │
+09)│        bytes: 3120        │
+10)│       format: memory      │
+11)│          rows: 2          │
+12)└───────────────────────────┘
 
 # 2 Joins
 query TT
@@ -1990,3 +2012,42 @@ physical_plan
 05)│ generate_series: start=1, │
 06)│  end=100, batch_size=8192 │
 07)└───────────────────────────┘
+
+# Test explain tree for CoalescePartitionsExec
+query TT
+EXPLAIN SELECT c1, c2, c3 FROM sink_table WHERE c3 > 0 LIMIT 5;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│   CoalescePartitionsExec  │
+03)│    --------------------   │
+04)│          limit: 5         │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│    CoalesceBatchesExec    │
+08)│    --------------------   │
+09)│          limit: 5         │
+10)│                           │
+11)│     target_batch_size:    │
+12)│            8192           │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│         FilterExec        │
+16)│    --------------------   │
+17)│    predicate: c3@2 > 0    │
+18)└─────────────┬─────────────┘
+19)┌─────────────┴─────────────┐
+20)│      RepartitionExec      │
+21)│    --------------------   │
+22)│  output_partition_count:  │
+23)│             1             │
+24)│                           │
+25)│    partitioning_scheme:   │
+26)│     RoundRobinBatch(4)    │
+27)└─────────────┬─────────────┘
+28)┌─────────────┴─────────────┐
+29)│     StreamingTableExec    │
+30)│    --------------------   │
+31)│       infinite: true      │
+32)│        limit: None        │
+33)└───────────────────────────┘
