@@ -221,8 +221,7 @@ jobs:
   # Library and integration tests
   linux-test:
     name: cargo test (amd64) + coverage
-    # todo: uncomment
-#    needs: linux-build-lib
+    needs: linux-build-lib
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
