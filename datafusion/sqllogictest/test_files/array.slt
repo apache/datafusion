@@ -7151,10 +7151,13 @@ from fixed_size_flatten_table;
 [1, 2, 3, 4, 5, 6] [[8], [9, 10], [11, 12, 13]] [[[1, 2]], [[3]]] [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
 
 # flatten with different inner list type
-query ?
-select flatten(arrow_cast(make_array([1, 2], [3, 4]), 'List(FixedSizeList(2, Int64))'))
+query ????
+select flatten(arrow_cast(make_array([1, 2], [3, 4]), 'List(FixedSizeList(2, Int64))')),
+       flatten(arrow_cast(make_array([[1, 2]], [[3, 4]]), 'List(FixedSizeList(1, List(Int64)))')),
+       flatten(arrow_cast(make_array([1, 2], [3, 4]), 'LargeList(List(Int64))')),
+       flatten(arrow_cast(make_array([[1, 2]], [[3, 4]]), 'LargeList(List(List(Int64)))'))
 ----
-[1, 2, 3, 4]
+[1, 2, 3, 4] [[1, 2], [3, 4]] [1, 2, 3, 4] [[1, 2], [3, 4]]
 
 ## empty (aliases: `array_empty`, `list_empty`)
 # empty scalar function #1
