@@ -32,7 +32,7 @@ use crate::{expr::WildcardOptions, Expr};
 ///
 /// This enum is typically used when you need to handle wildcards. After expanding `*` in the query,
 /// you can use `Expr` for all other expressions.
-/// 
+///
 /// # Examples
 ///
 /// ```
@@ -49,7 +49,7 @@ use crate::{expr::WildcardOptions, Expr};
 ///     WildcardOptions::default()
 /// );
 ///
-/// // SELECT col1 
+/// // SELECT col1
 /// let expr = SelectExpr::Expression(col("col1").into());
 /// ```
 #[derive(Clone, Debug)]
