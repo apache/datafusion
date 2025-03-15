@@ -292,8 +292,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
           TEST_STORAGE_INTEGRATION: 1
           AWS_ALLOW_HTTP: true
-        run: cargo llvm-cov test --lcov --output-path ./coverage.txt \
-          --profile ci -p datafusion-cli  --lib --tests --bins
+        run: cargo llvm-cov test --lcov --output-path ./coverage.txt --profile ci -p datafusion-cli  --lib --tests --bins
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
@@ -346,9 +345,17 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: stable
+          rust-version: nightly
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run doctests
-        run: cargo test --profile ci --doc --features avro,json
+        run: cargo +nightly llvm-cov --doctests --profile ci --doc --features avro,json
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.txt
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -526,8 +533,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run tests (excluding doctests)
         shell: bash
-        run: cargo llvm-cov test --lcov --output-path ./coverage.txt \
-          --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
+        run: cargo llvm-cov test --lcov --output-path ./coverage.txt --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
@@ -559,8 +565,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run datafusion-common tests
-        run: cargo llvm-cov test --lcov --output-path ./coverage.txt \
-          --profile ci -p datafusion-common --features=pyarrow
+        run: cargo llvm-cov test --lcov --output-path ./coverage.txt --profile ci -p datafusion-common --features=pyarrow
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
