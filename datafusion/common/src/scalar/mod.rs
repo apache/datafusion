@@ -22,7 +22,7 @@ mod struct_builder;
 
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
 use std::hash::Hash;
@@ -297,6 +297,7 @@ pub enum ScalarValue {
     Union(Option<(i8, Box<ScalarValue>)>, UnionFields, UnionMode),
     /// Dictionary type: index type and value
     Dictionary(Box<DataType>, Box<ScalarValue>),
+    Extension(Arc<ScalarValue>, Arc<str>, Option<Arc<str>>),
 }
 
 impl Hash for Fl<f16> {
@@ -420,6 +421,15 @@ impl PartialEq for ScalarValue {
             (Dictionary(_, _), _) => false,
             (Null, Null) => true,
             (Null, _) => false,
+            (
+                Extension(storage, extension_name, extension_metadata),
+                Extension(storage2, extension_name2, extension_metadata2),
+            ) => {
+                storage == storage2
+                    && extension_name == extension_name2
+                    && extension_metadata == extension_metadata2
+            }
+            (Extension(_, _, _), _) => false,
         }
     }
 }
@@ -571,6 +581,10 @@ impl PartialOrd for ScalarValue {
             (Dictionary(_, _), _) => None,
             (Null, Null) => Some(Ordering::Equal),
             (Null, _) => None,
+            (Extension(_, _, _), _) => {
+                // Treat Extension scalars as Opaque storage with undefined ordering
+                None
+            }
         }
     }
 }
@@ -765,6 +779,11 @@ impl Hash for ScalarValue {
             }
             // stable hash for Null value
             Null => 1.hash(state),
+            Extension(storage, name, metadata) => {
+                storage.hash(state);
+                name.hash(state);
+                metadata.hash(state);
+            }
         }
     }
 }
@@ -1393,6 +1412,28 @@ impl ScalarValue {
         })
     }
 
+    /// return the [`Field`] of this `ScalarValue`
+    pub fn field(&self) -> Field {
+        match self {
+            ScalarValue::Extension(storage, name, metadata) => {
+                let mut metadata_fields = HashMap::from([(
+                    "ARROW:extension:name".to_string(),
+                    name.to_string(),
+                )]);
+
+                if let Some(metadata_value) = metadata {
+                    metadata_fields.insert(
+                        "ARROW:extension:metadata".to_string(),
+                        metadata_value.to_string(),
+                    );
+                }
+
+                Field::new("", storage.data_type(), true).with_metadata(metadata_fields)
+            },
+            _ => Field::new("", self.data_type(), true)
+        }
+    }
+
     /// return the [`DataType`] of this `ScalarValue`
     pub fn data_type(&self) -> DataType {
         match self {
@@ -1466,6 +1507,10 @@ impl ScalarValue {
                 DataType::Dictionary(k.clone(), Box::new(v.data_type()))
             }
             ScalarValue::Null => DataType::Null,
+            ScalarValue::Extension(storage, _, _) => {
+                // TODO: drops extension information
+                storage.data_type()
+            }
         }
     }
 
@@ -1724,6 +1769,7 @@ impl ScalarValue {
                 None => true,
             },
             ScalarValue::Dictionary(_, v) => v.is_null(),
+            ScalarValue::Extension(storage, _, _) => storage.is_null(),
         }
     }
 
@@ -2642,6 +2688,10 @@ impl ScalarValue {
                 }
             }
             ScalarValue::Null => new_null_array(&DataType::Null, size),
+            ScalarValue::Extension(storage, _, _) => {
+                // TODO: Drops extension information
+                storage.to_array_of_size(size)?
+            }
         })
     }
 
@@ -3279,6 +3329,11 @@ impl ScalarValue {
                 }
             }
             ScalarValue::Null => array.is_null(index),
+            ScalarValue::Extension(storage, _, _) => {
+                // TODO: Drops extension information (will compare equal to storage
+                // whether or not the storage is from an extension type or not)
+                storage.eq_array(array, index)?
+            }
         })
     }
 
@@ -3354,6 +3409,14 @@ impl ScalarValue {
                 ScalarValue::Dictionary(dt, sv) => {
                     // `dt` and `sv` are boxed, so they are NOT already included in `self`
                     dt.size() + sv.size()
+                }
+                ScalarValue::Extension(storage, name, metadata) => {
+                    storage.size()
+                        + name.len()
+                        + match metadata {
+                            Some(value) => value.len(),
+                            None => 0,
+                        }
                 }
             }
     }
@@ -3745,6 +3808,12 @@ impl fmt::Display for ScalarValue {
             },
             ScalarValue::Dictionary(_k, v) => write!(f, "{v}")?,
             ScalarValue::Null => write!(f, "NULL")?,
+            ScalarValue::Extension(storage, name, metadata) => match metadata {
+                Some(metadata_value) => {
+                    write!(f, "<{}: {}> {}", name, metadata_value, storage)?
+                }
+                None => write!(f, "<{}> {}", name, storage)?,
+            },
         };
         Ok(())
     }
@@ -3922,6 +3991,12 @@ impl fmt::Debug for ScalarValue {
             },
             ScalarValue::Dictionary(k, v) => write!(f, "Dictionary({k:?}, {v:?})"),
             ScalarValue::Null => write!(f, "NULL"),
+            ScalarValue::Extension(storage, name, metadata) => match metadata {
+                Some(metadata_value) => {
+                    write!(f, "Extension<{}: {}>({:?})", name, metadata_value, storage)
+                }
+                None => write!(f, "Extension<{}>({:?})", name, storage),
+            },
         }
     }
 }
