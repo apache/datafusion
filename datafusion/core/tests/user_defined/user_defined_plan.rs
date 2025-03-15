@@ -120,12 +120,13 @@ async fn setup_table(ctx: SessionContext) -> Result<SessionContext> {
         OPTIONS('format.has_header' 'false')
     ";
 
-    let expected = vec!["++", "++"];
+    let result = exec_sql(&ctx, sql).await?;
 
-    let s = exec_sql(&ctx, sql).await?;
-    let actual = s.lines().collect::<Vec<_>>();
+    insta::assert_snapshot!(result, @r###"
+    ++
+    ++
+    "###);
 
-    assert_eq!(expected, actual, "Creating table");
     Ok(ctx)
 }
 
@@ -136,12 +137,13 @@ async fn setup_table_without_schemas(ctx: SessionContext) -> Result<SessionConte
         OPTIONS('format.has_header' 'false')
     ";
 
-    let expected = vec!["++", "++"];
+    let result = exec_sql(&ctx, sql).await?;
 
-    let s = exec_sql(&ctx, sql).await?;
-    let actual = s.lines().collect::<Vec<_>>();
+    insta::assert_snapshot!(result, @r###"
+    ++
+    ++
+    "###);
 
-    assert_eq!(expected, actual, "Creating table");
     Ok(ctx)
 }
 
@@ -155,27 +157,22 @@ const QUERY2: &str = "SELECT 42, arrow_typeof(42)";
 // Run the query using the specified execution context and compare it
 // to the known result
 async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result<()> {
-    let expected = vec![
-        "+-------------+---------+",
-        "| customer_id | revenue |",
-        "+-------------+---------+",
-        "| paul        | 300     |",
-        "| jorge       | 200     |",
-        "| andy        | 150     |",
-        "+-------------+---------+",
-    ];
+    let result = exec_sql(&ctx, QUERY).await?;
 
-    let s = exec_sql(&ctx, QUERY).await?;
-    let actual = s.lines().collect::<Vec<_>>();
+    insta::with_settings!({
+        description => description,
+    }, {
+        insta::assert_snapshot!(result, @r###"
+        +-------------+---------+
+        | customer_id | revenue |
+        +-------------+---------+
+        | paul        | 300     |
+        | jorge       | 200     |
+        | andy        | 150     |
+        +-------------+---------+
+        "###);
+    });
 
-    assert_eq!(
-        expected,
-        actual,
-        "output mismatch for {}. Expectedn\n{}Actual:\n{}",
-        description,
-        expected.join("\n"),
-        s
-    );
     Ok(())
 }
 
@@ -185,25 +182,20 @@ async fn run_and_compare_query_with_analyzer_rule(
     ctx: SessionContext,
     description: &str,
 ) -> Result<()> {
-    let expected = vec![
-        "+------------+--------------------------+",
-        "| UInt64(42) | arrow_typeof(UInt64(42)) |",
-        "+------------+--------------------------+",
-        "| 42         | UInt64                   |",
-        "+------------+--------------------------+",
-    ];
+    let result = exec_sql(&ctx, QUERY2).await?;
 
-    let s = exec_sql(&ctx, QUERY2).await?;
-    let actual = s.lines().collect::<Vec<_>>();
+    insta::with_settings!({
+        description => description,
+    }, {
+        insta::assert_snapshot!(result, @r###"
+        +------------+--------------------------+
+        | UInt64(42) | arrow_typeof(UInt64(42)) |
+        +------------+--------------------------+
+        | 42         | UInt64                   |
+        +------------+--------------------------+
+        "###);
+    });
 
-    assert_eq!(
-        expected,
-        actual,
-        "output mismatch for {}. Expectedn\n{}Actual:\n{}",
-        description,
-        expected.join("\n"),
-        s
-    );
     Ok(())
 }
 
@@ -213,27 +205,22 @@ async fn run_and_compare_query_with_auto_schemas(
     ctx: SessionContext,
     description: &str,
 ) -> Result<()> {
-    let expected = vec![
-        "+----------+----------+",
-        "| column_1 | column_2 |",
-        "+----------+----------+",
-        "| andrew   | 100      |",
-        "| jorge    | 200      |",
-        "| andy     | 150      |",
-        "+----------+----------+",
-    ];
+    let result = exec_sql(&ctx, QUERY1).await?;
 
-    let s = exec_sql(&ctx, QUERY1).await?;
-    let actual = s.lines().collect::<Vec<_>>();
+    insta::with_settings!({
+        description => description,
+    }, {
+        insta::assert_snapshot!(result, @r###"
+        +----------+----------+
+        | column_1 | column_2 |
+        +----------+----------+
+        | andrew   | 100      |
+        | jorge    | 200      |
+        | andy     | 150      |
+        +----------+----------+
+        "###);
+    });
 
-    assert_eq!(
-        expected,
-        actual,
-        "output mismatch for {}. Expectedn\n{}Actual:\n{}",
-        description,
-        expected.join("\n"),
-        s
-    );
     Ok(())
 }
 

@@ -18,7 +18,7 @@
 use arrow::array::RecordBatch;
 use std::sync::Arc;
 
-use datafusion::common::{assert_batches_eq, DFSchema};
+use datafusion::common::DFSchema;
 use datafusion::error::Result;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::Operator;
@@ -73,30 +73,36 @@ async fn plan_and_collect(sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
 }
 
+fn fmt_batches(batches: &[RecordBatch]) -> String {
+    use arrow::util::pretty::pretty_format_batches;
+    match pretty_format_batches(batches) {
+        Ok(formatted) => formatted.to_string(),
+        Err(e) => format!("Error formatting record batches: {}", e),
+    }
+}
+
 #[tokio::test]
 async fn test_custom_operators_arrow() {
     let actual = plan_and_collect("select 'foo'->'bar';").await.unwrap();
-    let expected = [
-        "+----------------------------+",
-        "| Utf8(\"foo\") || Utf8(\"bar\") |",
-        "+----------------------------+",
-        "| foobar                     |",
-        "+----------------------------+",
-    ];
-    assert_batches_eq!(&expected, &actual);
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +----------------------------+
+    | Utf8("foo") || Utf8("bar") |
+    +----------------------------+
+    | foobar                     |
+    +----------------------------+
+    "###);
 }
 
 #[tokio::test]
 async fn test_custom_operators_long_arrow() {
     let actual = plan_and_collect("select 1->>2;").await.unwrap();
-    let expected = [
-        "+---------------------+",
-        "| Int64(1) + Int64(2) |",
-        "+---------------------+",
-        "| 3                   |",
-        "+---------------------+",
-    ];
-    assert_batches_eq!(&expected, &actual);
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +---------------------+
+    | Int64(1) + Int64(2) |
+    +---------------------+
+    | 3                   |
+    +---------------------+
+    "###);
 }
 
 #[tokio::test]
@@ -104,14 +110,13 @@ async fn test_question_select() {
     let actual = plan_and_collect("select a ? 2 from (select 1 as a);")
         .await
         .unwrap();
-    let expected = [
-        "+--------------+",
-        "| a ? Int64(2) |",
-        "+--------------+",
-        "| true         |",
-        "+--------------+",
-    ];
-    assert_batches_eq!(&expected, &actual);
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +--------------+
+    | a ? Int64(2) |
+    +--------------+
+    | true         |
+    +--------------+
+    "###);
 }
 
 #[tokio::test]
@@ -119,6 +124,11 @@ async fn test_question_filter() {
     let actual = plan_and_collect("select a from (select 1 as a) where a ? 2;")
         .await
         .unwrap();
-    let expected = ["+---+", "| a |", "+---+", "| 1 |", "+---+"];
-    assert_batches_eq!(&expected, &actual);
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +---+
+    | a |
+    +---+
+    | 1 |
+    +---+
+    "###);
 }
