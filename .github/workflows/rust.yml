@@ -491,7 +491,7 @@ jobs:
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run tests (excluding doctests)
         shell: bash
-        run: cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
+        run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
