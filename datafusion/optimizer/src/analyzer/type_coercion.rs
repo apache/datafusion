@@ -287,16 +287,69 @@ impl<'a> TypeCoercionRewriter<'a> {
         right: Expr,
         right_schema: &DFSchema,
     ) -> Result<(Expr, Expr)> {
+        if let Expr::Literal(ref lit_value) = left {
+            if let Some(casted) =
+                try_cast_literal_to_type(lit_value, op, &right.get_type(right_schema)?)
+            {
+                return Ok((casted, right));
+            };
+        }
+
+        if let Expr::Literal(ref lit_value) = right {
+            if let Some(casted) =
+                try_cast_literal_to_type(lit_value, op, &left.get_type(left_schema)?)
+            {
+                return Ok((left, casted));
+            };
+        }
+
         let (left_type, right_type) = BinaryTypeCoercer::new(
             &left.get_type(left_schema)?,
             &op,
             &right.get_type(right_schema)?,
         )
         .get_input_types()?;
+
         Ok((
             left.cast_to(&left_type, left_schema)?,
             right.cast_to(&right_type, right_schema)?,
         ))
+    }
+}
+
+fn try_cast_literal_to_type(
+    lit_value: &ScalarValue,
+    op: Operator,
+    target_type: &DataType,
+) -> Option<Expr> {
+    match (op, lit_value) {
+        (
+            Operator::Eq | Operator::NotEq,
+            ScalarValue::Utf8(Some(_))
+            | ScalarValue::Utf8View(Some(_))
+            | ScalarValue::LargeUtf8(Some(_)),
+        ) => {
+            // Only try for integer types (TODO can we do this for other types like timestamps)?
+            use DataType::*;
+            if matches!(
+                target_type,
+                Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64
+            ) {
+                let opts = arrow::compute::CastOptions {
+                    safe: false,
+                    format_options: Default::default(),
+                };
+                let array = ScalarValue::to_array(lit_value).ok()?;
+                let casted =
+                    arrow::compute::cast_with_options(&array, target_type, &opts).ok()?;
+                ScalarValue::try_from_array(&casted, 0)
+                    .ok()
+                    .map(Expr::Literal)
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 
