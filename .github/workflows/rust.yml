@@ -131,9 +131,8 @@ jobs:
           rust-version: stable
       - name: Check datafusion-proto (no-default-features)
         run: cargo check --profile ci --all-targets --no-default-features -p datafusion-proto
-      # fails due to https://github.com/apache/datafusion/issues/15157
-      #- name: Check datafusion-proto (json)
-      #  run: cargo check --profile ci --all-targets --no-default-features -p datafusion-proto --features=json
+      - name: Check datafusion-proto (json)
+        run: cargo check --profile ci --all-targets --no-default-features -p datafusion-proto --features=json
       - name: Check datafusion-proto (parquet)
         run: cargo check --profile ci --all-targets --no-default-features -p datafusion-proto --features=parquet
       - name: Check datafusion-proto (avro)
@@ -219,7 +218,7 @@ jobs:
       - name: Check datafusion-functions (string_expressions)
         run: cargo check --profile ci --all-targets --no-default-features --features=string_expressions -p datafusion-functions
 
-  # Run tests
+  # Library and integration tests
   linux-test:
     name: cargo test (amd64)
     needs: linux-build-lib
@@ -233,6 +232,36 @@ jobs:
         run: rustup toolchain install stable
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
+      - name: Run tests (excluding doctests and datafusion-cli)
+        env:
+          RUST_BACKTRACE: 1
+        run: |
+          cargo test \
+            --profile ci \
+            --exclude datafusion-examples \
+            --exclude ffi_example_table_provider \
+            --exclude datafusion-benchmarks \
+            --exclude datafusion-cli \
+            --workspace \
+            --lib \
+            --tests \
+            --bins \
+            --features serde,avro,json,backtrace,integration-tests
+      - name: Verify Working Directory Clean
+        run: git diff --exit-code
+
+  # datafusion-cli tests
+  linux-test-datafusion-cli:
+    name: cargo test datafusion-cli (amd64)
+    needs: linux-build-lib
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+      - name: Setup Rust toolchain
+        run: rustup toolchain install stable
       - name: Setup Minio - S3-compatible storage
         run: |
           docker run -d --name minio-container \
@@ -253,12 +282,13 @@ jobs:
           AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
           TEST_STORAGE_INTEGRATION: 1
           AWS_ALLOW_HTTP: true
-        run: cargo test --profile ci --exclude datafusion-examples --exclude ffi_example_table_provider --exclude datafusion-benchmarks --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
+        run: cargo test --profile ci -p datafusion-cli  --lib --tests --bins
       - name: Verify Working Directory Clean
         run: git diff --exit-code
       - name: Minio Output
         if: ${{ !cancelled() }}
         run: docker logs minio-container
+
 
   linux-test-example:
     name: cargo examples (amd64)
@@ -461,7 +491,7 @@ jobs:
         uses: ./.github/actions/setup-macos-aarch64-builder
       - name: Run tests (excluding doctests)
         shell: bash
-        run: cargo test --profile ci --lib --tests --bins --features avro,json,backtrace,integration-tests
+        run: cargo test --profile ci --exclude datafusion-cli --workspace --lib --tests --bins --features avro,json,backtrace,integration-tests
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)

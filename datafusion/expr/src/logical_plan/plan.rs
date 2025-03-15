@@ -21,6 +21,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
@@ -55,7 +56,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
     DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependence,
-    FunctionalDependencies, ParamValues, Result, ScalarValue, TableReference,
+    FunctionalDependencies, ParamValues, Result, ScalarValue, Spans, TableReference,
     UnnestOptions,
 };
 use indexmap::IndexSet;
@@ -939,7 +940,9 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Subquery(Subquery {
-                outer_ref_columns, ..
+                outer_ref_columns,
+                spans,
+                ..
             }) => {
                 self.assert_no_expressions(expr)?;
                 let input = self.only_input(inputs)?;
@@ -947,6 +950,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Subquery(Subquery {
                     subquery: Arc::new(subquery),
                     outer_ref_columns: outer_ref_columns.clone(),
+                    spans: spans.clone(),
                 }))
             }
             LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
@@ -1083,6 +1087,7 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Explain(Explain {
                     verbose: e.verbose,
                     plan: Arc::new(input),
+                    explain_format: e.explain_format.clone(),
                     stringified_plans: e.stringified_plans.clone(),
                     schema: Arc::clone(&e.schema),
                     logical_optimization_succeeded: e.logical_optimization_succeeded,
@@ -2923,12 +2928,167 @@ impl PartialOrd for DescribeTable {
     }
 }
 
+/// Output formats for controlling for Explain plans
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExplainFormat {
+    /// Indent mode
+    ///
+    /// Example:
+    /// ```text
+    /// > explain format indent select x from values (1) t(x);
+    /// +---------------+-----------------------------------------------------+
+    /// | plan_type     | plan                                                |
+    /// +---------------+-----------------------------------------------------+
+    /// | logical_plan  | SubqueryAlias: t                                    |
+    /// |               |   Projection: column1 AS x                          |
+    /// |               |     Values: (Int64(1))                              |
+    /// | physical_plan | ProjectionExec: expr=[column1@0 as x]               |
+    /// |               |   DataSourceExec: partitions=1, partition_sizes=[1] |
+    /// |               |                                                     |
+    /// +---------------+-----------------------------------------------------+
+    /// ```
+    Indent,
+    /// Tree mode
+    ///
+    /// Example:
+    /// ```text
+    /// > explain format tree select x from values (1) t(x);
+    /// +---------------+-------------------------------+
+    /// | plan_type     | plan                          |
+    /// +---------------+-------------------------------+
+    /// | physical_plan | ┌───────────────────────────┐ |
+    /// |               | │       ProjectionExec      │ |
+    /// |               | │    --------------------   │ |
+    /// |               | │        x: column1@0       │ |
+    /// |               | └─────────────┬─────────────┘ |
+    /// |               | ┌─────────────┴─────────────┐ |
+    /// |               | │       DataSourceExec      │ |
+    /// |               | │    --------------------   │ |
+    /// |               | │         bytes: 128        │ |
+    /// |               | │       format: memory      │ |
+    /// |               | │          rows: 1          │ |
+    /// |               | └───────────────────────────┘ |
+    /// |               |                               |
+    /// +---------------+-------------------------------+
+    /// ```
+    Tree,
+    /// Postgres Json mode
+    ///
+    /// A displayable structure that produces plan in postgresql JSON format.
+    ///
+    /// Users can use this format to visualize the plan in existing plan
+    /// visualization tools, for example [dalibo](https://explain.dalibo.com/)
+    ///
+    /// Example:
+    /// ```text
+    /// > explain format pgjson select x from values (1) t(x);
+    /// +--------------+--------------------------------------+
+    /// | plan_type    | plan                                 |
+    /// +--------------+--------------------------------------+
+    /// | logical_plan | [                                    |
+    /// |              |   {                                  |
+    /// |              |     "Plan": {                        |
+    /// |              |       "Alias": "t",                  |
+    /// |              |       "Node Type": "Subquery",       |
+    /// |              |       "Output": [                    |
+    /// |              |         "x"                          |
+    /// |              |       ],                             |
+    /// |              |       "Plans": [                     |
+    /// |              |         {                            |
+    /// |              |           "Expressions": [           |
+    /// |              |             "column1 AS x"           |
+    /// |              |           ],                         |
+    /// |              |           "Node Type": "Projection", |
+    /// |              |           "Output": [                |
+    /// |              |             "x"                      |
+    /// |              |           ],                         |
+    /// |              |           "Plans": [                 |
+    /// |              |             {                        |
+    /// |              |               "Node Type": "Values", |
+    /// |              |               "Output": [            |
+    /// |              |                 "column1"            |
+    /// |              |               ],                     |
+    /// |              |               "Plans": [],           |
+    /// |              |               "Values": "(Int64(1))" |
+    /// |              |             }                        |
+    /// |              |           ]                          |
+    /// |              |         }                            |
+    /// |              |       ]                              |
+    /// |              |     }                                |
+    /// |              |   }                                  |
+    /// |              | ]                                    |
+    /// +--------------+--------------------------------------+
+    /// ```
+    PostgresJSON,
+    /// Graphviz mode
+    ///
+    /// Example:
+    /// ```text
+    /// > explain format graphviz select x from values (1) t(x);
+    /// +--------------+------------------------------------------------------------------------+
+    /// | plan_type    | plan                                                                   |
+    /// +--------------+------------------------------------------------------------------------+
+    /// | logical_plan |                                                                        |
+    /// |              | // Begin DataFusion GraphViz Plan,                                     |
+    /// |              | // display it online here: https://dreampuf.github.io/GraphvizOnline   |
+    /// |              |                                                                        |
+    /// |              | digraph {                                                              |
+    /// |              |   subgraph cluster_1                                                   |
+    /// |              |   {                                                                    |
+    /// |              |     graph[label="LogicalPlan"]                                         |
+    /// |              |     2[shape=box label="SubqueryAlias: t"]                              |
+    /// |              |     3[shape=box label="Projection: column1 AS x"]                      |
+    /// |              |     2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]                |
+    /// |              |     4[shape=box label="Values: (Int64(1))"]                            |
+    /// |              |     3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]                |
+    /// |              |   }                                                                    |
+    /// |              |   subgraph cluster_5                                                   |
+    /// |              |   {                                                                    |
+    /// |              |     graph[label="Detailed LogicalPlan"]                                |
+    /// |              |     6[shape=box label="SubqueryAlias: t\nSchema: [x:Int64;N]"]         |
+    /// |              |     7[shape=box label="Projection: column1 AS x\nSchema: [x:Int64;N]"] |
+    /// |              |     6 -> 7 [arrowhead=none, arrowtail=normal, dir=back]                |
+    /// |              |     8[shape=box label="Values: (Int64(1))\nSchema: [column1:Int64;N]"] |
+    /// |              |     7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]                |
+    /// |              |   }                                                                    |
+    /// |              | }                                                                      |
+    /// |              | // End DataFusion GraphViz Plan                                        |
+    /// |              |                                                                        |
+    /// +--------------+------------------------------------------------------------------------+
+    /// ```
+    Graphviz,
+}
+
+/// Implement  parsing strings to `ExplainFormat`
+impl FromStr for ExplainFormat {
+    type Err = DataFusionError;
+
+    fn from_str(format: &str) -> std::result::Result<Self, Self::Err> {
+        match format.to_lowercase().as_str() {
+            "indent" => Ok(ExplainFormat::Indent),
+            "tree" => Ok(ExplainFormat::Tree),
+            "pgjson" => Ok(ExplainFormat::PostgresJSON),
+            "graphviz" => Ok(ExplainFormat::Graphviz),
+            _ => {
+                plan_err!("Invalid explain format. Expected 'indent', 'tree', 'pgjson' or 'graphviz'. Got '{format}'")
+            }
+        }
+    }
+}
+
 /// Produces a relation with string representations of
 /// various parts of the plan
+///
+/// See [the documentation] for more information
+///
+/// [the documentation]: https://datafusion.apache.org/user-guide/sql/explain.html
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Explain {
     /// Should extra (detailed, intermediate plans) be included?
     pub verbose: bool,
+    /// Output format for explain, if specified.
+    /// If none, defaults to `text`
+    pub explain_format: ExplainFormat,
     /// The logical plan that is being EXPLAIN'd
     pub plan: Arc<LogicalPlan>,
     /// Represent the various stages plans have gone through
@@ -3615,6 +3775,8 @@ pub struct Subquery {
     pub subquery: Arc<LogicalPlan>,
     /// The outer references used in the subquery
     pub outer_ref_columns: Vec<Expr>,
+    /// Span information for subquery projection columns
+    pub spans: Spans,
 }
 
 impl Normalizeable for Subquery {
@@ -3649,6 +3811,7 @@ impl Subquery {
         Subquery {
             subquery: plan,
             outer_ref_columns: self.outer_ref_columns.clone(),
+            spans: Spans::new(),
         }
     }
 }

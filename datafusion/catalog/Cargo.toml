@@ -42,6 +42,7 @@ datafusion-sql = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
 log = { workspace = true }
+object_store = { workspace = true }
 parking_lot = { workspace = true }
 
 [dev-dependencies]

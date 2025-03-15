@@ -21,7 +21,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, TableReference,
+    not_impl_err, plan_err, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::{expr::Unnest, Expr, LogicalPlan, LogicalPlanBuilder};
@@ -212,6 +212,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     LogicalPlan::Subquery(Subquery {
                         subquery: input,
                         outer_ref_columns,
+                        spans: Spans::new(),
                     }),
                     alias,
                 )
@@ -219,6 +220,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan => Ok(LogicalPlan::Subquery(Subquery {
                 subquery: Arc::new(plan),
                 outer_ref_columns,
+                spans: Spans::new(),
             })),
         }
     }

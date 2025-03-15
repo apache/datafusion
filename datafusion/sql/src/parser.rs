@@ -16,6 +16,9 @@
 // under the License.
 
 //! [`DFParser`]: DataFusion SQL Parser based on [`sqlparser`]
+//!
+//! This parser implements DataFusion specific statements such as
+//! `CREATE EXTERNAL TABLE`
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -43,12 +46,23 @@ fn parse_file_type(s: &str) -> Result<String, ParserError> {
     Ok(s.to_uppercase())
 }
 
-/// DataFusion specific EXPLAIN (needed so we can EXPLAIN datafusion
-/// specific COPY and other statements)
+/// DataFusion specific `EXPLAIN`
+///
+/// Syntax:
+/// ```sql
+/// EXPLAIN <ANALYZE> <VERBOSE> [FORMAT format] statement
+///```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplainStatement {
+    /// `EXPLAIN ANALYZE ..`
     pub analyze: bool,
+    /// `EXPLAIN .. VERBOSE ..`
     pub verbose: bool,
+    /// `EXPLAIN .. FORMAT `
+    pub format: Option<String>,
+    /// The statement to analyze. Note this is a DataFusion [`Statement`] (not a
+    /// [`sqlparser::ast::Statement`] so that we can use `EXPLAIN`, `COPY`, and other
+    /// DataFusion specific statements
     pub statement: Box<Statement>,
 }
 
@@ -57,6 +71,7 @@ impl fmt::Display for ExplainStatement {
         let Self {
             analyze,
             verbose,
+            format,
             statement,
         } = self;
 
@@ -66,6 +81,9 @@ impl fmt::Display for ExplainStatement {
         }
         if *verbose {
             write!(f, "VERBOSE ")?;
+        }
+        if let Some(format) = format.as_ref() {
+            write!(f, "FORMAT {format} ")?;
         }
 
         write!(f, "{statement}")
@@ -446,7 +464,6 @@ impl<'a> DFParser<'a> {
                         self.parse_copy()
                     }
                     Keyword::EXPLAIN => {
-                        // (TODO parse all supported statements)
                         self.parser.next_token(); // EXPLAIN
                         self.parse_explain()
                     }
@@ -620,13 +637,33 @@ impl<'a> DFParser<'a> {
     pub fn parse_explain(&mut self) -> Result<Statement, ParserError> {
         let analyze = self.parser.parse_keyword(Keyword::ANALYZE);
         let verbose = self.parser.parse_keyword(Keyword::VERBOSE);
+        let format = self.parse_explain_format()?;
+
         let statement = self.parse_statement()?;
 
         Ok(Statement::Explain(ExplainStatement {
             statement: Box::new(statement),
             analyze,
             verbose,
+            format,
         }))
+    }
+
+    pub fn parse_explain_format(&mut self) -> Result<Option<String>, ParserError> {
+        if !self.parser.parse_keyword(Keyword::FORMAT) {
+            return Ok(None);
+        }
+
+        let next_token = self.parser.next_token();
+        let format = match next_token.token {
+            Token::Word(w) => Ok(w.value),
+            Token::SingleQuotedString(w) => Ok(w),
+            Token::DoubleQuotedString(w) => Ok(w),
+            _ => self
+                .parser
+                .expected("an explain format such as TREE", next_token),
+        }?;
+        Ok(Some(format))
     }
 
     /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
@@ -1542,6 +1579,7 @@ mod tests {
             let expected = Statement::Explain(ExplainStatement {
                 analyze,
                 verbose,
+                format: None,
                 statement: Box::new(expected_copy),
             });
             assert_eq!(verified_stmt(sql), expected);
