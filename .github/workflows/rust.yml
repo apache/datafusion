@@ -255,6 +255,7 @@ jobs:
           files: ./coverage.txt
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
+          name: linux-test
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -299,6 +300,7 @@ jobs:
           files: ./coverage.txt
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
+          name: linux-test-datafusion-cli
       - name: Verify Working Directory Clean
         run: git diff --exit-code
       - name: Minio Output
@@ -356,6 +358,7 @@ jobs:
           files: ./coverage.txt
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
+          name: linux-test-doc
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -412,8 +415,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate benchmark data and expected query results
         run: |
           mkdir -p datafusion/sqllogictest/test_files/tpch/data
@@ -427,14 +428,8 @@ jobs:
           # increase stack size to fix stack overflow
           export RUST_MIN_STACK=20971520
           export TPCH_DATA=`realpath datafusion/sqllogictest/test_files/tpch/data`
-          cargo llvm-cov test --lcov --output-path ./coverage.txt plan_q --package datafusion-benchmarks --profile ci --features=ci -- --test-threads=1
-          INCLUDE_TPCH=true cargo llvm-cov test --lcov --output-path ./coverage_with_tpch.txt --features backtrace --profile ci --package datafusion-sqllogictest --test sqllogictests
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: ./coverage.txt ./coverage_with_tpch.txt
-          disable_search: true
-          token: ${{ secrets.CODECOV_TOKEN }}
+          cargo test plan_q --package datafusion-benchmarks --profile ci --features=ci -- --test-threads=1
+          INCLUDE_TPCH=true cargo test --features backtrace --profile ci --package datafusion-sqllogictest --test sqllogictests
       - name: Verify Working Directory Clean
         run: git diff --exit-code
 
@@ -483,6 +478,7 @@ jobs:
           files: ./coverage.txt
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
+          name: sqllogictest-postgres
 
   #  Temporarily commenting out the Windows flow, the reason is enormously slow running build
   #  Waiting for new Windows 2025 github runner
@@ -540,6 +536,7 @@ jobs:
           files: ./coverage.txt
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
+          name: macos-aarch64
 
   test-datafusion-pyarrow:
     name: cargo test pyarrow (amd64)
@@ -572,6 +569,7 @@ jobs:
           files: ./coverage.txt
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
+          name: test-datafusion-pyarrow
 
   vendor:
     name: Verify Vendored Code
