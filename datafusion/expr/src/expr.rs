@@ -1147,6 +1147,10 @@ impl Expr {
         SchemaDisplay(self)
     }
 
+    pub fn sql_name(&self) -> impl Display + '_ {
+        SqlDisplay(self)
+    }
+
     /// Returns the qualifier and the schema name of this expression.
     ///
     /// Used when the expression forms the output field of a certain plan.
@@ -2596,6 +2600,43 @@ impl Display for SchemaDisplay<'_> {
     }
 }
 
+struct SqlDisplay<'a>(&'a Expr);
+impl Display for SqlDisplay<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Expr::Column(c) => {
+                write!(f, "{}", c.name)
+            }
+            Expr::Literal(_) => {
+                write!(f, "aa")
+            }
+            Expr::ScalarVariable(..) => {
+                write!(f, "bb")
+            }
+            Expr::OuterReferenceColumn(..) => {
+                write!(f, "cc")
+            }
+            Expr::Placeholder(_) => {
+                write!(f, "dd")
+            }
+            Expr::Wildcard { .. } => {
+                write!(f, "ee")
+            }
+            Expr::AggregateFunction(AggregateFunction { func, params }) => {
+                match func.sql_name(params) {
+                    Ok(name) => {
+                        write!(f, "{name}")
+                    }
+                    Err(e) => {
+                        write!(f, "got error from schema_name {}", e)
+                    }
+                }
+            }
+            _ => write!(f, "{}", self.0.schema_name()),
+        }
+    }
+}
+
 /// Get schema_name for Vector of expressions
 ///
 /// Internal usage. Please call `schema_name_from_exprs` instead
@@ -2607,9 +2648,19 @@ pub(crate) fn schema_name_from_exprs_comma_separated_without_space(
     schema_name_from_exprs_inner(exprs, ",")
 }
 
+pub(crate) fn sql_name_from_exprs_comma_separated_without_space(
+    exprs: &[Expr],
+) -> Result<String, fmt::Error> {
+    sql_name_from_exprs_inner(exprs, ",")
+}
+
 /// Get schema_name for Vector of expressions
 pub fn schema_name_from_exprs(exprs: &[Expr]) -> Result<String, fmt::Error> {
     schema_name_from_exprs_inner(exprs, ", ")
+}
+
+pub fn sql_name_from_exprs(exprs: &[Expr]) -> Result<String, fmt::Error> {
+    sql_name_from_exprs_inner(exprs, ", ")
 }
 
 fn schema_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt::Error> {
@@ -2619,6 +2670,18 @@ fn schema_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt
             write!(&mut s, "{sep}")?;
         }
         write!(&mut s, "{}", SchemaDisplay(e))?;
+    }
+
+    Ok(s)
+}
+
+fn sql_name_from_exprs_inner(exprs: &[Expr], sep: &str) -> Result<String, fmt::Error> {
+    let mut s = String::new();
+    for (i, e) in exprs.iter().enumerate() {
+        if i > 0 {
+            write!(&mut s, "{sep}")?;
+        }
+        write!(&mut s, "{}", SqlDisplay(e))?;
     }
 
     Ok(s)

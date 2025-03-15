@@ -65,6 +65,7 @@ pub struct AggregateExprBuilder {
     /// Physical expressions of the aggregate function
     args: Vec<Arc<dyn PhysicalExpr>>,
     alias: Option<String>,
+    sql_name: String,
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// The physical order by expressions
@@ -83,6 +84,7 @@ impl AggregateExprBuilder {
             fun,
             args,
             alias: None,
+            sql_name: String::default(),
             schema: Arc::new(Schema::empty()),
             ordering_req: LexOrdering::default(),
             ignore_nulls: false,
@@ -99,6 +101,7 @@ impl AggregateExprBuilder {
             fun,
             args,
             alias,
+            sql_name,
             schema,
             ordering_req,
             ignore_nulls,
@@ -148,6 +151,7 @@ impl AggregateExprBuilder {
             args,
             data_type,
             name,
+            sql_name,
             schema: Arc::unwrap_or_clone(schema),
             ordering_req,
             ignore_nulls,
@@ -161,6 +165,11 @@ impl AggregateExprBuilder {
 
     pub fn alias(mut self, alias: impl Into<String>) -> Self {
         self.alias = Some(alias.into());
+        self
+    }
+
+    pub fn sql_name(mut self, name: String) -> Self {
+        self.sql_name = name;
         self
     }
 
@@ -215,6 +224,7 @@ pub struct AggregateFunctionExpr {
     /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
+    sql_name: String,
     schema: Schema,
     // The physical order by expressions
     ordering_req: LexOrdering,
@@ -243,6 +253,11 @@ impl AggregateFunctionExpr {
     /// Human readable name such as `"MIN(c2)"`.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Simplified name for `tree` explain.
+    pub fn sql_name(&self) -> &str {
+        &self.sql_name
     }
 
     /// Return if the aggregation is distinct
