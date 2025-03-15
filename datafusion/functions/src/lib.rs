@@ -99,10 +99,8 @@ pub mod string;
 make_stub_package!(string, "string_expressions");
 
 /// Core datafusion expressions
-/// Enabled via feature flag `core_expressions`
-#[cfg(feature = "core_expressions")]
+/// These are always available and not controlled by a feature flag
 pub mod core;
-make_stub_package!(core, "core_expressions");
 
 /// Date and time expressions.
 /// Contains functions such as to_timestamp
@@ -147,7 +145,6 @@ pub mod utils;
 
 /// Fluent-style API for creating `Expr`s
 pub mod expr_fn {
-    #[cfg(feature = "core_expressions")]
     pub use super::core::expr_fn::*;
     #[cfg(feature = "crypto_expressions")]
     pub use super::crypto::expr_fn::*;

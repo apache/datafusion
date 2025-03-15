@@ -745,6 +745,7 @@ nvl2(expression1, expression2, expression3)
 - [lpad](#lpad)
 - [ltrim](#ltrim)
 - [octet_length](#octet_length)
+- [overlay](#overlay)
 - [position](#position)
 - [repeat](#repeat)
 - [replace](#replace)
@@ -1281,6 +1282,32 @@ octet_length(str)
 
 - [bit_length](#bit_length)
 - [length](#length)
+
+### `overlay`
+
+Returns the string which is replaced by another string from the specified position and specified count length.
+
+```sql
+overlay(str PLACING substr FROM pos [FOR count])
+```
+
+#### Arguments
+
+- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **substr**: Substring to replace in str.
+- **pos**: The start position to start the replace in str.
+- **count**: The count of characters to be replaced from start position of str. If not specified, will use substr length instead.
+
+#### Example
+
+```sql
+> select overlay('Txxxxas' placing 'hom' from 2 for 4);
++--------------------------------------------------------+
+| overlay(Utf8("Txxxxas"),Utf8("hom"),Int64(2),Int64(4)) |
++--------------------------------------------------------+
+| Thomas                                                 |
++--------------------------------------------------------+
+```
 
 ### `position`
 
