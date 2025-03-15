@@ -1,5 +1,5 @@
 comment:
-  layout: "condensed_header, condensed_files, condensed_footer"
+  layout: "condensed_header, condensed_files"
   hide_project_coverage: TRUE
   after_n_builds: 6 # linux-test, linux-test-datafusion-cli, sqllogictest-postgres, macos-aarch64, test-datafusion-pyarrow, linux-test-doc
 
