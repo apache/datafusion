@@ -1,0 +1,70 @@
+{
+  "columns": [
+    {
+      "name": "p_partkey",
+      "arrowType": {
+        "INT64": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "p_name",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "p_mfgr",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "p_brand",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "p_type",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "p_size",
+      "arrowType": {
+        "INT32": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "p_container",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    },
+    {
+      "name": "p_retailprice",
+      "arrowType": {
+        "DECIMAL": {
+          "precision": 15,
+          "scale": 2
+        }
+      },
+      "nullable": true
+    },
+    {
+      "name": "p_comment",
+      "arrowType": {
+        "UTF8VIEW": {}
+      },
+      "nullable": true
+    }
+  ]
+}
