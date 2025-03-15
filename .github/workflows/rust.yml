@@ -345,9 +345,7 @@ jobs:
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: nightly
+        run: rustup toolchain install nightly
       - name: Install cargo-llvm-cov
         run: cargo +nightly install cargo-llvm-cov
       - name: Run doctests
