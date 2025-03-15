@@ -347,7 +347,7 @@ jobs:
       - name: Setup Rust toolchain
         run: rustup toolchain install nightly
       - name: Install cargo-llvm-cov
-        run: cargo +nightly install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
       - name: Run doctests
