@@ -752,7 +752,7 @@ physical_plan
 07)│    count(Int64(1)) ROWS   │
 08)│      BETWEEN UNBOUNDED    │
 09)│   PRECEDING AND UNBOUNDED │
-10)│         FOLLOWING@0       │
+10)│          FOLLOWING        │
 11)└─────────────┬─────────────┘
 12)┌─────────────┴─────────────┐
 13)│       WindowAggExec       │
@@ -785,9 +785,9 @@ physical_plan
 05)│ sum(t1.v1) ORDER BY [t1.v1│
 06)│    ASC NULLS LAST] ROWS   │
 07)│     BETWEEN 1 PRECEDING   │
-08)│      AND CURRENT ROW@1    │
+08)│       AND CURRENT ROW     │
 09)│                           │
-10)│          v1: v1@0         │
+10)│           v1: v1          │
 11)└─────────────┬─────────────┘
 12)┌─────────────┴─────────────┐
 13)│    BoundedWindowAggExec   │
@@ -808,7 +808,7 @@ physical_plan
 28)┌─────────────┴─────────────┐
 29)│       ProjectionExec      │
 30)│    --------------------   │
-31)│        v1: value@0        │
+31)│         v1: value         │
 32)└─────────────┬─────────────┘
 33)┌─────────────┴─────────────┐
 34)│       LazyMemoryExec      │
@@ -835,14 +835,14 @@ physical_plan
 07)│    count(Int64(1)) ROWS   │
 08)│      BETWEEN UNBOUNDED    │
 09)│   PRECEDING AND UNBOUNDED │
-10)│         FOLLOWING@0       │
+10)│          FOLLOWING        │
 11)│                           │
 12)│ row_number() ROWS BETWEEN │
 13)│   UNBOUNDED PRECEDING AND │
 14)│    UNBOUNDED FOLLOWING:   │
 15)│ row_number() ROWS BETWEEN │
 16)│   UNBOUNDED PRECEDING AND │
-17)│    UNBOUNDED FOLLOWING@1  │
+17)│     UNBOUNDED FOLLOWING   │
 18)└─────────────┬─────────────┘
 19)┌─────────────┴─────────────┐
 20)│       WindowAggExec       │
@@ -908,13 +908,13 @@ physical_plan
 02)│       ProjectionExec      │
 03)│    --------------------   │
 04)│        bigint_col:        │
-05)│        bigint_col@1       │
+05)│         bigint_col        │
 06)│                           │
-07)│     int_col: int_col@0    │
+07)│      int_col: int_col     │
 08)│                           │
 09)│          sum_col:         │
-10)│ CAST(int_col@0 AS Int64) +│
-11)│        bigint_col@1       │
+10)│  CAST(int_col AS Int64) + │
+11)│         bigint_col        │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
@@ -951,7 +951,7 @@ physical_plan
 10)│    .int_col DESC NULLS    │
 11)│    FIRST] RANGE BETWEEN   │
 12)│   UNBOUNDED PRECEDING AND │
-13)│        CURRENT ROW@1      │
+13)│         CURRENT ROW       │
 14)│                           │
 15)│   row_number() ORDER BY   │
 16)│    [table1.int_col ASC    │
@@ -964,7 +964,7 @@ physical_plan
 23)│      NULLS LAST] RANGE    │
 24)│      BETWEEN UNBOUNDED    │
 25)│    PRECEDING AND CURRENT  │
-26)│            ROW@2          │
+26)│             ROW           │
 27)└─────────────┬─────────────┘
 28)┌─────────────┴─────────────┐
 29)│    BoundedWindowAggExec   │
@@ -1017,13 +1017,13 @@ physical_plan
 02)│       ProjectionExec      │
 03)│    --------------------   │
 04)│        bigint_col:        │
-05)│        bigint_col@1       │
+05)│         bigint_col        │
 06)│                           │
-07)│     int_col: int_col@0    │
+07)│      int_col: int_col     │
 08)│                           │
 09)│          sum_col:         │
-10)│ CAST(int_col@0 AS Int64) +│
-11)│        bigint_col@1       │
+10)│  CAST(int_col AS Int64) + │
+11)│         bigint_col        │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
@@ -1051,13 +1051,13 @@ physical_plan
 02)│       ProjectionExec      │
 03)│    --------------------   │
 04)│        bigint_col:        │
-05)│        bigint_col@1       │
+05)│         bigint_col        │
 06)│                           │
-07)│     int_col: int_col@0    │
+07)│      int_col: int_col     │
 08)│                           │
 09)│          sum_col:         │
-10)│ CAST(int_col@0 AS Int64) +│
-11)│        bigint_col@1       │
+10)│  CAST(int_col AS Int64) + │
+11)│         bigint_col        │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│       DataSourceExec      │
@@ -1076,12 +1076,12 @@ physical_plan
 02)│       ProjectionExec      │
 03)│    --------------------   │
 04)│        bigint_col:        │
-05)│        bigint_col@0       │
+05)│         bigint_col        │
 06)│                           │
-07)│     int_col: int_col@1    │
+07)│      int_col: int_col     │
 08)│                           │
 09)│          sum_col:         │
-10)│  int_col@1 + bigint_col@0 │
+10)│    int_col + bigint_col   │
 11)└─────────────┬─────────────┘
 12)┌─────────────┴─────────────┐
 13)│      RepartitionExec      │
@@ -1109,13 +1109,13 @@ physical_plan
 02)│       ProjectionExec      │
 03)│    --------------------   │
 04)│        bigint_col:        │
-05)│        bigint_col@1       │
+05)│         bigint_col        │
 06)│                           │
-07)│     int_col: int_col@0    │
+07)│      int_col: int_col     │
 08)│                           │
 09)│          sum_col:         │
-10)│ CAST(int_col@0 AS Int64) +│
-11)│        bigint_col@1       │
+10)│  CAST(int_col AS Int64) + │
+11)│         bigint_col        │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
@@ -1219,17 +1219,17 @@ physical_plan
 35)│    --------------------   ││    --------------------   │
 36)│ CAST(table1.string_col AS ││  output_partition_count:  │
 37)│         Utf8View):        ││             1             │
-38)│    CAST(string_col@1 AS   ││                           │
+38)│     CAST(string_col AS    ││                           │
 39)│          Utf8View)        ││    partitioning_scheme:   │
 40)│                           ││     RoundRobinBatch(4)    │
 41)│        bigint_col:        ││                           │
-42)│        bigint_col@2       ││                           │
+42)│         bigint_col        ││                           │
 43)│                           ││                           │
-44)│    date_col: date_col@3   ││                           │
-45)│     int_col: int_col@0    ││                           │
+44)│     date_col: date_col    ││                           │
+45)│      int_col: int_col     ││                           │
 46)│                           ││                           │
 47)│        string_col:        ││                           │
-48)│        string_col@1       ││                           │
+48)│         string_col        ││                           │
 49)└─────────────┬─────────────┘└─────────────┬─────────────┘
 50)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 51)│      RepartitionExec      ││       DataSourceExec      │
@@ -1291,17 +1291,17 @@ physical_plan
 37)│    --------------------   ││    --------------------   │
 38)│ CAST(table1.string_col AS ││  output_partition_count:  │
 39)│         Utf8View):        ││             1             │
-40)│    CAST(string_col@1 AS   ││                           │
+40)│     CAST(string_col AS    ││                           │
 41)│          Utf8View)        ││    partitioning_scheme:   │
 42)│                           ││     RoundRobinBatch(4)    │
 43)│        bigint_col:        ││                           │
-44)│        bigint_col@2       ││                           │
+44)│         bigint_col        ││                           │
 45)│                           ││                           │
-46)│    date_col: date_col@3   ││                           │
-47)│     int_col: int_col@0    ││                           │
+46)│     date_col: date_col    ││                           │
+47)│      int_col: int_col     ││                           │
 48)│                           ││                           │
 49)│        string_col:        ││                           │
-50)│        string_col@1       ││                           │
+50)│         string_col        ││                           │
 51)└─────────────┬─────────────┘└─────────────┬─────────────┘
 52)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 53)│      RepartitionExec      ││       DataSourceExec      │
@@ -1471,7 +1471,7 @@ physical_plan
 02)│       ProjectionExec      │
 03)│    --------------------   │
 04)│         count(*):         │
-05)│     count(Int64(1))@1     │
+05)│      count(Int64(1))      │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
 08)│       AggregateExec       │
@@ -1834,7 +1834,7 @@ physical_plan
 09)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 10)│     PlaceholderRowExec    ││       ProjectionExec      │
 11)│                           ││    --------------------   │
-12)│                           ││        id: id@0 + 1       │
+12)│                           ││         id: id + 1        │
 13)└───────────────────────────┘└─────────────┬─────────────┘
 14)-----------------------------┌─────────────┴─────────────┐
 15)-----------------------------│    CoalesceBatchesExec    │
@@ -1944,7 +1944,7 @@ physical_plan
 02)│       ProjectionExec      │
 03)│    --------------------   │
 04)│         count(*):         │
-05)│     count(Int64(1))@0     │
+05)│      count(Int64(1))      │
 06)└─────────────┬─────────────┘
 07)┌─────────────┴─────────────┐
 08)│       AggregateExec       │

@@ -167,6 +167,12 @@ impl PhysicalExpr for NegativeExpr {
             preserves_lex_ordering: false,
         })
     }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(- ")?;
+        self.arg.fmt_sql(f)?;
+        write!(f, ")")
+    }
 }
 
 /// Creates a unary expression NEGATIVE
@@ -202,6 +208,7 @@ mod tests {
     use datafusion_common::cast::as_primitive_array;
     use datafusion_common::{DataFusionError, ScalarValue};
 
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use paste::paste;
 
     macro_rules! test_array_negative_op {
@@ -377,6 +384,17 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let expr = negative(col("a", &schema)?, &schema).unwrap_err();
         matches!(expr, DataFusionError::Plan(_));
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let expr = NegativeExpr::new(Arc::new(Column::new("a", 0)));
+        let display_string = expr.to_string();
+        assert_eq!(display_string, "(- a@0)");
+        let sql_string = fmt_sql(&expr).to_string();
+        assert_eq!(sql_string, "(- a)");
+
         Ok(())
     }
 }
