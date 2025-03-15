@@ -48,6 +48,7 @@ pub mod expr_fn;
 pub mod expr_rewriter;
 pub mod expr_schema;
 pub mod function;
+pub mod select_expr;
 pub mod groups_accumulator {
     pub use datafusion_expr_common::groups_accumulator::*;
 }

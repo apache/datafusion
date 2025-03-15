@@ -22,11 +22,10 @@ use datafusion_common::{
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
     DFSchema, Dependency, Diagnostic, Result, Span,
 };
-use datafusion_expr::expr::{ScalarFunction, Unnest};
+use datafusion_expr::expr::{ScalarFunction, Unnest, WildcardOptions};
 use datafusion_expr::planner::{PlannerResult, RawAggregateExpr, RawWindowExpr};
 use datafusion_expr::{
-    expr, qualified_wildcard, wildcard, Expr, ExprFunctionExt, ExprSchemable,
-    WindowFrame, WindowFunctionDefinition,
+    expr, Expr, ExprFunctionExt, ExprSchemable, WindowFrame, WindowFunctionDefinition,
 };
 use sqlparser::ast::{
     DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
@@ -473,11 +472,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 name: _,
                 arg: FunctionArgExpr::Wildcard,
                 operator: _,
-            } => Ok(wildcard()),
+            } => {
+                #[expect(deprecated)]
+                let expr = Expr::Wildcard {
+                    qualifier: None,
+                    options: Box::new(WildcardOptions::default()),
+                };
+
+                Ok(expr)
+            }
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 self.sql_expr_to_logical_expr(arg, schema, planner_context)
             }
-            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(wildcard()),
+            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
+                #[expect(deprecated)]
+                let expr = Expr::Wildcard {
+                    qualifier: None,
+                    options: Box::new(WildcardOptions::default()),
+                };
+
+                Ok(expr)
+            }
             FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 // Sanity check on qualifier with schema
@@ -485,7 +500,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if qualified_indices.is_empty() {
                     return plan_err!("Invalid qualifier {qualifier}");
                 }
-                Ok(qualified_wildcard(qualifier))
+
+                #[expect(deprecated)]
+                let expr = Expr::Wildcard {
+                    qualifier: qualifier.into(),
+                    options: Box::new(WildcardOptions::default()),
+                };
+
+                Ok(expr)
             }
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }

@@ -1090,7 +1090,7 @@ fn test_table_scan_pushdown() -> Result<()> {
         plan_to_sql(&query_from_table_scan_with_two_projections)?;
     assert_eq!(
         query_from_table_scan_with_two_projections.to_string(),
-        "SELECT * FROM (SELECT t1.id, t1.age FROM t1)"
+        "SELECT t1.id, t1.age FROM (SELECT t1.id, t1.age FROM t1)"
     );
 
     let table_scan_with_filter = table_scan_with_filters(

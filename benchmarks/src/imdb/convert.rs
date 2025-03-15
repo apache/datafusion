@@ -16,6 +16,7 @@
 // under the License.
 
 use datafusion::dataframe::DataFrameWriteOptions;
+use datafusion::logical_expr::select_expr::SelectExpr;
 use datafusion_common::instant::Instant;
 use std::path::PathBuf;
 
@@ -74,7 +75,8 @@ impl ConvertOpt {
                 .iter()
                 .take(schema.fields.len())
                 .map(Expr::from)
-                .collect();
+                .map(SelectExpr::from)
+                .collect::<Vec<_>>();
 
             csv = csv.select(selection)?;
 
