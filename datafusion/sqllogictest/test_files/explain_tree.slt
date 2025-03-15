@@ -175,7 +175,7 @@ physical_plan
 08)│         FilterExec        │
 09)│    --------------------   │
 10)│         predicate:        │
-11)│    string_col@1 != foo    │
+11)│     string_col != foo     │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
@@ -303,7 +303,7 @@ physical_plan
 08)│        HashJoinExec       │
 09)│    --------------------   │
 10)│            on:            ├──────────────┐
-11)│  (int_col@0 = int_col@0)  │              │
+11)│    (int_col = int_col)    │              │
 12)└─────────────┬─────────────┘              │
 13)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 14)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    │
@@ -357,7 +357,7 @@ physical_plan
 08)│        HashJoinExec       │
 09)│    --------------------   │
 10)│            on:            ├───────────────────────────────────────────┐
-11)│  (int_col@1 = int_col@0)  │                                           │
+11)│    (int_col = int_col)    │                                           │
 12)└─────────────┬─────────────┘                                           │
 13)┌─────────────┴─────────────┐                             ┌─────────────┴─────────────┐
 14)│    CoalesceBatchesExec    │                             │    CoalesceBatchesExec    │
@@ -369,7 +369,7 @@ physical_plan
 20)│        HashJoinExec       │                             │      RepartitionExec      │
 21)│    --------------------   │                             │    --------------------   │
 22)│            on:            │                             │  output_partition_count:  │
-23)│  (int_col@0 = int_col@0)  ├──────────────┐              │             1             │
+23)│    (int_col = int_col)    ├──────────────┐              │             1             │
 24)│                           │              │              │                           │
 25)│                           │              │              │    partitioning_scheme:   │
 26)│                           │              │              │    Hash([int_col@0], 4)   │
@@ -423,9 +423,9 @@ physical_plan
 08)│         FilterExec        │
 09)│    --------------------   │
 10)│         predicate:        │
-11)│  string_col@1 != foo AND  │
-12)│     string_col@1 != bar   │
-13)│    AND string_col@1 != a  │
+11)│   string_col != foo AND   │
+12)│      string_col != bar    │
+13)│     AND string_col != a   │
 14)│     really long string    │
 15)│          constant         │
 16)└─────────────┬─────────────┘
@@ -461,8 +461,8 @@ physical_plan
 08)│         FilterExec        │
 09)│    --------------------   │
 10)│         predicate:        │
-11)│      string_col@1 !=      │
-12)│       aaaaaaaaaaaaaa      │
+11)│       string_col !=       │
+12)│        aaaaaaaaaaaa       │
 13)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
 14)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
 15)│aaaaaaaaaaaaaaaaaaaaaaaaaaa│
@@ -510,7 +510,7 @@ physical_plan
 # Check exactly the render width.
 query TT
 explain SELECT int_col FROM table1
-WHERE string_col != 'aaaaaaaaaaa';
+WHERE string_col != 'aaaaaaaaaaaaa';
 ----
 physical_plan
 01)┌───────────────────────────┐
@@ -523,7 +523,7 @@ physical_plan
 08)│         FilterExec        │
 09)│    --------------------   │
 10)│         predicate:        │
-11)│string_col@1 != aaaaaaaaaaa│
+11)│string_col != aaaaaaaaaaaaa│
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
@@ -544,7 +544,7 @@ physical_plan
 # Check with the render witdth + 1.
 query TT
 explain SELECT int_col FROM table1
-WHERE string_col != 'aaaaaaaaaaaa';
+WHERE string_col != 'aaaaaaaaaaaaaaa';
 ----
 physical_plan
 01)┌───────────────────────────┐
@@ -557,24 +557,25 @@ physical_plan
 08)│         FilterExec        │
 09)│    --------------------   │
 10)│         predicate:        │
-11)│      string_col@1 !=      │
+11)│       string_col !=       │
 12)│        aaaaaaaaaaaa       │
-13)└─────────────┬─────────────┘
-14)┌─────────────┴─────────────┐
-15)│      RepartitionExec      │
-16)│    --------------------   │
-17)│  output_partition_count:  │
-18)│             1             │
-19)│                           │
-20)│    partitioning_scheme:   │
-21)│     RoundRobinBatch(4)    │
-22)└─────────────┬─────────────┘
-23)┌─────────────┴─────────────┐
-24)│       DataSourceExec      │
-25)│    --------------------   │
-26)│          files: 1         │
-27)│        format: csv        │
-28)└───────────────────────────┘
+13)│            aaa            │
+14)└─────────────┬─────────────┘
+15)┌─────────────┴─────────────┐
+16)│      RepartitionExec      │
+17)│    --------------------   │
+18)│  output_partition_count:  │
+19)│             1             │
+20)│                           │
+21)│    partitioning_scheme:   │
+22)│     RoundRobinBatch(4)    │
+23)└─────────────┬─────────────┘
+24)┌─────────────┴─────────────┐
+25)│       DataSourceExec      │
+26)│    --------------------   │
+27)│          files: 1         │
+28)│        format: csv        │
+29)└───────────────────────────┘
 
 # Query with filter on csv
 query TT
@@ -591,7 +592,7 @@ physical_plan
 08)│         FilterExec        │
 09)│    --------------------   │
 10)│         predicate:        │
-11)│    string_col@1 != foo    │
+11)│     string_col != foo     │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
@@ -625,7 +626,7 @@ physical_plan
 08)│         FilterExec        │
 09)│    --------------------   │
 10)│         predicate:        │
-11)│    string_col@1 != foo    │
+11)│     string_col != foo     │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
@@ -643,7 +644,7 @@ physical_plan
 26)│      format: parquet      │
 27)│                           │
 28)│         predicate:        │
-29)│    string_col@1 != foo    │
+29)│     string_col != foo     │
 30)└───────────────────────────┘
 
 # Query with filter on memory
@@ -661,7 +662,7 @@ physical_plan
 08)│         FilterExec        │
 09)│    --------------------   │
 10)│         predicate:        │
-11)│    string_col@1 != foo    │
+11)│     string_col != foo     │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│       DataSourceExec      │
@@ -686,7 +687,7 @@ physical_plan
 08)│         FilterExec        │
 09)│    --------------------   │
 10)│         predicate:        │
-11)│    string_col@1 != foo    │
+11)│     string_col != foo     │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
@@ -719,7 +720,7 @@ physical_plan
 08)│         FilterExec        │
 09)│    --------------------   │
 10)│         predicate:        │
-11)│    string_col@1 != foo    │
+11)│     string_col != foo     │
 12)└─────────────┬─────────────┘
 13)┌─────────────┴─────────────┐
 14)│      RepartitionExec      │
@@ -1192,10 +1193,10 @@ physical_plan
 08)│        HashJoinExec       │
 09)│    --------------------   │
 10)│            on:            │
-11)│ (int_col@0 = int_col@0),  ├──────────────┐
-12)│  (CAST(table1.string_col  │              │
-13)│      AS Utf8View)@4 =     │              │
-14)│        string_col@1)      │              │
+11)│ (int_col = int_col), (CAST├──────────────┐
+12)│   (table1.string_col AS   │              │
+13)│         Utf8View) =       │              │
+14)│         string_col)       │              │
 15)└─────────────┬─────────────┘              │
 16)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 17)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    │
@@ -1264,10 +1265,10 @@ physical_plan
 10)│      join_type: Left      │
 11)│                           │
 12)│            on:            ├──────────────┐
-13)│ (int_col@0 = int_col@0),  │              │
-14)│  (CAST(table1.string_col  │              │
-15)│      AS Utf8View)@4 =     │              │
-16)│        string_col@1)      │              │
+13)│ (int_col = int_col), (CAST│              │
+14)│   (table1.string_col AS   │              │
+15)│         Utf8View) =       │              │
+16)│         string_col)       │              │
 17)└─────────────┬─────────────┘              │
 18)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 19)│    CoalesceBatchesExec    ││    CoalesceBatchesExec    │
@@ -1402,7 +1403,7 @@ physical_plan
 01)┌───────────────────────────┐
 02)│     SortMergeJoinExec     │
 03)│    --------------------   ├──────────────┐
-04)│     on: (c1@0 = c1@0)     │              │
+04)│       on: (c1 = c1)       │              │
 05)└─────────────┬─────────────┘              │
 06)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
 07)│          SortExec         ││          SortExec         │
@@ -1569,20 +1570,20 @@ physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
 03)│    --------------------   │
-04)│   date@0 ASC NULLS LAST,  │
-05)│    time@2 ASC NULLS LAST  │
-06)└─────────────┬─────────────┘
-07)┌─────────────┴─────────────┐
-08)│    CoalesceBatchesExec    │
-09)│    --------------------   │
-10)│     target_batch_size:    │
-11)│            8192           │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│         FilterExec        │
-15)│    --------------------   │
-16)│         predicate:        │
-17)│        ticker@1 = A       │
+04)│   date ASC NULLS LAST,    │
+05)│                           │
+06)│    time ASC NULLS LAST    │
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│    CoalesceBatchesExec    │
+10)│    --------------------   │
+11)│     target_batch_size:    │
+12)│            8192           │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│         FilterExec        │
+16)│    --------------------   │
+17)│   predicate: ticker = A   │
 18)└─────────────┬─────────────┘
 19)┌─────────────┴─────────────┐
 20)│      RepartitionExec      │
@@ -1611,7 +1612,7 @@ physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
 03)│    --------------------   │
-04)│   time@2 ASC NULLS LAST   │
+04)│    time ASC NULLS LAST    │
 05)└─────────────┬─────────────┘
 06)┌─────────────┴─────────────┐
 07)│    CoalesceBatchesExec    │
@@ -1623,8 +1624,8 @@ physical_plan
 13)│         FilterExec        │
 14)│    --------------------   │
 15)│         predicate:        │
-16)│ ticker@1 = A AND CAST(time│
-17)│   @2 AS Date32) = date@0  │
+16)│  ticker = A AND CAST(time │
+17)│      AS Date32) = date    │
 18)└─────────────┬─────────────┘
 19)┌─────────────┴─────────────┐
 20)│      RepartitionExec      │
@@ -1652,7 +1653,7 @@ physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
 03)│    --------------------   │
-04)│   date@0 ASC NULLS LAST   │
+04)│    date ASC NULLS LAST    │
 05)└─────────────┬─────────────┘
 06)┌─────────────┴─────────────┐
 07)│    CoalesceBatchesExec    │
@@ -1664,8 +1665,8 @@ physical_plan
 13)│         FilterExec        │
 14)│    --------------------   │
 15)│         predicate:        │
-16)│ ticker@1 = A AND CAST(time│
-17)│   @2 AS Date32) = date@0  │
+16)│  ticker = A AND CAST(time │
+17)│      AS Date32) = date    │
 18)└─────────────┬─────────────┘
 19)┌─────────────┴─────────────┐
 20)│      RepartitionExec      │
@@ -1703,8 +1704,8 @@ physical_plan
 11)│         FilterExec        │
 12)│    --------------------   │
 13)│         predicate:        │
-14)│ ticker@1 = A AND CAST(time│
-15)│   @2 AS Date32) = date@0  │
+14)│  ticker = A AND CAST(time │
+15)│      AS Date32) = date    │
 16)└─────────────┬─────────────┘
 17)┌─────────────┴─────────────┐
 18)│      RepartitionExec      │
@@ -1733,21 +1734,67 @@ physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
 03)│    --------------------   │
-04)│   time@2 ASC NULLS LAST,  │
-05)│    date@0 ASC NULLS LAST  │
-06)└─────────────┬─────────────┘
-07)┌─────────────┴─────────────┐
-08)│    CoalesceBatchesExec    │
-09)│    --------------------   │
-10)│     target_batch_size:    │
-11)│            8192           │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│         FilterExec        │
-15)│    --------------------   │
-16)│         predicate:        │
-17)│ ticker@1 = A AND CAST(time│
-18)│   @2 AS Date32) = date@0  │
+04)│    date ASC NULLS LAST    │
+05)│                           │
+06)│   time ASC NULLS LAST,    │
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│    CoalesceBatchesExec    │
+10)│    --------------------   │
+11)│     target_batch_size:    │
+12)│            8192           │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│         FilterExec        │
+16)│    --------------------   │
+17)│         predicate:        │
+18)│  ticker = A AND CAST(time │
+19)│      AS Date32) = date    │
+20)└─────────────┬─────────────┘
+21)┌─────────────┴─────────────┐
+22)│      RepartitionExec      │
+23)│    --------------------   │
+24)│  output_partition_count:  │
+25)│             1             │
+26)│                           │
+27)│    partitioning_scheme:   │
+28)│     RoundRobinBatch(4)    │
+29)└─────────────┬─────────────┘
+30)┌─────────────┴─────────────┐
+31)│     StreamingTableExec    │
+32)│    --------------------   │
+33)│       infinite: true      │
+34)│        limit: None        │
+35)└───────────────────────────┘
+
+
+
+
+# query
+query TT
+explain SELECT * FROM data 
+WHERE date = '2006-01-02' 
+ORDER BY "ticker", "time";
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│  SortPreservingMergeExec  │
+03)│    --------------------   │
+04)│  ticker ASC NULLS LAST,   │
+05)│                           │
+06)│    time ASC NULLS LAST    │
+07)└─────────────┬─────────────┘
+08)┌─────────────┴─────────────┐
+09)│    CoalesceBatchesExec    │
+10)│    --------------------   │
+11)│     target_batch_size:    │
+12)│            8192           │
+13)└─────────────┬─────────────┘
+14)┌─────────────┴─────────────┐
+15)│         FilterExec        │
+16)│    --------------------   │
+17)│         predicate:        │
+18)│     date = 2006-01-02     │
 19)└─────────────┬─────────────┘
 20)┌─────────────┴─────────────┐
 21)│      RepartitionExec      │
@@ -1764,50 +1811,6 @@ physical_plan
 32)│       infinite: true      │
 33)│        limit: None        │
 34)└───────────────────────────┘
-
-
-
-
-# query
-query TT
-explain SELECT * FROM data 
-WHERE date = '2006-01-02' 
-ORDER BY "ticker", "time";
-----
-physical_plan
-01)┌───────────────────────────┐
-02)│  SortPreservingMergeExec  │
-03)│    --------------------   │
-04)│  ticker@1 ASC NULLS LAST, │
-05)│    time@2 ASC NULLS LAST  │
-06)└─────────────┬─────────────┘
-07)┌─────────────┴─────────────┐
-08)│    CoalesceBatchesExec    │
-09)│    --------------------   │
-10)│     target_batch_size:    │
-11)│            8192           │
-12)└─────────────┬─────────────┘
-13)┌─────────────┴─────────────┐
-14)│         FilterExec        │
-15)│    --------------------   │
-16)│         predicate:        │
-17)│    date@0 = 2006-01-02    │
-18)└─────────────┬─────────────┘
-19)┌─────────────┴─────────────┐
-20)│      RepartitionExec      │
-21)│    --------------------   │
-22)│  output_partition_count:  │
-23)│             1             │
-24)│                           │
-25)│    partitioning_scheme:   │
-26)│     RoundRobinBatch(4)    │
-27)└─────────────┬─────────────┘
-28)┌─────────────┴─────────────┐
-29)│     StreamingTableExec    │
-30)│    --------------------   │
-31)│       infinite: true      │
-32)│        limit: None        │
-33)└───────────────────────────┘
 
 
 
@@ -1845,7 +1848,7 @@ physical_plan
 20)-----------------------------┌─────────────┴─────────────┐
 21)-----------------------------│         FilterExec        │
 22)-----------------------------│    --------------------   │
-23)-----------------------------│    predicate: id@0 < 10   │
+23)-----------------------------│     predicate: id < 10    │
 24)-----------------------------└─────────────┬─────────────┘
 25)-----------------------------┌─────────────┴─────────────┐
 26)-----------------------------│      RepartitionExec      │
@@ -1990,7 +1993,7 @@ physical_plan
 48)┌─────────────┴─────────────┐
 49)│         FilterExec        │
 50)│    --------------------   │
-51)│     predicate: a@0 > 3    │
+51)│      predicate: a > 3     │
 52)└─────────────┬─────────────┘
 53)┌─────────────┴─────────────┐
 54)│       DataSourceExec      │
@@ -2034,7 +2037,7 @@ physical_plan
 14)┌─────────────┴─────────────┐
 15)│         FilterExec        │
 16)│    --------------------   │
-17)│    predicate: c3@2 > 0    │
+17)│     predicate: c3 > 0     │
 18)└─────────────┬─────────────┘
 19)┌─────────────┴─────────────┐
 20)│      RepartitionExec      │
