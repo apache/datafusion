@@ -40,6 +40,7 @@
 /// Exported functions accept:
 /// - `Vec<Expr>` argument (single argument followed by a comma)
 /// - Variable number of `Expr` arguments (zero or more arguments, must be without commas)
+#[macro_export]
 macro_rules! export_functions {
     ($(($FUNC:ident, $DOC:expr, $($arg:tt)*)),*) => {
         $(
@@ -69,6 +70,7 @@ macro_rules! export_functions {
 /// named `$NAME` which returns that singleton.
 ///
 /// This is used to ensure creating the list of `ScalarUDF` only happens once.
+#[macro_export]
 macro_rules! make_udf_function {
     ($UDF:ty, $NAME:ident) => {
         #[doc = concat!("Return a [`ScalarUDF`](datafusion_expr::ScalarUDF) implementation of ", stringify!($NAME))]

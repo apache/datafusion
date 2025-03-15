@@ -104,28 +104,55 @@ impl SessionStateDefaults {
 
     /// returns the list of default [`ScalarUDF']'s
     pub fn default_scalar_functions() -> Vec<Arc<ScalarUDF>> {
-        #[cfg_attr(not(feature = "nested_expressions"), allow(unused_mut))]
+        #[cfg_attr(
+            not(any(feature = "nested_expressions", feature = "spark")),
+            allow(unused_mut)
+        )]
         let mut functions: Vec<Arc<ScalarUDF>> = functions::all_default_functions();
 
         #[cfg(feature = "nested_expressions")]
         functions.append(&mut functions_nested::all_default_nested_functions());
+
+        #[cfg(feature = "spark")]
+        functions.append(&mut datafusion_spark::all_default_scalar_functions());
 
         functions
     }
 
     /// returns the list of default [`AggregateUDF']'s
     pub fn default_aggregate_functions() -> Vec<Arc<AggregateUDF>> {
-        functions_aggregate::all_default_aggregate_functions()
+        #[cfg_attr(not(feature = "spark"), allow(unused_mut))]
+        let mut functions: Vec<Arc<AggregateUDF>> =
+            functions_aggregate::all_default_aggregate_functions();
+
+        #[cfg(feature = "spark")]
+        functions.append(&mut datafusion_spark::all_default_aggregate_functions());
+
+        functions
     }
 
     /// returns the list of default [`WindowUDF']'s
     pub fn default_window_functions() -> Vec<Arc<WindowUDF>> {
-        functions_window::all_default_window_functions()
+        #[cfg_attr(not(feature = "spark"), allow(unused_mut))]
+        let mut functions: Vec<Arc<WindowUDF>> =
+            functions_window::all_default_window_functions();
+
+        #[cfg(feature = "spark")]
+        functions.append(&mut datafusion_spark::all_default_window_functions());
+
+        functions
     }
 
     /// returns the list of default [`TableFunction`]s
     pub fn default_table_functions() -> Vec<Arc<TableFunction>> {
-        functions_table::all_default_table_functions()
+        #[cfg_attr(not(feature = "spark"), allow(unused_mut))]
+        let mut functions: Vec<Arc<TableFunction>> =
+            functions_table::all_default_table_functions();
+
+        #[cfg(feature = "spark")]
+        functions.append(&mut datafusion_spark::all_default_table_functions());
+
+        functions
     }
 
     /// returns the list of default [`FileFormatFactory']'s
@@ -148,6 +175,7 @@ impl SessionStateDefaults {
         Self::register_scalar_functions(state);
         Self::register_array_functions(state);
         Self::register_aggregate_functions(state);
+        Self::register_spark_functions(state);
     }
 
     /// registers all the builtin scalar functions
@@ -168,6 +196,13 @@ impl SessionStateDefaults {
     pub fn register_aggregate_functions(state: &mut SessionState) {
         functions_aggregate::register_all(state)
             .expect("can not register aggregate functions");
+    }
+
+    /// registers all the builtin Spark functions
+    #[cfg_attr(not(feature = "spark"), allow(unused_variables))]
+    pub fn register_spark_functions(state: &mut SessionState) {
+        #[cfg(feature = "spark")]
+        datafusion_spark::register_all(state).expect("can not register Spark functions");
     }
 
     /// registers the default schema
