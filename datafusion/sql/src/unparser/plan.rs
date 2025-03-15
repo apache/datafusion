@@ -381,7 +381,13 @@ impl Unparser<'_> {
                         {
                             if matches!(
                                 projection.input.as_ref(),
-                                LogicalPlan::EmptyRelation(_)
+                                LogicalPlan::EmptyRelation(_) // It may be possible that UNNEST is used as a source for the query.
+                                                              // However, at this point, we don't yet know if it is just a single expression
+                                                              // from another source or if it's from UNNEST.
+                                                              //
+                                                              // Unnest(Projection(EmptyRelation)) denotes a case with `UNNEST([...])`,
+                                                              // which is normally safe to unnest as a table factor.
+                                                              // However, in the future, more comprehensive checks can be added here.
                             ) {
                                 return self.unnest_to_table_factor_sql(
                                     unnest, query, select, relation,
