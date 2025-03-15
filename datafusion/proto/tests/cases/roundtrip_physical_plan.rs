@@ -24,6 +24,7 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow::csv::WriterBuilder;
 use arrow::datatypes::{Fields, TimeUnit};
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion_expr::dml::InsertOp;
@@ -94,7 +95,7 @@ use datafusion_common::file_options::json_writer::JsonWriterOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{
-    internal_err, not_impl_err, DataFusionError, Result, UnnestOptions,
+    internal_err, not_impl_err, Constraints, DataFusionError, Result, UnnestOptions,
 };
 use datafusion_expr::{
     Accumulator, AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ScalarUDF,
@@ -740,20 +741,31 @@ fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
     let file_source = Arc::new(
         ParquetSource::new(options).with_predicate(Arc::clone(&file_schema), predicate),
     );
+    let statistics = Statistics {
+        num_rows: Precision::Inexact(100),
+        total_byte_size: Precision::Inexact(1024),
+        column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+            Field::new("col", DataType::Utf8, false),
+        ]))),
+    };
 
-    let scan_config =
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, file_source)
-            .with_file_groups(vec![vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )]])
-            .with_statistics(Statistics {
-                num_rows: Precision::Inexact(100),
-                total_byte_size: Precision::Inexact(1024),
-                column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
-                    vec![Field::new("col", DataType::Utf8, false)],
-                ))),
-            });
+    let mut scan_config = FileScanConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_schema,
+        file_groups: vec![vec![PartitionedFile::new(
+            "/path/to/file.parquet".to_string(),
+            1024,
+        )]],
+        constraints: Constraints::empty(),
+        projection: None,
+        limit: None,
+        table_partition_cols: vec![],
+        output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
+        file_source: file_source,
+    };
+    scan_config = scan_config.with_statistics(statistics);
 
     roundtrip_test(scan_config.build())
 }
@@ -795,19 +807,32 @@ fn roundtrip_parquet_exec_with_custom_predicate_expr() -> Result<()> {
             .with_predicate(Arc::clone(&file_schema), custom_predicate_expr),
     );
 
-    let scan_config =
-        FileScanConfig::new(ObjectStoreUrl::local_filesystem(), file_schema, file_source)
-            .with_file_groups(vec![vec![PartitionedFile::new(
-                "/path/to/file.parquet".to_string(),
-                1024,
-            )]])
-            .with_statistics(Statistics {
-                num_rows: Precision::Inexact(100),
-                total_byte_size: Precision::Inexact(1024),
-                column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(
-                    vec![Field::new("col", DataType::Utf8, false)],
-                ))),
-            });
+    let statistics = Statistics {
+        num_rows: Precision::Inexact(100),
+        total_byte_size: Precision::Inexact(1024),
+        column_statistics: Statistics::unknown_column(&Arc::new(Schema::new(vec![
+            Field::new("col", DataType::Utf8, false),
+        ]))),
+    };
+
+    let mut scan_config = FileScanConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_schema,
+        file_groups: vec![vec![PartitionedFile::new(
+            "/path/to/file.parquet".to_string(),
+            1024,
+        )]],
+        constraints: Constraints::empty(),
+
+        projection: None,
+        limit: None,
+        table_partition_cols: vec![],
+        output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
+        file_source: file_source,
+    };
+    scan_config = scan_config.with_statistics(statistics);
 
     #[derive(Debug, Clone, Eq)]
     struct CustomPredicateExpr {
@@ -1594,18 +1619,23 @@ async fn roundtrip_projection_source() -> Result<()> {
 
     let statistics = Statistics::new_unknown(&schema);
 
-    let file_source = ParquetSource::default().with_statistics(statistics.clone());
-    let scan_config = FileScanConfig::new(
-        ObjectStoreUrl::local_filesystem(),
-        schema.clone(),
-        file_source,
-    )
-    .with_file_groups(vec![vec![PartitionedFile::new(
-        "/path/to/file.parquet".to_string(),
-        1024,
-    )]])
-    .with_statistics(statistics)
-    .with_projection(Some(vec![0, 1, 2]));
+    let source = ParquetSource::default().with_statistics(statistics.clone());
+    let scan_config = FileScanConfig {
+        object_store_url: ObjectStoreUrl::local_filesystem(),
+        file_groups: vec![vec![PartitionedFile::new(
+            "/path/to/file.parquet".to_string(),
+            1024,
+        )]],
+        constraints: Constraints::empty(),
+        file_schema: schema.clone(),
+        projection: Some(vec![0, 1, 2]),
+        limit: None,
+        table_partition_cols: vec![],
+        output_ordering: vec![],
+        file_compression_type: FileCompressionType::UNCOMPRESSED,
+        new_lines_in_values: false,
+        file_source: source,
+    };
 
     let filter = Arc::new(
         FilterExec::try_new(
