@@ -2679,24 +2679,16 @@ impl Union {
         Ok(Union { inputs, schema })
     }
 
-    /// When constructing a `UNION BY NAME`, we may need to wrap inputs
+    /// When constructing a `UNION BY NAME`, we need to wrap inputs
     /// in an additional `Projection` to account for absence of columns
-    /// in input schemas.
+    /// in input schemas or differing projection orders.
     fn rewrite_inputs_from_schema(
-        schema: &DFSchema,
+        schema: &Arc<DFSchema>,
         inputs: Vec<Arc<LogicalPlan>>,
     ) -> Result<Vec<Arc<LogicalPlan>>> {
         let schema_width = schema.iter().count();
         let mut wrapped_inputs = Vec::with_capacity(inputs.len());
         for input in inputs {
-            // If the input plan's schema contains the same number of fields
-            // as the derived schema, then it does not to be wrapped in an
-            // additional `Projection`.
-            if input.schema().iter().count() == schema_width {
-                wrapped_inputs.push(input);
-                continue;
-            }
-
             // Any columns that exist within the derived schema but do not exist
             // within an input's schema should be replaced with `NULL` aliased
             // to the appropriate column in the derived schema.
@@ -2711,9 +2703,9 @@ impl Union {
                     expr.push(Expr::Literal(ScalarValue::Null).alias(column.name()));
                 }
             }
-            wrapped_inputs.push(Arc::new(LogicalPlan::Projection(Projection::try_new(
-                expr, input,
-            )?)));
+            wrapped_inputs.push(Arc::new(LogicalPlan::Projection(
+                Projection::try_new_with_schema(expr, input, Arc::clone(schema))?,
+            )));
         }
 
         Ok(wrapped_inputs)
