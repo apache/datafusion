@@ -350,6 +350,8 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Install Protobuf Compiler
         run: sudo apt-get install -y protobuf-compiler
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
       - name: Run doctests
         run: cargo +nightly llvm-cov --doctests --profile ci --doc --features avro,json
       - name: Upload coverage reports to Codecov
