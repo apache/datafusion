@@ -577,6 +577,7 @@ impl SessionState {
                     return Ok(LogicalPlan::Explain(Explain {
                         verbose: e.verbose,
                         plan: Arc::clone(&e.plan),
+                        explain_format: e.explain_format.clone(),
                         stringified_plans,
                         schema: Arc::clone(&e.schema),
                         logical_optimization_succeeded: false,
@@ -612,6 +613,7 @@ impl SessionState {
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose: e.verbose,
+                explain_format: e.explain_format.clone(),
                 plan,
                 stringified_plans,
                 schema: Arc::clone(&e.schema),
