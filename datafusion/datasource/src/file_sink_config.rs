@@ -86,6 +86,8 @@ pub trait FileSink: DataSink {
 /// The base configurations to provide when creating a physical plan for
 /// writing to any given file format.
 pub struct FileSinkConfig {
+    /// The unresolved URL specified by the user
+    pub original_url: String,
     /// Object store URL, used to get an ObjectStore instance
     pub object_store_url: ObjectStoreUrl,
     /// A vector of [`PartitionedFile`] structs, each representing a file partition
