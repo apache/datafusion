@@ -286,3 +286,71 @@ fn test_invalid_function() -> Result<()> {
     assert_eq!(diag.span, Some(spans["whole"]));
     Ok(())
 }
+#[test]
+fn test_scalar_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Error>> {
+    let query = "SELECT (SELECT 1 AS /*x*/x/*x*/, 2 AS /*y*/y/*y*/) AS col";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+
+    assert_eq!(
+        diag.message,
+        "Too many columns! The subquery should only return one column"
+    );
+
+    let expected_span = Some(Span {
+        start: spans["x"].start,
+        end: spans["y"].end,
+    });
+    assert_eq!(diag.span, expected_span);
+    assert_eq!(
+        diag.notes
+            .iter()
+            .map(|n| (n.message.as_str(), n.span))
+            .collect::<Vec<_>>(),
+        vec![("Extra column 1", Some(spans["y"]))]
+    );
+    assert_eq!(
+        diag.helps
+            .iter()
+            .map(|h| h.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Select only one column in the subquery"]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_in_subquery_multiple_columns() -> Result<(), Box<dyn std::error::Error>> {
+    // This query uses an IN subquery with multiple columns - this should trigger an error
+    let query = "SELECT * FROM person WHERE id IN (SELECT /*id*/id/*id*/, /*first*/first_name/*first*/ FROM person)";
+    let spans = get_spans(query);
+    let diag = do_query(query);
+
+    assert_eq!(
+        diag.message,
+        "Too many columns! The subquery should only return one column"
+    );
+
+    let expected_span = Some(Span {
+        start: spans["id"].start,
+        end: spans["first"].end,
+    });
+    assert_eq!(diag.span, expected_span);
+    assert_eq!(
+        diag.notes
+            .iter()
+            .map(|n| (n.message.as_str(), n.span))
+            .collect::<Vec<_>>(),
+        vec![("Extra column 1", Some(spans["first"]))]
+    );
+    assert_eq!(
+        diag.helps
+            .iter()
+            .map(|h| h.message.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Select only one column in the subquery"]
+    );
+
+    Ok(())
+}

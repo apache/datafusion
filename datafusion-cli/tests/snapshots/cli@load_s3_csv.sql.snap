@@ -1,0 +1,26 @@
+---
+source: tests/cli_integration.rs
+info:
+  program: datafusion-cli
+  args: []
+  stdin: "CREATE EXTERNAL TABLE CARS\nSTORED AS CSV\nLOCATION 's3://data/cars.csv';\n\nSELECT * FROM CARS limit 1;"
+input_file: tests/sql/load_s3_csv.sql
+---
+success: true
+exit_code: 0
+----- stdout -----
+[CLI_VERSION]
+0 row(s) fetched. 
+[ELAPSED]
+
++-----+-------+---------------------+
+| car | speed | time                |
++-----+-------+---------------------+
+| red | 20.0  | 1996-04-12T12:05:03 |
++-----+-------+---------------------+
+1 row(s) fetched. 
+[ELAPSED]
+
+\q
+
+----- stderr -----

@@ -82,8 +82,8 @@ impl ScalarUDFImpl for UnionExtractFun {
     }
 
     fn return_type(&self, _: &[DataType]) -> Result<DataType> {
-        // should be using return_type_from_exprs and not calling the default implementation
-        internal_err!("union_extract should return type from exprs")
+        // should be using return_type_from_args and not calling the default implementation
+        internal_err!("union_extract should return type from args")
     }
 
     fn return_type_from_args(&self, args: ReturnTypeArgs) -> Result<ReturnInfo> {

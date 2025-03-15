@@ -48,9 +48,9 @@ use datafusion_expr::{
     CreateExternalTable as PlanCreateExternalTable, CreateFunction, CreateFunctionBody,
     CreateIndex as PlanCreateIndex, CreateMemoryTable, CreateView, Deallocate,
     DescribeTable, DmlStatement, DropCatalogSchema, DropFunction, DropTable, DropView,
-    EmptyRelation, Execute, Explain, Expr, ExprSchemable, Filter, LogicalPlan,
-    LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable, SortExpr,
-    Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
+    EmptyRelation, Execute, Explain, ExplainFormat, Expr, ExprSchemable, Filter,
+    LogicalPlan, LogicalPlanBuilder, OperateFunctionArg, PlanType, Prepare, SetVariable,
+    SortExpr, Statement as PlanStatement, ToStringifiedPlan, TransactionAccessMode,
     TransactionConclusion, TransactionEnd, TransactionIsolationLevel, TransactionStart,
     Volatility, WriteOp,
 };
@@ -177,8 +177,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             DFStatement::Explain(ExplainStatement {
                 verbose,
                 analyze,
+                format,
                 statement,
-            }) => self.explain_to_plan(verbose, analyze, *statement),
+            }) => self.explain_to_plan(verbose, analyze, format, *statement),
         }
     }
 
@@ -214,11 +215,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 verbose,
                 statement,
                 analyze,
-                format: _,
+                format,
                 describe_alias: _,
                 ..
             } => {
-                self.explain_to_plan(verbose, analyze, DFStatement::Statement(statement))
+                let format = format.map(|format| format.to_string());
+                let statement = DFStatement::Statement(statement);
+                self.explain_to_plan(verbose, analyze, format, statement)
             }
             Statement::Query(query) => self.query_to_plan(*query, planner_context),
             Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
@@ -1564,17 +1567,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         verbose: bool,
         analyze: bool,
+        format: Option<String>,
         statement: DFStatement,
     ) -> Result<LogicalPlan> {
         let plan = self.statement_to_plan(statement)?;
         if matches!(plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
+
         let plan = Arc::new(plan);
         let schema = LogicalPlan::explain_schema();
         let schema = schema.to_dfschema_ref()?;
 
+        if verbose && format.is_some() {
+            return plan_err!("EXPLAIN VERBOSE with FORMAT is not supported");
+        }
+
         if analyze {
+            if format.is_some() {
+                return plan_err!("EXPLAIN ANALYZE with FORMAT is not supported");
+            }
             Ok(LogicalPlan::Analyze(Analyze {
                 verbose,
                 input: plan,
@@ -1583,8 +1595,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             let stringified_plans =
                 vec![plan.to_stringified(PlanType::InitialLogicalPlan)];
+
+            // default to configuration value
+            let options = self.context_provider.options();
+            let format = format.as_ref().unwrap_or(&options.explain.format);
+
+            let format: ExplainFormat = format.parse()?;
+
             Ok(LogicalPlan::Explain(Explain {
                 verbose,
+                explain_format: format,
                 plan,
                 stringified_plans,
                 schema,
