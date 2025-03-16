@@ -622,7 +622,8 @@ impl DFSchema {
         self_fields.zip(other_fields).all(|((q1, f1), (q2, f2))| {
             q1 == q2
                 && f1.name() == f2.name()
-                && Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
+                && (Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
+                || !can_cast_types(f2.data_type(), f1.data_type()))
         })
     }
 
