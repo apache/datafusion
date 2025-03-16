@@ -75,14 +75,12 @@ async fn create_test_table() -> Result<DataFrame> {
 }
 
 /// Executes an expression on the test dataframe as a select.
-/// Compares formatted output of a record batch with an expected
-/// vector of strings, using the assert_batch_eq! macro
-
 async fn get_batches(expr: Expr, limit: usize) -> Result<Vec<RecordBatch>> {
     let df = create_test_table().await?;
     let df = df.select(vec![expr])?.limit(0, Some(limit))?;
     df.collect().await
 }
+
 #[tokio::test]
 async fn test_fn_ascii() -> Result<()> {
     let expr = ascii(col("a"));
