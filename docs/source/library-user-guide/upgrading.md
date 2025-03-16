@@ -214,10 +214,10 @@ Elapsed 0.005 seconds.
 
 ### Changes to array scalar function signatures
 
-Datafusion 46 has changed the way scalar array function signatures are
+DataFusion 46 has changed the way scalar array function signatures are
 declared. Previously, functions needed to select from a list of predefined
 signatures within the `ArrayFunctionSignature` enum. Now the signatures
-can be defined via a `Vector` of psuedo-types, which each correspond to a
+can be defined via a `Vec` of psuedo-types, which each correspond to a
 single argument. Those psuedo-types are the variants of the
 `ArrayFunctionArgument` enum and are as follows:
 
