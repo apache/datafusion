@@ -82,6 +82,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::datum::compare_op_for_nested;
 
 use ahash::RandomState;
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use futures::{ready, Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
@@ -672,7 +673,9 @@ impl DisplayAs for HashJoinExec {
                 let on = self
                     .on
                     .iter()
-                    .map(|(c1, c2)| format!("({} = {})", c1, c2))
+                    .map(|(c1, c2)| {
+                        format!("({} = {})", fmt_sql(c1.as_ref()), fmt_sql(c2.as_ref()))
+                    })
                     .collect::<Vec<String>>()
                     .join(", ");
 
