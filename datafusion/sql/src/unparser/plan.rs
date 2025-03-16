@@ -675,11 +675,10 @@ impl Unparser<'_> {
                         ))));
 
                         let negated = match join.join_type {
-                            JoinType::LeftSemi => false,
-                            JoinType::LeftAnti => true,
-                            JoinType::LeftMark => false,
-                            JoinType::RightSemi => false,
-                            JoinType::RightAnti => true,
+                            JoinType::LeftSemi
+                            | JoinType::RightSemi
+                            | JoinType::LeftMark => false,
+                            JoinType::LeftAnti | JoinType::RightAnti => true,
                             _ => unreachable!(),
                         };
                         let exists_expr = ast::Expr::Exists {
