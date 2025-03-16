@@ -19,7 +19,6 @@
 
 use arrow::array::{
     Array, ArrayRef, GenericListArray, ListArray, OffsetSizeTrait, UInt64Array,
-    UInt64Builder,
 };
 use arrow::datatypes::{
     DataType,
@@ -220,17 +219,10 @@ pub fn array_ndims_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     fn general_list_ndims<O: OffsetSizeTrait>(
         array: &GenericListArray<O>,
     ) -> Result<ArrayRef> {
-        let mut builder = UInt64Builder::with_capacity(array.len());
         let ndims = list_ndims(array.data_type());
-        for arr in array.iter() {
-            if arr.is_some() {
-                builder.append_value(ndims)
-            } else {
-                builder.append_null()
-            }
-        }
-
-        Ok(Arc::new(builder.finish()))
+        let data = vec![ndims; array.len()];
+        let result = UInt64Array::new(data.into(), array.nulls().cloned());
+        Ok(Arc::new(result))
     }
 
     match array.data_type() {
