@@ -54,13 +54,13 @@ INSERT INTO t2 VALUES (2, 2), (4, 4);
 
 # Test binding
 query I
-SELECT t1.x FROM t1 UNION BY NAME SELECT x FROM t1 ORDER BY t1.x;
+SELECT t1.x FROM t1 UNION BY NAME SELECT x FROM t1 ORDER BY x;
 ----
 1
 3
 
 query I
-SELECT t1.x FROM t1 UNION ALL BY NAME SELECT x FROM t1 ORDER BY t1.x;
+SELECT t1.x FROM t1 UNION ALL BY NAME SELECT x FROM t1 ORDER BY x;
 ----
 1
 1
@@ -70,13 +70,13 @@ SELECT t1.x FROM t1 UNION ALL BY NAME SELECT x FROM t1 ORDER BY t1.x;
 3
 
 query I
-SELECT x FROM t1 UNION BY NAME SELECT x FROM t1 ORDER BY t1.x;
+SELECT x FROM t1 UNION BY NAME SELECT x FROM t1 ORDER BY x;
 ----
 1
 3
 
 query I
-SELECT x FROM t1 UNION ALL BY NAME SELECT x FROM t1 ORDER BY t1.x;
+SELECT x FROM t1 UNION ALL BY NAME SELECT x FROM t1 ORDER BY x;
 ----
 1
 1
@@ -124,8 +124,8 @@ NULL 3
 
 # Ambiguous name
 
-statement error DataFusion error: Schema error: No field named t1.x. Valid fields are a, b.
-SELECT x AS a FROM t1 UNION BY NAME SELECT x AS b FROM t1 ORDER BY t1.x;
+statement error DataFusion error: Schema error: No field named x. Valid fields are a, b.
+SELECT x AS a FROM t1 UNION BY NAME SELECT x AS b FROM t1 ORDER BY x;
 
 query II
 (SELECT y FROM t1 UNION ALL SELECT x FROM t1) UNION BY NAME (SELECT z FROM t2 UNION ALL SELECT y FROM t2) ORDER BY y, z;

@@ -774,7 +774,7 @@ SELECT * FROM v
 ORDER BY 1, 2;
 ----
 logical_plan
-01)Sort: u.m ASC NULLS LAST, u.t ASC NULLS LAST
+01)Sort: m ASC NULLS LAST, t ASC NULLS LAST
 02)--Union
 03)----SubqueryAlias: u
 04)------Projection: Int64(0) AS m, m0.t
@@ -925,10 +925,10 @@ ORDER BY SUM(column1)
 
 # ORDER BY with a GROUP BY clause
 query I
-SELECT SUM(column1) 
-  FROM foo 
-GROUP BY column2 
-ORDER BY SUM(column1) 
+SELECT SUM(column1)
+  FROM foo
+GROUP BY column2
+ORDER BY SUM(column1)
 ----
 0
 2
@@ -940,12 +940,12 @@ ORDER BY SUM(column1)
 
 # ORDER BY with a GROUP BY clause and a HAVING clause
 query I
-SELECT 
-  SUM(column1) 
-FROM foo 
-GROUP BY column2 
-HAVING SUM(column1) < 3 
-ORDER BY SUM(column1) 
+SELECT
+  SUM(column1)
+FROM foo
+GROUP BY column2
+HAVING SUM(column1) < 3
+ORDER BY SUM(column1)
 ----
 0
 2
@@ -1071,7 +1071,7 @@ physical_plan
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
-drop table ordered_table; 
+drop table ordered_table;
 
 
 # ABS(x) breaks the ordering if x's range contains both negative and positive values.
@@ -1107,7 +1107,7 @@ physical_plan
 05)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[c], output_ordering=[c@0 ASC NULLS LAST], file_type=csv, has_header=true
 
 statement ok
-drop table ordered_table; 
+drop table ordered_table;
 
 # ABS(x) preserves the ordering if x's range falls into positive values.
 # Since x is defined as INT UNSIGNED, its range is assumed to be from 0 to INF.
@@ -1239,15 +1239,14 @@ order by d, c, a, a0, b
 limit 2;
 ----
 logical_plan
-01)Projection: t1.b, t1.c, t1.a, t1.a0
-02)--Sort: t1.d ASC NULLS LAST, t1.c ASC NULLS LAST, t1.a ASC NULLS LAST, t1.a0 ASC NULLS LAST, t1.b ASC NULLS LAST, fetch=2
-03)----Union
-04)------SubqueryAlias: t1
-05)--------Projection: ordered_table.b, ordered_table.c, ordered_table.a, Int32(NULL) AS a0, ordered_table.d
-06)----------TableScan: ordered_table projection=[a, b, c, d]
-07)------SubqueryAlias: t2
-08)--------Projection: ordered_table.b, ordered_table.c, Int32(NULL) AS a, ordered_table.a0, ordered_table.d
-09)----------TableScan: ordered_table projection=[a0, b, c, d]
+01)Sort: d ASC NULLS LAST, c ASC NULLS LAST, a ASC NULLS LAST, a0 ASC NULLS LAST, b ASC NULLS LAST, fetch=2
+02)--Union
+03)----SubqueryAlias: t1
+04)------Projection: ordered_table.b, ordered_table.c, ordered_table.a, Int32(NULL) AS a0, ordered_table.d
+05)--------TableScan: ordered_table projection=[a, b, c, d]
+06)----SubqueryAlias: t2
+07)------Projection: ordered_table.b, ordered_table.c, Int32(NULL) AS a, ordered_table.a0, ordered_table.d
+08)--------TableScan: ordered_table projection=[a0, b, c, d]
 physical_plan
 01)ProjectionExec: expr=[b@0 as b, c@1 as c, a@2 as a, a0@3 as a0]
 02)--SortPreservingMergeExec: [d@4 ASC NULLS LAST, c@1 ASC NULLS LAST, a@2 ASC NULLS LAST, a0@3 ASC NULLS LAST, b@0 ASC NULLS LAST], fetch=2
