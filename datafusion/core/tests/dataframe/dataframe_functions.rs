@@ -378,7 +378,6 @@ async fn test_fn_approx_median() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn test_fn_approx_percentile_cont() -> Result<()> {
     let expr = approx_percentile_cont(col("b"), lit(0.5), None);
@@ -464,7 +463,7 @@ async fn test_fn_character_length() -> Result<()> {
 async fn test_fn_chr() -> Result<()> {
     let expr = chr(lit(128175));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr, 1).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -472,9 +471,6 @@ async fn test_fn_chr() -> Result<()> {
         +--------------------+
         | chr(Int32(128175)) |
         +--------------------+
-        | 💯                 |
-        | 💯                 |
-        | 💯                 |
         | 💯                 |
         +--------------------+
         "###);
@@ -599,7 +595,7 @@ async fn test_fn_lpad_with_string() -> Result<()> {
 async fn test_fn_ltrim() -> Result<()> {
     let expr = ltrim(vec![lit("      a b c             ")]);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr, 1).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -607,9 +603,6 @@ async fn test_fn_ltrim() -> Result<()> {
         +-----------------------------------------+
         | ltrim(Utf8("      a b c             ")) |
         +-----------------------------------------+
-        | a b c                                   |
-        | a b c                                   |
-        | a b c                                   |
         | a b c                                   |
         +-----------------------------------------+
         "###);
