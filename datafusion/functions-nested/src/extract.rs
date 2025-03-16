@@ -165,10 +165,7 @@ impl ScalarUDFImpl for ArrayElement {
         match &arg_types[0] {
             Null => Ok(Null),
             List(field) | LargeList(field) => Ok(field.data_type().clone()),
-            arg_type => plan_err!(
-                "{} does not support an argument of type {arg_type}",
-                self.name()
-            ),
+            arg_type => plan_err!("{} does not support type {arg_type}", self.name()),
         }
     }
 
@@ -211,7 +208,7 @@ fn array_element_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             general_array_element::<i64>(array, indexes)
         }
         arg_type => {
-            exec_err!("array_element does not support an argument of type {arg_type}")
+            exec_err!("array_element does not support type {arg_type}")
         }
     }
 }

@@ -296,10 +296,7 @@ impl ScalarUDFImpl for ArrayConcat {
                 DataType::Null | DataType::List(_) | DataType::FixedSizeList(..) => (),
                 DataType::LargeList(_) => large_list = true,
                 arg_type => {
-                    return plan_err!(
-                        "{} does not support an argument of type {arg_type}",
-                        self.name()
-                    )
+                    return plan_err!("{} does not support type {arg_type}", self.name())
                 }
             }
 
@@ -446,28 +443,22 @@ fn concat_internal<O: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 /// Array_append SQL function
 pub(crate) fn array_append_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [array, values] = take_function_args("array_append", args)?;
-
     match array.data_type() {
         DataType::Null => make_array_inner(&[Arc::clone(values)]),
         DataType::List(_) => general_append_and_prepend::<i32>(args, true),
         DataType::LargeList(_) => general_append_and_prepend::<i64>(args, true),
-        arg_type => {
-            exec_err!("array_append does not support an argument of type {arg_type}")
-        }
+        arg_type => exec_err!("array_append does not support type {arg_type}"),
     }
 }
 
 /// Array_prepend SQL function
 pub(crate) fn array_prepend_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     let [values, array] = take_function_args("array_prepend", args)?;
-
     match array.data_type() {
         DataType::Null => make_array_inner(&[Arc::clone(values)]),
         DataType::List(_) => general_append_and_prepend::<i32>(args, false),
         DataType::LargeList(_) => general_append_and_prepend::<i64>(args, false),
-        arg_type => {
-            exec_err!("array_prepend does not support an argument of type {arg_type}")
-        }
+        arg_type => exec_err!("array_prepend does not support type {arg_type}"),
     }
 }
 
