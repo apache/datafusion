@@ -511,13 +511,13 @@ mod tests {
                 Check optimizer-specific invariants after optimizer rule: get table_scan rule\n\
                 caused by\n\
                 Internal error: Failed due to a difference in schemas: Error during planning: Schema mismatch: \
-                the schema length are not same Expected schema length: 3, got: 0, original schema: DFSchema \
-                { inner: Schema { fields: [], metadata: {} }, field_qualifiers: [], functional_dependencies: FunctionalDependencies { deps: [] } }, new schema: DFSchema { inner: Schema { fields: [\
+                the schema length are not same Expected schema length: 3, got: 0, original schema: DFSchema { inner: Schema { fields: [], metadata: {} }, \
+                field_qualifiers: [], functional_dependencies: FunctionalDependencies { deps: [] } }, new schema: DFSchema { inner: Schema { fields: [\
                 Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
                 Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
                 Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }\
-                ], metadata: {} }, field_qualifiers: [Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" }), \
-                Some(Bare { table: \"test\" })], functional_dependencies: FunctionalDependencies { deps: [] } }."
+                ], metadata: {} }, field_qualifiers: [Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" })], \
+                functional_dependencies: FunctionalDependencies { deps: [] } }."
         ));
     }
 
