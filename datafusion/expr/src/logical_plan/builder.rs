@@ -776,6 +776,7 @@ impl LogicalPlanBuilder {
             &missing_cols,
             is_distinct,
         )?;
+
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
             input: Arc::new(plan),

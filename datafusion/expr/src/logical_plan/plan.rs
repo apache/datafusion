@@ -2817,6 +2817,7 @@ impl Union {
             }
         }
 
+        let mut name_counts: HashMap<String, usize> = HashMap::new();
         let union_fields = (0..fields_count)
             .map(|i| {
                 let fields = inputs
@@ -2824,7 +2825,8 @@ impl Union {
                     .map(|input| input.schema().field(i))
                     .collect::<Vec<_>>();
                 let first_field = fields[0];
-                let name = first_field.name();
+                let base_name = first_field.name().to_string();
+
                 let data_type = if loose_types {
                     // TODO apply type coercion here, or document why it's better to defer
                     // temporarily use the data type from the left input and later rely on the analyzer to
@@ -2847,13 +2849,21 @@ impl Union {
                     )?
                 };
                 let nullable = fields.iter().any(|field| field.is_nullable());
-                let mut field = Field::new(name, data_type.clone(), nullable);
+
+                // Generate unique field name
+                let name = if let Some(count) = name_counts.get_mut(&base_name) {
+                    *count += 1;
+                    format!("{}_{}", base_name, count)
+                } else {
+                    name_counts.insert(base_name.clone(), 0);
+                    base_name
+                };
+
+                let mut field = Field::new(&name, data_type.clone(), nullable);
                 let field_metadata =
                     intersect_maps(fields.iter().map(|field| field.metadata()));
                 field.set_metadata(field_metadata);
-                // TODO reusing table reference from the first schema is probably wrong
-                let table_reference = first_schema.qualified_field(i).0.cloned();
-                Ok((table_reference, Arc::new(field)))
+                Ok((None, Arc::new(field)))
             })
             .collect::<Result<_>>()?;
         let union_schema_metadata =
