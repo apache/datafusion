@@ -605,7 +605,7 @@ impl DFSchema {
     }
 
     /// Returns true if the two schemas have the same qualified named
-    /// fields with the same data types. Returns false otherwise.
+    /// fields with the compatible data types. Returns false otherwise.
     ///
     /// This is a specialized version of Eq that ignores differences
     /// in nullability and metadata.
