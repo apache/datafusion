@@ -22,12 +22,12 @@ use datafusion_expr::planner::{
 use sqlparser::ast::{
     AccessExpr, BinaryOperator, CastFormat, CastKind, DataType as SQLDataType,
     DictionaryField, Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias, MapEntry,
-    Spanned, StructField, Subscript, TrimWhereField, Value,
+    StructField, Subscript, TrimWhereField, Value,
 };
 
 use datafusion_common::{
-    internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, DFSchema,
-    Result, ScalarValue, Span,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err, DFSchema, Result,
+    ScalarValue,
 };
 
 use datafusion_expr::expr::ScalarFunction;
@@ -1003,66 +1003,41 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn extract_root_and_access_chain(
         &self,
         root: SQLExpr,
-        access_chain: Vec<AccessExpr>,
+        mut access_chain: Vec<AccessExpr>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<(Expr, Vec<AccessExpr>)> {
-        if let SQLExpr::Identifier(sqlparser::ast::Ident { value: id, .. }) = &root {
-            let mut ids = vec![id.clone()];
-            for access in &access_chain {
-                if let AccessExpr::Dot(SQLExpr::Identifier(sqlparser::ast::Ident {
-                    value: id,
-                    ..
-                })) = access
-                {
-                    ids.push(id.clone());
-                } else {
-                    break;
-                }
-            }
+        let SQLExpr::Identifier(root_ident) = root else {
+            let root = self.sql_expr_to_logical_expr(root, schema, planner_context)?;
+            return Ok((root, access_chain));
+        };
 
-            if ids.len() > 1 {
-                // maybe it's a compound identifier
-                if let Some((field, Some(qualifier), nested_names)) =
-                    identifier::search_dfschema(&ids, schema)
-                {
-                    let span_num = ids.len() - nested_names.len();
-                    let mut idx = 0;
-                    let mut spans = vec![];
-                    if let Some(s) = Span::try_from_sqlparser_span(root.span()) {
-                        spans.push(s);
-                    }
-                    idx += 1;
-
-                    let mut nested_access_chain = vec![];
-                    for access in &access_chain {
-                        if idx < span_num {
-                            idx += 1;
-                            if let AccessExpr::Dot(expr) = access {
-                                if let Some(s) =
-                                    Span::try_from_sqlparser_span(expr.span())
-                                {
-                                    spans.push(s);
-                                }
-                            } else {
-                                unreachable!();
-                            }
-                        } else {
-                            nested_access_chain.push(access.clone());
-                        }
-                    }
-
-                    let root = Expr::Column(Column {
-                        name: field.name().clone(),
-                        relation: Some(qualifier.clone()),
-                        spans: datafusion_common::Spans(spans),
-                    });
-                    let access_chain = nested_access_chain;
-                    return Ok((root, access_chain));
-                }
+        let mut compound_idents = vec![root_ident];
+        let first_non_ident = access_chain
+            .iter()
+            .position(|access| !matches!(access, AccessExpr::Dot(SQLExpr::Identifier(_))))
+            .unwrap_or(access_chain.len());
+        for access in access_chain.drain(0..first_non_ident) {
+            if let AccessExpr::Dot(SQLExpr::Identifier(ident)) = access {
+                compound_idents.push(ident);
+            } else {
+                return internal_err!("Expected identifier in access chain");
             }
         }
-        let root = self.sql_expr_to_logical_expr(root, schema, planner_context)?;
+
+        let root = if compound_idents.len() == 1 {
+            self.sql_identifier_to_expr(
+                compound_idents.pop().unwrap(),
+                schema,
+                planner_context,
+            )?
+        } else {
+            self.sql_compound_identifier_to_expr(
+                compound_idents,
+                schema,
+                planner_context,
+            )?
+        };
         Ok((root, access_chain))
     }
 
@@ -1073,7 +1048,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let (mut root, access_chain) = self.extract_root_and_access_chain(
+        let (root, access_chain) = self.extract_root_and_access_chain(
             root,
             access_chain,
             schema,
@@ -1152,45 +1127,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         }
                     }
                 }
-                AccessExpr::Dot(expr) => {
-                    let expr =
-                        self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
-                    match expr {
-                        Expr::Column(Column {
-                            name,
-                            relation,
-                            spans,
-                        }) => {
-                            if let Some(relation) = &relation {
-                                // If the first part of the dot access is a column reference, we should
-                                // check if the column is from the same table as the root expression.
-                                // If it is, we should replace the root expression with the column reference.
-                                // Otherwise, we should treat the dot access as a named field access.
-                                if relation.table() == root.schema_name().to_string() {
-                                    root = Expr::Column(Column {
-                                        name,
-                                        relation: Some(relation.clone()),
-                                        spans,
-                                    });
-                                    Ok(None)
-                                } else {
-                                    plan_err!(
-                                        "table name mismatch: {} != {}",
-                                        relation.table(),
-                                        root.schema_name()
-                                    )
-                                }
-                            } else {
-                                Ok(Some(GetFieldAccess::NamedStructField {
-                                    name: ScalarValue::from(name),
-                                }))
-                            }
-                        }
-                        _ => not_impl_err!(
-                            "Dot access not supported for non-column expr: {expr:?}"
-                        ),
+                AccessExpr::Dot(expr) => match expr {
+                    SQLExpr::Value(
+                        Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
+                    ) => Ok(Some(GetFieldAccess::NamedStructField {
+                        name: ScalarValue::from(s),
+                    })),
+                    _ => {
+                        not_impl_err!(
+                            "Dot access not supported for non-string expr: {expr:?}"
+                        )
                     }
-                }
+                },
             })
             .collect::<Result<Vec<_>>>()?;
 

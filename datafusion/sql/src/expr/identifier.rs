@@ -290,7 +290,7 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
     }
 }
 
-pub(crate) fn search_dfschema<'ids, 'schema>(
+fn search_dfschema<'ids, 'schema>(
     ids: &'ids [String],
     schema: &'schema DFSchema,
 ) -> Option<(
