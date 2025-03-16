@@ -107,6 +107,7 @@ impl FileOpener for ParquetOpener {
 
         let projected_schema =
             SchemaRef::from(self.table_schema.project(&self.projection)?);
+        let schema_adapter_factory = Arc::clone(&self.schema_adapter_factory);
         let schema_adapter = self
             .schema_adapter_factory
             .create(projected_schema, Arc::clone(&self.table_schema));
@@ -173,7 +174,7 @@ impl FileOpener for ParquetOpener {
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
-                    Arc::clone(&schema_mapping),
+                    schema_adapter_factory.clone(),
                 );
 
                 match row_filter {

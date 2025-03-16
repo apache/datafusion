@@ -52,7 +52,10 @@ mod tests {
     use datafusion_datasource::file_format::FileFormat;
     use datafusion_datasource::file_meta::FileMeta;
     use datafusion_datasource::file_scan_config::FileScanConfig;
-    use datafusion_datasource::schema_adapter::{DefaultSchemaAdapterFactory, MissingColumnGenerator, MissingColumnGeneratorFactory, SchemaAdapterFactory};
+    use datafusion_datasource::schema_adapter::{
+        DefaultSchemaAdapterFactory, MissingColumnGenerator,
+        MissingColumnGeneratorFactory, SchemaAdapterFactory,
+    };
     use datafusion_datasource::source::DataSourceExec;
 
     use datafusion_datasource::{FileRange, PartitionedFile};
@@ -104,7 +107,10 @@ mod tests {
             Default::default()
         }
 
-        fn with_schema_adapter_factory(mut self, schema_adapter_factory: Arc<dyn SchemaAdapterFactory>) -> Self {
+        fn with_schema_adapter_factory(
+            mut self,
+            schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+        ) -> Self {
             self.schema_adapter_factory = Some(schema_adapter_factory);
             self
         }
@@ -237,6 +243,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pushdown_with_missing_column_in_file() {
+        let c1: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
+
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(file_schema.clone(), vec![c1]).unwrap();
+
+        // Since c2 is missing from the file and we didn't supply a custom `SchemaAdapterFactory`,
+        // the default behavior is to fill in missing columns with nulls.
+        // Thus this predicate will come back as false.
+        let filter = col("c1").eq(lit(1_i32)).and(col("c2").eq(lit(1_i32)));
+
+        let read = RoundTrip::new()
+            .with_schema(table_schema)
+            .with_predicate(filter)
+            .with_pushdown_predicate()
+            .round_trip_to_batches(vec![batch])
+            .await
+            .unwrap();
+        let total_rows = read.iter().map(|b| b.num_rows()).sum::<usize>();
+        assert_eq!(total_rows, 0, "Expected no rows to match the predicate");
+    }
+
+    #[tokio::test]
     async fn test_pushdown_with_column_generators() {
         #[derive(Debug, Clone)]
         struct ConstantMissingColumnGenerator {
@@ -277,12 +313,10 @@ mod tests {
             }
         }
 
-        let c1: ArrayRef =
-            Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let c1: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
 
-        let file_schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, true),
-        ]));
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
 
         let table_schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::Int32, true),
@@ -293,14 +327,15 @@ mod tests {
 
         let filter = col("c2").eq(lit(1_i32));
 
-        let missing_column_generator_factory = Arc::new(ConstantMissingColumnGeneratorFactory {
-            column: "c2".to_string(),
-            default_value: ScalarValue::Int32(Some(1)),
-        });
+        let missing_column_generator_factory =
+            Arc::new(ConstantMissingColumnGeneratorFactory {
+                column: "c2".to_string(),
+                default_value: ScalarValue::Int32(Some(1)),
+            });
 
         let schema_adapter_factory = Arc::new(
             DefaultSchemaAdapterFactory::default()
-                .with_column_generator(missing_column_generator_factory)
+                .with_column_generator(missing_column_generator_factory),
         );
 
         let read = RoundTrip::new()
@@ -324,7 +359,6 @@ mod tests {
             "+-----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &read);
-
     }
 
     #[tokio::test]

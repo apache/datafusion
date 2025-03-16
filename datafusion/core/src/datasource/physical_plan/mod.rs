@@ -202,7 +202,8 @@ mod tests {
     #[test]
     fn schema_adapter_with_column_generator() {
         use crate::datasource::schema_adapter::{
-            DefaultSchemaAdapterFactory, MissingColumnGenerator, MissingColumnGeneratorFactory,
+            DefaultSchemaAdapterFactory, MissingColumnGenerator,
+            MissingColumnGeneratorFactory,
         };
         use arrow::array::{ArrayRef, Int32Array};
         use arrow::datatypes::Int32Type;
@@ -213,7 +214,10 @@ mod tests {
         struct ConstantGenerator(Int32Array);
 
         impl MissingColumnGenerator for ConstantGenerator {
-            fn generate(&self, _batch: RecordBatch) -> datafusion_common::Result<ArrayRef> {
+            fn generate(
+                &self,
+                _batch: RecordBatch,
+            ) -> datafusion_common::Result<ArrayRef> {
                 Ok(Arc::new(self.0.clone()))
             }
 
@@ -231,7 +235,11 @@ mod tests {
 
         impl fmt::Display for ConstantGeneratorFactory {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                write!(f, "ConstantGeneratorFactory({}={})", self.field_name, self.value)
+                write!(
+                    f,
+                    "ConstantGeneratorFactory({}={})",
+                    self.field_name, self.value
+                )
             }
         }
 
@@ -241,7 +249,9 @@ mod tests {
                 field: &Field,
                 _file_schema: &Schema,
             ) -> Option<Arc<dyn MissingColumnGenerator + Send + Sync>> {
-                if field.name() == &self.field_name && field.data_type() == &DataType::Int32 {
+                if field.name() == &self.field_name
+                    && field.data_type() == &DataType::Int32
+                {
                     let array = Int32Array::from(vec![self.value; 3]);
                     Some(Arc::new(ConstantGenerator(array)))
                 } else {
@@ -257,7 +267,10 @@ mod tests {
         }
 
         impl MissingColumnGenerator for MultiplyByTwoGenerator {
-            fn generate(&self, batch: RecordBatch) -> datafusion_common::Result<ArrayRef> {
+            fn generate(
+                &self,
+                batch: RecordBatch,
+            ) -> datafusion_common::Result<ArrayRef> {
                 let idx = batch
                     .schema()
                     .index_of(&self.dependency)
@@ -368,11 +381,9 @@ mod tests {
 
         // Create a batch with just an id column
         let id = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
-        let batch = RecordBatch::try_new(
-            Arc::new(file_schema.clone()),
-            vec![Arc::new(id)],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(Arc::new(file_schema.clone()), vec![Arc::new(id)])
+                .unwrap();
 
         let projected = batch.project(&projection).unwrap();
         let mapped_batch = mapping.map_batch(projected).unwrap();
@@ -394,7 +405,8 @@ mod tests {
     #[test]
     fn schema_adapter_with_multiple_generators() {
         use crate::datasource::schema_adapter::{
-            DefaultSchemaAdapterFactory, MissingColumnGenerator, MissingColumnGeneratorFactory,
+            DefaultSchemaAdapterFactory, MissingColumnGenerator,
+            MissingColumnGeneratorFactory,
         };
         use arrow::array::{ArrayRef, Int32Array, StringArray};
         use arrow::datatypes::Int32Type;
@@ -405,7 +417,10 @@ mod tests {
         struct IdToDescriptionGenerator;
 
         impl MissingColumnGenerator for IdToDescriptionGenerator {
-            fn generate(&self, batch: RecordBatch) -> datafusion_common::Result<ArrayRef> {
+            fn generate(
+                &self,
+                batch: RecordBatch,
+            ) -> datafusion_common::Result<ArrayRef> {
                 let idx = batch.schema().index_of("id").expect("id should exist");
                 let col = batch.column(idx);
                 let col = col.as_primitive::<Int32Type>();
@@ -461,7 +476,10 @@ mod tests {
         struct ScoreGenerator(i32);
 
         impl MissingColumnGenerator for ScoreGenerator {
-            fn generate(&self, batch: RecordBatch) -> datafusion_common::Result<ArrayRef> {
+            fn generate(
+                &self,
+                batch: RecordBatch,
+            ) -> datafusion_common::Result<ArrayRef> {
                 let len = batch.num_rows();
                 Ok(Arc::new(Int32Array::from(vec![self.0; len])))
             }
@@ -513,11 +531,9 @@ mod tests {
 
         // Create a batch to test
         let id = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
-        let batch = RecordBatch::try_new(
-            Arc::new(file_schema.clone()),
-            vec![Arc::new(id)],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(Arc::new(file_schema.clone()), vec![Arc::new(id)])
+                .unwrap();
 
         let projected = batch.project(&projection).unwrap();
         let mapped_batch = mapping.map_batch(projected).unwrap();
