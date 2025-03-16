@@ -3101,13 +3101,12 @@ select array_concat(
 [1, 2, 3]
 
 # Concatenating Mixed types
-query ?
-select array_concat(
-  [arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')],
-  [arrow_cast('3', 'Utf8View')]
-);
+query ?T
+select
+    array_concat([arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')], [arrow_cast('3', 'Utf8View')]),
+    arrow_typeof(array_concat([arrow_cast('1', 'Utf8'), arrow_cast('2', 'Utf8')], [arrow_cast('3', 'Utf8View')]));
 ----
-[1, 2, 3]
+[1, 2, 3] List(Field { name: "item", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 # array_concat error
 query error DataFusion error: Error during planning: Execution error: Function 'array_concat' user-defined coercion failed with "Error during planning: array_concat does not support an argument of type Int64"
