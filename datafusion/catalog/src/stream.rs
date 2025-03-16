@@ -25,8 +25,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::create_ordering;
-use crate::{TableProvider, TableProviderFactory};
+use crate::{create_ordering, Session, TableProvider, TableProviderFactory};
 
 use arrow::array::{RecordBatch, RecordBatchReader, RecordBatchWriter};
 use arrow::datatypes::SchemaRef;
@@ -40,7 +39,6 @@ use datafusion_physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 
-use crate::Session;
 use async_trait::async_trait;
 use futures::StreamExt;
 
