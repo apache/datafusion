@@ -272,6 +272,9 @@ impl<'a> FilterCandidateBuilder<'a> {
             return Ok(None);
         };
 
+        println!("required_indices: {required_indices:?}");
+        println!("rewritten_expr: {rewritten_expr}");
+
         let required_bytes = size_of_columns(&required_indices, metadata)?;
         let can_use_index = columns_sorted(&required_indices, metadata)?;
 
