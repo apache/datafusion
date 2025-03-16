@@ -152,30 +152,32 @@ const QUERY1: &str = "SELECT * FROM sales limit 3";
 
 const QUERY2: &str = "SELECT 42, arrow_typeof(42)";
 
-// Run the query using the specified execution context and compare it
+// Run the query using the specified execution context and compare it 
 // to the known result
 async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result<()> {
     let s = exec_sql(&ctx, QUERY).await?;
     let actual = s.lines().collect::<Vec<_>>().join("\n");
-
-    insta::with_settings!({
-        description => description,
-    }, {
-        insta::assert_snapshot!(actual, @r###"
-        +-------------+---------+
-        | customer_id | revenue |
-        +-------------+---------+
-        | paul        | 300     |
-        | jorge       | 200     |
-        | andy        | 150     |
-        +-------------+---------+
-        "###);
-    });
-
+    
+    insta::allow_duplicates!(|| {
+        insta::with_settings!({
+            description => description,
+        }, {
+            insta::assert_snapshot!(actual, @r###"
+            +-------------+---------+
+            | customer_id | revenue |
+            +-------------+---------+
+            | paul        | 300     |
+            | jorge       | 200     |
+            | andy        | 150     |
+            +-------------+---------+
+            "###);
+        });
+    })();
+    
     Ok(())
 }
 
-// Run the query using the specified execution context and compare it
+// Run the query using the specified execution context and compare it 
 // to the known result
 async fn run_and_compare_query_with_analyzer_rule(
     ctx: SessionContext,
@@ -183,23 +185,25 @@ async fn run_and_compare_query_with_analyzer_rule(
 ) -> Result<()> {
     let s = exec_sql(&ctx, QUERY2).await?;
     let actual = s.lines().collect::<Vec<_>>().join("\n");
-
-    insta::with_settings!({
-        description => description,
-    }, {
-        insta::assert_snapshot!(actual, @r###"
-        +------------+--------------------------+
-        | UInt64(42) | arrow_typeof(UInt64(42)) |
-        +------------+--------------------------+
-        | 42         | UInt64                   |
-        +------------+--------------------------+
-        "###);
-    });
-
+    
+    insta::allow_duplicates!(|| {
+        insta::with_settings!({
+            description => description,
+        }, {
+            insta::assert_snapshot!(actual, @r###"
+            +------------+--------------------------+
+            | UInt64(42) | arrow_typeof(UInt64(42)) |
+            +------------+--------------------------+
+            | 42         | UInt64                   |
+            +------------+--------------------------+
+            "###);
+        });
+    })();
+    
     Ok(())
 }
 
-// Run the query using the specified execution context and compare it
+// Run the query using the specified execution context and compare it 
 // to the known result
 async fn run_and_compare_query_with_auto_schemas(
     ctx: SessionContext,
@@ -207,21 +211,23 @@ async fn run_and_compare_query_with_auto_schemas(
 ) -> Result<()> {
     let s = exec_sql(&ctx, QUERY1).await?;
     let actual = s.lines().collect::<Vec<_>>().join("\n");
-
-    insta::with_settings!({
-        description => description,
-    }, {
-        insta::assert_snapshot!(actual, @r###"
-        +----------+----------+
-        | column_1 | column_2 |
-        +----------+----------+
-        | andrew   | 100      |
-        | jorge    | 200      |
-        | andy     | 150      |
-        +----------+----------+
-        "###);
-    });
-
+    
+    insta::allow_duplicates!(|| {
+        insta::with_settings!({
+            description => description,
+        }, {
+            insta::assert_snapshot!(actual, @r###"
+            +----------+----------+
+            | column_1 | column_2 |
+            +----------+----------+
+            | andrew   | 100      |
+            | jorge    | 200      |
+            | andy     | 150      |
+            +----------+----------+
+            "###);
+        });
+    })();
+    
     Ok(())
 }
 
