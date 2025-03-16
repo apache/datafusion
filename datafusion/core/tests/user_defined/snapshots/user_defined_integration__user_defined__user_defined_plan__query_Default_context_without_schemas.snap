@@ -1,0 +1,12 @@
+---
+source: datafusion/core/tests/user_defined/user_defined_plan.rs
+description: Default context without schemas
+expression: actual
+---
++----------+----------+
+| column_1 | column_2 |
++----------+----------+
+| andrew   | 100      |
+| jorge    | 200      |
+| andy     | 150      |
++----------+----------+

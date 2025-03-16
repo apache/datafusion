@@ -1,0 +1,9 @@
+---
+source: datafusion/core/tests/user_defined/expr_planner.rs
+expression: fmt_batches(&actual)
+---
++---+
+| a |
++---+
+| 1 |
++---+

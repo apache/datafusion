@@ -1,0 +1,9 @@
+---
+source: datafusion/core/tests/user_defined/user_defined_aggregates.rs
+expression: fmt_batches(&actual)
+---
++------+---+---+
+| text | a | b |
++------+---+---+
+| foo  | 1 | 2 |
++------+---+---+

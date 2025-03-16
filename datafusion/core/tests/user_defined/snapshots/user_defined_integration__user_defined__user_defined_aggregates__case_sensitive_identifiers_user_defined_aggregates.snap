@@ -1,0 +1,9 @@
+---
+source: datafusion/core/tests/user_defined/user_defined_aggregates.rs
+expression: fmt_batches(&result)
+---
++-------------+
+| MY_AVG(t.i) |
++-------------+
+| 1.0         |
++-------------+
