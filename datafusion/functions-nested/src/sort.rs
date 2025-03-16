@@ -138,10 +138,7 @@ impl ScalarUDFImpl for ArraySort {
                 Ok(DataType::new_list(field.data_type().clone(), true))
             }
             arg_type => {
-                plan_err!(
-                    "{} does not support an argument of type {arg_type}",
-                    self.name()
-                )
+                plan_err!("{} does not support type {arg_type}", self.name())
             }
         }
     }

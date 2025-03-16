@@ -3115,7 +3115,7 @@ select
 [1, 2, 3] List(Field { name: "item", data_type: Utf8View, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} })
 
 # array_concat error
-query error DataFusion error: Error during planning: Execution error: Function 'array_concat' user-defined coercion failed with "Error during planning: array_concat does not support an argument of type Int64"
+query error DataFusion error: Error during planning: Execution error: Function 'array_concat' user-defined coercion failed with "Error during planning: array_concat does not support type Int64"
 select array_concat(1, 2);
 
 # array_concat scalar function #1
