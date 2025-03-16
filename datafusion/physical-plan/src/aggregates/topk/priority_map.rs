@@ -108,10 +108,66 @@ impl PriorityMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, RecordBatch, StringArray};
+    use arrow::array::{
+        Int64Array, LargeStringArray, RecordBatch, StringArray, StringViewArray,
+    };
     use arrow::datatypes::{Field, Schema, SchemaRef};
     use arrow::util::pretty::pretty_format_batches;
     use std::sync::Arc;
+
+    #[test]
+    fn should_append_with_utf8view() -> Result<()> {
+        let ids: ArrayRef = Arc::new(StringViewArray::from(vec!["1"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        let mut agg = PriorityMap::new(DataType::Utf8View, DataType::Int64, 1, false)?;
+        agg.set_batch(ids, vals);
+        agg.insert(0)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_schema_utf8view(), cols)?;
+        let batch_schema = batch.schema();
+        assert_eq!(batch_schema.fields[0].data_type(), &DataType::Utf8View);
+
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+        let expected = r#"
++----------+--------------+
+| trace_id | timestamp_ms |
++----------+--------------+
+| 1        | 1            |
++----------+--------------+
+        "#
+        .trim();
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn should_append_with_large_utf8() -> Result<()> {
+        let ids: ArrayRef = Arc::new(LargeStringArray::from(vec!["1"]));
+        let vals: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+        let mut agg = PriorityMap::new(DataType::LargeUtf8, DataType::Int64, 1, false)?;
+        agg.set_batch(ids, vals);
+        agg.insert(0)?;
+
+        let cols = agg.emit()?;
+        let batch = RecordBatch::try_new(test_large_schema(), cols)?;
+        let batch_schema = batch.schema();
+        assert_eq!(batch_schema.fields[0].data_type(), &DataType::LargeUtf8);
+
+        let actual = format!("{}", pretty_format_batches(&[batch])?);
+        let expected = r#"
++----------+--------------+
+| trace_id | timestamp_ms |
++----------+--------------+
+| 1        | 1            |
++----------+--------------+
+        "#
+        .trim();
+        assert_eq!(actual, expected);
+
+        Ok(())
+    }
 
     #[test]
     fn should_append() -> Result<()> {
@@ -367,6 +423,20 @@ mod tests {
     fn test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("trace_id", DataType::Utf8, true),
+            Field::new("timestamp_ms", DataType::Int64, true),
+        ]))
+    }
+
+    fn test_schema_utf8view() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("trace_id", DataType::Utf8View, true),
+            Field::new("timestamp_ms", DataType::Int64, true),
+        ]))
+    }
+
+    fn test_large_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("trace_id", DataType::LargeUtf8, true),
             Field::new("timestamp_ms", DataType::Int64, true),
         ]))
     }
