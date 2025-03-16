@@ -1435,6 +1435,12 @@ NULL 23
 NULL 43
 5 NULL
 
+# array_element of empty array
+query T
+select coalesce(array_element([], 1), array_element(NULL, 1), 'ok');
+----
+ok
+
 
 ## array_max
 # array_max scalar function #1 (with positive index)
