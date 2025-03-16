@@ -563,29 +563,6 @@ impl DFSchema {
             .all(|(dffield, arrowfield)| dffield.name() == arrowfield.name())
     }
 
-    /// Check to see if fields in 2 Arrow schemas are compatible
-    pub fn check_arrow_schema_type_compatible(
-        &self,
-        arrow_schema: &Schema,
-    ) -> Result<()> {
-        let self_arrow_schema: Schema = self.into();
-        self_arrow_schema
-            .fields()
-            .iter()
-            .zip(arrow_schema.fields().iter())
-            .try_for_each(|(l_field, r_field)| {
-                if !can_cast_types(r_field.data_type(), l_field.data_type()) {
-                    _plan_err!("Column {} (type: {}) is not compatible with column {} (type: {})",
-                                r_field.name(),
-                                r_field.data_type(),
-                                l_field.name(),
-                                l_field.data_type())
-                } else {
-                    Ok(())
-                }
-            })
-    }
-
     /// Returns true if the two schemas have the same qualified named
     /// fields with logically equivalent data types. Returns false otherwise.
     ///
@@ -613,18 +590,41 @@ impl DFSchema {
     /// Use [DFSchema]::logically_equivalent_names_and_types for a weaker
     /// logical type checking, which for example would consider a dictionary
     /// encoded UTF8 array to be equivalent to a plain UTF8 array.
-    pub fn equivalent_names_and_types(&self, other: &Self) -> bool {
+    pub fn equivalent_names_and_types(&self, other: &Self) -> Result<()> {
+        // case 1 : schema length mismatch
         if self.fields().len() != other.fields().len() {
-            return false;
+            _plan_err!(
+                "Schema mismatch: the schema length are not same \
+            Expected schema length: {}, got: {}",
+                self.fields().len(),
+                other.fields().len()
+            )
+        } else {
+            // case 2 : schema length match, but fields mismatch
+            // check if the fields name are the same and have the same data types
+            self.fields()
+                .iter()
+                .zip(other.fields().iter())
+                .try_for_each(|(f1, f2)| {
+                    if f1.name() != f2.name()
+                        || (!DFSchema::datatype_is_semantically_equal(
+                            f1.data_type(),
+                            f2.data_type(),
+                        ) && !can_cast_types(f2.data_type(), f1.data_type()))
+                    {
+                        _plan_err!(
+                            "Schema mismatch: Expected field '{}' with type {:?}, \
+                            but got '{}' with type {:?}.",
+                            f1.name(),
+                            f1.data_type(),
+                            f2.name(),
+                            f2.data_type()
+                        )
+                    } else {
+                        Ok(())
+                    }
+                })
         }
-        let self_fields = self.iter();
-        let other_fields = other.iter();
-        self_fields.zip(other_fields).all(|((q1, f1), (q2, f2))| {
-            q1 == q2
-                && f1.name() == f2.name()
-                && (Self::datatype_is_semantically_equal(f1.data_type(), f2.data_type())
-                    || can_cast_types(f2.data_type(), f1.data_type()))
-        })
     }
 
     /// Checks if two [`DataType`]s are logically equal. This is a notably weaker constraint

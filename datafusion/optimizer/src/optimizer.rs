@@ -507,25 +507,17 @@ mod tests {
         let err = opt.optimize(plan, &config, &observe).unwrap_err();
         assert!(err.strip_backtrace().starts_with(
             "Optimizer rule 'get table_scan rule' failed\n\
-            caused by\n\
-            Check optimizer-specific invariants after optimizer rule: get table_scan rule\n\
-            caused by\n\
-            Internal error: Failed due to a difference in schemas, \
-            original schema: DFSchema { inner: Schema { \
-            fields: [], \
-            metadata: {} }, \
-            field_qualifiers: [], \
-            functional_dependencies: FunctionalDependencies { deps: [] } \
-            }, \
-            new schema: DFSchema { inner: Schema { \
-            fields: [\
-              Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-              Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
-              Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }\
-            ], \
-            metadata: {} }, \
-            field_qualifiers: [Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" })], \
-            functional_dependencies: FunctionalDependencies { deps: [] } }",
+                caused by\n\
+                Check optimizer-specific invariants after optimizer rule: get table_scan rule\n\
+                caused by\n\
+                Internal error: Failed due to a difference in schemas: Error during planning: Schema mismatch: \
+                the schema length are not same Expected schema length: 3, got: 0, original schema: DFSchema \
+                { inner: Schema { fields: [], metadata: {} }, field_qualifiers: [], functional_dependencies: FunctionalDependencies { deps: [] } }, new schema: DFSchema { inner: Schema { fields: [\
+                Field { name: \"a\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
+                Field { name: \"b\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, \
+                Field { name: \"c\", data_type: UInt32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }\
+                ], metadata: {} }, field_qualifiers: [Some(Bare { table: \"test\" }), Some(Bare { table: \"test\" }), \
+                Some(Bare { table: \"test\" })], functional_dependencies: FunctionalDependencies { deps: [] } }."
         ));
     }
 
