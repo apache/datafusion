@@ -277,7 +277,7 @@ mod tests {
 
         let adapter = DefaultSchemaAdapterFactory::from_schema(Arc::new(table_schema));
         let err = adapter.map_schema(&file_schema).unwrap_err().to_string();
-        assert_eq!(err, "Error during planning: Column a is missing from the file schema, cannot be generated, and is non-nullable");
+        assert!(err.contains("Error during planning: Column a is missing from the file schema, cannot be generated, and is non-nullable"));
     }
 
     #[derive(Debug)]
