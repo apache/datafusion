@@ -46,7 +46,7 @@ use crate::{
 };
 
 use super::dml::InsertOp;
-use super::plan::ColumnUnnestList;
+use super::plan::{ColumnUnnestList, ExplainFormat};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use datafusion_common::display::ToStringifiedPlan;
@@ -776,6 +776,7 @@ impl LogicalPlanBuilder {
             &missing_cols,
             is_distinct,
         )?;
+
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
             input: Arc::new(plan),
@@ -1211,6 +1212,7 @@ impl LogicalPlanBuilder {
             Ok(Self::new(LogicalPlan::Explain(Explain {
                 verbose,
                 plan: self.plan,
+                explain_format: ExplainFormat::Indent,
                 stringified_plans,
                 schema,
                 logical_optimization_succeeded: false,

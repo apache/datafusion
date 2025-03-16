@@ -16,8 +16,8 @@
 // under the License.
 
 use datafusion::error::Result;
-use datafusion::logical_expr::{LogicalPlan, PlanType};
-use datafusion::physical_plan::{displayable, DisplayFormatType};
+use datafusion::logical_expr::LogicalPlan;
+use datafusion::physical_plan::displayable;
 use datafusion::physical_planner::DefaultPhysicalPlanner;
 use datafusion::prelude::*;
 
@@ -77,13 +77,7 @@ async fn to_physical_plan_in_one_api_demo(
 
     println!(
         "Physical plan direct from logical plan:\n\n{}\n\n",
-        displayable(physical_plan.as_ref())
-            .to_stringified(
-                false,
-                PlanType::InitialPhysicalPlan,
-                DisplayFormatType::Default
-            )
-            .plan
+        displayable(physical_plan.as_ref()).indent(false)
     );
 
     Ok(())
@@ -123,13 +117,7 @@ async fn to_physical_plan_step_by_step_demo(
         .await?;
     println!(
         "Final physical plan:\n\n{}\n\n",
-        displayable(physical_plan.as_ref())
-            .to_stringified(
-                false,
-                PlanType::InitialPhysicalPlan,
-                DisplayFormatType::Default
-            )
-            .plan
+        displayable(physical_plan.as_ref()).indent(false)
     );
 
     // Call the physical optimizer with an existing physical plan (in this
@@ -142,13 +130,7 @@ async fn to_physical_plan_step_by_step_demo(
         planner.optimize_physical_plan(physical_plan, &ctx.state(), |_, _| {})?;
     println!(
         "Optimized physical plan:\n\n{}\n\n",
-        displayable(physical_plan.as_ref())
-            .to_stringified(
-                false,
-                PlanType::InitialPhysicalPlan,
-                DisplayFormatType::Default
-            )
-            .plan
+        displayable(physical_plan.as_ref()).indent(false)
     );
 
     Ok(())

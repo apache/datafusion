@@ -438,7 +438,7 @@ logical_plan
 08)----------TableScan: t1 projection=[t1_int]
 
 #invalid_scalar_subquery
-statement error DataFusion error: Invalid \(non-executable\) plan after Analyzer\ncaused by\nError during planning: Scalar subquery should only return one column, but found 2: t2.t2_id, t2.t2_name
+statement error DataFusion error: Error during planning: Too many columns! The subquery should only return one column: t2.t2_id, t2.t2_name
 SELECT t1_id, t1_name, t1_int, (select t2_id, t2_name FROM t2 WHERE t2.t2_id = t1.t1_int) FROM t1
 
 #subquery_not_allowed
@@ -1431,3 +1431,23 @@ drop table t1;
 
 statement count 0
 drop table t2;
+
+
+# test exists_subquery_wildcard
+statement count 0
+create table person(id int, last_name int, state int);
+
+query TT
+explain SELECT id FROM person p WHERE EXISTS 
+    (SELECT * FROM person WHERE last_name = p.last_name AND state = p.state)
+----
+logical_plan
+01)Projection: p.id
+02)--LeftSemi Join: p.last_name = __correlated_sq_1.last_name, p.state = __correlated_sq_1.state
+03)----SubqueryAlias: p
+04)------TableScan: person projection=[id, last_name, state]
+05)----SubqueryAlias: __correlated_sq_1
+06)------TableScan: person projection=[last_name, state]
+
+statement count 0
+drop table person;

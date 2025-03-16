@@ -24,7 +24,8 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::common::{
     not_impl_datafusion_err, not_impl_err, plan_datafusion_err, plan_err,
-    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, TableReference,
+    substrait_datafusion_err, substrait_err, DFSchema, DFSchemaRef, Spans,
+    TableReference,
 };
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::expr::{Exists, InSubquery, Sort, WindowFunctionParams};
@@ -68,8 +69,8 @@ use datafusion::logical_expr::{
 };
 use datafusion::prelude::{lit, JoinType};
 use datafusion::{
-    arrow, error::Result, logical_expr::utils::split_conjunction, prelude::Column,
-    scalar::ScalarValue,
+    arrow, error::Result, logical_expr::utils::split_conjunction,
+    logical_expr::utils::split_conjunction_owned, prelude::Column, scalar::ScalarValue,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -104,10 +105,11 @@ use substrait::proto::{
     rel::RelType,
     rel_common,
     sort_field::{SortDirection, SortKind::*},
-    AggregateFunction, AggregateRel, ConsistentPartitionWindowRel, CrossRel, ExchangeRel,
-    Expression, ExtendedExpression, ExtensionLeafRel, ExtensionMultiRel,
-    ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument, JoinRel, NamedStruct,
-    Plan, ProjectRel, ReadRel, Rel, RelCommon, SetRel, SortField, SortRel, Type,
+    AggregateFunction, AggregateRel, ConsistentPartitionWindowRel, CrossRel,
+    DynamicParameter, ExchangeRel, Expression, ExtendedExpression, ExtensionLeafRel,
+    ExtensionMultiRel, ExtensionSingleRel, FetchRel, FilterRel, FunctionArgument,
+    JoinRel, NamedStruct, Plan, ProjectRel, ReadRel, Rel, RelCommon, SetRel, SortField,
+    SortRel, Type,
 };
 
 #[async_trait]
@@ -390,6 +392,14 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
 
     async fn consume_enum(&self, _expr: &Enum, _input_schema: &DFSchema) -> Result<Expr> {
         not_impl_err!("Enum expression not supported")
+    }
+
+    async fn consume_dynamic_parameter(
+        &self,
+        _expr: &DynamicParameter,
+        _input_schema: &DFSchema,
+    ) -> Result<Expr> {
+        not_impl_err!("Dynamic Parameter expression not supported")
     }
 
     // User-Defined Functionality
@@ -1327,8 +1337,16 @@ pub async fn from_read_rel(
         table_ref: TableReference,
         schema: DFSchema,
         projection: &Option<MaskExpression>,
+        filter: &Option<Box<Expression>>,
     ) -> Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
+
+        let filters = if let Some(f) = filter {
+            let filter_expr = consumer.consume_expression(f, &schema).await?;
+            split_conjunction_owned(filter_expr)
+        } else {
+            vec![]
+        };
 
         let plan = {
             let provider = match consumer.resolve_table_ref(&table_ref).await? {
@@ -1336,10 +1354,11 @@ pub async fn from_read_rel(
                 _ => return plan_err!("No table named '{table_ref}'"),
             };
 
-            LogicalPlanBuilder::scan(
+            LogicalPlanBuilder::scan_with_filters(
                 table_ref,
                 provider_as_source(Arc::clone(&provider)),
                 None,
+                filters,
             )?
             .build()?
         };
@@ -1382,6 +1401,7 @@ pub async fn from_read_rel(
                 table_reference,
                 substrait_schema,
                 &read.projection,
+                &read.filter,
             )
             .await
         }
@@ -1464,6 +1484,7 @@ pub async fn from_read_rel(
                 table_reference,
                 substrait_schema,
                 &read.projection,
+                &read.filter,
             )
             .await
         }
@@ -1988,6 +2009,9 @@ pub async fn from_substrait_rex(
             }
             RexType::Nested(expr) => consumer.consume_nested(expr, input_schema).await,
             RexType::Enum(expr) => consumer.consume_enum(expr, input_schema).await,
+            RexType::DynamicParameter(expr) => {
+                consumer.consume_dynamic_parameter(expr, input_schema).await
+            }
         },
         None => substrait_err!("Expression must set rex_type: {:?}", expression),
     }
@@ -2257,6 +2281,7 @@ pub async fn from_subquery(
                             subquery: Subquery {
                                 subquery: Arc::new(haystack_expr),
                                 outer_ref_columns: outer_refs,
+                                spans: Spans::new(),
                             },
                             negated: false,
                         }))
@@ -2275,6 +2300,7 @@ pub async fn from_subquery(
                 Ok(Expr::ScalarSubquery(Subquery {
                     subquery: Arc::new(plan),
                     outer_ref_columns,
+                    spans: Spans::new(),
                 }))
             }
             SubqueryType::SetPredicate(predicate) => {
@@ -2290,6 +2316,7 @@ pub async fn from_subquery(
                             Subquery {
                                 subquery: Arc::new(plan),
                                 outer_ref_columns,
+                                spans: Spans::new(),
                             },
                             false,
                         )))
