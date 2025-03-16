@@ -232,8 +232,8 @@ Each of the old variants can be converted to the new format as follows:
 `TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndElement)`:
 
 ```rust
-use datafusion::common::utils::ListCoercion;
-use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
 
 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
     arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Element],
