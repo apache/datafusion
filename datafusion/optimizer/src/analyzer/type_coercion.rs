@@ -46,7 +46,7 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
+use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_utf8view_or_large_utf8};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
@@ -713,7 +713,7 @@ fn coerce_frame_bound(
 
 fn extract_window_frame_target_type(col_type: &DataType) -> Result<DataType> {
     if col_type.is_numeric()
-        || is_utf8_or_large_utf8(col_type)
+        || is_utf8_or_utf8view_or_large_utf8(col_type)
         || matches!(col_type, DataType::Null)
         || matches!(col_type, DataType::Boolean)
     {
