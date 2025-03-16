@@ -1767,7 +1767,7 @@ logical_plan
 01)Projection: count(Int64(1)) AS count(*) AS global_count
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----SubqueryAlias: a
-04)------Projection: 
+04)------Projection:
 05)--------Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[]]
 06)----------Projection: aggregate_test_100.c1
 07)------------Filter: aggregate_test_100.c13 != Utf8("C2GT5KVyOPZpgKVl110TyZO0NcJ434")
@@ -5352,7 +5352,7 @@ order by c1, c2, rank;
 query TT
 explain select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5386,7 +5386,7 @@ physical_plan
 query IIII
 select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5403,7 +5403,7 @@ order by c1, c2, rank1, rank2;
 query TT
 explain select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5437,7 +5437,7 @@ physical_plan
 query IIII
 select c1, c2, rank1, rank2
 from (
-  select c1, c2, rank() over (partition by c1 order by c2) as rank1, 
+  select c1, c2, rank() over (partition by c1 order by c2) as rank1,
     rank() over (partition by c2, c1 order by c1) as rank2
   from t1
 )
@@ -5536,3 +5536,18 @@ physical_plan
 01)ProjectionExec: expr=[max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@1 as max_c5]
 02)--WindowAggExec: wdw=[max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "max(aggregate_test_100_ordered.c5) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int32, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
 03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c5], file_type=csv, has_header=true
+
+query II
+SELECT
+  t1.v1,
+  SUM(t1.v1) OVER w + 1
+FROM
+  generate_series(1, 5) AS t1(v1)
+WINDOW
+  w AS (ORDER BY t1.v1);
+----
+1 2
+2 4
+3 7
+4 11
+5 16
