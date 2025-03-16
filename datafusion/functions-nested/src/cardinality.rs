@@ -141,7 +141,7 @@ pub fn cardinality_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             generic_map_cardinality(map_array)
         }
         arg_type => {
-            exec_err!("cardinality does not support an argument of type '{arg_type}'")
+            exec_err!("cardinality does not support type {arg_type}")
         }
     }
 }

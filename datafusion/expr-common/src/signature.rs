@@ -885,12 +885,16 @@ impl Signature {
     }
 
     /// Specialized [Signature] for functions that take a fixed number of arrays.
-    pub fn arrays(n: usize, volatility: Volatility) -> Self {
+    pub fn arrays(
+        n: usize,
+        coercion: Option<ListCoercion>,
+        volatility: Volatility,
+    ) -> Self {
         Signature {
             type_signature: TypeSignature::ArraySignature(
                 ArrayFunctionSignature::Array {
                     arguments: vec![ArrayFunctionArgument::Array; n],
-                    array_coercion: Some(ListCoercion::FixedSizedListToList),
+                    array_coercion: coercion,
                 },
             ),
             volatility,
@@ -939,7 +943,7 @@ impl Signature {
 
     /// Specialized [Signature] for ArrayEmpty and similar functions.
     pub fn array(volatility: Volatility) -> Self {
-        Signature::arrays(1, volatility)
+        Signature::arrays(1, Some(ListCoercion::FixedSizedListToList), volatility)
     }
 }
 
