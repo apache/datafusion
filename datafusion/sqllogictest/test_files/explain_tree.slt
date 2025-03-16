@@ -1570,36 +1570,35 @@ physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
 03)│    --------------------   │
-04)│   date ASC NULLS LAST,    │
-05)│                           │
-06)│    time ASC NULLS LAST    │
-07)└─────────────┬─────────────┘
-08)┌─────────────┴─────────────┐
-09)│    CoalesceBatchesExec    │
-10)│    --------------------   │
-11)│     target_batch_size:    │
-12)│            8192           │
-13)└─────────────┬─────────────┘
-14)┌─────────────┴─────────────┐
-15)│         FilterExec        │
-16)│    --------------------   │
-17)│   predicate: ticker = A   │
-18)└─────────────┬─────────────┘
-19)┌─────────────┴─────────────┐
-20)│      RepartitionExec      │
-21)│    --------------------   │
-22)│  output_partition_count:  │
-23)│             1             │
-24)│                           │
-25)│    partitioning_scheme:   │
-26)│     RoundRobinBatch(4)    │
-27)└─────────────┬─────────────┘
-28)┌─────────────┴─────────────┐
-29)│     StreamingTableExec    │
-30)│    --------------------   │
-31)│       infinite: true      │
-32)│        limit: None        │
-33)└───────────────────────────┘
+04)│ date ASC NULLS LAST, time │
+05)│       ASC NULLS LAST      │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│    CoalesceBatchesExec    │
+09)│    --------------------   │
+10)│     target_batch_size:    │
+11)│            8192           │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│         FilterExec        │
+15)│    --------------------   │
+16)│   predicate: ticker = A   │
+17)└─────────────┬─────────────┘
+18)┌─────────────┴─────────────┐
+19)│      RepartitionExec      │
+20)│    --------------------   │
+21)│  output_partition_count:  │
+22)│             1             │
+23)│                           │
+24)│    partitioning_scheme:   │
+25)│     RoundRobinBatch(4)    │
+26)└─────────────┬─────────────┘
+27)┌─────────────┴─────────────┐
+28)│     StreamingTableExec    │
+29)│    --------------------   │
+30)│       infinite: true      │
+31)│        limit: None        │
+32)└───────────────────────────┘
 
 
 # constant ticker, CAST(time AS DATE) = time, order by time
@@ -1734,67 +1733,21 @@ physical_plan
 01)┌───────────────────────────┐
 02)│  SortPreservingMergeExec  │
 03)│    --------------------   │
-04)│    date ASC NULLS LAST    │
-05)│                           │
-06)│   time ASC NULLS LAST,    │
-07)└─────────────┬─────────────┘
-08)┌─────────────┴─────────────┐
-09)│    CoalesceBatchesExec    │
-10)│    --------------------   │
-11)│     target_batch_size:    │
-12)│            8192           │
-13)└─────────────┬─────────────┘
-14)┌─────────────┴─────────────┐
-15)│         FilterExec        │
-16)│    --------------------   │
-17)│         predicate:        │
-18)│  ticker = A AND CAST(time │
-19)│      AS Date32) = date    │
-20)└─────────────┬─────────────┘
-21)┌─────────────┴─────────────┐
-22)│      RepartitionExec      │
-23)│    --------------------   │
-24)│  output_partition_count:  │
-25)│             1             │
-26)│                           │
-27)│    partitioning_scheme:   │
-28)│     RoundRobinBatch(4)    │
-29)└─────────────┬─────────────┘
-30)┌─────────────┴─────────────┐
-31)│     StreamingTableExec    │
-32)│    --------------------   │
-33)│       infinite: true      │
-34)│        limit: None        │
-35)└───────────────────────────┘
-
-
-
-
-# query
-query TT
-explain SELECT * FROM data 
-WHERE date = '2006-01-02' 
-ORDER BY "ticker", "time";
-----
-physical_plan
-01)┌───────────────────────────┐
-02)│  SortPreservingMergeExec  │
-03)│    --------------------   │
-04)│  ticker ASC NULLS LAST,   │
-05)│                           │
-06)│    time ASC NULLS LAST    │
-07)└─────────────┬─────────────┘
-08)┌─────────────┴─────────────┐
-09)│    CoalesceBatchesExec    │
-10)│    --------------------   │
-11)│     target_batch_size:    │
-12)│            8192           │
-13)└─────────────┬─────────────┘
-14)┌─────────────┴─────────────┐
-15)│         FilterExec        │
-16)│    --------------------   │
-17)│         predicate:        │
-18)│     date = 2006-01-02     │
+04)│ time ASC NULLS LAST, date │
+05)│       ASC NULLS LAST      │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│    CoalesceBatchesExec    │
+09)│    --------------------   │
+10)│     target_batch_size:    │
+11)│            8192           │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│         FilterExec        │
+15)│    --------------------   │
+16)│         predicate:        │
+17)│  ticker = A AND CAST(time │
+18)│      AS Date32) = date    │
 19)└─────────────┬─────────────┘
 20)┌─────────────┴─────────────┐
 21)│      RepartitionExec      │
@@ -1811,6 +1764,50 @@ physical_plan
 32)│       infinite: true      │
 33)│        limit: None        │
 34)└───────────────────────────┘
+
+
+
+
+# query
+query TT
+explain SELECT * FROM data 
+WHERE date = '2006-01-02' 
+ORDER BY "ticker", "time";
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│  SortPreservingMergeExec  │
+03)│    --------------------   │
+04)│   ticker ASC NULLS LAST,  │
+05)│     time ASC NULLS LAST   │
+06)└─────────────┬─────────────┘
+07)┌─────────────┴─────────────┐
+08)│    CoalesceBatchesExec    │
+09)│    --------------------   │
+10)│     target_batch_size:    │
+11)│            8192           │
+12)└─────────────┬─────────────┘
+13)┌─────────────┴─────────────┐
+14)│         FilterExec        │
+15)│    --------------------   │
+16)│         predicate:        │
+17)│     date = 2006-01-02     │
+18)└─────────────┬─────────────┘
+19)┌─────────────┴─────────────┐
+20)│      RepartitionExec      │
+21)│    --------------------   │
+22)│  output_partition_count:  │
+23)│             1             │
+24)│                           │
+25)│    partitioning_scheme:   │
+26)│     RoundRobinBatch(4)    │
+27)└─────────────┬─────────────┘
+28)┌─────────────┴─────────────┐
+29)│     StreamingTableExec    │
+30)│    --------------------   │
+31)│       infinite: true      │
+32)│        limit: None        │
+33)└───────────────────────────┘
 
 
 
