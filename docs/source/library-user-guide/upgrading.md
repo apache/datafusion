@@ -212,7 +212,7 @@ To include special characters (such as newlines via `\n`) you can use an `E` lit
 Elapsed 0.005 seconds.
 ```
 
-### More expressive scalar array function signatures
+### Changes to array scalar function signatures
 
 Datafusion 46 has changed the way scalar array function signatures are
 declared. Previously, functions needed to select from a list of predefined
