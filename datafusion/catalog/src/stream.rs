@@ -290,7 +290,7 @@ impl StreamConfig {
 /// data stored in object storage, should instead consider [`ListingTable`].
 ///
 /// [Hadoop]: https://hadoop.apache.org/
-/// [`ListingTable`]: crate::datasource::listing::ListingTable
+/// [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
 #[derive(Debug)]
 pub struct StreamTable(Arc<StreamConfig>);
 
