@@ -118,7 +118,7 @@ impl PhysicalSortExpr {
         self
     }
 
-    /// Like `fmt_sql` in `PhysicalExpr`, prints a [`PhysicalSortExpr`] in a SQL-like format.
+    /// Like [`PhysicalExpr::fmt_sql`] prints a [`PhysicalSortExpr`] in a SQL-like format.
     pub fn fmt_sql(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
