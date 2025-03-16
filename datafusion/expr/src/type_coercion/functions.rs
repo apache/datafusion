@@ -366,69 +366,63 @@ fn get_valid_types(
             return Ok(vec![vec![]]);
         }
 
-        let mut fixed_size = None;
         let mut large_list = false;
+        let mut fixed_size = array_coercion != Some(&ListCoercion::FixedSizedListToList);
+        let mut list_sizes = Vec::with_capacity(arguments.len());
         let mut element_types = Vec::with_capacity(arguments.len());
         for (argument, current_type) in arguments.iter().zip(current_types.iter()) {
             match argument {
-                ArrayFunctionArgument::Array => match current_type {
-                    DataType::FixedSizeList(field, size) => {
-                        match array_coercion {
-                            Some(ListCoercion::FixedSizedListToList) => (),
-                            None if fixed_size.is_none() => fixed_size = Some(*size),
-                            None if fixed_size == Some(*size) => (),
-                            None => fixed_size = None,
-                        }
-
-                        element_types.push(field.data_type().clone())
-                    }
-                    DataType::List(field) => {
-                        fixed_size = None;
-                        element_types.push(field.data_type().clone())
-                    }
-                    DataType::LargeList(field) => {
-                        fixed_size = None;
-                        large_list = true;
-                        element_types.push(field.data_type().clone())
-                    }
-                    DataType::Null => {
-                        fixed_size = None;
-                        element_types.push(DataType::Null)
-                    }
-                    arg_type => {
-                        return plan_err!(
-                        "{function_name} does not support an argument of type {arg_type}"
-                    )
-                    }
-                },
+                ArrayFunctionArgument::Index | ArrayFunctionArgument::String => (),
                 ArrayFunctionArgument::Element => {
                     element_types.push(current_type.clone())
                 }
-                ArrayFunctionArgument::Index | ArrayFunctionArgument::String => (),
+                ArrayFunctionArgument::Array => match current_type {
+                    DataType::Null => element_types.push(DataType::Null),
+                    DataType::List(field) => {
+                        element_types.push(field.data_type().clone());
+                        fixed_size = false;
+                    }
+                    DataType::LargeList(field) => {
+                        element_types.push(field.data_type().clone());
+                        large_list = true;
+                        fixed_size = false;
+                    }
+                    DataType::FixedSizeList(field, size) => {
+                        element_types.push(field.data_type().clone());
+                        list_sizes.push(*size)
+                    }
+                    arg_type => plan_err!(
+                        "{function_name} does not support an argument of type {arg_type}"
+                    )?,
+                },
             }
         }
 
         let Some(element_type) = type_union_resolution(&element_types) else {
-            return plan_err!(
-                "Failed to unify argument types of {function_name}: {current_types:?}."
-            );
+            return Ok(vec![vec![]]);
         };
 
-        let array_type = if large_list {
-            DataType::new_large_list(element_type.clone(), true)
-        } else if let Some(size) = fixed_size {
-            DataType::new_fixed_size_list(element_type.clone(), size, true)
-        } else {
-            DataType::new_list(element_type.clone(), true)
-        };
+        if !fixed_size {
+            list_sizes.clear()
+        }
 
+        let mut list_sizes = list_sizes.into_iter();
         let valid_types = arguments.iter().zip(current_types.iter()).map(
             |(argument_type, current_type)| match argument_type {
-                ArrayFunctionArgument::Array if current_type.is_null() => DataType::Null,
-                ArrayFunctionArgument::Array => array_type.clone(),
-                ArrayFunctionArgument::Element => element_type.clone(),
                 ArrayFunctionArgument::Index => DataType::Int64,
                 ArrayFunctionArgument::String => DataType::Utf8,
+                ArrayFunctionArgument::Element => element_type.clone(),
+                ArrayFunctionArgument::Array => {
+                    if current_type.is_null() {
+                        DataType::Null
+                    } else if large_list {
+                        DataType::new_large_list(element_type.clone(), true)
+                    } else if let Some(size) = list_sizes.next() {
+                        DataType::new_fixed_size_list(element_type.clone(), size, true)
+                    } else {
+                        DataType::new_list(element_type.clone(), true)
+                    }
+                }
             },
         );
 
@@ -1168,5 +1162,155 @@ mod tests {
             coerced_from(&type_into, &type_from),
             Some(type_into.clone())
         );
+    }
+
+    #[test]
+    fn test_get_valid_types_array_and_array() -> Result<()> {
+        let function = "array_and_array";
+        let signature = Signature::arrays(2, Volatility::Immutable);
+
+        let data_types = vec![
+            DataType::new_list(DataType::Int32, true),
+            DataType::new_large_list(DataType::Float64, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Float64, true),
+                DataType::new_large_list(DataType::Float64, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Int64, 3, true),
+            DataType::new_fixed_size_list(DataType::Int32, 5, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Int64, true),
+                DataType::new_list(DataType::Int64, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Null, 3, true),
+            DataType::new_large_list(DataType::Utf8, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Utf8, true),
+                DataType::new_large_list(DataType::Utf8, true),
+            ]]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_valid_types_array_and_element() -> Result<()> {
+        let function = "array_and_element";
+        let signature = Signature::array_and_element(Volatility::Immutable);
+
+        let data_types =
+            vec![DataType::new_list(DataType::Int32, true), DataType::Float64];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Float64, true),
+                DataType::Float64,
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_large_list(DataType::Int32, true),
+            DataType::Null,
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Int32, true),
+                DataType::Int32,
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Null, 3, true),
+            DataType::Utf8,
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Utf8, true),
+                DataType::Utf8,
+            ]]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_valid_types_element_and_array() -> Result<()> {
+        let function = "element_and_array";
+        let signature = Signature::element_and_array(Volatility::Immutable);
+
+        let data_types = vec![
+            DataType::new_large_list(DataType::Null, false),
+            DataType::new_list(DataType::new_list(DataType::Int64, true), true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature.type_signature, &data_types)?,
+            vec![vec![
+                DataType::new_large_list(DataType::Int64, true),
+                DataType::new_list(DataType::new_large_list(DataType::Int64, true), true),
+            ]]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_valid_types_fixed_size_arrays() -> Result<()> {
+        let function = "fixed_size_arrays";
+        let signature = TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+            arguments: vec![ArrayFunctionArgument::Array; 2],
+            array_coercion: None,
+        });
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Int64, 3, true),
+            DataType::new_fixed_size_list(DataType::Int32, 5, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature, &data_types)?,
+            vec![vec![
+                DataType::new_fixed_size_list(DataType::Int64, 3, true),
+                DataType::new_fixed_size_list(DataType::Int64, 5, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Int64, 3, true),
+            DataType::new_list(DataType::Int32, true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature, &data_types)?,
+            vec![vec![
+                DataType::new_list(DataType::Int64, true),
+                DataType::new_list(DataType::Int64, true),
+            ]]
+        );
+
+        let data_types = vec![
+            DataType::new_fixed_size_list(DataType::Utf8, 3, true),
+            DataType::new_list(DataType::new_list(DataType::Int32, true), true),
+        ];
+        assert_eq!(
+            get_valid_types(function, &signature, &data_types)?,
+            vec![vec![]]
+        );
+
+        Ok(())
     }
 }
