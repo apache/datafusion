@@ -25,6 +25,8 @@ use arrow::array::{new_null_array, RecordBatch, RecordBatchOptions};
 use arrow::compute::{can_cast_types, cast};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::plan_err;
+use datafusion_expr::binary::struct_coercion;
+use datafusion_expr::binary::list_coercion;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -269,7 +271,11 @@ impl SchemaAdapter for DefaultSchemaAdapter {
             if let Some((table_idx, table_field)) =
                 self.projected_table_schema.fields().find(file_field.name())
             {
-                match can_cast_types(file_field.data_type(), table_field.data_type()) {
+                match
+                    can_cast_types(file_field.data_type(), table_field.data_type()) ||
+                    struct_coercion(file_field.data_type(), table_field.data_type()).is_some() ||
+                    list_coercion(file_field.data_type(), table_field.data_type()).is_some()
+                {
                     true => {
                         field_mappings[table_idx] = Some(projection.len());
                         projection.push(file_idx);

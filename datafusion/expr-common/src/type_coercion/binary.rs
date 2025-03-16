@@ -454,6 +454,27 @@ pub fn type_union_resolution(data_types: &[DataType]) -> Option<DataType> {
         return Some(DataType::Utf8);
     }
 
+    // Check if all data_types are Structs and coalescable
+    if data_types.iter().all(|t| matches!(t, DataType::Struct(_))) {
+        let mut max_cardinality_struct: Option<&DataType> = None;
+        for data_type in data_types.iter() {
+            if let Some(DataType::Struct(fields)) = max_cardinality_struct {
+                if let DataType::Struct(new_fields) = data_type {
+                    if fields.len() == new_fields.len() {
+                        max_cardinality_struct = Some(data_type);
+                    } else if new_fields.len() > fields.len() {
+                        max_cardinality_struct = Some(data_type);
+                    }
+                }
+            } else {
+                max_cardinality_struct = Some(data_type);
+            }
+        }
+        if let Some(max_struct) = max_cardinality_struct {
+            return Some(max_struct.clone());
+        }
+    }
+
     // Ignore Nulls, if any data_type category is not the same, return None
     let data_types_category: Vec<TypeCategory> = data_types
         .iter()
@@ -976,27 +997,48 @@ fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType
     }
 }
 
-fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn struct_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (Struct(lhs_fields), Struct(rhs_fields)) => {
-            if lhs_fields.len() != rhs_fields.len() {
-                return None;
-            }
-
-            let coerced_types = std::iter::zip(lhs_fields.iter(), rhs_fields.iter())
-                .map(|(lhs, rhs)| comparison_coercion(lhs.data_type(), rhs.data_type()))
-                .collect::<Option<Vec<DataType>>>()?;
-
-            // preserve the field name and nullability
-            let orig_fields = std::iter::zip(lhs_fields.iter(), rhs_fields.iter());
-
-            let fields: Vec<FieldRef> = coerced_types
-                .into_iter()
-                .zip(orig_fields)
-                .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
+            use std::collections::{HashMap, HashSet};
+            // Create maps from field name to field
+            let lhs_map: HashMap<String, FieldRef> = lhs_fields
+                .iter()
+                .map(|f| (f.name().clone(), Arc::clone(f)))
                 .collect();
-            Some(Struct(fields.into()))
+            let rhs_map: HashMap<String, FieldRef> = rhs_fields
+                .iter()
+                .map(|f| (f.name().clone(), Arc::clone(f)))
+                .collect();
+
+            // Compute the union of all field names
+            let keys: HashSet<String> = lhs_map
+                .keys()
+                .chain(rhs_map.keys())
+                .cloned()
+                .collect();
+
+            let mut coerced_fields: Vec<FieldRef> = Vec::new();
+            for key in keys {
+                let lhs_field = lhs_map.get(&key);
+                let rhs_field = rhs_map.get(&key);
+
+                // If a field is missing on one side, treat it as Null.
+                let lhs_dt = lhs_field.map(|f| f.data_type()).unwrap_or(&Null);
+                let rhs_dt = rhs_field.map(|f| f.data_type()).unwrap_or(&Null);
+
+                let coerced_dt = comparison_coercion(lhs_dt, rhs_dt)?;
+                // Determine nullability:
+                // - If the field is missing on one side, we consider it nullable.
+                // - Otherwise, true if either field is nullable.
+                let nullable = lhs_field.map(|f| f.is_nullable()).unwrap_or(true)
+                    || rhs_field.map(|f| f.is_nullable()).unwrap_or(true);
+                coerced_fields.push(Arc::new(Field::new(&key, coerced_dt, nullable)));
+            }
+            // Optionally, sort fields (here we sort alphabetically by name)
+            coerced_fields.sort_by(|a, b| a.name().cmp(b.name()));
+            Some(Struct(coerced_fields.into()))
         }
         _ => None,
     }
@@ -1221,7 +1263,7 @@ fn coerce_list_children(lhs_field: &FieldRef, rhs_field: &FieldRef) -> Option<Fi
 }
 
 /// Coercion rules for list types.
-fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+pub fn list_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         // Coerce to the left side FixedSizeList type if the list lengths are the same,
@@ -2240,7 +2282,6 @@ mod tests {
     #[test]
     fn test_list_coercion() {
         let lhs_type = DataType::List(Arc::new(Field::new("lhs", DataType::Int8, false)));
-
         let rhs_type = DataType::List(Arc::new(Field::new("rhs", DataType::Int64, true)));
 
         let coerced_type = list_coercion(&lhs_type, &rhs_type).unwrap();
@@ -2248,6 +2289,23 @@ mod tests {
             coerced_type,
             DataType::List(Arc::new(Field::new("lhs", DataType::Int64, true)))
         ); // nullable because the RHS is nullable
+    }
+
+    #[test]
+    fn test_struct_coercion() {
+        let lhs_struct = DataType::Struct(vec![
+            Field::new("a", DataType::Int8, false),
+            Field::new("b", DataType::Int16, false),
+        ].into());
+
+        let rhs_struct = DataType::Struct(vec![
+            Field::new("a", DataType::Int8, false),
+            Field::new("b", DataType::Int16, false),
+            Field::new("c", DataType::Int32, true),
+        ].into());
+
+        let coerced_type = type_union_resolution(&[lhs_struct.clone(), rhs_struct.clone()]).unwrap();
+        assert_eq!(coerced_type, rhs_struct);
     }
 
     #[test]
