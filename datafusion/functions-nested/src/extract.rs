@@ -224,6 +224,10 @@ where
     i64: TryInto<O>,
 {
     let values = array.values();
+    if values.data_type().is_null() {
+        return Ok(Arc::new(NullArray::new(array.len())));
+    }
+
     let original_data = values.to_data();
     let capacity = Capacities::Array(original_data.len());
 
