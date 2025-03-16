@@ -244,8 +244,8 @@ TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
 `TypeSignature::ArraySignature(ArrayFunctionSignature::ElementAndArray)`:
 
 ```rust
-use datafusion::common::utils::ListCoercion;
-use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
 
 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
     arguments: vec![ArrayFunctionArgument::Element, ArrayFunctionArgument::Array],
@@ -256,8 +256,8 @@ TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
 `TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndIndex)`:
 
 ```rust
-use datafusion::common::utils::ListCoercion;
-use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
 
 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
     arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Index],
@@ -268,8 +268,8 @@ TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
 `TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndElementAndOptionalIndex)`:
 
 ```rust
-use datafusion::common::utils::ListCoercion;
-use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
 
 TypeSignature::OneOf(vec![
     TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
@@ -290,8 +290,8 @@ TypeSignature::OneOf(vec![
 `TypeSignature::ArraySignature(ArrayFunctionSignature::Array)`:
 
 ```rust
-use datafusion::common::utils::ListCoercion;
-use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
+# use datafusion::common::utils::ListCoercion;
+# use datafusion_expr_common::signature::{ArrayFunctionArgument, ArrayFunctionSignature, TypeSignature};
 
 TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
     arguments: vec![ArrayFunctionArgument::Array],
