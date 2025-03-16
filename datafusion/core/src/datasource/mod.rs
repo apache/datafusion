@@ -30,9 +30,9 @@ pub mod memory;
 pub mod physical_plan;
 pub mod provider;
 mod statistics;
-pub mod stream;
 mod view_test;
 
+pub use datafusion_catalog::stream;
 pub use datafusion_catalog::view;
 pub use datafusion_datasource::schema_adapter;
 pub use datafusion_datasource::source;
