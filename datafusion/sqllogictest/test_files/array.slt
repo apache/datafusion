@@ -5822,7 +5822,7 @@ query BBBB
 select array_has_all(make_array(1,2,3), []),
        array_has_any(make_array(1,2,3), []),
        array_has_all(make_array('aa','bb','cc'), []),
-       array_has_any(make_array('aa','bb','cc'), []),
+       array_has_any(make_array('aa','bb','cc'), [])
 ;
 ----
 true false true false
