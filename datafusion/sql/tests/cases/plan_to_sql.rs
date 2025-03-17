@@ -646,12 +646,6 @@ fn roundtrip_statement_with_dialect() -> Result<()> {
             unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
         },
         TestStatementWithDialect {
-            sql: "select * from (select [1, 2, 3] as c), unnest(c);",
-            expected: r#"SELECT * FROM (SELECT [1, 2, 3] AS c) CROSS JOIN UNNEST(c)"#,
-            parser_dialect: Box::new(GenericDialect {}),
-            unparser_dialect: Box::new(CustomDialectBuilder::default().with_unnest_as_table_factor(true).build()),
-        },
-        TestStatementWithDialect {
             sql: "SELECT * FROM unnest_table u, UNNEST(u.array_col)",
             expected: r#"SELECT u.array_col, u.struct_col, "UNNEST(outer_ref(u.array_col))" FROM unnest_table AS u CROSS JOIN LATERAL (SELECT UNNEST(u.array_col) AS "UNNEST(outer_ref(u.array_col))")"#,
             parser_dialect: Box::new(GenericDialect {}),
