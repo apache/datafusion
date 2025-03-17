@@ -214,13 +214,13 @@ async fn run_and_compare_query_with_auto_schemas(
             description => description,
         }, {
             insta::assert_snapshot!(actual, @r###"
-            +-------------+---------+
-            | customer_id | revenue |
-            +-------------+---------+
-            | paul        | 300     |
-            | jorge       | 200     |
-            | andy        | 150     |
-            +-------------+---------+
+            +----------+----------+
+            | column_1 | column_2 |
+            +----------+----------+
+            | andrew   | 100      |
+            | jorge    | 200      |
+            | andy     | 150      |
+            +----------+----------+
         "###);
     });
 
