@@ -78,7 +78,7 @@ pub struct FFI_SchemaProvider {
     pub version: unsafe extern "C" fn() -> u64,
 
     /// Internal data. This is only to be accessed by the provider of the plan.
-    /// A [`ForeignExecutionPlan`] should never attempt to access this data.
+    /// A [`ForeignSchemaProvider`] should never attempt to access this data.
     pub private_data: *mut c_void,
 }
 
