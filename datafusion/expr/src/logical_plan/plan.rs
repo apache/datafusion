@@ -2166,6 +2166,11 @@ impl Projection {
             schema,
         }
     }
+
+    /// An example of a method that is not tested
+    pub fn dummy_non_tested_method(&self) {
+        panic!()
+    }
 }
 
 /// Computes the schema of the result produced by applying a projection to the input logical plan.
