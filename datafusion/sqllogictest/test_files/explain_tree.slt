@@ -2051,3 +2051,17 @@ physical_plan
 31)│       infinite: true      │
 32)│        limit: None        │
 33)└───────────────────────────┘
+
+# Test explain tree for PlaceholderRowExec
+query TT
+EXPLAIN select count(*) from (values ('a', 'b'), ('c', 'd')) as t (c1, c2)
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        count(*): 2        │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│     PlaceholderRowExec    │
+08)└───────────────────────────┘
