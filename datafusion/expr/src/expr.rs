@@ -2604,23 +2604,159 @@ struct SqlDisplay<'a>(&'a Expr);
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
-            Expr::Column(c) => {
-                write!(f, "{}", c.name)
+            Expr::Column(col) => {
+                write!(f, "{}", col.name)
             }
-            Expr::Literal(_) => {
-                write!(f, "aa")
+            Expr::Literal(scalar) => scalar.fmt(f),
+            Expr::Placeholder(holder) => {
+                write!(f, "{}", holder.id)
             }
-            Expr::ScalarVariable(..) => {
-                write!(f, "bb")
+            Expr::Alias(Alias { name, .. }) => write!(f, "{name}"),
+            Expr::Between(Between {
+                expr,
+                negated,
+                low,
+                high,
+            }) => {
+                if *negated {
+                    write!(
+                        f,
+                        "{} NOT BETWEEN {} AND {}",
+                        SqlDisplay(expr),
+                        SqlDisplay(low),
+                        SqlDisplay(high),
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{} BETWEEN {} AND {}",
+                        SqlDisplay(expr),
+                        SqlDisplay(low),
+                        SqlDisplay(high),
+                    )
+                }
             }
-            Expr::OuterReferenceColumn(..) => {
-                write!(f, "cc")
+            Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
+                write!(f, "{} {op} {}", SqlDisplay(left), SqlDisplay(right),)
             }
-            Expr::Placeholder(_) => {
-                write!(f, "dd")
+            Expr::Case(Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            }) => {
+                write!(f, "CASE ")?;
+
+                if let Some(e) = expr {
+                    write!(f, "{} ", SqlDisplay(e))?;
+                }
+
+                for (when, then) in when_then_expr {
+                    write!(f, "WHEN {} THEN {} ", SqlDisplay(when), SqlDisplay(then),)?;
+                }
+
+                if let Some(e) = else_expr {
+                    write!(f, "ELSE {} ", SqlDisplay(e))?;
+                }
+
+                write!(f, "END")
             }
-            Expr::Wildcard { .. } => {
-                write!(f, "ee")
+            Expr::Cast(Cast { expr, .. }) | Expr::TryCast(TryCast { expr, .. }) => {
+                write!(f, "{}", SqlDisplay(expr))
+            }
+            Expr::InList(InList {
+                expr,
+                list,
+                negated,
+            }) => {
+                let inlist_name = sql_name_from_exprs(list)?;
+
+                if *negated {
+                    write!(f, "{} NOT IN {}", SqlDisplay(expr), inlist_name)
+                } else {
+                    write!(f, "{} IN {}", SqlDisplay(expr), inlist_name)
+                }
+            }
+            Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+                write!(f, "ROLLUP ({})", sql_name_from_exprs(exprs)?)
+            }
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                write!(f, "GROUPING SETS (")?;
+                for exprs in lists_of_exprs.iter() {
+                    write!(f, "({})", sql_name_from_exprs(exprs)?)?;
+                }
+                write!(f, ")")
+            }
+            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+                write!(f, "ROLLUP ({})", sql_name_from_exprs(exprs)?)
+            }
+            Expr::IsNull(expr) => write!(f, "{} IS NULL", SqlDisplay(expr)),
+            Expr::IsNotNull(expr) => {
+                write!(f, "{} IS NOT NULL", SqlDisplay(expr))
+            }
+            Expr::IsUnknown(expr) => {
+                write!(f, "{} IS UNKNOWN", SqlDisplay(expr))
+            }
+            Expr::IsNotUnknown(expr) => {
+                write!(f, "{} IS NOT UNKNOWN", SqlDisplay(expr))
+            }
+            Expr::IsTrue(expr) => write!(f, "{} IS TRUE", SqlDisplay(expr)),
+            Expr::IsFalse(expr) => write!(f, "{} IS FALSE", SqlDisplay(expr)),
+            Expr::IsNotTrue(expr) => {
+                write!(f, "{} IS NOT TRUE", SqlDisplay(expr))
+            }
+            Expr::IsNotFalse(expr) => {
+                write!(f, "{} IS NOT FALSE", SqlDisplay(expr))
+            }
+            Expr::Like(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                case_insensitive,
+            }) => {
+                write!(
+                    f,
+                    "{} {}{} {}",
+                    SqlDisplay(expr),
+                    if *negated { "NOT " } else { "" },
+                    if *case_insensitive { "ILIKE" } else { "LIKE" },
+                    SqlDisplay(pattern),
+                )?;
+
+                if let Some(char) = escape_char {
+                    write!(f, " CHAR '{char}'")?;
+                }
+
+                Ok(())
+            }
+            Expr::Negative(expr) => write!(f, "(- {})", SqlDisplay(expr)),
+            Expr::Not(expr) => write!(f, "NOT {}", SqlDisplay(expr)),
+            Expr::Unnest(Unnest { expr }) => {
+                write!(f, "UNNEST({})", SqlDisplay(expr))
+            }
+            Expr::SimilarTo(Like {
+                negated,
+                expr,
+                pattern,
+                escape_char,
+                ..
+            }) => {
+                write!(
+                    f,
+                    "{} {} {}",
+                    SqlDisplay(expr),
+                    if *negated {
+                        "NOT SIMILAR TO"
+                    } else {
+                        "SIMILAR TO"
+                    },
+                    SqlDisplay(pattern),
+                )?;
+                if let Some(char) = escape_char {
+                    write!(f, " CHAR '{char}'")?;
+                }
+
+                Ok(())
             }
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
                 match func.sql_name(params) {
