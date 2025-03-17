@@ -28,13 +28,13 @@ use std::sync::Arc;
 use datafusion::error::Result;
 
 use datafusion::prelude::*;
-use datafusion_common::test_util::{batches_to_string};
-use insta::assert_snapshot;
+use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::expr::Alias;
 use datafusion_expr::{table_scan, ExprSchemable, LogicalPlanBuilder};
 use datafusion_functions_aggregate::expr_fn::{approx_median, approx_percentile_cont};
 use datafusion_functions_nested::map::map;
+use insta::assert_snapshot;
 
 fn test_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -108,8 +108,8 @@ async fn test_fn_bit_length() -> Result<()> {
     let batches = get_batches(expr, 10).await?;
 
     assert_snapshot!(
-        batches_to_string(&batches),
-        @r"
+    batches_to_string(&batches),
+    @r"
     +--------------------+
     | bit_length(test.a) |
     +--------------------+
@@ -119,7 +119,7 @@ async fn test_fn_bit_length() -> Result<()> {
     | 72                 |
     +--------------------+
     "
-        );
+    );
 
     Ok(())
 }
@@ -384,7 +384,6 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
 
     let df = create_test_table().await?;
     let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
-
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1250,7 +1249,6 @@ async fn test_count_wildcard() -> Result<()> {
         .unwrap()
         .build()
         .unwrap();
-
 
     let formatted_plan = plan.display_indent_schema().to_string();
     assert_snapshot!(formatted_plan,
