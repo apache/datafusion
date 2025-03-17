@@ -734,9 +734,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "Invalid (non-executable) plan after Analyzer\
-        \ncaused by\
-        \nError during planning: Scalar subquery should only return one column";
+        let expected = "Error during planning: Scalar subquery should only return one column, but found 4: orders.o_orderkey, orders.o_custkey, orders.o_orderstatus, orders.o_totalprice";
         assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }
@@ -796,9 +794,7 @@ mod tests {
             .project(vec![col("customer.c_custkey")])?
             .build()?;
 
-        let expected = "Invalid (non-executable) plan after Analyzer\
-        \ncaused by\
-        \nError during planning: Scalar subquery should only return one column";
+        let expected = "Error during planning: Scalar subquery should only return one column, but found 2: orders.o_custkey, orders.o_orderkey";
         assert_analyzer_check_err(vec![], plan, expected);
         Ok(())
     }

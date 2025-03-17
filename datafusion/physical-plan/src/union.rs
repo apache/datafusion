@@ -391,10 +391,7 @@ impl DisplayAs for InterleaveExec {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
                 write!(f, "InterleaveExec")
             }
-            DisplayFormatType::TreeRender => {
-                // TODO: collect info
-                write!(f, "")
-            }
+            DisplayFormatType::TreeRender => Ok(()),
         }
     }
 }

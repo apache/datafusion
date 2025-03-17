@@ -310,4 +310,15 @@ impl PhysicalExpr for ScalarFunctionExpr {
             preserves_lex_ordering,
         })
     }
+
+    fn fmt_sql(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}(", self.name)?;
+        for (i, expr) in self.args.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            expr.fmt_sql(f)?;
+        }
+        write!(f, ")")
+    }
 }

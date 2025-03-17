@@ -25,10 +25,10 @@ use std::sync::{Arc, Weak};
 
 use super::options::ReadOptions;
 use crate::{
+    catalog::listing_schema::ListingSchemaProvider,
     catalog::{
         CatalogProvider, CatalogProviderList, TableProvider, TableProviderFactory,
     },
-    catalog_common::listing_schema::ListingSchemaProvider,
     dataframe::DataFrame,
     datasource::listing::{
         ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,

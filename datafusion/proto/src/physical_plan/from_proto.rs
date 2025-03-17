@@ -730,6 +730,7 @@ impl TryFrom<&protobuf::FileSinkConfig> for FileSinkConfig {
             protobuf::InsertOp::Replace => InsertOp::Replace,
         };
         Ok(Self {
+            original_url: String::default(),
             object_store_url: ObjectStoreUrl::parse(&conf.object_store_url)?,
             file_groups,
             table_paths,
