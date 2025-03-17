@@ -956,9 +956,11 @@ mod tests {
     use arrow::array::{
         GenericListArray, NullBufferBuilder, OffsetSizeTrait, StringArray,
     };
+    use arrow::util::pretty;
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{Field, Int32Type};
     use datafusion_common::assert_batches_eq;
+    use insta::assert_snapshot;
 
     // Create a GenericListArray with the following list values:
     //  [A, B, C], [], NULL, [D], NULL, [NULL, F]
@@ -1040,6 +1042,10 @@ mod tests {
         let strs = unnested_array.as_string::<i32>().iter().collect::<Vec<_>>();
         assert_eq!(strs, expected);
         Ok(())
+    }
+
+    fn fmt_batches(batches: &[RecordBatch]) -> String {
+        pretty::pretty_format_batches(batches).unwrap().to_string()
     }
 
     #[test]
@@ -1145,33 +1151,33 @@ mod tests {
         )?
         .unwrap();
 
-        let expected = &[
-"+---------------------------------+---------------------------------+---------------------------------+",
-"| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |",
-"+---------------------------------+---------------------------------+---------------------------------+",
-"| [1, 2, 3]                       | 1                               | a                               |",
-"|                                 | 2                               | b                               |",
-"| [4, 5]                          | 3                               |                                 |",
-"| [1, 2, 3]                       |                                 | a                               |",
-"|                                 |                                 | b                               |",
-"| [4, 5]                          |                                 |                                 |",
-"| [1, 2, 3]                       | 4                               | a                               |",
-"|                                 | 5                               | b                               |",
-"| [4, 5]                          |                                 |                                 |",
-"| [7, 8, 9, 10]                   | 7                               | c                               |",
-"|                                 | 8                               | d                               |",
-"| [11, 12, 13]                    | 9                               |                                 |",
-"|                                 | 10                              |                                 |",
-"| [7, 8, 9, 10]                   |                                 | c                               |",
-"|                                 |                                 | d                               |",
-"| [11, 12, 13]                    |                                 |                                 |",
-"| [7, 8, 9, 10]                   | 11                              | c                               |",
-"|                                 | 12                              | d                               |",
-"| [11, 12, 13]                    | 13                              |                                 |",
-"|                                 |                                 | e                               |",
-"+---------------------------------+---------------------------------+---------------------------------+",
-        ];
-        assert_batches_eq!(expected, &[ret]);
+        assert_snapshot!(fmt_batches(&[ret]),
+        @r###"
++---------------------------------+---------------------------------+---------------------------------+
+| col1_unnest_placeholder_depth_1 | col1_unnest_placeholder_depth_2 | col2_unnest_placeholder_depth_1 |
++---------------------------------+---------------------------------+---------------------------------+
+| [1, 2, 3]                       | 1                               | a                               |
+|                                 | 2                               | b                               |
+| [4, 5]                          | 3                               |                                 |
+| [1, 2, 3]                       |                                 | a                               |
+|                                 |                                 | b                               |
+| [4, 5]                          |                                 |                                 |
+| [1, 2, 3]                       | 4                               | a                               |
+|                                 | 5                               | b                               |
+| [4, 5]                          |                                 |                                 |
+| [7, 8, 9, 10]                   | 7                               | c                               |
+|                                 | 8                               | d                               |
+| [11, 12, 13]                    | 9                               |                                 |
+|                                 | 10                              |                                 |
+| [7, 8, 9, 10]                   |                                 | c                               |
+|                                 |                                 | d                               |
+| [11, 12, 13]                    |                                 |                                 |
+| [7, 8, 9, 10]                   | 11                              | c                               |
+|                                 | 12                              | d                               |
+| [11, 12, 13]                    | 13                              |                                 |
+|                                 |                                 | e                               |
++---------------------------------+---------------------------------+---------------------------------+
+        "###);
         Ok(())
     }
 

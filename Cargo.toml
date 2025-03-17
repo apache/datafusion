@@ -165,6 +165,7 @@ sqlparser = { version = "0.54.0", features = ["visitor"] }
 tempfile = "3"
 tokio = { version = "1.43", features = ["macros", "rt", "sync"] }
 url = "2.5.4"
+insta = { version = "1.41.1", features = ["glob", "filters"] }
 
 [profile.release]
 codegen-units = 1
