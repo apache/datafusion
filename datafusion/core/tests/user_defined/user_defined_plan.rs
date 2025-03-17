@@ -158,11 +158,21 @@ async fn run_and_compare_query(ctx: SessionContext, description: &str) -> Result
     let s = exec_sql(&ctx, QUERY).await?;
     let actual = s.lines().collect::<Vec<_>>().join("\n");
 
-    insta::with_settings!({
-        description => description,
-    }, {
-        insta::assert_snapshot!(format!("query_{}", description.replace(" ", "_")), actual);
-    });
+    insta::allow_duplicates! {
+        insta::with_settings!({
+            description => description,
+        }, {
+            insta::assert_snapshot!(actual, @r###"
+            +-------------+---------+
+            | customer_id | revenue |
+            +-------------+---------+
+            | paul        | 300     |
+            | jorge       | 200     |
+            | andy        | 150     |
+            +-------------+---------+
+        "###);
+        });
+    }
 
     Ok(())
 }
@@ -179,7 +189,13 @@ async fn run_and_compare_query_with_analyzer_rule(
     insta::with_settings!({
         description => description,
     }, {
-        insta::assert_snapshot!(format!("query_{}", description.replace(" ", "_")), actual);
+        insta::assert_snapshot!(actual, @r###"
+        +------------+--------------------------+
+        | UInt64(42) | arrow_typeof(UInt64(42)) |
+        +------------+--------------------------+
+        | 42         | UInt64                   |
+        +------------+--------------------------+
+        "###);
     });
 
     Ok(())
@@ -195,9 +211,17 @@ async fn run_and_compare_query_with_auto_schemas(
     let actual = s.lines().collect::<Vec<_>>().join("\n");
 
     insta::with_settings!({
-        description => description,
-    }, {
-        insta::assert_snapshot!(format!("query_{}", description.replace(" ", "_")), actual);
+            description => description,
+        }, {
+            insta::assert_snapshot!(actual, @r###"
+            +-------------+---------+
+            | customer_id | revenue |
+            +-------------+---------+
+            | paul        | 300     |
+            | jorge       | 200     |
+            | andy        | 150     |
+            +-------------+---------+
+        "###);
     });
 
     Ok(())
@@ -207,7 +231,7 @@ async fn run_and_compare_query_with_auto_schemas(
 // Run the query using default planners and optimizer
 async fn normal_query_without_schemas() -> Result<()> {
     let ctx = setup_table_without_schemas(SessionContext::new()).await?;
-    run_and_compare_query_with_auto_schemas(ctx, "Default context without schemas").await
+    run_and_compare_query_with_auto_schemas(ctx, "Default context").await
 }
 
 #[tokio::test]

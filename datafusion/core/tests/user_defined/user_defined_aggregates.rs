@@ -71,7 +71,17 @@ async fn test_setup() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual));
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +-------+----------------------------+
+    | value | time                       |
+    +-------+----------------------------+
+    | 2.0   | 1970-01-01T00:00:00.000002 |
+    | 3.0   | 1970-01-01T00:00:00.000003 |
+    | 1.0   | 1970-01-01T00:00:00.000004 |
+    | 5.0   | 1970-01-01T00:00:00.000005 |
+    | 5.0   | 1970-01-01T00:00:00.000005 |
+    +-------+----------------------------+
+    "###);
 }
 
 /// Basic user defined aggregate
@@ -83,7 +93,13 @@ async fn test_udaf() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual));
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +----------------------------+
+    | time_sum(t.time)           |
+    +----------------------------+
+    | 1970-01-01T00:00:00.000019 |
+    +----------------------------+
+    "###);
 
     // normal aggregates call update_batch
     assert!(test_state.update_batch());
@@ -98,7 +114,17 @@ async fn test_udaf_as_window() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual));
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +----------------------------+
+    | time_sum                   |
+    +----------------------------+
+    | 1970-01-01T00:00:00.000019 |
+    | 1970-01-01T00:00:00.000019 |
+    | 1970-01-01T00:00:00.000019 |
+    | 1970-01-01T00:00:00.000019 |
+    | 1970-01-01T00:00:00.000019 |
+    +----------------------------+
+    "###);
 
     // aggregate over the entire window function call update_batch
     assert!(test_state.update_batch());
@@ -113,7 +139,17 @@ async fn test_udaf_as_window_with_frame() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual));
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +----------------------------+
+    | time_sum                   |
+    +----------------------------+
+    | 1970-01-01T00:00:00.000005 |
+    | 1970-01-01T00:00:00.000009 |
+    | 1970-01-01T00:00:00.000012 |
+    | 1970-01-01T00:00:00.000014 |
+    | 1970-01-01T00:00:00.000010 |
+    +----------------------------+
+    "###);
 
     // user defined aggregates with window frame should be calling retract batch
     assert!(test_state.update_batch());
@@ -141,7 +177,13 @@ async fn test_udaf_returning_struct() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual));
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +------------------------------------------------+
+    | first(t.value,t.time)                          |
+    +------------------------------------------------+
+    | {value: 2.0, time: 1970-01-01T00:00:00.000002} |
+    +------------------------------------------------+
+    "###);
 }
 
 /// Demonstrate extracting the fields from a structure using a subquery
@@ -152,7 +194,13 @@ async fn test_udaf_returning_struct_subquery() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual));
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +-----------------+----------------------------+
+    | sq.first[value] | sq.first[time]             |
+    +-----------------+----------------------------+
+    | 2.0             | 1970-01-01T00:00:00.000002 |
+    +-----------------+----------------------------+
+    "###);
 }
 
 #[tokio::test]
@@ -166,7 +214,13 @@ async fn test_udaf_shadows_builtin_fn() {
     // compute with builtin `sum` aggregator
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual));
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +---------------------------------------+
+    | sum(arrow_cast(t.time,Utf8("Int64"))) |
+    +---------------------------------------+
+    | 19000                                 |
+    +---------------------------------------+
+    "###);
 
     // Register `TimeSum` with name `sum`. This will shadow the builtin one
     TimeSum::register(&mut ctx, test_state.clone(), "sum");
@@ -174,7 +228,13 @@ async fn test_udaf_shadows_builtin_fn() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual));
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +----------------------------+
+    | sum(t.time)                |
+    +----------------------------+
+    | 1970-01-01T00:00:00.000019 |
+    +----------------------------+
+    "###);
 }
 
 async fn execute(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
@@ -214,7 +274,13 @@ async fn simple_udaf() -> Result<()> {
 
     let result = ctx.sql("SELECT MY_AVG(a) FROM t").await?.collect().await?;
 
-    insta::assert_snapshot!(fmt_batches(&result));
+    insta::assert_snapshot!(fmt_batches(&result), @r###"
+    +-------------+
+    | my_avg(t.a) |
+    +-------------+
+    | 3.0         |
+    +-------------+
+    "###);
 
     Ok(())
 }
@@ -274,7 +340,13 @@ async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
         .collect()
         .await?;
 
-    insta::assert_snapshot!(fmt_batches(&result));
+    insta::assert_snapshot!(fmt_batches(&result), @r###"
+    +-------------+
+    | MY_AVG(t.i) |
+    +-------------+
+    | 1.0         |
+    +-------------+
+    "###);
 
     Ok(())
 }
@@ -300,11 +372,23 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
 
-    insta::assert_snapshot!(fmt_batches(&result));
+    insta::assert_snapshot!(fmt_batches(&result), @r###"
+    +------------+
+    | dummy(t.i) |
+    +------------+
+    | 1.0        |
+    +------------+
+    "###);
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
 
-    insta::assert_snapshot!(fmt_batches(&alias_result));
+    insta::assert_snapshot!(fmt_batches(&alias_result), @r###"
+    +------------+
+    | dummy(t.i) |
+    +------------+
+    | 1.0        |
+    +------------+
+    "###);
 
     Ok(())
 }
@@ -365,7 +449,13 @@ async fn test_parameterized_aggregate_udf() -> Result<()> {
 
     let actual = DataFrame::new(ctx.state(), plan).collect().await?;
 
-    insta::assert_snapshot!(fmt_batches(&actual));
+    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    +------+---+---+
+    | text | a | b |
+    +------+---+---+
+    | foo  | 1 | 2 |
+    +------+---+---+
+    "###);
 
     ctx.deregister_table("t")?;
     Ok(())
