@@ -75,7 +75,11 @@ async fn create_test_table() -> Result<DataFrame> {
 }
 
 /// Executes an expression on the test dataframe as a select.
-async fn get_batches(expr: Expr, limit: usize) -> Result<Vec<RecordBatch>> {
+async fn get_batches(expr: Expr) -> Result<Vec<RecordBatch>> {
+    get_batches_with_limit(expr, 10).await
+}
+
+async fn get_batches_with_limit(expr: Expr, limit: usize) -> Result<Vec<RecordBatch>> {
     let df = create_test_table().await?;
     let df = df.select(vec![expr])?.limit(0, Some(limit))?;
     df.collect().await
@@ -85,7 +89,7 @@ async fn get_batches(expr: Expr, limit: usize) -> Result<Vec<RecordBatch>> {
 async fn test_fn_ascii() -> Result<()> {
     let expr = ascii(col("a"));
 
-    let batches = get_batches(expr, 1).await?;
+    let batches = get_batches_with_limit(expr, 1).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -105,7 +109,7 @@ async fn test_fn_ascii() -> Result<()> {
 async fn test_fn_bit_length() -> Result<()> {
     let expr = bit_length(col("a"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
     batches_to_string(&batches),
@@ -128,7 +132,7 @@ async fn test_fn_bit_length() -> Result<()> {
 async fn test_fn_btrim() -> Result<()> {
     let expr = btrim(vec![lit("      a b c             ")]);
 
-    let batches = get_batches(expr, 1).await?;
+    let batches = get_batches_with_limit(expr, 1).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -147,7 +151,7 @@ async fn test_fn_btrim() -> Result<()> {
 async fn test_fn_btrim_with_chars() -> Result<()> {
     let expr = btrim(vec![col("a"), lit("ab")]);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -170,7 +174,7 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
 async fn test_fn_nullif() -> Result<()> {
     let expr = nullif(col("a"), lit("abcDEF"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -192,7 +196,7 @@ async fn test_fn_nullif() -> Result<()> {
 async fn test_fn_arrow_cast() -> Result<()> {
     let expr = arrow_typeof(arrow_cast(col("b"), lit("Float64")));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -222,7 +226,7 @@ async fn test_nvl() -> Result<()> {
     )
     .alias("nvl_expr");
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -253,7 +257,7 @@ async fn test_nvl2() -> Result<()> {
     )
     .alias("nvl2_expr");
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -274,7 +278,7 @@ async fn test_nvl2() -> Result<()> {
 async fn test_fn_arrow_typeof() -> Result<()> {
     let expr = arrow_typeof(col("l"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -296,7 +300,7 @@ async fn test_fn_arrow_typeof() -> Result<()> {
 async fn test_fn_struct() -> Result<()> {
     let expr = r#struct(vec![col("a"), col("b")]);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -318,7 +322,7 @@ async fn test_fn_struct() -> Result<()> {
 async fn test_fn_named_struct() -> Result<()> {
     let expr = named_struct(vec![lit("column_a"), col("a"), lit("column_b"), col("b")]);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -340,7 +344,7 @@ async fn test_fn_named_struct() -> Result<()> {
 async fn test_fn_coalesce() -> Result<()> {
     let expr = coalesce(vec![lit(ScalarValue::Utf8(None)), lit("ab")]);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -440,7 +444,7 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
 async fn test_fn_character_length() -> Result<()> {
     let expr = character_length(col("a"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -462,7 +466,7 @@ async fn test_fn_character_length() -> Result<()> {
 async fn test_fn_chr() -> Result<()> {
     let expr = chr(lit(128175));
 
-    let batches = get_batches(expr, 1).await?;
+    let batches = get_batches_with_limit(expr, 1).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -481,7 +485,7 @@ async fn test_fn_chr() -> Result<()> {
 async fn test_fn_initcap() -> Result<()> {
     let expr = initcap(col("a"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -504,7 +508,7 @@ async fn test_fn_initcap() -> Result<()> {
 async fn test_fn_left() -> Result<()> {
     let expr = left(col("a"), lit(3));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -526,7 +530,7 @@ async fn test_fn_left() -> Result<()> {
 async fn test_fn_lower() -> Result<()> {
     let expr = lower(col("a"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -549,7 +553,7 @@ async fn test_fn_lower() -> Result<()> {
 async fn test_fn_lpad() -> Result<()> {
     let expr = lpad(vec![col("a"), lit(10)]);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -572,7 +576,7 @@ async fn test_fn_lpad() -> Result<()> {
 async fn test_fn_lpad_with_string() -> Result<()> {
     let expr = lpad(vec![col("a"), lit(10), lit("*")]);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -594,7 +598,7 @@ async fn test_fn_lpad_with_string() -> Result<()> {
 async fn test_fn_ltrim() -> Result<()> {
     let expr = ltrim(vec![lit("      a b c             ")]);
 
-    let batches = get_batches(expr, 1).await?;
+    let batches = get_batches_with_limit(expr, 1).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -613,7 +617,7 @@ async fn test_fn_ltrim() -> Result<()> {
 async fn test_fn_ltrim_with_columns() -> Result<()> {
     let expr = ltrim(vec![col("a")]);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -636,7 +640,7 @@ async fn test_fn_ltrim_with_columns() -> Result<()> {
 async fn test_fn_md5() -> Result<()> {
     let expr = md5(col("a"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -659,7 +663,7 @@ async fn test_fn_md5() -> Result<()> {
 async fn test_fn_regexp_like() -> Result<()> {
     let expr = regexp_like(col("a"), lit("[a-z]"), None);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -676,7 +680,7 @@ async fn test_fn_regexp_like() -> Result<()> {
 
     let expr = regexp_like(col("a"), lit("abc"), Some(lit("i")));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -699,7 +703,7 @@ async fn test_fn_regexp_like() -> Result<()> {
 async fn test_fn_regexp_match() -> Result<()> {
     let expr = regexp_match(col("a"), lit("[a-z]"), None);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -716,7 +720,7 @@ async fn test_fn_regexp_match() -> Result<()> {
 
     let expr = regexp_match(col("a"), lit("[A-Z]"), Some(lit("i")));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -739,7 +743,7 @@ async fn test_fn_regexp_match() -> Result<()> {
 async fn test_fn_regexp_replace() -> Result<()> {
     let expr = regexp_replace(col("a"), lit("[a-z]"), lit("x"), Some(lit("g")));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -756,7 +760,7 @@ async fn test_fn_regexp_replace() -> Result<()> {
 
     let expr = regexp_replace(col("a"), lit("[a-z]"), lit("x"), None);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -778,7 +782,7 @@ async fn test_fn_regexp_replace() -> Result<()> {
 async fn test_fn_replace() -> Result<()> {
     let expr = replace(col("a"), lit("abc"), lit("x"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -800,7 +804,7 @@ async fn test_fn_replace() -> Result<()> {
 async fn test_fn_repeat() -> Result<()> {
     let expr = repeat(col("a"), lit(2));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -823,7 +827,7 @@ async fn test_fn_repeat() -> Result<()> {
 async fn test_fn_reverse() -> Result<()> {
     let expr = reverse(col("a"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -846,7 +850,7 @@ async fn test_fn_reverse() -> Result<()> {
 async fn test_fn_right() -> Result<()> {
     let expr = right(col("a"), lit(3));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -869,7 +873,7 @@ async fn test_fn_right() -> Result<()> {
 async fn test_fn_rpad() -> Result<()> {
     let expr = rpad(vec![col("a"), lit(11)]);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -892,7 +896,7 @@ async fn test_fn_rpad() -> Result<()> {
 async fn test_fn_rpad_with_characters() -> Result<()> {
     let expr = rpad(vec![col("a"), lit(11), lit("x")]);
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -915,7 +919,7 @@ async fn test_fn_rpad_with_characters() -> Result<()> {
 async fn test_fn_sha224() -> Result<()> {
     let expr = sha224(col("a"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -937,7 +941,7 @@ async fn test_fn_sha224() -> Result<()> {
 async fn test_fn_split_part() -> Result<()> {
     let expr = split_part(col("a"), lit("b"), lit(1));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -959,7 +963,7 @@ async fn test_fn_split_part() -> Result<()> {
 async fn test_fn_starts_with() -> Result<()> {
     let expr = starts_with(col("a"), lit("abc"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -981,7 +985,7 @@ async fn test_fn_starts_with() -> Result<()> {
 async fn test_fn_ends_with() -> Result<()> {
     let expr = ends_with(col("a"), lit("DEF"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1004,7 +1008,7 @@ async fn test_fn_ends_with() -> Result<()> {
 async fn test_fn_strpos() -> Result<()> {
     let expr = strpos(col("a"), lit("f"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1027,7 +1031,7 @@ async fn test_fn_strpos() -> Result<()> {
 async fn test_fn_substr() -> Result<()> {
     let expr = substr(col("a"), lit(2));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1048,7 +1052,7 @@ async fn test_fn_substr() -> Result<()> {
 #[tokio::test]
 async fn test_cast() -> Result<()> {
     let expr = cast(col("b"), DataType::Float64);
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1070,7 +1074,7 @@ async fn test_cast() -> Result<()> {
 async fn test_fn_to_hex() -> Result<()> {
     let expr = to_hex(col("b"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1093,7 +1097,7 @@ async fn test_fn_to_hex() -> Result<()> {
 async fn test_fn_translate() -> Result<()> {
     let expr = translate(col("a"), lit("bc"), lit("xx"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1115,7 +1119,7 @@ async fn test_fn_translate() -> Result<()> {
 async fn test_fn_upper() -> Result<()> {
     let expr = upper(col("a"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1137,7 +1141,7 @@ async fn test_fn_upper() -> Result<()> {
 async fn test_fn_encode() -> Result<()> {
     let expr = encode(col("a"), lit("hex"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1166,7 +1170,7 @@ async fn test_fn_decode() -> Result<()> {
         // so it looks like nothing is done
         .cast_to(&DataType::Utf8, &df_schema)?;
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1188,7 +1192,7 @@ async fn test_fn_decode() -> Result<()> {
 async fn test_fn_array_to_string() -> Result<()> {
     let expr = array_to_string(col("l"), lit("***"));
 
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
@@ -1212,7 +1216,7 @@ async fn test_fn_map() -> Result<()> {
         vec![lit("a"), lit("b"), lit("c")],
         vec![lit(1), lit(2), lit(3)],
     );
-    let batches = get_batches(expr, 10).await?;
+    let batches = get_batches(expr).await?;
 
     assert_snapshot!(
         batches_to_string(&batches),
