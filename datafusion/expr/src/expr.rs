@@ -1147,6 +1147,18 @@ impl Expr {
         SchemaDisplay(self)
     }
 
+    /// The human readable name of the column (field) that this `Expr` will produce.
+    /// This name is primarily used in printing the explain tree output, (e.g. `EXPLAIN <query>`),
+    /// providing a readable format to show how expressions are used in physical and logical plans.
+    ///
+    /// # Example
+    /// ```
+    /// # use datafusion_expr::{col, lit};
+    /// let expr = col("foo") + lit(42);
+    /// // For EXPLAIN output:
+    /// // "foo + 42"
+    /// println!("{}", expr.sql_name());
+    /// ```
     pub fn sql_name(&self) -> impl Display + '_ {
         SqlDisplay(self)
     }
@@ -2784,6 +2796,7 @@ pub(crate) fn schema_name_from_exprs_comma_separated_without_space(
     schema_name_from_exprs_inner(exprs, ",")
 }
 
+/// Get `sql_name` for Vector of expressions.
 pub(crate) fn sql_name_from_exprs_comma_separated_without_space(
     exprs: &[Expr],
 ) -> Result<String, fmt::Error> {
@@ -2795,6 +2808,7 @@ pub fn schema_name_from_exprs(exprs: &[Expr]) -> Result<String, fmt::Error> {
     schema_name_from_exprs_inner(exprs, ", ")
 }
 
+/// Get `sql_name` for Vector of expressions.
 pub fn sql_name_from_exprs(exprs: &[Expr]) -> Result<String, fmt::Error> {
     sql_name_from_exprs_inner(exprs, ", ")
 }
