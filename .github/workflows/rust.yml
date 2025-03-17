@@ -469,7 +469,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v5
         with:
-          files: ./coverage.txt
+          files: ./datafusion/sqllogictest/coverage.txt
           disable_search: true
           token: ${{ secrets.CODECOV_TOKEN }}
           name: sqllogictest-postgres
