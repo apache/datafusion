@@ -699,7 +699,6 @@ pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
 extern crate core;
 extern crate sqlparser;
 
-pub mod catalog_common;
 pub mod dataframe;
 pub mod datasource;
 pub mod error;

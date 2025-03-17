@@ -298,6 +298,27 @@ SELECT c2, approx_distinct(c1), approx_distinct(c5) FROM aggregate_test_100 GROU
 4 5 23
 5 5 14
 
+# Test approx_distinct for varchar(with Utf8View) / int
+statement ok
+CREATE TABLE aggregate_test_100_utf8view AS SELECT
+      arrow_cast(c1, 'Utf8View') as c1,
+      c2,
+      c5
+FROM aggregate_test_100;
+
+# Test approx_distinct for varchar(with Utf8View) / int
+query III
+SELECT c2, approx_distinct(c1), approx_distinct(c5) FROM aggregate_test_100_utf8view GROUP BY c2 ORDER BY c2;
+----
+1 5 22
+2 5 22
+3 5 19
+4 5 23
+5 5 14
+
+statement ok
+DROP TABLE aggregate_test_100_utf8view;
+
 # Test count with nullable fields
 query III
 SELECT c2, count(c3), count(c11) FROM aggregate_test_100_null GROUP BY c2 ORDER BY c2;

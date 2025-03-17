@@ -398,6 +398,22 @@ impl PhysicalExpr for InListExpr {
             self.static_filter.clone(),
         )))
     }
+
+    fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.expr.fmt_sql(f)?;
+        if self.negated {
+            write!(f, " NOT")?;
+        }
+
+        write!(f, " IN (")?;
+        for (i, expr) in self.list.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            expr.fmt_sql(f)?;
+        }
+        write!(f, ")")
+    }
 }
 
 impl PartialEq for InListExpr {
@@ -453,6 +469,7 @@ mod tests {
     use crate::expressions::{col, lit, try_cast};
     use datafusion_common::plan_err;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
+    use datafusion_physical_expr_common::physical_expr::fmt_sql;
 
     type InListCastResult = (Arc<dyn PhysicalExpr>, Vec<Arc<dyn PhysicalExpr>>);
 
@@ -1419,6 +1436,46 @@ mod tests {
                 &schema
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fmt_sql() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+        let col_a = col("a", &schema)?;
+
+        // Test: a IN ('a', 'b')
+        let list = vec![lit("a"), lit("b")];
+        let expr = in_list(Arc::clone(&col_a), list, &false, &schema)?;
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        let display_string = expr.to_string();
+        assert_eq!(sql_string, "a IN (a, b)");
+        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }])");
+
+        // Test: a NOT IN ('a', 'b')
+        let list = vec![lit("a"), lit("b")];
+        let expr = in_list(Arc::clone(&col_a), list, &true, &schema)?;
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        let display_string = expr.to_string();
+        assert_eq!(sql_string, "a NOT IN (a, b)");
+        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }])");
+
+        // Test: a IN ('a', 'b', NULL)
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
+        let expr = in_list(Arc::clone(&col_a), list, &false, &schema)?;
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        let display_string = expr.to_string();
+        assert_eq!(sql_string, "a IN (a, b, NULL)");
+        assert_eq!(display_string, "Use a@0 IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }, Literal { value: Utf8(NULL) }])");
+
+        // Test: a NOT IN ('a', 'b', NULL)
+        let list = vec![lit("a"), lit("b"), lit(ScalarValue::Utf8(None))];
+        let expr = in_list(Arc::clone(&col_a), list, &true, &schema)?;
+        let sql_string = fmt_sql(expr.as_ref()).to_string();
+        let display_string = expr.to_string();
+        assert_eq!(sql_string, "a NOT IN (a, b, NULL)");
+        assert_eq!(display_string, "a@0 NOT IN (SET) ([Literal { value: Utf8(\"a\") }, Literal { value: Utf8(\"b\") }, Literal { value: Utf8(NULL) }])");
 
         Ok(())
     }

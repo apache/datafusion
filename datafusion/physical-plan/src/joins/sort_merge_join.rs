@@ -70,6 +70,7 @@ use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_execution::TaskContext;
 use datafusion_physical_expr::equivalence::join_equivalence_properties;
 use datafusion_physical_expr::PhysicalExprRef;
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 
 use futures::{Stream, StreamExt};
@@ -373,7 +374,9 @@ impl DisplayAs for SortMergeJoinExec {
                 let on = self
                     .on
                     .iter()
-                    .map(|(c1, c2)| format!("({} = {})", c1, c2))
+                    .map(|(c1, c2)| {
+                        format!("({} = {})", fmt_sql(c1.as_ref()), fmt_sql(c2.as_ref()))
+                    })
                     .collect::<Vec<String>>()
                     .join(", ");
 
