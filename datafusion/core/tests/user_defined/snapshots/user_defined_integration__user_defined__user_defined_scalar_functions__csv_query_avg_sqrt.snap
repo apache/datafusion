@@ -1,9 +1,0 @@
----
-source: datafusion/core/tests/user_defined/user_defined_scalar_functions.rs
-expression: fmt_batches(&actual)
----
-+------------------------------------------+
-| avg(custom_sqrt(aggregate_test_100.c12)) |
-+------------------------------------------+
-| 0.6706002946036459                       |
-+------------------------------------------+

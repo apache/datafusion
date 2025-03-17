@@ -1,9 +1,0 @@
----
-source: datafusion/core/tests/user_defined/expr_planner.rs
-expression: fmt_batches(&actual)
----
-+----------------------------+
-| Utf8("foo") || Utf8("bar") |
-+----------------------------+
-| foobar                     |
-+----------------------------+
