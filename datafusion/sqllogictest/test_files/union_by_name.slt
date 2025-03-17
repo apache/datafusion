@@ -315,3 +315,21 @@ select t3.x, t3.y, t3.z from t3 union by name select t4.z, t4.y, t4.x, 'd' as zz
 ----
 a b c NULL
 a b c d
+
+query TTT rowsort
+select x, y, z from t3 union all by name select z, y, x from t3;
+----
+a b c
+a b c
+
+query TTT rowsort
+select x, y, z from t3 union all by name select z, y, x from t4;
+----
+a b c
+a b c
+
+query TTT
+select x, y, z from t3 union all by name select z, y, x from t4 order by x;
+----
+a b c
+a b c
