@@ -16,17 +16,17 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Field};
-use std::any::Any;
-use std::fmt::Debug;
-
+use datafusion::logical_expr::ColumnarValue;
 use datafusion_common::plan_err;
 use datafusion_expr::function::AccumulatorArgs;
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, PartitionEvaluator, ScalarUDFImpl, Signature,
-    Volatility, WindowUDFImpl,
+    Accumulator, AggregateUDFImpl, PartitionEvaluator, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility, WindowUDFImpl,
 };
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
 use datafusion_functions_window_common::partition::PartitionEvaluatorArgs;
+use std::any::Any;
+use std::fmt::Debug;
 
 mod roundtrip_logical_plan;
 mod roundtrip_physical_plan;
@@ -69,6 +69,14 @@ impl ScalarUDFImpl for MyRegexUdf {
             plan_err!("regex_udf only accepts Utf8 arguments")
         }
     }
+
+    fn invoke_with_args(
+        &self,
+        _args: ScalarFunctionArgs,
+    ) -> datafusion_common::Result<ColumnarValue> {
+        panic!("dummy - not implemented")
+    }
+
     fn aliases(&self) -> &[String] {
         &self.aliases
     }
