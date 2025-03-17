@@ -1661,8 +1661,8 @@ mod tests {
     use datafusion_expr::{
         case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
-        table_scan, try_cast, when, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
-        WindowFrame, WindowFunctionDefinition,
+        table_scan, try_cast, when, ColumnarValue, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
     use datafusion_functions::expr_fn::{get_field, named_struct};
@@ -1710,6 +1710,10 @@ mod tests {
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int32)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("dummy - not implemented")
         }
     }
     // See sql::tests for E2E tests.
