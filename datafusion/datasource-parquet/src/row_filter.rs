@@ -518,9 +518,9 @@ pub fn build_row_filter(
 mod test {
     use super::*;
     use datafusion_common::ScalarValue;
-    use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
 
     use arrow::datatypes::{Field, Fields, TimeUnit::Nanosecond};
+    use datafusion_datasource::schema_adapter::DefaultSchemaAdapterFactory;
     use datafusion_expr::{col, Expr};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::metrics::{Count, Time};
@@ -547,7 +547,7 @@ mod test {
         let expr = col("int64_list").is_not_null();
         let expr = logical2physical(&expr, &table_schema);
 
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory::default());
+        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
         let table_schema = Arc::new(table_schema.clone());
 
         let candidate = FilterCandidateBuilder::new(
@@ -586,7 +586,7 @@ mod test {
             ScalarValue::TimestampNanosecond(Some(1), Some(Arc::from("UTC"))),
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory::default());
+        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
         let table_schema = Arc::new(table_schema.clone());
         let candidate = FilterCandidateBuilder::new(
             expr,
@@ -626,7 +626,7 @@ mod test {
             ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("UTC"))),
         ));
         let expr = logical2physical(&expr, &table_schema);
-        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory::default());
+        let schema_adapter_factory = Arc::new(DefaultSchemaAdapterFactory);
         let candidate = FilterCandidateBuilder::new(
             expr,
             file_schema,
