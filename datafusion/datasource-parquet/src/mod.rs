@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![cfg_attr(not(test), deny(clippy::clone_on_ref_ptr))]
+
 //! [`ParquetExec`] FileSource for reading Parquet files
 
 pub mod access_plan;
