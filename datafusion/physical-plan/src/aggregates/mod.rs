@@ -48,6 +48,7 @@ use datafusion_physical_expr::{
     PhysicalSortRequirement,
 };
 
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use itertools::Itertools;
 
 pub(crate) mod group_values;
@@ -742,17 +743,18 @@ impl DisplayAs for AggregateExec {
         t: DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        let format_expr_with_alias =
-            |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
-                let e = e.to_string();
-                if &e != alias {
-                    format!("{e} as {alias}")
-                } else {
-                    e
-                }
-            };
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
+                let format_expr_with_alias =
+                    |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+                        let e = e.to_string();
+                        if &e != alias {
+                            format!("{e} as {alias}")
+                        } else {
+                            e
+                        }
+                    };
+
                 write!(f, "AggregateExec: mode={:?}", self.mode)?;
                 let g: Vec<String> = if self.group_by.is_single() {
                     self.group_by
@@ -801,6 +803,16 @@ impl DisplayAs for AggregateExec {
                 }
             }
             DisplayFormatType::TreeRender => {
+                let format_expr_with_alias =
+                    |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
+                        let expr_sql = fmt_sql(e.as_ref()).to_string();
+                        if &expr_sql != alias {
+                            format!("{expr_sql} as {alias}")
+                        } else {
+                            expr_sql
+                        }
+                    };
+
                 let g: Vec<String> = if self.group_by.is_single() {
                     self.group_by
                         .expr
@@ -830,7 +842,6 @@ impl DisplayAs for AggregateExec {
                         })
                         .collect()
                 };
-                // TODO: Implement `fmt_sql` for `AggregateFunctionExpr`.
                 let a: Vec<String> = self
                     .aggr_expr
                     .iter()
@@ -840,7 +851,9 @@ impl DisplayAs for AggregateExec {
                 if !g.is_empty() {
                     writeln!(f, "group_by={}", g.join(", "))?;
                 }
-                writeln!(f, "aggr={}", a.join(", "))?;
+                if !a.is_empty() {
+                    writeln!(f, "aggr={}", a.join(", "))?;
+                }
             }
         }
         Ok(())
