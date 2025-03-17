@@ -174,7 +174,7 @@ impl FileOpener for ParquetOpener {
                     builder.metadata(),
                     reorder_predicates,
                     &file_metrics,
-                    schema_adapter_factory.clone(),
+                    &schema_adapter_factory,
                 );
 
                 match row_filter {
