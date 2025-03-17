@@ -24,10 +24,12 @@
 #![deny(clippy::clone_on_ref_ptr)]
 
 pub mod arrow_wrappers;
+pub mod catalog_provider;
 pub mod execution_plan;
 pub mod insert_op;
 pub mod plan_properties;
 pub mod record_batch_stream;
+pub mod schema_provider;
 pub mod session_config;
 pub mod table_provider;
 pub mod table_source;
