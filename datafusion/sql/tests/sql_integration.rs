@@ -1904,7 +1904,6 @@ fn union_by_name_different_columns() {
         \n    Projection: Int64(1), order_id\
         \n      Projection: orders.order_id, Int64(1)\
         \n        TableScan: orders";
-
     quick_test(sql, expected);
 }
 

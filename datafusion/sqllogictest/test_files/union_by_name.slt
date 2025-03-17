@@ -337,7 +337,7 @@ a b c
 
 # FIXME: The following should pass without error, but currently it is failing
 # due to differing record batch schemas when the SLT runner collects results in
-# normalize::convert_batches.
+# `normalize::convert_batches`.
 #
 # More context can be found here: https://github.com/apache/datafusion/pull/15242#issuecomment-2730402547
 query error
