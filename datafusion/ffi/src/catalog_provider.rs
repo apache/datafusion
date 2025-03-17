@@ -280,3 +280,59 @@ impl CatalogProvider for ForeignCatalogProvider {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use datafusion::catalog::{MemoryCatalogProvider, MemorySchemaProvider};
+
+    use super::*;
+
+    #[test]
+    fn test_round_trip_ffi_catalog_provider() {
+        let prior_schema = Arc::new(MemorySchemaProvider::new());
+
+        let catalog = Arc::new(MemoryCatalogProvider::new());
+        assert!(catalog
+            .as_ref()
+            .register_schema("prior_schema", prior_schema)
+            .unwrap()
+            .is_none());
+
+        let ffi_catalog = FFI_CatalogProvider::new(catalog, None);
+
+        let foreign_catalog: ForeignCatalogProvider = (&ffi_catalog).into();
+
+        let prior_schema_names = foreign_catalog.schema_names();
+        assert_eq!(prior_schema_names.len(), 1);
+        assert_eq!(prior_schema_names[0], "prior_schema");
+
+        // Replace an existing schema with one of the same name
+        let returned_schema = foreign_catalog
+            .register_schema("prior_schema", Arc::new(MemorySchemaProvider::new()))
+            .expect("Unable to register schema");
+        assert!(returned_schema.is_some());
+        assert_eq!(foreign_catalog.schema_names().len(), 1);
+
+        // Add a new schema name
+        let returned_schema = foreign_catalog
+            .register_schema("second_schema", Arc::new(MemorySchemaProvider::new()))
+            .expect("Unable to register schema");
+        assert!(returned_schema.is_none());
+        assert_eq!(foreign_catalog.schema_names().len(), 2);
+
+        // Remove a schema
+        let returned_schema = foreign_catalog
+            .deregister_schema("prior_schema", false)
+            .expect("Unable to deregister schema");
+        assert!(returned_schema.is_some());
+        assert_eq!(foreign_catalog.schema_names().len(), 1);
+
+        // Retrieve non-existant schema
+        let returned_schema = foreign_catalog.schema("prior_schema");
+        assert!(returned_schema.is_none());
+
+        // Retrieve valid schema
+        let returned_schema = foreign_catalog.schema("second_schema");
+        assert!(returned_schema.is_some());
+    }
+}

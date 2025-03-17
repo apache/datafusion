@@ -316,3 +316,70 @@ impl SchemaProvider for ForeignSchemaProvider {
         unsafe { (self.0.table_exist)(&self.0, name.into()) }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::Schema;
+    use datafusion::{catalog::MemorySchemaProvider, datasource::empty::EmptyTable};
+
+    use super::*;
+
+    fn empty_table() -> Arc<dyn TableProvider> {
+        Arc::new(EmptyTable::new(Arc::new(Schema::empty())))
+    }
+
+    #[tokio::test]
+    async fn test_round_trip_ffi_schema_provider() {
+        let schema_provider = Arc::new(MemorySchemaProvider::new());
+        assert!(schema_provider
+            .as_ref()
+            .register_table("prior_table".to_string(), empty_table())
+            .unwrap()
+            .is_none());
+
+        let ffi_schema_provider = FFI_SchemaProvider::new(schema_provider, None);
+
+        let foreign_schema_provider: ForeignSchemaProvider =
+            (&ffi_schema_provider).into();
+
+        let prior_table_names = foreign_schema_provider.table_names();
+        assert_eq!(prior_table_names.len(), 1);
+        assert_eq!(prior_table_names[0], "prior_table");
+
+        // Replace an existing table with one of the same name generates an error
+        let returned_schema = foreign_schema_provider
+            .register_table("prior_table".to_string(), empty_table());
+        assert!(returned_schema.is_err());
+        assert_eq!(foreign_schema_provider.table_names().len(), 1);
+
+        // Add a new table
+        let returned_schema = foreign_schema_provider
+            .register_table("second_table".to_string(), empty_table())
+            .expect("Unable to register table");
+        assert!(returned_schema.is_none());
+        assert_eq!(foreign_schema_provider.table_names().len(), 2);
+
+        // Remove a table
+        let returned_schema = foreign_schema_provider
+            .deregister_table("prior_table")
+            .expect("Unable to deregister table");
+        assert!(returned_schema.is_some());
+        assert_eq!(foreign_schema_provider.table_names().len(), 1);
+
+        // Retrieve non-existant table
+        let returned_schema = foreign_schema_provider
+            .table("prior_table")
+            .await
+            .expect("Unable to query table");
+        assert!(returned_schema.is_none());
+        assert!(!foreign_schema_provider.table_exist("prior_table"));
+
+        // Retrieve valid table
+        let returned_schema = foreign_schema_provider
+            .table("second_table")
+            .await
+            .expect("Unable to query table");
+        assert!(returned_schema.is_some());
+        assert!(foreign_schema_provider.table_exist("second_table"));
+    }
+}
