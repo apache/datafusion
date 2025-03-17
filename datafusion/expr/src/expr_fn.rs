@@ -25,6 +25,7 @@ use crate::function::{
     AccumulatorArgs, AccumulatorFactoryFunction, PartitionEvaluatorFactory,
     StateFieldsArgs,
 };
+use crate::select_expr::SelectExpr;
 use crate::{
     conditional_expressions::CaseBuilder, expr::Sort, logical_plan::Subquery,
     AggregateUDF, Expr, LogicalPlan, Operator, PartitionEvaluator, ScalarFunctionArgs,
@@ -120,21 +121,13 @@ pub fn placeholder(id: impl Into<String>) -> Expr {
 /// let p = wildcard();
 /// assert_eq!(p.to_string(), "*")
 /// ```
-pub fn wildcard() -> Expr {
-    #[expect(deprecated)]
-    Expr::Wildcard {
-        qualifier: None,
-        options: Box::new(WildcardOptions::default()),
-    }
+pub fn wildcard() -> SelectExpr {
+    SelectExpr::Wildcard(WildcardOptions::default())
 }
 
 /// Create an '*' [`Expr::Wildcard`] expression with the wildcard options
-pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
-    #[expect(deprecated)]
-    Expr::Wildcard {
-        qualifier: None,
-        options: Box::new(options),
-    }
+pub fn wildcard_with_options(options: WildcardOptions) -> SelectExpr {
+    SelectExpr::Wildcard(options)
 }
 
 /// Create an 't.*' [`Expr::Wildcard`] expression that matches all columns from a specific table
@@ -147,24 +140,16 @@ pub fn wildcard_with_options(options: WildcardOptions) -> Expr {
 /// let p = qualified_wildcard(TableReference::bare("t"));
 /// assert_eq!(p.to_string(), "t.*")
 /// ```
-pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> Expr {
-    #[expect(deprecated)]
-    Expr::Wildcard {
-        qualifier: Some(qualifier.into()),
-        options: Box::new(WildcardOptions::default()),
-    }
+pub fn qualified_wildcard(qualifier: impl Into<TableReference>) -> SelectExpr {
+    SelectExpr::QualifiedWildcard(qualifier.into(), WildcardOptions::default())
 }
 
 /// Create an 't.*' [`Expr::Wildcard`] expression with the wildcard options
 pub fn qualified_wildcard_with_options(
     qualifier: impl Into<TableReference>,
     options: WildcardOptions,
-) -> Expr {
-    #[expect(deprecated)]
-    Expr::Wildcard {
-        qualifier: Some(qualifier.into()),
-        options: Box::new(options),
-    }
+) -> SelectExpr {
+    SelectExpr::QualifiedWildcard(qualifier.into(), options)
 }
 
 /// Return a new expression `left <op> right`

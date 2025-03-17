@@ -1661,8 +1661,8 @@ mod tests {
     use datafusion_expr::{
         case, cast, col, cube, exists, grouping_set, interval_datetime_lit,
         interval_year_month_lit, lit, not, not_exists, out_ref_col, placeholder, rollup,
-        table_scan, try_cast, when, wildcard, ScalarUDF, ScalarUDFImpl, Signature,
-        Volatility, WindowFrame, WindowFunctionDefinition,
+        table_scan, try_cast, when, ColumnarValue, ScalarFunctionArgs, ScalarUDF,
+        ScalarUDFImpl, Signature, Volatility, WindowFrame, WindowFunctionDefinition,
     };
     use datafusion_expr::{interval_month_day_nano_lit, ExprFunctionExt};
     use datafusion_functions::expr_fn::{get_field, named_struct};
@@ -1710,6 +1710,10 @@ mod tests {
 
         fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
             Ok(DataType::Int32)
+        }
+
+        fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+            panic!("dummy - not implemented")
         }
     }
     // See sql::tests for E2E tests.
@@ -1913,16 +1917,24 @@ mod tests {
             ),
             (sum(col("a")), r#"sum(a)"#),
             (
+                #[expect(deprecated)]
                 count_udaf()
-                    .call(vec![wildcard()])
+                    .call(vec![Expr::Wildcard {
+                        qualifier: None,
+                        options: Box::new(WildcardOptions::default()),
+                    }])
                     .distinct()
                     .build()
                     .unwrap(),
                 "count(DISTINCT *)",
             ),
             (
+                #[expect(deprecated)]
                 count_udaf()
-                    .call(vec![wildcard()])
+                    .call(vec![Expr::Wildcard {
+                        qualifier: None,
+                        options: Box::new(WildcardOptions::default()),
+                    }])
                     .filter(lit(true))
                     .build()
                     .unwrap(),
@@ -1942,10 +1954,14 @@ mod tests {
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
             (
+                #[expect(deprecated)]
                 Expr::WindowFunction(WindowFunction {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     params: WindowFunctionParams {
-                        args: vec![wildcard()],
+                        args: vec![Expr::Wildcard {
+                            qualifier: None,
+                            options: Box::new(WildcardOptions::default()),
+                        }],
                         partition_by: vec![],
                         order_by: vec![Sort::new(col("a"), false, true)],
                         window_frame: WindowFrame::new_bounds(
