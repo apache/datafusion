@@ -107,7 +107,7 @@ pub(crate) struct DatafusionArrowPredicate {
     /// how long was spent evaluating this predicate
     time: metrics::Time,
     /// used to perform type coercion while filtering rows
-    schema_mapping: Arc<dyn SchemaMapper>,
+    schema_mapper: Arc<dyn SchemaMapper>,
 }
 
 impl DatafusionArrowPredicate {
@@ -132,7 +132,7 @@ impl DatafusionArrowPredicate {
             rows_pruned,
             rows_matched,
             time,
-            schema_mapping: candidate.schema_mapper,
+            schema_mapper: candidate.schema_mapper,
         })
     }
 }
@@ -143,7 +143,7 @@ impl ArrowPredicate for DatafusionArrowPredicate {
     }
 
     fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
-        let batch = self.schema_mapping.map_batch(batch)?;
+        let batch = self.schema_mapper.map_batch(batch)?;
 
         // scoped timer updates on drop
         let mut timer = self.time.timer();
