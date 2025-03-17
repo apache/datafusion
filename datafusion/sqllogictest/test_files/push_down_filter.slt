@@ -250,5 +250,12 @@ explain select a from t where cast(a as string) = '100';
 ----
 logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("100")]
 
+# The predicate should still have the column cast when the value's string representation is not the same after a round-trip cast
+query TT
+explain select a from t where CAST(a AS string) = '0123';
+----
+logical_plan TableScan: t projection=[a], full_filters=[CAST(t.a AS Utf8) = Utf8("0123")]
+
+
 statement ok
 drop table t;
