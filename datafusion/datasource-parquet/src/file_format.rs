@@ -465,7 +465,7 @@ impl FileFormat for ParquetFormat {
     }
 }
 
-/// Apply necessary schema type coercions between table and file schemas
+/// Apply necessary schema type coercions to make file schema match table schema.
 ///
 /// This function performs two main types of transformations in a single pass:
 /// 1. Binary types to string types conversion - Converts binary data types to their
