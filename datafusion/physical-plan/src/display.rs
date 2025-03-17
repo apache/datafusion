@@ -19,13 +19,12 @@
 //! [`crate::displayable`] for examples of how to format
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 use std::fmt::Formatter;
-use std::{fmt, str::FromStr};
 
 use arrow::datatypes::SchemaRef;
 
 use datafusion_common::display::{GraphvizBuilder, PlanType, StringifiedPlan};
-use datafusion_common::DataFusionError;
 use datafusion_expr::display_schema;
 use datafusion_physical_expr::LexOrdering;
 
@@ -39,7 +38,7 @@ pub enum DisplayFormatType {
     /// Default, compact format. Example: `FilterExec: c12 < 10.0`
     ///
     /// This format is designed to provide a detailed textual description
-    /// of all rele
+    /// of all parts of the plan.
     Default,
     /// Verbose, showing all available details.
     ///
@@ -77,21 +76,6 @@ pub enum DisplayFormatType {
     /// └───────────────────────────┘
     ///  ```
     TreeRender,
-}
-
-impl FromStr for DisplayFormatType {
-    type Err = DataFusionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "indent" => Ok(Self::Default),
-            "tree" => Ok(Self::TreeRender),
-            _ => Err(DataFusionError::Configuration(format!(
-                "Invalid explain format: {}",
-                s
-            ))),
-        }
-    }
 }
 
 /// Wraps an `ExecutionPlan` with various methods for formatting
@@ -280,6 +264,9 @@ impl<'a> DisplayableExecutionPlan<'a> {
         }
     }
 
+    /// Formats the plan using a ASCII art like tree
+    ///
+    /// See [`DisplayFormatType::TreeRender`] for more details.
     pub fn tree_render(&self) -> impl fmt::Display + 'a {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
@@ -326,7 +313,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
         }
     }
 
-    /// format as a `StringifiedPlan`
+    #[deprecated(since = "47.0.0", note = "indent() or tree_render() instead")]
     pub fn to_stringified(
         &self,
         verbose: bool,

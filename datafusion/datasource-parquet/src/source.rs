@@ -34,6 +34,7 @@ use datafusion_common::config::TableParquetOptions;
 use datafusion_common::Statistics;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_physical_expr_common::physical_expr::fmt_sql;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::pruning::PruningPredicate;
 use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder};
@@ -580,7 +581,7 @@ impl FileSource for ParquetSource {
             }
             DisplayFormatType::TreeRender => {
                 if let Some(predicate) = self.predicate() {
-                    writeln!(f, "predicate={predicate}")?;
+                    writeln!(f, "predicate={}", fmt_sql(predicate.as_ref()))?;
                 }
                 Ok(())
             }
