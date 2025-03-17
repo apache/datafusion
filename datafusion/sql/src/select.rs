@@ -27,6 +27,7 @@ use crate::utils::{
 
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::DataFusionError;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use datafusion_common::{RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
@@ -826,6 +827,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
             .collect::<Result<Vec<Expr>>>()?;
 
+        // check if the columns in the SELECT list are in the GROUP BY clause
+        // or are part of an aggregate function, if not, throw an error.
+        validate_columns_in_group_by_or_aggregate(
+            &select_exprs_post_aggr,
+            &column_exprs_post_aggr,
+        )?;
+
         // finally, we have some validation that the re-written projection can be resolved
         // from the aggregate output columns
         check_columns_satisfy_exprs(
@@ -853,6 +861,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
+}
+
+/// This function is for checking if the columns in the SELECT list are
+/// in the GROUP BY clause or are part of an aggregate function.
+/// If not, throw an SchemaError::GroupByColumnInvalid and return an error.
+///
+fn validate_columns_in_group_by_or_aggregate(
+    expanded: &Vec<Expr>,
+    aggregate_columns: &Vec<Expr>,
+) -> Result<(), DataFusionError> {
+    if !aggregate_columns.is_empty() {
+        for e in expanded {
+            if let Expr::Column(col) = e {
+                let name = &col.name;
+                if !aggregate_columns.contains(e) {
+                    return Err(DataFusionError::SchemaError(
+                        datafusion_common::SchemaError::GoupByColumnNotInSelectList {
+                            column: (name.clone().to_string()),
+                        },
+                        Box::new(None),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // If there are any multiple-defined windows, we raise an error.
