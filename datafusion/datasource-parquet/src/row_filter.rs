@@ -449,12 +449,12 @@ fn columns_sorted(_columns: &[usize], _metadata: &ParquetMetaData) -> Result<boo
 /// `a = 1` and `c = 3`.
 pub fn build_row_filter(
     expr: &Arc<dyn PhysicalExpr>,
-    file_schema: &Schema,
-    table_schema: &Schema,
+    file_schema: &SchemaRef,
+    table_schema: &SchemaRef,
     metadata: &ParquetMetaData,
     reorder_predicates: bool,
     file_metrics: &ParquetFileMetrics,
-    schema_adapter_factory: Arc<dyn SchemaAdapterFactory>,
+    schema_adapter_factory: &Arc<dyn SchemaAdapterFactory>,
 ) -> Result<Option<RowFilter>> {
     let rows_pruned = &file_metrics.pushdown_rows_pruned;
     let rows_matched = &file_metrics.pushdown_rows_matched;
@@ -464,18 +464,15 @@ pub fn build_row_filter(
     // `a = 1 AND b = 2 AND c = 3` -> [`a = 1`, `b = 2`, `c = 3`]
     let predicates = split_conjunction(expr);
 
-    let file_schema = Arc::new(file_schema.clone());
-    let table_schema = Arc::new(table_schema.clone());
-
     // Determine which conjuncts can be evaluated as ArrowPredicates, if any
     let mut candidates: Vec<FilterCandidate> = predicates
         .into_iter()
         .map(|expr| {
             FilterCandidateBuilder::new(
                 Arc::clone(expr),
-                file_schema.clone(),
-                table_schema.clone(),
-                schema_adapter_factory.clone(),
+                Arc::clone(file_schema),
+                Arc::clone(table_schema),
+                Arc::clone(schema_adapter_factory),
             )
             .build(metadata)
         })
