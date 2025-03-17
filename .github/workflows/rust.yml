@@ -246,7 +246,6 @@ jobs:
             mc cp -r /source/* localminio/data"
       - name: Run tests (excluding doctests)
         env:
-          RUST_MIN_STACK: 4194304
           RUST_BACKTRACE: 1
           AWS_ENDPOINT: http://127.0.0.1:9000
           AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
