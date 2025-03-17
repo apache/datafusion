@@ -2616,9 +2616,6 @@ struct SqlDisplay<'a>(&'a Expr);
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.0 {
-            Expr::Column(col) => {
-                write!(f, "{}", col.name)
-            }
             Expr::Literal(scalar) => scalar.fmt(f),
             Expr::Placeholder(holder) => {
                 write!(f, "{}", holder.id)
