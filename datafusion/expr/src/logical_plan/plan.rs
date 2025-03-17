@@ -2821,6 +2821,9 @@ impl Union {
                     .iter()
                     .map(|input| input.schema().field(i))
                     .collect::<Vec<_>>();
+
+                // fix union
+
                 let first_field = fields[0];
                 let name = first_field.name();
                 let data_type = if loose_types {

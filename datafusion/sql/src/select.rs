@@ -33,6 +33,7 @@ use datafusion_expr::expr::{Alias, PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
+use datafusion_expr::user_defined_builder::UserDefinedLogicalBuilder;
 use datafusion_expr::utils::{
     expand_qualified_wildcard, expand_wildcard, expr_as_column_expr, expr_to_columns,
     find_aggregate_exprs, find_window_exprs,
@@ -100,6 +101,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(base_plan.clone(), select_exprs.clone())?;
+        let select_exprs = projected_plan.expressions();
 
         // Place the fields of the base plan at the front so that when there are references
         // with the same name, the fields of the base plan will be searched first.
@@ -116,7 +118,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             true,
             Some(base_plan.schema().as_ref()),
         )?;
-        let order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
+        let mut order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
 
         // This alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
@@ -218,7 +220,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
-            LogicalPlanBuilder::from(plan)
+            UserDefinedLogicalBuilder::new(self.context_provider, plan)
                 .having(having_expr_post_aggr)?
                 .build()?
         } else {
@@ -266,9 +268,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                // Build the final plan
-                LogicalPlanBuilder::from(base_plan)
-                    .distinct_on(on_expr, select_exprs, None)?
+                let order_by_rex = std::mem::take(&mut order_by_rex);
+                // In case of `DISTINCT ON` we must capture the sort expressions since during the plan
+                // optimization we're effectively doing a `first_value` aggregation according to them.
+                UserDefinedLogicalBuilder::new(self.context_provider, base_plan)
+                    .distinct_on(on_expr, select_exprs, Some(order_by_rex))?
                     .build()
             }
         }?;
@@ -532,10 +536,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &[using_columns],
                 )?;
 
-                Ok(LogicalPlan::Filter(Filter::try_new(
-                    filter_expr,
-                    Arc::new(plan),
-                )?))
+                UserDefinedLogicalBuilder::new(self.context_provider, plan)
+                    .filter(filter_expr)?
+                    .build()
             }
             None => Ok(plan),
         }
@@ -743,7 +746,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Wrap a plan in a projection
     fn project(&self, input: LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
         self.validate_schema_satisfies_exprs(input.schema(), &expr)?;
-        LogicalPlanBuilder::from(input).project(expr)?.build()
+        UserDefinedLogicalBuilder::new(self.context_provider, input)
+            .project(expr)?
+            .build()
     }
 
     /// Create an aggregate plan.
@@ -781,10 +786,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // create the aggregate plan
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
-        let plan = LogicalPlanBuilder::from(input.clone())
-            .with_options(options)
-            .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
+        let plan = UserDefinedLogicalBuilder::new(self.context_provider, input.clone())
+            .aggregate(options, group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
+
         let group_by_exprs = if let LogicalPlan::Aggregate(agg) = &plan {
             &agg.group_expr
         } else {

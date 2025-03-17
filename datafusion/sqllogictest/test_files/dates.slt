@@ -85,7 +85,7 @@ g
 h
 
 ## Plan error when compare Utf8 and timestamp in where clause
-statement error DataFusion error: type_coercion\ncaused by\nError during planning: Cannot coerce arithmetic expression Timestamp\(Nanosecond, Some\("\+00:00"\)\) \+ Utf8 to valid types
+query error DataFusion error: Error during planning: Cannot coerce arithmetic expression Timestamp\(Nanosecond, Some\("\+00:00"\)\) \+ Utf8 to valid types
 select i_item_desc from test
 where d3_date > now() + '5 days';
 

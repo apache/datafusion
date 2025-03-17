@@ -28,8 +28,9 @@ use datafusion_common::{
 use sqlparser::ast::{self, NullTreatment};
 
 use crate::{
-    type_coercion::TypeCoercion, AggregateUDF, Expr, GetFieldAccess, ScalarUDF, SortExpr,
-    TableSource, WindowFrame, WindowFunctionDefinition, WindowUDF,
+    type_coercion::TypeCoercion, AggregateUDF, Expr, GetFieldAccess,
+    LogicalPlanBuilderConfig, ScalarUDF, SortExpr, TableSource, WindowFrame,
+    WindowFunctionDefinition, WindowUDF,
 };
 
 /// Provides the `SQL` query planner meta-data about tables and
@@ -37,7 +38,7 @@ use crate::{
 /// `datafusion` Catalog structures such as [`TableProvider`]
 ///
 /// [`TableProvider`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProvider.html
-pub trait ContextProvider {
+pub trait ContextProvider: LogicalPlanBuilderConfig {
     /// Returns a table by reference, if it exists
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
 
@@ -81,10 +82,6 @@ pub trait ContextProvider {
 
     /// Return [`ExprPlanner`] extensions for planning expressions
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
-        &[]
-    }
-
-    fn get_type_coercions(&self) -> &[Arc<dyn TypeCoercion>] {
         &[]
     }
 

@@ -17,7 +17,10 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{not_impl_err, Column, Result};
-use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{
+    user_defined_builder::UserDefinedLogicalBuilder, JoinType, LogicalPlan,
+    LogicalPlanBuilder,
+};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
 };
@@ -121,8 +124,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let join_schema = left.schema().join(right.schema())?;
                 // parse ON expression
                 let expr = self.sql_to_expr(sql_expr, &join_schema, planner_context)?;
-                LogicalPlanBuilder::from(left)
-                    .join_on(right, join_type, Some(expr))?
+                UserDefinedLogicalBuilder::new(self.context_provider, left)
+                    .join_on(right, join_type, vec![expr])?
                     .build()
             }
             JoinConstraint::Using(object_names) => {

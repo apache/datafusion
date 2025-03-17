@@ -27,7 +27,8 @@ use sqlparser::ast::{
 };
 
 use datafusion_common::{
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, Column, DFSchema, Result, ScalarValue
+    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_err, Column,
+    DFSchema, Result, ScalarValue,
 };
 
 use datafusion_expr::expr::ScalarFunction;
@@ -124,27 +125,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         schema: &DFSchema,
     ) -> Result<Expr> {
         let binary_expr = self.build_binary_expr(op.clone(), left, right, schema)?;
-        let Expr::BinaryExpr(binary_expr) = binary_expr else {
-            // If not binary expression after `plan_binary_op`, it doesn't need `coerce_binary_expr`, return directly
-            return Ok(binary_expr);
-        };
+        Ok(binary_expr)
 
-        let mut binary_expr = binary_expr;
-        for type_coercion in self.context_provider.get_type_coercions() {
-            match type_coercion.coerce_binary_expr(binary_expr, schema)? {
-                TypeCoerceResult::CoercedExpr(expr) => {
-                    return Ok(expr);
-                }
-                TypeCoerceResult::Original(expr) => {
-                    binary_expr = expr;
-                }
-                _ => {
-                    return exec_err!("CoercedPlan is not an expected result for `coerce_binary_expr`")
-                }
-            }
-        }
+        // let Expr::BinaryExpr(binary_expr) = binary_expr else {
+        //     // If not binary expression after `plan_binary_op`, it doesn't need `coerce_binary_expr`, return directly
+        //     return Ok(binary_expr);
+        // };
 
-        exec_err!("Likely DefaultTypeCoercion is not added to the context provider")
+        // let mut binary_expr = binary_expr;
+        // for type_coercion in self.context_provider.get_type_coercions() {
+        //     match type_coercion.coerce_binary_expr(binary_expr, schema)? {
+        //         TypeCoerceResult::CoercedExpr(expr) => {
+        //             return Ok(expr);
+        //         }
+        //         TypeCoerceResult::Original(expr) => {
+        //             binary_expr = expr;
+        //         }
+        //         _ => {
+        //             return exec_err!(
+        //                 "CoercedPlan is not an expected result for `coerce_binary_expr`"
+        //             )
+        //         }
+        //     }
+        // }
+
+        // exec_err!("Likely DefaultTypeCoercion is not added to the context provider")
     }
 
     fn build_binary_expr(
@@ -1169,7 +1174,9 @@ mod tests {
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::TableReference;
     use datafusion_expr::logical_plan::builder::LogicalTableSource;
-    use datafusion_expr::{AggregateUDF, ScalarUDF, TableSource, WindowUDF};
+    use datafusion_expr::{
+        AggregateUDF, LogicalPlanBuilderConfig, ScalarUDF, TableSource, WindowUDF,
+    };
 
     use super::*;
 
@@ -1194,6 +1201,14 @@ mod tests {
                 options: Default::default(),
                 tables,
             }
+        }
+    }
+
+    impl LogicalPlanBuilderConfig for TestContextProvider {
+        fn get_type_coercions(
+            &self,
+        ) -> &[Arc<dyn datafusion_expr::type_coercion::TypeCoercion>] {
+            &[]
         }
     }
 

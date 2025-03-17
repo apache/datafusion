@@ -57,8 +57,8 @@ use datafusion_expr::simplify::SimplifyInfo;
 use datafusion_expr::type_coercion::TypeCoercion;
 use datafusion_expr::var_provider::{is_system_variables, VarType};
 use datafusion_expr::{
-    AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, ScalarUDF, TableSource,
-    WindowUDF,
+    AggregateUDF, Explain, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilderConfig,
+    ScalarUDF, TableSource, WindowUDF,
 };
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
@@ -211,6 +211,12 @@ impl Debug for SessionState {
             .field("window_functions", &self.window_functions)
             .field("prepared_plans", &self.prepared_plans)
             .finish()
+    }
+}
+
+impl LogicalPlanBuilderConfig for SessionState {
+    fn get_type_coercions(&self) -> &[Arc<dyn TypeCoercion>] {
+        &self.type_coercions
     }
 }
 
@@ -818,6 +824,10 @@ impl SessionState {
     /// Return [SerializerRegistry] for extensions
     pub fn serializer_registry(&self) -> &Arc<dyn SerializerRegistry> {
         &self.serializer_registry
+    }
+
+    pub fn type_coercions(&self) -> &Vec<Arc<dyn TypeCoercion>> {
+        &self.type_coercions
     }
 
     /// Return version of the cargo package that produced this query
@@ -1635,13 +1645,15 @@ struct SessionContextProvider<'a> {
     tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
 }
 
+impl LogicalPlanBuilderConfig for SessionContextProvider<'_> {
+    fn get_type_coercions(&self) -> &[Arc<dyn TypeCoercion>] {
+        &self.state.type_coercions
+    }
+}
+
 impl ContextProvider for SessionContextProvider<'_> {
     fn get_expr_planners(&self) -> &[Arc<dyn ExprPlanner>] {
         &self.state.expr_planners
-    }
-
-    fn get_type_coercions(&self) -> &[Arc<dyn TypeCoercion>] {
-        &self.state.type_coercions
     }
 
     fn get_type_planner(&self) -> Option<Arc<dyn TypePlanner>> {

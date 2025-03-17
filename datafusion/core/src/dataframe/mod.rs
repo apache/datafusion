@@ -54,6 +54,8 @@ use datafusion_common::{
     exec_err, not_impl_err, plan_datafusion_err, plan_err, Column, DFSchema,
     DataFusionError, ParamValues, ScalarValue, SchemaError, UnnestOptions,
 };
+use datafusion_expr::type_coercion::TypeCoerceResult;
+use datafusion_expr::user_defined_builder::UserDefinedLogicalBuilder;
 use datafusion_expr::{
     case,
     dml::InsertOp,
@@ -495,9 +497,10 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn filter(self, predicate: Expr) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = UserDefinedLogicalBuilder::new(self.session_state.as_ref(), self.plan)
             .filter(predicate)?
             .build()?;
+
         Ok(DataFrame {
             session_state: self.session_state,
             plan,

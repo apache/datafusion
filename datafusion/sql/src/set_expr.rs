@@ -19,7 +19,9 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
     not_impl_err, plan_err, DataFusionError, Diagnostic, Result, Span,
 };
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{
+    user_defined_builder::UserDefinedLogicalBuilder, LogicalPlan, LogicalPlanBuilder,
+};
 use sqlparser::ast::{SetExpr, SetOperator, SetQuantifier, Spanned};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -126,8 +128,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         match (op, set_quantifier) {
             (SetOperator::Union, SetQuantifier::All) => {
-                LogicalPlanBuilder::from(left_plan)
-                    .union(right_plan)?
+                UserDefinedLogicalBuilder::new(self.context_provider, left_plan)
+                    .union(vec![right_plan])?
                     .build()
             }
             (SetOperator::Union, SetQuantifier::AllByName) => {

@@ -787,6 +787,7 @@ impl LogicalPlanBuilder {
             .map(Self::new)
     }
 
+    // Deprecated this one, use UserDefinedLogicalPlanBuilder
     /// Apply a union, preserving duplicate rows
     pub fn union(self, plan: LogicalPlan) -> Result<Self> {
         union(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)

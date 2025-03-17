@@ -46,7 +46,9 @@ use datafusion_expr::type_coercion::functions::{
 use datafusion_expr::type_coercion::other::{
     get_coerce_type_for_case_expression, get_coerce_type_for_list,
 };
-use datafusion_expr::type_coercion::{is_datetime, is_utf8_or_large_utf8};
+use datafusion_expr::type_coercion::{
+    is_datetime, is_utf8_or_large_utf8,
+};
 use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     is_false, is_not_false, is_not_true, is_not_unknown, is_true, is_unknown, not,
@@ -191,7 +193,7 @@ impl<'a> TypeCoercionRewriter<'a> {
                 // expression
                 let left_schema = join.left.schema();
                 let right_schema = join.right.schema();
-                let (lhs, rhs) = self.coerce_binary_op(
+                let (lhs, rhs) = self.coerce_binary_op_for_join(
                     lhs,
                     left_schema,
                     Operator::Eq,
@@ -287,12 +289,48 @@ impl<'a> TypeCoercionRewriter<'a> {
         right: Expr,
         right_schema: &DFSchema,
     ) -> Result<(Expr, Expr)> {
+        let left_type_old = left.get_type(left_schema)?;
+        let right_type_old = right.get_type(right_schema)?;
+
         let (left_type, right_type) = BinaryTypeCoercer::new(
             &left.get_type(left_schema)?,
             &op,
             &right.get_type(right_schema)?,
         )
         .get_input_types()?;
+
+        if left_type != left_type_old {
+            return internal_err!(
+                "Missing coercion for left: {left_type_old:?} -> {left_type:?}"
+            );
+        }
+        if right_type != right_type_old {
+            return internal_err!("Missing coercion for right: {right_type_old:?} -> {right_type:?}, right: {:?}", right);
+        }
+
+        Ok((
+            left.cast_to(&left_type, left_schema)?,
+            right.cast_to(&right_type, right_schema)?,
+        ))
+    }
+
+    // TODO: remove this after coercion_join is supported
+    // temporary function
+    fn coerce_binary_op_for_join(
+        &self,
+        left: Expr,
+        left_schema: &DFSchema,
+        op: Operator,
+        right: Expr,
+        right_schema: &DFSchema,
+    ) -> Result<(Expr, Expr)> {
+        let (left_type, right_type) = BinaryTypeCoercer::new(
+            &left.get_type(left_schema)?,
+            &op,
+            &right.get_type(right_schema)?,
+        )
+        .get_input_types()?;
+
         Ok((
             left.cast_to(&left_type, left_schema)?,
             right.cast_to(&right_type, right_schema)?,

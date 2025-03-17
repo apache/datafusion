@@ -2183,6 +2183,7 @@ dependencies = [
  "datafusion-physical-expr-common",
  "env_logger",
  "indexmap 2.7.1",
+ "itertools 0.14.0",
  "paste",
  "recursive",
  "serde_json",
