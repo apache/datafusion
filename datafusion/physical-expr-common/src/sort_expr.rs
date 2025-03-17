@@ -17,7 +17,7 @@
 
 //! Sort expressions
 
-use crate::physical_expr::PhysicalExpr;
+use crate::physical_expr::{fmt_sql, PhysicalExpr};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -116,6 +116,16 @@ impl PhysicalSortExpr {
     pub fn nulls_last(mut self) -> Self {
         self.options.nulls_first = false;
         self
+    }
+
+    /// Like [`PhysicalExpr::fmt_sql`] prints a [`PhysicalSortExpr`] in a SQL-like format.
+    pub fn fmt_sql(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{} {}",
+            fmt_sql(self.expr.as_ref()),
+            to_str(&self.options)
+        )
     }
 }
 
