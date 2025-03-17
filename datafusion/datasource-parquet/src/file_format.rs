@@ -465,108 +465,109 @@ impl FileFormat for ParquetFormat {
     }
 }
 
-/// Coerces the file schema if the table schema uses a view type.
-pub fn coerce_file_schema_to_view_type(
+/// Apply necessary schema type coercions between table and file schemas
+///
+/// This function performs two main types of transformations in a single pass:
+/// 1. Binary types to string types conversion - Converts binary data types to their
+///    corresponding string types when the table schema expects string data
+/// 2. Regular to view types conversion - Converts standard string/binary types to
+///    view types when the table schema uses view types
+///
+/// # Arguments
+/// * `table_schema` - The table schema containing the desired types
+/// * `file_schema` - The file schema to be transformed
+///
+/// # Returns
+/// * `Some(Schema)` - If any transformations were applied, returns the transformed schema
+/// * `None` - If no transformations were needed
+pub fn apply_file_schema_type_coercions(
     table_schema: &Schema,
     file_schema: &Schema,
 ) -> Option<Schema> {
-    let mut transform = false;
+    let mut needs_view_transform = false;
+    let mut needs_string_transform = false;
+
+    // Create a mapping of table field names to their data types for fast lookup
+    // and simultaneously check if we need any transformations
     let table_fields: HashMap<_, _> = table_schema
-        .fields
+        .fields()
         .iter()
         .map(|f| {
             let dt = f.data_type();
+            // Check if we need view type transformation
             if dt.equals_datatype(&DataType::Utf8View)
                 || dt.equals_datatype(&DataType::BinaryView)
             {
-                transform = true;
+                needs_view_transform = true;
             }
+            // Check if we need string type transformation
+            if dt.equals_datatype(&DataType::Utf8)
+                || dt.equals_datatype(&DataType::LargeUtf8)
+                || dt.equals_datatype(&DataType::Utf8View)
+            {
+                needs_string_transform = true;
+            }
+
             (f.name(), dt)
         })
         .collect();
 
-    if !transform {
+    // Early return if no transformation needed
+    if !needs_view_transform && !needs_string_transform {
         return None;
     }
 
     let transformed_fields: Vec<Arc<Field>> = file_schema
-        .fields
+        .fields()
         .iter()
-        .map(
-            |field| match (table_fields.get(field.name()), field.data_type()) {
-                (Some(DataType::Utf8View), DataType::Utf8 | DataType::LargeUtf8) => {
-                    field_with_new_type(field, DataType::Utf8View)
+        .map(|field| {
+            let field_name = field.name();
+            let field_type = field.data_type();
+
+            // Look up the corresponding field type in the table schema
+            if let Some(table_type) = table_fields.get(field_name) {
+                match (table_type, field_type) {
+                    // table schema uses string type, coerce the file schema to use string type
+                    (
+                        &DataType::Utf8,
+                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                    ) => {
+                        return field_with_new_type(field, DataType::Utf8);
+                    }
+                    // table schema uses large string type, coerce the file schema to use large string type
+                    (
+                        &DataType::LargeUtf8,
+                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                    ) => {
+                        return field_with_new_type(field, DataType::LargeUtf8);
+                    }
+                    // table schema uses string view type, coerce the file schema to use view type
+                    (
+                        &DataType::Utf8View,
+                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                    ) => {
+                        return field_with_new_type(field, DataType::Utf8View);
+                    }
+                    // Handle view type conversions
+                    (&DataType::Utf8View, DataType::Utf8 | DataType::LargeUtf8) => {
+                        return field_with_new_type(field, DataType::Utf8View);
+                    }
+                    (&DataType::BinaryView, DataType::Binary | DataType::LargeBinary) => {
+                        return field_with_new_type(field, DataType::BinaryView);
+                    }
+                    _ => {}
                 }
-                (
-                    Some(DataType::BinaryView),
-                    DataType::Binary | DataType::LargeBinary,
-                ) => field_with_new_type(field, DataType::BinaryView),
-                _ => Arc::clone(field),
-            },
-        )
+            }
+
+            // If no transformation is needed, keep the original field
+            Arc::clone(field)
+        })
         .collect();
 
     Some(Schema::new_with_metadata(
         transformed_fields,
         file_schema.metadata.clone(),
     ))
-}
-
-/// If the table schema uses a string type, coerce the file schema to use a string type.
-///
-/// See [ParquetFormat::binary_as_string] for details
-pub fn coerce_file_schema_to_string_type(
-    table_schema: &Schema,
-    file_schema: &Schema,
-) -> Option<Schema> {
-    let mut transform = false;
-    let table_fields: HashMap<_, _> = table_schema
-        .fields
-        .iter()
-        .map(|f| (f.name(), f.data_type()))
-        .collect();
-    let transformed_fields: Vec<Arc<Field>> = file_schema
-        .fields
-        .iter()
-        .map(
-            |field| match (table_fields.get(field.name()), field.data_type()) {
-                // table schema uses string type, coerce the file schema to use string type
-                (
-                    Some(DataType::Utf8),
-                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-                ) => {
-                    transform = true;
-                    field_with_new_type(field, DataType::Utf8)
-                }
-                // table schema uses large string type, coerce the file schema to use large string type
-                (
-                    Some(DataType::LargeUtf8),
-                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-                ) => {
-                    transform = true;
-                    field_with_new_type(field, DataType::LargeUtf8)
-                }
-                // table schema uses string view type, coerce the file schema to use view type
-                (
-                    Some(DataType::Utf8View),
-                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
-                ) => {
-                    transform = true;
-                    field_with_new_type(field, DataType::Utf8View)
-                }
-                _ => Arc::clone(field),
-            },
-        )
-        .collect();
-
-    if !transform {
-        None
-    } else {
-        Some(Schema::new_with_metadata(
-            transformed_fields,
-            file_schema.metadata.clone(),
-        ))
-    }
 }
 
 /// Create a new field with the specified data type, copying the other
@@ -718,11 +719,8 @@ pub fn statistics_from_parquet_meta_calc(
         file_metadata.schema_descr(),
         file_metadata.key_value_metadata(),
     )?;
-    if let Some(merged) = coerce_file_schema_to_string_type(&table_schema, &file_schema) {
-        file_schema = merged;
-    }
 
-    if let Some(merged) = coerce_file_schema_to_view_type(&table_schema, &file_schema) {
+    if let Some(merged) = apply_file_schema_type_coercions(&table_schema, &file_schema) {
         file_schema = merged;
     }
 
