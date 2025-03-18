@@ -224,7 +224,8 @@ pub struct AggregateFunctionExpr {
     /// Output / return type of this aggregate
     data_type: DataType,
     name: String,
-    sql_name: String,
+    /// Simplified name for `tree` explain.
+        sql_name: String,
     schema: Schema,
     // The physical order by expressions
     ordering_req: LexOrdering,
