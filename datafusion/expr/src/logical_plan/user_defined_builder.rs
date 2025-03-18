@@ -20,8 +20,7 @@
 use std::sync::Arc;
 
 use crate::{
-    expr::Alias, expr_rewriter::coerce_plan_expr_for_schema,
-    type_coercion::TypeCoerceResult, Expr, SortExpr,
+    expr::Alias, type_coercion::TypeCoerceResult, Expr, ExprSchemable, SortExpr
 };
 
 use super::{
@@ -180,10 +179,12 @@ impl<'a, C: LogicalPlanBuilderConfig> UserDefinedLogicalBuilder<'a, C> {
         let plan_ref = std::iter::once(&self.plan)
             .chain(inputs.iter())
             .collect::<Vec<_>>();
+
         let union_schema = Arc::new(coerce_union_schema(&plan_ref)?);
         let inputs = std::iter::once(self.plan)
             .chain(inputs.into_iter())
             .collect::<Vec<_>>();
+
         let inputs = inputs
             .into_iter()
             .map(|p| {
@@ -405,4 +406,67 @@ fn project_with_column_index(
 
     Projection::try_new_with_schema(alias_expr, input, schema)
         .map(LogicalPlan::Projection)
+}
+
+/// Returns plan with expressions coerced to types compatible with
+/// schema types
+fn coerce_plan_expr_for_schema(
+    plan: LogicalPlan,
+    schema: &DFSchema,
+) -> Result<LogicalPlan> {
+    match plan {
+        // special case Projection to avoid adding multiple projections
+        LogicalPlan::Projection(Projection { expr, input, .. }) => {
+            let new_exprs = coerce_exprs_for_schema(expr, input.schema(), schema)?;
+            let projection = Projection::try_new(new_exprs, input)?;
+            Ok(LogicalPlan::Projection(projection))
+        }
+        _ => {
+            let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
+            let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
+            let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
+            if add_project {
+                let projection = Projection::try_new(new_exprs, Arc::new(plan))?;
+                Ok(LogicalPlan::Projection(projection))
+            } else {
+                Ok(plan)
+            }
+        }
+    }
+}
+
+fn coerce_exprs_for_schema(
+    exprs: Vec<Expr>,
+    src_schema: &DFSchema,
+    dst_schema: &DFSchema,
+) -> Result<Vec<Expr>> {
+    exprs
+        .into_iter()
+        .enumerate()
+        .map(|(idx, expr)| {
+            let new_type = dst_schema.field(idx).data_type();
+            if new_type != &expr.get_type(src_schema)? {
+                let (table_ref, name) = expr.qualified_name();
+
+                let new_expr = match expr {
+                    Expr::Alias(Alias { expr, name, .. }) => {
+                        expr.cast_to(new_type, src_schema)?.alias(name)
+                    }
+                    #[expect(deprecated)]
+                    Expr::Wildcard { .. } => expr,
+                    _ => expr.cast_to(new_type, src_schema)?,
+                };
+
+                let (new_table_ref, new_name) = new_expr.qualified_name();
+                if table_ref != new_table_ref || name != new_name {
+                    Ok(new_expr.alias_qualified(table_ref, name))
+                } else {
+                    Ok(new_expr)
+                }
+
+            } else {
+                Ok(expr)
+            }
+        })
+        .collect::<Result<_>>()
 }

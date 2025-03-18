@@ -42,6 +42,7 @@ use datafusion_expr::dml::{CopyTo, InsertOp};
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::DdlStatement;
+use datafusion_expr::user_defined_builder::UserDefinedLogicalBuilder;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
     cast, col, Analyze, CreateCatalog, CreateCatalogSchema,
@@ -1848,7 +1849,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let source = project(source, exprs)?;
+        let source = UserDefinedLogicalBuilder::new(self.context_provider, source)
+            .project(exprs)?
+            .build()?;
 
         let plan = LogicalPlan::Dml(DmlStatement::new(
             table_name,

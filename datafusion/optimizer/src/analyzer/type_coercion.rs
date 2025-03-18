@@ -140,15 +140,31 @@ fn analyze_internal(
 
     let name_preserver = NamePreserver::new(&plan);
     // apply coercion rewrite all expressions in the plan individually
-    plan.map_expressions(|expr| {
+    let r = plan.map_expressions(|expr| {
         let original_name = name_preserver.save(&expr);
-        expr.rewrite(&mut expr_rewrite)
-            .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
+        let sr = expr.rewrite(&mut expr_rewrite)
+            .map(|transformed| transformed.update_data(|e| original_name.restore(e)));
+
+        // println!("sr: {:?}", sr);
+        sr
     })?
     // some plans need extra coercion after their expressions are coerced
-    .map_data(|plan| expr_rewrite.coerce_plan(plan))?
+    .map_data(|plan| {
+        let st = expr_rewrite.coerce_plan(plan);
+        // println!("st: {:?}", st);
+        st
+    })?
     // recompute the schema after the expressions have been rewritten as the types may have changed
-    .map_data(|plan| plan.recompute_schema())
+    .map_data(|plan| {
+        // println!("plan: {}", plan.display_indent());
+        let sz = plan.recompute_schema();
+        // println!("sz: {:?}", sz);
+        sz
+    });
+
+    // println!("r: {:?}", r);
+
+    r
 }
 
 /// Rewrite expressions to apply type coercion.
@@ -222,7 +238,8 @@ impl<'a> TypeCoercionRewriter<'a> {
             .into_iter()
             .map(|p| {
                 let plan =
-                    coerce_plan_expr_for_schema(Arc::unwrap_or_clone(p), &union_schema)?;
+                    coerce_plan_expr_for_schema(Arc::unwrap_or_clone(p), &union_schema);
+                let plan = plan?;
                 match plan {
                     LogicalPlan::Projection(Projection { expr, input, .. }) => {
                         Ok(Arc::new(project_with_column_index(
@@ -235,6 +252,7 @@ impl<'a> TypeCoercionRewriter<'a> {
                 }
             })
             .collect::<Result<Vec<_>>>()?;
+
         Ok(LogicalPlan::Union(Union {
             inputs: new_inputs,
             schema: union_schema,
@@ -1030,6 +1048,7 @@ pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
             union_field_map.extend(plan_field.metadata().clone());
         }
     }
+
     let union_qualified_fields = izip!(
         base_schema.iter(),
         union_datatypes.into_iter(),
