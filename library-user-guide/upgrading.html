@@ -612,6 +612,11 @@
      no longer automatically unescapes strings
     </a>
    </li>
+   <li class="toc-h3 nav-item toc-entry">
+    <a class="reference internal nav-link" href="#changes-to-array-scalar-function-signatures">
+     Changes to array scalar function signatures
+    </a>
+   </li>
   </ul>
  </li>
 </ul>
@@ -815,6 +820,76 @@ the following must be changed:</p>
 <span class="n">Elapsed</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">005</span><span class="w"> </span><span class="n">seconds</span><span class="p">.</span>
 </pre></div>
 </div>
+</section>
+<section id="changes-to-array-scalar-function-signatures">
+<h3>Changes to array scalar function signatures<a class="headerlink" href="#changes-to-array-scalar-function-signatures" title="Link to this heading">¶</a></h3>
+<p>DataFusion 46 has changed the way scalar array function signatures are
+declared. Previously, functions needed to select from a list of predefined
+signatures within the <code class="docutils literal notranslate"><span class="pre">ArrayFunctionSignature</span></code> enum. Now the signatures
+can be defined via a <code class="docutils literal notranslate"><span class="pre">Vec</span></code> of psuedo-types, which each correspond to a
+single argument. Those psuedo-types are the variants of the
+<code class="docutils literal notranslate"><span class="pre">ArrayFunctionArgument</span></code> enum and are as follows:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Array</span></code>: An argument of type List/LargeList/FixedSizeList. All Array
+arguments must be coercible to the same type.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Element</span></code>: An argument that is coercible to the inner type of the <code class="docutils literal notranslate"><span class="pre">Array</span></code>
+arguments.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Index</span></code>: An <code class="docutils literal notranslate"><span class="pre">Int64</span></code> argument.</p></li>
+</ul>
+<p>Each of the old variants can be converted to the new format as follows:</p>
+<p><code class="docutils literal notranslate"><span class="pre">TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndElement)</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">TypeSignature</span><span class="p">::</span><span class="n">ArraySignature</span><span class="p">(</span><span class="n">ArrayFunctionSignature</span><span class="p">::</span><span class="n">Array</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">arguments</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[</span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Array</span><span class="p">,</span><span class="w"> </span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Element</span><span class="p">],</span>
+<span class="w">    </span><span class="n">array_coercion</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">ListCoercion</span><span class="p">::</span><span class="n">FixedSizedListToList</span><span class="p">),</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">TypeSignature::ArraySignature(ArrayFunctionSignature::ElementAndArray)</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">TypeSignature</span><span class="p">::</span><span class="n">ArraySignature</span><span class="p">(</span><span class="n">ArrayFunctionSignature</span><span class="p">::</span><span class="n">Array</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">arguments</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[</span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Element</span><span class="p">,</span><span class="w"> </span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Array</span><span class="p">],</span>
+<span class="w">    </span><span class="n">array_coercion</span><span class="p">:</span><span class="w"> </span><span class="nb">Some</span><span class="p">(</span><span class="n">ListCoercion</span><span class="p">::</span><span class="n">FixedSizedListToList</span><span class="p">),</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndIndex)</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">TypeSignature</span><span class="p">::</span><span class="n">ArraySignature</span><span class="p">(</span><span class="n">ArrayFunctionSignature</span><span class="p">::</span><span class="n">Array</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">arguments</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[</span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Array</span><span class="p">,</span><span class="w"> </span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Index</span><span class="p">],</span>
+<span class="w">    </span><span class="n">array_coercion</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndElementAndOptionalIndex)</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">TypeSignature</span><span class="p">::</span><span class="n">OneOf</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span>
+<span class="w">    </span><span class="n">TypeSignature</span><span class="p">::</span><span class="n">ArraySignature</span><span class="p">(</span><span class="n">ArrayFunctionSignature</span><span class="p">::</span><span class="n">Array</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">arguments</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[</span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Array</span><span class="p">,</span><span class="w"> </span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Element</span><span class="p">],</span>
+<span class="w">        </span><span class="n">array_coercion</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">    </span><span class="p">}),</span>
+<span class="w">    </span><span class="n">TypeSignature</span><span class="p">::</span><span class="n">ArraySignature</span><span class="p">(</span><span class="n">ArrayFunctionSignature</span><span class="p">::</span><span class="n">Array</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">arguments</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[</span>
+<span class="w">            </span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Array</span><span class="p">,</span>
+<span class="w">            </span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Element</span><span class="p">,</span>
+<span class="w">            </span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Index</span><span class="p">,</span>
+<span class="w">        </span><span class="p">],</span>
+<span class="w">        </span><span class="n">array_coercion</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">    </span><span class="p">}),</span>
+<span class="p">]);</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">TypeSignature::ArraySignature(ArrayFunctionSignature::Array)</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="n">TypeSignature</span><span class="p">::</span><span class="n">ArraySignature</span><span class="p">(</span><span class="n">ArrayFunctionSignature</span><span class="p">::</span><span class="n">Array</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">arguments</span><span class="p">:</span><span class="w"> </span><span class="nc">vec</span><span class="o">!</span><span class="p">[</span><span class="n">ArrayFunctionArgument</span><span class="p">::</span><span class="n">Array</span><span class="p">],</span>
+<span class="w">    </span><span class="n">array_coercion</span><span class="p">:</span><span class="w"> </span><span class="nb">None</span><span class="p">,</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p>Alternatively, you can switch to using one of the following functions which
+take care of constructing the <code class="docutils literal notranslate"><span class="pre">TypeSignature</span></code> for you:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Signature::array_and_element</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Signature::array_and_element_and_optional_index</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Signature::array_and_index</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Signature::array</span></code></p></li>
+</ul>
 </section>
 </section>
 </section>

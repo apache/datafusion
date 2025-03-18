@@ -200,4 +200,89 @@ To include special characters (such as newlines via `\n`) you can use an `E` lit
 Elapsed 0.005 seconds.
 ```
 
+### Changes to array scalar function signatures
+
+DataFusion 46 has changed the way scalar array function signatures are
+declared. Previously, functions needed to select from a list of predefined
+signatures within the `ArrayFunctionSignature` enum. Now the signatures
+can be defined via a `Vec` of psuedo-types, which each correspond to a
+single argument. Those psuedo-types are the variants of the
+`ArrayFunctionArgument` enum and are as follows:
+
+- `Array`: An argument of type List/LargeList/FixedSizeList. All Array
+  arguments must be coercible to the same type.
+- `Element`: An argument that is coercible to the inner type of the `Array`
+  arguments.
+- `Index`: An `Int64` argument.
+
+Each of the old variants can be converted to the new format as follows:
+
+`TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndElement)`:
+
+```rust
+
+TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+    arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Element],
+    array_coercion: Some(ListCoercion::FixedSizedListToList),
+});
+```
+
+`TypeSignature::ArraySignature(ArrayFunctionSignature::ElementAndArray)`:
+
+```rust
+
+TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+    arguments: vec![ArrayFunctionArgument::Element, ArrayFunctionArgument::Array],
+    array_coercion: Some(ListCoercion::FixedSizedListToList),
+});
+```
+
+`TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndIndex)`:
+
+```rust
+
+TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+    arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Index],
+    array_coercion: None,
+});
+```
+
+`TypeSignature::ArraySignature(ArrayFunctionSignature::ArrayAndElementAndOptionalIndex)`:
+
+```rust
+
+TypeSignature::OneOf(vec![
+    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+        arguments: vec![ArrayFunctionArgument::Array, ArrayFunctionArgument::Element],
+        array_coercion: None,
+    }),
+    TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+        arguments: vec![
+            ArrayFunctionArgument::Array,
+            ArrayFunctionArgument::Element,
+            ArrayFunctionArgument::Index,
+        ],
+        array_coercion: None,
+    }),
+]);
+```
+
+`TypeSignature::ArraySignature(ArrayFunctionSignature::Array)`:
+
+```rust
+
+TypeSignature::ArraySignature(ArrayFunctionSignature::Array {
+    arguments: vec![ArrayFunctionArgument::Array],
+    array_coercion: None,
+});
+```
+
+Alternatively, you can switch to using one of the following functions which
+take care of constructing the `TypeSignature` for you:
+
+- `Signature::array_and_element`
+- `Signature::array_and_element_and_optional_index`
+- `Signature::array_and_index`
+- `Signature::array`
+
 [ticket]: https://github.com/apache/datafusion/issues/13286
