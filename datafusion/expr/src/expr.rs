@@ -104,6 +104,7 @@ use sqlparser::ast::{
 /// // All literals are strongly typed in DataFusion. To make an `i64` 42:
 /// let expr = lit(42i64);
 /// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
+/// assert_eq!(expr, Expr::Literal(ScalarValue::Int64(Some(42))));
 /// // To make a (typed) NULL:
 /// let expr = Expr::Literal(ScalarValue::Int64(None));
 /// // to make an (untyped) NULL (the optimizer will coerce this to the correct type):
@@ -1147,9 +1148,17 @@ impl Expr {
         SchemaDisplay(self)
     }
 
-    /// The human readable name of the column (field) that this `Expr` will produce.
-    /// This name is primarily used in printing the explain tree output, (e.g. `EXPLAIN <query>`),
-    /// providing a readable format to show how expressions are used in physical and logical plans.
+    /// Human readable formatting for this expression.
+    ///
+    /// This name is primarily used in printing the explain tree output, (e.g.
+    /// `EXPLAIN <query>`), providing a readable format to show how expressions
+    /// are used in physical and logical plans.
+    ///
+    /// Note this format is intended for human consumption rather than SQL for
+    /// other systems. If you need  SQL to pass to other systems, consider using
+    /// [`Unparser`].
+    ///
+    /// [Unparser]: https://docs.rs/datafusion/latest/datafusion/sql/unparser/struct.Unparser.html
     ///
     /// # Example
     /// ```
@@ -2613,16 +2622,7 @@ impl Display for SchemaDisplay<'_> {
 }
 
 /// A helper struct for displaying an `Expr` as an SQL-like string.
-///
-/// This struct provides a simple way to convert an `Expr` to a string representation that resembles SQL.
-/// It is intended for explain display purpose rather than generating production-ready SQL.
-/// If you need syntactically correct SQL for use in other systems, it is recommended to use `Unparser` from the `datafusion-sql` crate.
-///
-/// # Note
-///
-/// For generating syntactically correct SQL that can be fed to other systems, consider using `Unparser`.
-/// For more details, see the [Unparser documentation](https://docs.rs/datafusion/latest/datafusion/sql/unparser/struct.Unparser.html).struct SqlDisplay<'a>(&'a Expr);
-pub struct SqlDisplay<'a>(&'a Expr);
+struct SqlDisplay<'a>(&'a Expr);
 
 impl Display for SqlDisplay<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
