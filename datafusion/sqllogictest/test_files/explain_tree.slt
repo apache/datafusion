@@ -1541,6 +1541,32 @@ physical_plan
 71)│          rows: 1          ││          rows: 1          │
 72)└───────────────────────────┘└───────────────────────────┘
 
+# Test explain tree for UnionExec
+query TT
+EXPLAIN
+SELECT id, name FROM t1
+UNION ALL
+SELECT id, name FROM t2;
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│         UnionExec         ├──────────────┐
+03)└─────────────┬─────────────┘              │
+04)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+05)│       DataSourceExec      ││       ProjectionExec      │
+06)│    --------------------   ││    --------------------   │
+07)│        bytes: 1320        ││   id: CAST(id AS Int32)   │
+08)│       format: memory      ││         name: name        │
+09)│          rows: 1          ││                           │
+10)└───────────────────────────┘└─────────────┬─────────────┘
+11)-----------------------------┌─────────────┴─────────────┐
+12)-----------------------------│       DataSourceExec      │
+13)-----------------------------│    --------------------   │
+14)-----------------------------│        bytes: 1312        │
+15)-----------------------------│       format: memory      │
+16)-----------------------------│          rows: 1          │
+17)-----------------------------└───────────────────────────┘
+
 # cleanup
 statement ok
 drop table t1;
@@ -2000,6 +2026,10 @@ physical_plan
 58)│          rows: 1          │
 59)└───────────────────────────┘
 
+# clean up
+statement ok
+drop table t1;
+
 # Test explain tree for LazyMemoryExec
 query TT
 EXPLAIN SELECT * FROM generate_series(1, 100)
@@ -2051,3 +2081,17 @@ physical_plan
 31)│       infinite: true      │
 32)│        limit: None        │
 33)└───────────────────────────┘
+
+# Test explain tree for PlaceholderRowExec
+query TT
+EXPLAIN select count(*) from (values ('a', 'b'), ('c', 'd')) as t (c1, c2)
+----
+physical_plan
+01)┌───────────────────────────┐
+02)│       ProjectionExec      │
+03)│    --------------------   │
+04)│        count(*): 2        │
+05)└─────────────┬─────────────┘
+06)┌─────────────┴─────────────┐
+07)│     PlaceholderRowExec    │
+08)└───────────────────────────┘
