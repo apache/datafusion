@@ -69,35 +69,19 @@ impl NestedStructSchemaAdapterFactory {
     }
 
     /// Create an appropriate schema adapter based on schema characteristics.
-    /// Returns a NestedStructSchemaAdapter if either schema contains nested structs
-    /// or when adapting between schemas with different structures.
+    /// Returns a NestedStructSchemaAdapter if the projected schema contains nested structs,
+    /// otherwise returns a DefaultSchemaAdapter.
     pub fn create_appropriate_adapter(
         projected_table_schema: SchemaRef,
         table_schema: SchemaRef,
-        source_schema: Option<&Schema>, // Add optional source schema parameter
     ) -> Box<dyn SchemaAdapter> {
         // Use nested adapter if target has nested structs
         if Self::has_nested_structs(projected_table_schema.as_ref()) {
-            return NestedStructSchemaAdapterFactory
-                .create(projected_table_schema, table_schema);
+            NestedStructSchemaAdapterFactory.create(projected_table_schema, table_schema)
+        } else {
+            // Default case for simple schemas
+            DefaultSchemaAdapterFactory.create(projected_table_schema, table_schema)
         }
-
-        // Also use nested adapter if source has nested structs
-        if let Some(src_schema) = source_schema {
-            if Self::has_nested_structs(src_schema) {
-                return NestedStructSchemaAdapterFactory
-                    .create(projected_table_schema, table_schema);
-            }
-
-            // Or if we're doing schema transformation between different structures
-            if src_schema.fields().len() != projected_table_schema.fields().len() {
-                return NestedStructSchemaAdapterFactory
-                    .create(projected_table_schema, table_schema);
-            }
-        }
-
-        // Default case for simple schemas
-        DefaultSchemaAdapterFactory.create(projected_table_schema, table_schema)
     }
 }
 
@@ -437,7 +421,6 @@ mod tests {
             NestedStructSchemaAdapterFactory::create_appropriate_adapter(
                 nested_schema.clone(),
                 nested_schema.clone(),
-                None,
             );
 
         // Verify complex_adapter can handle schema evolution
