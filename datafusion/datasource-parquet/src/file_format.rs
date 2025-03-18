@@ -495,16 +495,14 @@ pub fn apply_file_schema_type_coercions(
         .map(|f| {
             let dt = f.data_type();
             // Check if we need view type transformation
-            if dt.equals_datatype(&DataType::Utf8View)
-                || dt.equals_datatype(&DataType::BinaryView)
-            {
+            if matches!(dt, &DataType::Utf8View | &DataType::BinaryView) {
                 needs_view_transform = true;
             }
             // Check if we need string type transformation
-            if dt.equals_datatype(&DataType::Utf8)
-                || dt.equals_datatype(&DataType::LargeUtf8)
-                || dt.equals_datatype(&DataType::Utf8View)
-            {
+            if matches!(
+                dt,
+                &DataType::Utf8 | &DataType::LargeUtf8 | &DataType::Utf8View
+            ) {
                 needs_string_transform = true;
             }
 
