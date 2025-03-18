@@ -1,0 +1,11 @@
+---
+source: datafusion/core/tests/sql/path_partition.rs
+expression: batches_to_sort_string(&result)
+---
++------+-------+-----+
+| year | month | day |
++------+-------+-----+
+| 2021 | 09    | 09  |
+| 2021 | 10    | 09  |
+| 2021 | 10    | 28  |
++------+-------+-----+

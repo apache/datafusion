@@ -1,0 +1,13 @@
+---
+source: datafusion/core/tests/sql/path_partition.rs
+expression: batches_to_sort_string(&result)
+---
++----+----+
+| c1 | c2 |
++----+----+
+| a  | 1  |
+| b  | 1  |
+| b  | 5  |
+| c  | 2  |
+| d  | 5  |
++----+----+

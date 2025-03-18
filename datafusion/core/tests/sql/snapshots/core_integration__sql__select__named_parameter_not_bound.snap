@@ -1,0 +1,9 @@
+---
+source: datafusion/core/tests/sql/select.rs
+expression: batches_to_sort_string(&results)
+---
++--------+----------+
+| signed | unsigned |
++--------+----------+
+| -1     | 1        |
++--------+----------+
