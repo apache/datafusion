@@ -24,14 +24,11 @@ use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::Column;
 use datafusion_expr::TableType;
 use datafusion_expr::{Expr, LogicalPlan};
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
-use datafusion_optimizer::analyzer::type_coercion::TypeCoercion;
-use datafusion_optimizer::Analyzer;
 use datafusion_physical_plan::ExecutionPlan;
 
 /// An implementation of `TableProvider` that uses another logical plan.
@@ -52,7 +49,6 @@ impl ViewTable {
         logical_plan: LogicalPlan,
         definition: Option<String>,
     ) -> Result<Self> {
-        let logical_plan = Self::apply_required_rule(logical_plan)?;
         let table_schema = logical_plan.schema().as_ref().to_owned().into();
 
         let view = Self {
@@ -62,15 +58,6 @@ impl ViewTable {
         };
 
         Ok(view)
-    }
-
-    fn apply_required_rule(logical_plan: LogicalPlan) -> Result<LogicalPlan> {
-        let options = ConfigOptions::default();
-        Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())]).execute_and_check(
-            logical_plan,
-            &options,
-            |_, _| {},
-        )
     }
 
     /// Get definition ref

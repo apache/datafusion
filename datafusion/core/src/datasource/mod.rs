@@ -45,8 +45,8 @@ pub use self::memory::MemTable;
 pub use self::view::ViewTable;
 pub use crate::catalog::TableProvider;
 pub use crate::logical_expr::TableType;
-pub use datafusion_catalog::create_ordering;
 pub use datafusion_execution::object_store;
+pub use datafusion_physical_expr::create_ordering;
 pub use statistics::get_statistics_with_limit;
 
 #[cfg(all(test, feature = "parquet"))]

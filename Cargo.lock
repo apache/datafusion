@@ -1895,7 +1895,6 @@ dependencies = [
  "datafusion-common-runtime",
  "datafusion-execution",
  "datafusion-expr",
- "datafusion-optimizer",
  "datafusion-physical-expr",
  "datafusion-physical-plan",
  "datafusion-sql",
