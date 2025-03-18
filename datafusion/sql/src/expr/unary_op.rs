@@ -51,10 +51,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             format!("+ cannot be used with {data_type}"), 
                             span
                         );
-                        if span.is_none() {
-                            diagnostic.add_note("+ can only be used with numbers, intervals, and timestamps", None);
-                            diagnostic.add_help(format!("perhaps you need to cast {operand}"), None);
-                        }
+                        diagnostic.add_note("+ can only be used with numbers, intervals, and timestamps", None);
+                        diagnostic.add_help(format!("perhaps you need to cast {operand}"), None);
                         e.with_diagnostic(diagnostic)
                     })
                 }

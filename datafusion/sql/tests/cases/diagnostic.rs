@@ -362,13 +362,21 @@ fn test_unary_op_plus_with_column() -> Result<()> {
     let diag = do_query(query);
     assert_eq!(diag.message, "+ cannot be used with Utf8");
     assert_eq!(diag.span, Some(spans["whole"]));
+    assert_eq!(
+        diag.notes[0].message,
+        "+ can only be used with numbers, intervals, and timestamps"
+    );
+    assert_eq!(
+        diag.helps[0].message,
+        "perhaps you need to cast person.first_name"
+    );
     Ok(())
 }
 
 #[test]
 fn test_unary_op_plus_with_non_column() -> Result<()> {
     // create a table with a column of type varchar
-    let query = "SELECT /*whole*/+'a'/*whole*/ ";
+    let query = "SELECT +'a'";
     let diag = do_query(query);
     assert_eq!(diag.message, "+ cannot be used with Utf8");
     assert_eq!(
