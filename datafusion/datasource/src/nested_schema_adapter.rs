@@ -102,6 +102,51 @@ pub struct NestedStructSchemaAdapter {
     table_schema: SchemaRef,
 }
 
+/// Adapt the source schema fields to match the target schema while preserving
+/// nested struct fields and handling field additions/removals
+fn adapt_fields(source_fields: &Fields, target_fields: &Fields) -> Vec<Field> {
+    let mut adapted_fields = Vec::new();
+    let source_map: HashMap<_, _> = source_fields
+        .iter()
+        .map(|f| (f.name().as_str(), f))
+        .collect();
+
+    for target_field in target_fields {
+        match source_map.get(target_field.name().as_str()) {
+            Some(source_field) => {
+                match (source_field.data_type(), target_field.data_type()) {
+                    // Recursively adapt nested struct fields
+                    (
+                        DataType::Struct(source_children),
+                        DataType::Struct(target_children),
+                    ) => {
+                        let adapted_children =
+                            adapt_fields(source_children, target_children);
+                        adapted_fields.push(Field::new(
+                            target_field.name(),
+                            DataType::Struct(adapted_children.into()),
+                            target_field.is_nullable(),
+                        ));
+                    }
+                    // If types match exactly, keep source field
+                    _ if source_field.data_type() == target_field.data_type() => {
+                        adapted_fields.push(source_field.as_ref().clone());
+                    }
+                    // Types don't match - use target field definition
+                    _ => {
+                        adapted_fields.push(target_field.as_ref().clone());
+                    }
+                }
+            }
+            // Field doesn't exist in source - add from target
+            None => {
+                adapted_fields.push(target_field.as_ref().clone());
+            }
+        }
+    }
+
+    adapted_fields
+}
 impl NestedStructSchemaAdapter {
     /// Create a new NestedStructSchemaAdapter with the target schema
     pub fn new(projected_table_schema: SchemaRef, table_schema: SchemaRef) -> Self {
@@ -119,56 +164,10 @@ impl NestedStructSchemaAdapter {
         self.table_schema.as_ref()
     }
 
-    /// Adapt the source schema fields to match the target schema while preserving
-    /// nested struct fields and handling field additions/removals
-    fn adapt_fields(&self, source_fields: &Fields, target_fields: &Fields) -> Vec<Field> {
-        let mut adapted_fields = Vec::new();
-        let source_map: HashMap<_, _> = source_fields
-            .iter()
-            .map(|f| (f.name().as_str(), f))
-            .collect();
-
-        for target_field in target_fields {
-            match source_map.get(target_field.name().as_str()) {
-                Some(source_field) => {
-                    match (source_field.data_type(), target_field.data_type()) {
-                        // Recursively adapt nested struct fields
-                        (
-                            DataType::Struct(source_children),
-                            DataType::Struct(target_children),
-                        ) => {
-                            let adapted_children =
-                                self.adapt_fields(source_children, target_children);
-                            adapted_fields.push(Field::new(
-                                target_field.name(),
-                                DataType::Struct(adapted_children.into()),
-                                target_field.is_nullable(),
-                            ));
-                        }
-                        // If types match exactly, keep source field
-                        _ if source_field.data_type() == target_field.data_type() => {
-                            adapted_fields.push(source_field.as_ref().clone());
-                        }
-                        // Types don't match - use target field definition
-                        _ => {
-                            adapted_fields.push(target_field.as_ref().clone());
-                        }
-                    }
-                }
-                // Field doesn't exist in source - add from target
-                None => {
-                    adapted_fields.push(target_field.as_ref().clone());
-                }
-            }
-        }
-
-        adapted_fields
-    }
-
     // Takes a source schema and transforms it to match the structure of the target schema.
     fn adapt_schema(&self, source_schema: SchemaRef) -> Result<SchemaRef> {
         let adapted_fields =
-            self.adapt_fields(source_schema.fields(), self.table_schema.fields());
+            adapt_fields(source_schema.fields(), self.table_schema.fields());
 
         Ok(Arc::new(Schema::new_with_metadata(
             adapted_fields,
@@ -487,7 +486,7 @@ mod tests {
         assert_eq!(adapted.fields().len(), 2); // Should have id and user_info
 
         // Check that user_info is a struct
-        if let Some(idx) = adapted.index_of("user_info").ok() {
+        if let Ok(idx) = adapted.index_of("user_info") {
             let user_info_field = adapted.field(idx);
             assert!(matches!(user_info_field.data_type(), DataType::Struct(_)));
 
@@ -535,7 +534,7 @@ mod tests {
     }
 
     fn create_nested_schema() -> Arc<Schema> {
-        let nested_schema = Arc::new(Schema::new(vec![
+        Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new(
                 "user_info",
@@ -563,12 +562,11 @@ mod tests {
                 ),
                 true,
             ),
-        ]));
-        nested_schema
+        ]))
     }
 
     fn create_flat_schema() -> Arc<Schema> {
-        let flat_schema = Arc::new(Schema::new(vec![
+        Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("user", DataType::Utf8, true),
             Field::new(
@@ -576,7 +574,6 @@ mod tests {
                 DataType::Timestamp(TimeUnit::Millisecond, None),
                 true,
             ),
-        ]));
-        flat_schema
+        ]))
     }
 }
