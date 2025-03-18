@@ -805,7 +805,7 @@ impl DisplayAs for AggregateExec {
             DisplayFormatType::TreeRender => {
                 let format_expr_with_alias =
                     |(e, alias): &(Arc<dyn PhysicalExpr>, String)| -> String {
-                        let expr_sql = fmt_sql(e.as_ref());
+                        let expr_sql = fmt_sql(e.as_ref()).to_string();
                         if &expr_sql != alias {
                             format!("{expr_sql} as {alias}")
                         } else {
