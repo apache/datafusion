@@ -577,6 +577,7 @@ impl SessionState {
                     return Ok(LogicalPlan::Explain(Explain {
                         verbose: e.verbose,
                         plan: Arc::clone(&e.plan),
+                        explain_format: e.explain_format.clone(),
                         stringified_plans,
                         schema: Arc::clone(&e.schema),
                         logical_optimization_succeeded: false,
@@ -612,6 +613,7 @@ impl SessionState {
 
             Ok(LogicalPlan::Explain(Explain {
                 verbose: e.verbose,
+                explain_format: e.explain_format.clone(),
                 plan,
                 stringified_plans,
                 schema: Arc::clone(&e.schema),
@@ -1413,10 +1415,14 @@ impl SessionStateBuilder {
                 &state.runtime_env,
             );
 
-            state.catalog_list.register_catalog(
+            let existing_default_catalog = state.catalog_list.register_catalog(
                 state.config.options().catalog.default_catalog.clone(),
                 Arc::new(default_catalog),
             );
+
+            if existing_default_catalog.is_some() {
+                debug!("Overwrote the default catalog");
+            }
         }
 
         if let Some(analyzer_rules) = analyzer_rules {

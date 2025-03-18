@@ -17,7 +17,7 @@
 
 //! Sort expressions
 
-use crate::physical_expr::PhysicalExpr;
+use crate::physical_expr::{fmt_sql, PhysicalExpr};
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -37,7 +37,7 @@ use itertools::Itertools;
 /// Example:
 /// ```
 /// # use std::any::Any;
-/// # use std::fmt::Display;
+/// # use std::fmt::{Display, Formatter};
 /// # use std::hash::Hasher;
 /// # use std::sync::Arc;
 /// # use arrow::array::RecordBatch;
@@ -58,6 +58,7 @@ use itertools::Itertools;
 /// #  fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {todo!() }
 /// #  fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {todo!()}
 /// #  fn with_new_children(self: Arc<Self>, children: Vec<Arc<dyn PhysicalExpr>>) -> Result<Arc<dyn PhysicalExpr>> {todo!()}
+/// # fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result { todo!() }
 /// # }
 /// # impl Display for MyPhysicalExpr {
 /// #    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result { write!(f, "a") }
@@ -115,6 +116,16 @@ impl PhysicalSortExpr {
     pub fn nulls_last(mut self) -> Self {
         self.options.nulls_first = false;
         self
+    }
+
+    /// Like [`PhysicalExpr::fmt_sql`] prints a [`PhysicalSortExpr`] in a SQL-like format.
+    pub fn fmt_sql(&self, f: &mut Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{} {}",
+            fmt_sql(self.expr.as_ref()),
+            to_str(&self.options)
+        )
     }
 }
 

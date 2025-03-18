@@ -204,6 +204,7 @@ impl TreeNode for LogicalPlan {
             .update_data(LogicalPlan::Distinct),
             LogicalPlan::Explain(Explain {
                 verbose,
+                explain_format: format,
                 plan,
                 stringified_plans,
                 schema,
@@ -211,6 +212,7 @@ impl TreeNode for LogicalPlan {
             }) => plan.map_elements(f)?.update_data(|plan| {
                 LogicalPlan::Explain(Explain {
                     verbose,
+                    explain_format: format,
                     plan,
                     stringified_plans,
                     schema,

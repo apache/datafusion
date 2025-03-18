@@ -1060,7 +1060,7 @@ pub async fn from_project_rel(
 ) -> Result<LogicalPlan> {
     if let Some(input) = p.input.as_ref() {
         let mut input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
-        let original_schema = input.schema().clone();
+        let original_schema = Arc::clone(input.schema());
 
         // Ensure that all expressions have a unique display name, so that
         // validate_unique_names does not fail when constructing the project.
@@ -1626,7 +1626,7 @@ fn apply_emit_kind(
                             .get(field as usize)
                             .ok_or_else(|| substrait_datafusion_err!(
                                   "Emit output field {} cannot be resolved in input schema {}",
-                                  field, proj.input.schema().clone()
+                                  field, proj.input.schema()
                                 ))?;
                         exprs.push(name_tracker.get_uniquely_named_expr(expr.clone())?);
                     }
