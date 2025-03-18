@@ -1588,7 +1588,7 @@ type AggregateExprWithOptionalArgs = (
 pub fn create_aggregate_expr_with_name_and_maybe_filter(
     e: &Expr,
     name: Option<String>,
-    sql_name: String,
+    human_displan: String,
     logical_input_schema: &DFSchema,
     physical_input_schema: &Schema,
     execution_props: &ExecutionProps,
@@ -1643,7 +1643,7 @@ pub fn create_aggregate_expr_with_name_and_maybe_filter(
                         .order_by(ordering_reqs)
                         .schema(Arc::new(physical_input_schema.to_owned()))
                         .alias(name)
-                        .sql_name(sql_name)
+                        .human_display(human_displan)
                         .with_ignore_nulls(ignore_nulls)
                         .with_distinct(*distinct)
                         .build()
@@ -1666,13 +1666,13 @@ pub fn create_aggregate_expr_and_maybe_filter(
     execution_props: &ExecutionProps,
 ) -> Result<AggregateExprWithOptionalArgs> {
     // unpack (nested) aliased logical expressions, e.g. "sum(col) as total"
-    let (name, sql_name, e) = match e {
+    let (name, human_display, e) = match e {
         Expr::Alias(Alias { expr, name, .. }) => {
             (Some(name.clone()), String::default(), expr.as_ref())
         }
         Expr::AggregateFunction(_) => (
             Some(e.schema_name().to_string()),
-            e.sql_name().to_string(),
+            e.human_display().to_string(),
             e,
         ),
         _ => (None, String::default(), e),
@@ -1681,7 +1681,7 @@ pub fn create_aggregate_expr_and_maybe_filter(
     create_aggregate_expr_with_name_and_maybe_filter(
         e,
         name,
-        sql_name,
+        human_display,
         logical_input_schema,
         physical_input_schema,
         execution_props,

@@ -175,8 +175,11 @@ impl AggregateUDF {
         self.inner.schema_name(params)
     }
 
-    pub fn sql_name(&self, params: &AggregateFunctionParams) -> Result<String> {
-        self.inner.sql_name(params)
+    /// Returns a human readable expression.
+    ///
+    /// See [`Expr::human_display`] for details.
+    pub fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
+        self.inner.human_display(params)
     }
 
     pub fn window_function_schema_name(
@@ -456,7 +459,10 @@ pub trait AggregateUDFImpl: Debug + Send + Sync {
         Ok(schema_name)
     }
 
-    fn sql_name(&self, params: &AggregateFunctionParams) -> Result<String> {
+    /// Returns a human readable expression.
+    ///
+    /// See [`Expr::human_display`] for details.
+    fn human_display(&self, params: &AggregateFunctionParams) -> Result<String> {
         let AggregateFunctionParams {
             args,
             distinct,

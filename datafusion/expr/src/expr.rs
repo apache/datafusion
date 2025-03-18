@@ -67,7 +67,11 @@ use sqlparser::ast::{
 /// # Printing Expressions
 ///
 /// You can print `Expr`s using the the `Debug` trait, `Display` trait, or
-/// [`Self::sql_name`]. See the [examples](#examples-displaying-exprs) below.
+/// [`Self::human_display`]. See the [examples](#examples-displaying-exprs) below.
+///
+/// If you need  SQL to pass to other systems, consider using [`Unparser`].
+///
+/// [`Unparser`]: https://docs.rs/datafusion/latest/datafusion/sql/unparser/struct.Unparser.html
 ///
 /// # Schema Access
 ///
@@ -207,18 +211,18 @@ use sqlparser::ast::{
 /// assert_eq!(format!("{expr}"), "c1 + Int32(42)");
 /// ```
 ///
-/// ## Use [`Self::sql_name`] (human readable)
+/// ## Use [`Self::human_display`] (human readable)
 ///
-/// [`Self::sql_name`]  prints out the expression in a SQL-like form, optimized
+/// [`Self::human_display`]  prints out the expression in a SQL-like form, optimized
 /// for human consumption by end users. It is used for the
 /// [`ExplainFormat::Tree`] explain plan format.
 ///
 /// [`ExplainFormat::Tree`]: crate::logical_plan::ExplainFormat::Tree
 ///
-/// ```
+///```
 /// # use datafusion_expr::{lit, col};
 /// let expr = col("c1") + lit(42);
-/// assert_eq!(format!("{}", expr.sql_name()), "c1 + 42");
+/// assert_eq!(format!("{}", expr.human_display()), "c1 + 42");
 /// ```
 ///
 /// # Examples: Visiting and Rewriting `Expr`s
@@ -1197,17 +1201,18 @@ impl Expr {
         SchemaDisplay(self)
     }
 
-    /// Human readable formatting for this expression.
+    /// Human readable display formatting for this expression.
     ///
-    /// This name is primarily used in printing the explain tree output, (e.g.
-    /// `EXPLAIN <query>`), providing a readable format to show how expressions
-    /// are used in physical and logical plans.
+    /// This function is primarily used in printing the explain tree output,
+    /// (e.g. `EXPLAIN FORMAT TREE <query>`), providing a readable format to
+    /// show how expressions are used in physical and logical plans. See the
+    /// [`Expr`] for other ways to format expressions
     ///
     /// Note this format is intended for human consumption rather than SQL for
     /// other systems. If you need  SQL to pass to other systems, consider using
     /// [`Unparser`].
     ///
-    /// [Unparser]: https://docs.rs/datafusion/latest/datafusion/sql/unparser/struct.Unparser.html
+    /// [`Unparser`]: https://docs.rs/datafusion/latest/datafusion/sql/unparser/struct.Unparser.html
     ///
     /// # Example
     /// ```
@@ -1215,9 +1220,9 @@ impl Expr {
     /// let expr = col("foo") + lit(42);
     /// // For EXPLAIN output:
     /// // "foo + 42"
-    /// println!("{}", expr.sql_name());
+    /// println!("{}", expr.human_display());
     /// ```
-    pub fn sql_name(&self) -> impl Display + '_ {
+    pub fn human_display(&self) -> impl Display + '_ {
         SqlDisplay(self)
     }
 
@@ -2837,7 +2842,7 @@ impl Display for SqlDisplay<'_> {
                 Ok(())
             }
             Expr::AggregateFunction(AggregateFunction { func, params }) => {
-                match func.sql_name(params) {
+                match func.human_display(params) {
                     Ok(name) => {
                         write!(f, "{name}")
                     }

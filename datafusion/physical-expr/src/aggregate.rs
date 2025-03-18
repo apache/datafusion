@@ -65,7 +65,8 @@ pub struct AggregateExprBuilder {
     /// Physical expressions of the aggregate function
     args: Vec<Arc<dyn PhysicalExpr>>,
     alias: Option<String>,
-    sql_name: String,
+    /// A human readable name
+    human_display: String,
     /// Arrow Schema for the aggregate function
     schema: SchemaRef,
     /// The physical order by expressions
@@ -84,7 +85,7 @@ impl AggregateExprBuilder {
             fun,
             args,
             alias: None,
-            sql_name: String::default(),
+            human_display: String::default(),
             schema: Arc::new(Schema::empty()),
             ordering_req: LexOrdering::default(),
             ignore_nulls: false,
@@ -101,7 +102,7 @@ impl AggregateExprBuilder {
             fun,
             args,
             alias,
-            sql_name,
+            human_display,
             schema,
             ordering_req,
             ignore_nulls,
@@ -151,7 +152,7 @@ impl AggregateExprBuilder {
             args,
             data_type,
             name,
-            sql_name,
+            human_display,
             schema: Arc::unwrap_or_clone(schema),
             ordering_req,
             ignore_nulls,
@@ -168,8 +169,8 @@ impl AggregateExprBuilder {
         self
     }
 
-    pub fn sql_name(mut self, name: String) -> Self {
-        self.sql_name = name;
+    pub fn human_display(mut self, name: String) -> Self {
+        self.human_display = name;
         self
     }
 
@@ -226,7 +227,7 @@ pub struct AggregateFunctionExpr {
     /// Output column name that this expression creates
     name: String,
     /// Simplified name for `tree` explain.
-    sql_name: String,
+    human_display: String,
     schema: Schema,
     // The physical order by expressions
     ordering_req: LexOrdering,
@@ -258,8 +259,8 @@ impl AggregateFunctionExpr {
     }
 
     /// Simplified name for `tree` explain.
-    pub fn sql_name(&self) -> &str {
-        &self.sql_name
+    pub fn human_display(&self) -> &str {
+        &self.human_display
     }
 
     /// Return if the aggregation is distinct
