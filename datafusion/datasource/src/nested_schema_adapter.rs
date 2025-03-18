@@ -239,7 +239,7 @@ mod tests {
     fn test_nested_struct_evolution() -> Result<()> {
         // Create source and target schemas using helper functions
         let source_schema = create_basic_nested_schema();
-        let target_schema = create_enhanced_nested_schema();
+        let target_schema = create_deep_nested_schema();
 
         let adapter =
             NestedStructSchemaAdapter::new(target_schema.clone(), target_schema.clone());
@@ -258,7 +258,7 @@ mod tests {
     }
 
     /// Helper function to create an enhanced schema with deeper nested structs
-    fn create_enhanced_nested_schema() -> SchemaRef {
+    fn create_deep_nested_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             create_additional_info_field(true), // with reason field
         ]))
@@ -288,29 +288,26 @@ mod tests {
     }
 
     /// Helper function to create the reason nested field
+    /// Helper function to create the reason nested field with its details subfield
     fn create_reason_field() -> Field {
         Field::new(
             "reason",
             DataType::Struct(
                 vec![
                     Field::new("_level", DataType::Float64, true),
-                    create_details_field(),
-                ]
-                .into(),
-            ),
-            true,
-        )
-    }
-
-    /// Helper function to create the details nested field
-    fn create_details_field() -> Field {
-        Field::new(
-            "details",
-            DataType::Struct(
-                vec![
-                    Field::new("rurl", DataType::Utf8, true),
-                    Field::new("s", DataType::Float64, true),
-                    Field::new("t", DataType::Utf8, true),
+                    // Inline the details field creation
+                    Field::new(
+                        "details",
+                        DataType::Struct(
+                            vec![
+                                Field::new("rurl", DataType::Utf8, true),
+                                Field::new("s", DataType::Float64, true),
+                                Field::new("t", DataType::Utf8, true),
+                            ]
+                            .into(),
+                        ),
+                        true,
+                    ),
                 ]
                 .into(),
             ),
