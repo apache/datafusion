@@ -35,6 +35,7 @@ pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
 pub mod memory;
+pub mod nested_schema_adapter;
 pub mod schema_adapter;
 pub mod source;
 mod statistics;
