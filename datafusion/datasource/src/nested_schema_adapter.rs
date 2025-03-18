@@ -44,9 +44,12 @@ impl SchemaAdapterFactory for NestedStructSchemaAdapterFactory {
     fn create(
         &self,
         projected_table_schema: SchemaRef,
-        _table_schema: SchemaRef,
+        table_schema: SchemaRef,
     ) -> Box<dyn SchemaAdapter> {
-        Box::new(NestedStructSchemaAdapter::new(projected_table_schema))
+        Box::new(NestedStructSchemaAdapter::new(
+            projected_table_schema,
+            table_schema,
+        ))
     }
 }
 
@@ -76,7 +79,7 @@ impl NestedStructSchemaAdapterFactory {
         table_schema: SchemaRef,
     ) -> Box<dyn SchemaAdapter> {
         // Use nested adapter if target has nested structs
-        if Self::has_nested_structs(projected_table_schema.as_ref()) {
+        if Self::has_nested_structs(table_schema.as_ref()) {
             NestedStructSchemaAdapterFactory.create(projected_table_schema, table_schema)
         } else {
             // Default case for simple schemas
@@ -88,13 +91,32 @@ impl NestedStructSchemaAdapterFactory {
 /// A SchemaAdapter that handles schema evolution for nested struct types
 #[derive(Debug, Clone)]
 pub struct NestedStructSchemaAdapter {
-    target_schema: SchemaRef,
+    /// The schema for the table, projected to include only the fields being output (projected) by the
+    /// associated ParquetSource
+    projected_table_schema: SchemaRef,
+    /// The entire table schema for the table we're using this to adapt.
+    ///
+    /// This is used to evaluate any filters pushed down into the scan
+    /// which may refer to columns that are not referred to anywhere
+    /// else in the plan.
+    table_schema: SchemaRef,
 }
 
 impl NestedStructSchemaAdapter {
     /// Create a new NestedStructSchemaAdapter with the target schema
-    pub fn new(target_schema: SchemaRef) -> Self {
-        Self { target_schema }
+    pub fn new(projected_table_schema: SchemaRef, table_schema: SchemaRef) -> Self {
+        Self {
+            projected_table_schema,
+            table_schema,
+        }
+    }
+
+    pub fn projected_table_schema(&self) -> &Schema {
+        self.projected_table_schema.as_ref()
+    }
+
+    pub fn table_schema(&self) -> &Schema {
+        self.table_schema.as_ref()
     }
 
     /// Adapt the source schema fields to match the target schema while preserving
@@ -146,11 +168,11 @@ impl NestedStructSchemaAdapter {
     // Takes a source schema and transforms it to match the structure of the target schema.
     fn adapt_schema(&self, source_schema: SchemaRef) -> Result<SchemaRef> {
         let adapted_fields =
-            self.adapt_fields(source_schema.fields(), self.target_schema.fields());
+            self.adapt_fields(source_schema.fields(), self.table_schema.fields());
 
         Ok(Arc::new(Schema::new_with_metadata(
             adapted_fields,
-            self.target_schema.metadata().clone(),
+            self.table_schema.metadata().clone(),
         )))
     }
 
@@ -181,7 +203,7 @@ impl NestedStructSchemaAdapter {
 
 impl SchemaAdapter for NestedStructSchemaAdapter {
     fn map_column_index(&self, index: usize, file_schema: &Schema) -> Option<usize> {
-        let field_name = self.target_schema.field(index).name();
+        let field_name = self.table_schema.field(index).name();
         file_schema.index_of(field_name).ok()
     }
 
@@ -215,68 +237,85 @@ mod tests {
 
     #[test]
     fn test_nested_struct_evolution() -> Result<()> {
-        // Original schema with basic nested struct
-        let source_schema = Arc::new(Schema::new(vec![Field::new(
-            "additionalInfo",
-            DataType::Struct(
-                vec![
-                    Field::new("location", DataType::Utf8, true),
-                    Field::new(
-                        "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        true,
-                    ),
-                ]
-                .into(),
-            ),
-            true,
-        )]));
+        // Create source and target schemas using helper functions
+        let source_schema = create_basic_nested_schema();
+        let target_schema = create_enhanced_nested_schema();
 
-        // Enhanced schema with new nested fields
-        let target_schema = Arc::new(Schema::new(vec![Field::new(
-            "additionalInfo",
-            DataType::Struct(
-                vec![
-                    Field::new("location", DataType::Utf8, true),
-                    Field::new(
-                        "timestamp_utc",
-                        DataType::Timestamp(TimeUnit::Millisecond, None),
-                        true,
-                    ),
-                    Field::new(
-                        "reason",
-                        DataType::Struct(
-                            vec![
-                                Field::new("_level", DataType::Float64, true),
-                                Field::new(
-                                    "details",
-                                    DataType::Struct(
-                                        vec![
-                                            Field::new("rurl", DataType::Utf8, true),
-                                            Field::new("s", DataType::Float64, true),
-                                            Field::new("t", DataType::Utf8, true),
-                                        ]
-                                        .into(),
-                                    ),
-                                    true,
-                                ),
-                            ]
-                            .into(),
-                        ),
-                        true,
-                    ),
-                ]
-                .into(),
-            ),
-            true,
-        )]));
-
-        let adapter = NestedStructSchemaAdapter::new(target_schema.clone());
+        let adapter =
+            NestedStructSchemaAdapter::new(target_schema.clone(), target_schema.clone());
         let adapted = adapter.adapt_schema(source_schema)?;
 
         // Verify the adapted schema matches target
         assert_eq!(adapted.fields(), target_schema.fields());
         Ok(())
+    }
+
+    /// Helper function to create a basic schema with a simple nested struct
+    fn create_basic_nested_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            create_additional_info_field(false), // without reason field
+        ]))
+    }
+
+    /// Helper function to create an enhanced schema with deeper nested structs
+    fn create_enhanced_nested_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            create_additional_info_field(true), // with reason field
+        ]))
+    }
+
+    /// Helper function to create the additionalInfo field with or without the reason subfield
+    fn create_additional_info_field(with_reason: bool) -> Field {
+        let mut field_children = vec![
+            Field::new("location", DataType::Utf8, true),
+            Field::new(
+                "timestamp_utc",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+        ];
+
+        // Add the reason field if requested (for target schema)
+        if with_reason {
+            field_children.push(create_reason_field());
+        }
+
+        Field::new(
+            "additionalInfo",
+            DataType::Struct(field_children.into()),
+            true,
+        )
+    }
+
+    /// Helper function to create the reason nested field
+    fn create_reason_field() -> Field {
+        Field::new(
+            "reason",
+            DataType::Struct(
+                vec![
+                    Field::new("_level", DataType::Float64, true),
+                    create_details_field(),
+                ]
+                .into(),
+            ),
+            true,
+        )
+    }
+
+    /// Helper function to create the details nested field
+    fn create_details_field() -> Field {
+        Field::new(
+            "details",
+            DataType::Struct(
+                vec![
+                    Field::new("rurl", DataType::Utf8, true),
+                    Field::new("s", DataType::Float64, true),
+                    Field::new("t", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            true,
+        )
     }
 
     #[test]
@@ -317,7 +356,8 @@ mod tests {
             Field::new("description", DataType::Utf8, true), // Added field
         ]));
 
-        let adapter = NestedStructSchemaAdapter::new(target_schema.clone());
+        let adapter =
+            NestedStructSchemaAdapter::new(target_schema.clone(), target_schema.clone());
         let (_, projection) = adapter.map_schema(&source_schema)?;
 
         // Verify projection contains all columns from source schema
@@ -478,7 +518,8 @@ mod tests {
         ]));
 
         // Create mapping with our adapter - should handle missing nested fields
-        let nested_adapter = NestedStructSchemaAdapter::new(target_schema.clone());
+        let nested_adapter =
+            NestedStructSchemaAdapter::new(target_schema.clone(), target_schema.clone());
         let adapted = nested_adapter.adapt_schema(source_schema.clone())?;
 
         // Verify structure of adapted schema
