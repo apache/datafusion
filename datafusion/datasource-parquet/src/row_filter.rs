@@ -119,7 +119,7 @@ impl DatafusionArrowPredicate {
         rows_matched: metrics::Count,
         time: metrics::Time,
     ) -> Result<Self> {
-        let projected_schema = candidate.filter_schema.clone();
+        let projected_schema = Arc::clone(&candidate.filter_schema);
         let physical_expr =
             reassign_predicate_columns(candidate.expr, &projected_schema, true)?;
 
@@ -273,7 +273,7 @@ impl FilterCandidateBuilder {
 
         let (schema_mapper, projection_into_file_schema) = self
             .schema_adapter_factory
-            .create(projected_table_schema.clone(), self.table_schema)
+            .create(Arc::clone(&projected_table_schema), self.table_schema)
             .map_schema(&self.file_schema)?;
 
         let required_bytes = size_of_columns(&projection_into_file_schema, metadata)?;
