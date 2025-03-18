@@ -29,7 +29,7 @@ This crate is a submodule of DataFusion that contains an implementation of [sqll
 
 This crate uses [sqllogictest-rs](https://github.com/risinglightdb/sqllogictest-rs) to parse and run `.slt` files in the
 [`test_files`](test_files) directory of this crate or the [`data/sqlite`](https://github.com/apache/datafusion-testing/tree/main/data/sqlite)
-directory of the datafusion-testing crate.
+directory of the [datafusion-testing](https://github.com/apache/datafusion-testing) crate.
 
 ## Testing setup
 
