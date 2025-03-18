@@ -605,20 +605,22 @@ impl DFSchema {
         })
     }
 
-    /// Returns true if the two schemas have the same qualified named
-    /// fields with the compatible data types. Returns false otherwise.
-    ///
-    /// This is a specialized version of Eq that ignores differences
-    /// in nullability and metadata.
-    ///
-    /// Use [DFSchema]::logically_equivalent_names_and_types for a weaker
-    /// logical type checking, which for example would consider a dictionary
-    /// encoded UTF8 array to be equivalent to a plain UTF8 array.
     #[deprecated(since = "47.0.0", note = "Use has_equivalent_names_and_types` instead")]
     pub fn equivalent_names_and_types(&self, other: &Self) -> bool {
         self.has_equivalent_names_and_types(other).is_ok()
     }
 
+    /// Returns Ok if the two schemas have the same qualified named
+    /// fields with the compatible data types.
+    ///
+    /// Returns an `Err` with a message otherwise.
+    ///
+    /// This is a specialized version of Eq that ignores differences in
+    /// nullability and metadata.
+    ///
+    /// Use [DFSchema]::logically_equivalent_names_and_types for a weaker
+    /// logical type checking, which for example would consider a dictionary
+    /// encoded UTF8 array to be equivalent to a plain UTF8 array.
     pub fn has_equivalent_names_and_types(&self, other: &Self) -> Result<()> {
         // case 1 : schema length mismatch
         if self.fields().len() != other.fields().len() {
