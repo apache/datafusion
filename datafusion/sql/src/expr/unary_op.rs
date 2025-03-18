@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{not_impl_err, plan_err, DFSchema, Result};
+use datafusion_common::{not_impl_err, plan_err, DFSchema, Diagnostic, Result};
 use datafusion_expr::{
     type_coercion::{is_interval, is_timestamp},
     Expr, ExprSchemable,
@@ -45,7 +45,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 {
                     Ok(operand)
                 } else {
-                    plan_err!("Unary operator '+' only supports numeric, interval and timestamp types")
+                    plan_err!("Unary operator '+' only supports numeric, interval and timestamp types").map_err(|e| {
+                        let span = operand.spans().and_then(|s| s.first());
+                        let mut diagnostic = Diagnostic::new_error(
+                            format!("+ cannot be used with {data_type}"), 
+                            span
+                        );
+                        diagnostic.add_note("+ can only be used with numbers, intervals, and timestamps", None);
+                        diagnostic.add_help(format!("perhaps you need to cast {operand}"), None);
+                        e.with_diagnostic(diagnostic)
+                    })
                 }
             }
             UnaryOperator::Minus => {
