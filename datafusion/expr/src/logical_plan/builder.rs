@@ -24,7 +24,7 @@ use std::iter::once;
 use std::sync::Arc;
 
 use crate::dml::CopyTo;
-use crate::expr::{Alias, Sort as SortExpr};
+use crate::expr::{Alias, PlannedReplaceSelectItem, Sort as SortExpr};
 use crate::expr_rewriter::{
     coerce_plan_expr_for_schema, normalize_col,
     normalize_col_with_schemas_and_ambiguity_check, normalize_cols, normalize_sorts,
@@ -36,9 +36,11 @@ use crate::logical_plan::{
     Projection, Repartition, Sort, SubqueryAlias, TableScan, Union, Unnest, Values,
     Window,
 };
+use crate::select_expr::SelectExpr;
 use crate::utils::{
-    can_hash, columnize_expr, compare_sort_expr, expr_to_columns,
-    find_valid_equijoin_key_pair, group_window_expr_by_sort_keys,
+    can_hash, columnize_expr, compare_sort_expr, expand_qualified_wildcard,
+    expand_wildcard, expr_to_columns, find_valid_equijoin_key_pair,
+    group_window_expr_by_sort_keys,
 };
 use crate::{
     and, binary_expr, lit, DmlStatement, Expr, ExprSchemable, Operator, RecursiveQuery,
@@ -520,10 +522,11 @@ impl LogicalPlanBuilder {
         }
         Ok(plan)
     }
+
     /// Apply a projection without alias.
     pub fn project(
         self,
-        expr: impl IntoIterator<Item = impl Into<Expr>>,
+        expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
     ) -> Result<Self> {
         project(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
     }
@@ -532,7 +535,7 @@ impl LogicalPlanBuilder {
     /// (true to validate, false to not validate)
     pub fn project_with_validation(
         self,
-        expr: Vec<(impl Into<Expr>, bool)>,
+        expr: Vec<(impl Into<SelectExpr>, bool)>,
     ) -> Result<Self> {
         project_with_validation(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
     }
@@ -776,6 +779,7 @@ impl LogicalPlanBuilder {
             &missing_cols,
             is_distinct,
         )?;
+
         let sort_plan = LogicalPlan::Sort(Sort {
             expr: normalize_sorts(sorts, &plan)?,
             input: Arc::new(plan),
@@ -1656,7 +1660,7 @@ pub fn union_by_name(
 /// * An invalid expression is used (e.g. a `sort` expression)
 pub fn project(
     plan: LogicalPlan,
-    expr: impl IntoIterator<Item = impl Into<Expr>>,
+    expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
 ) -> Result<LogicalPlan> {
     project_with_validation(plan, expr.into_iter().map(|e| (e, true)))
 }
@@ -1670,15 +1674,54 @@ pub fn project(
 /// * An invalid expression is used (e.g. a `sort` expression)
 fn project_with_validation(
     plan: LogicalPlan,
-    expr: impl IntoIterator<Item = (impl Into<Expr>, bool)>,
+    expr: impl IntoIterator<Item = (impl Into<SelectExpr>, bool)>,
 ) -> Result<LogicalPlan> {
     let mut projected_expr = vec![];
     for (e, validate) in expr {
         let e = e.into();
         match e {
-            #[expect(deprecated)]
-            Expr::Wildcard { .. } => projected_expr.push(e),
-            _ => {
+            SelectExpr::Wildcard(opt) => {
+                let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
+
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
+                let expanded = if let Some(replace) = opt.replace {
+                    replace_columns(expanded, &replace)?
+                } else {
+                    expanded
+                };
+
+                for e in expanded {
+                    if validate {
+                        projected_expr
+                            .push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                    } else {
+                        projected_expr.push(e)
+                    }
+                }
+            }
+            SelectExpr::QualifiedWildcard(table_ref, opt) => {
+                let expanded =
+                    expand_qualified_wildcard(&table_ref, plan.schema(), Some(&opt))?;
+
+                // If there is a REPLACE statement, replace that column with the given
+                // replace expression. Column name remains the same.
+                let expanded = if let Some(replace) = opt.replace {
+                    replace_columns(expanded, &replace)?
+                } else {
+                    expanded
+                };
+
+                for e in expanded {
+                    if validate {
+                        projected_expr
+                            .push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
+                    } else {
+                        projected_expr.push(e)
+                    }
+                }
+            }
+            SelectExpr::Expression(e) => {
                 if validate {
                     projected_expr.push(columnize_expr(normalize_col(e, &plan)?, &plan)?)
                 } else {
@@ -1690,6 +1733,29 @@ fn project_with_validation(
     validate_unique_names("Projections", projected_expr.iter())?;
 
     Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+}
+
+/// If there is a REPLACE statement in the projected expression in the form of
+/// "REPLACE (some_column_within_an_expr AS some_column)", this function replaces
+/// that column with the given replace expression. Column name remains the same.
+/// Multiple REPLACEs are also possible with comma separations.
+fn replace_columns(
+    mut exprs: Vec<Expr>,
+    replace: &PlannedReplaceSelectItem,
+) -> Result<Vec<Expr>> {
+    for expr in exprs.iter_mut() {
+        if let Expr::Column(Column { name, .. }) = expr {
+            if let Some((_, new_expr)) = replace
+                .items()
+                .iter()
+                .zip(replace.expressions().iter())
+                .find(|(item, _)| item.column_name.value == *name)
+            {
+                *expr = new_expr.clone().alias(name.clone())
+            }
+        }
+    }
+    Ok(exprs)
 }
 
 /// Create a SubqueryAlias to wrap a LogicalPlan.
@@ -1810,7 +1876,7 @@ pub fn wrap_projection_for_join_if_necessary(
         projection.extend(join_key_items);
 
         LogicalPlanBuilder::from(input)
-            .project(projection)?
+            .project(projection.into_iter().map(SelectExpr::from))?
             .build()?
     } else {
         input
