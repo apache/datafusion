@@ -869,7 +869,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 ///
 fn validate_columns_in_group_by_or_aggregate(
     expanded: &Vec<Expr>,
-    aggregate_columns: &Vec<Expr>,
+    aggregate_columns: &[Expr],
 ) -> Result<(), DataFusionError> {
     if !aggregate_columns.is_empty() {
         for e in expanded {
