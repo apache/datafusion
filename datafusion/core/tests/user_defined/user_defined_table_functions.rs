@@ -26,6 +26,7 @@ use arrow::csv::ReaderBuilder;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::common::test_util::batches_to_string;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
@@ -38,14 +39,6 @@ use datafusion_common::{DFSchema, ScalarValue};
 use datafusion_expr::{EmptyRelation, Expr, LogicalPlan, Projection, TableType};
 
 use async_trait::async_trait;
-
-fn fmt_batches(batches: &[RecordBatch]) -> String {
-    use arrow::util::pretty::pretty_format_batches;
-    match pretty_format_batches(batches) {
-        Ok(formatted) => formatted.to_string(),
-        Err(e) => format!("Error formatting record batches: {}", e),
-    }
-}
 
 /// test simple udtf with define read_csv with parameters
 #[tokio::test]
@@ -62,7 +55,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
         .collect()
         .await?;
 
-    insta::assert_snapshot!(fmt_batches(&rbs), @r###"
+    insta::assert_snapshot!(batches_to_string(&rbs), @r###"
     +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
     | n_nationkey | n_name    | n_regionkey | n_comment                                                                                                   |
     +-------------+-----------+-------------+-------------------------------------------------------------------------------------------------------------+
@@ -81,7 +74,7 @@ async fn test_simple_read_csv_udtf() -> Result<()> {
         .collect()
         .await?;
 
-    insta::assert_snapshot!(fmt_batches(&rbs), @r###"
+    insta::assert_snapshot!(batches_to_string(&rbs), @r###"
     +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+
     | n_nationkey | n_name    | n_regionkey | n_comment                                                                                                          |
     +-------------+-----------+-------------+--------------------------------------------------------------------------------------------------------------------+

@@ -20,8 +20,9 @@
 
 use arrow::array::{ArrayRef, AsArray, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::test_util::batches_to_string;
+use datafusion::common::{Result, ScalarValue};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     PartitionEvaluator, Signature, TypeSignature, Volatility, WindowUDF, WindowUDFImpl,
 };
@@ -57,14 +58,6 @@ const BOUNDED_WINDOW_QUERY:  &str  =
      odd_counter(val) OVER (PARTITION BY x ORDER BY y ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) \
      from t ORDER BY x, y";
 
-fn fmt_batches(batches: &[RecordBatch]) -> String {
-    use arrow::util::pretty::pretty_format_batches;
-    match pretty_format_batches(batches) {
-        Ok(formatted) => formatted.to_string(),
-        Err(e) => format!("Error formatting record batches: {}", e),
-    }
-}
-
 #[tokio::test]
 async fn test_setup() {
     let test_state = TestState::new();
@@ -73,7 +66,7 @@ async fn test_setup() {
     let sql = "SELECT * from t order by x, y";
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
          +---+---+-----+
          | x | y | val |
          +---+---+-----+
@@ -99,7 +92,7 @@ async fn test_udwf() {
 
     let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
          +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
          | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
          +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
@@ -144,7 +137,7 @@ async fn test_udwf_with_alias() {
         .await
         .unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
          +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
          | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
          +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
@@ -171,7 +164,7 @@ async fn test_udwf_bounded_window_ignores_frame() {
     // Since the UDWF doesn't say it needs the window frame, the frame is ignored
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
          +---+---+-----+--------------------------------------------------------------------------------------------------------------+
          | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
          +---+---+-----+--------------------------------------------------------------------------------------------------------------+
@@ -201,7 +194,7 @@ async fn test_udwf_bounded_window() {
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
          +---+---+-----+--------------------------------------------------------------------------------------------------------------+
          | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
          +---+---+-----+--------------------------------------------------------------------------------------------------------------+
@@ -233,7 +226,7 @@ async fn test_stateful_udwf() {
 
     let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
          +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
          | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
          +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
@@ -264,7 +257,7 @@ async fn test_stateful_udwf_bounded_window() {
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
          +---+---+-----+--------------------------------------------------------------------------------------------------------------+
          | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
          +---+---+-----+--------------------------------------------------------------------------------------------------------------+
@@ -294,7 +287,7 @@ async fn test_udwf_query_include_rank() {
 
     let actual = execute(&ctx, UNBOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
          +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
          | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW |
          +---+---+-----+-----------------------------------------------------------------------------------------------------------------------+
@@ -325,7 +318,7 @@ async fn test_udwf_bounded_query_include_rank() {
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
          +---+---+-----+--------------------------------------------------------------------------------------------------------------+
          | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
          +---+---+-----+--------------------------------------------------------------------------------------------------------------+
@@ -358,7 +351,7 @@ async fn test_udwf_bounded_window_returns_null() {
 
     let actual = execute(&ctx, BOUNDED_WINDOW_QUERY).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
          +---+---+-----+--------------------------------------------------------------------------------------------------------------+
          | x | y | val | odd_counter(t.val) PARTITION BY [t.x] ORDER BY [t.y ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING |
          +---+---+-----+--------------------------------------------------------------------------------------------------------------+

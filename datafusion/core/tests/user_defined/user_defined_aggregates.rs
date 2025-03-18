@@ -30,6 +30,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{Fields, Schema};
 
+use datafusion::common::test_util::batches_to_string;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
 use datafusion::test_util::plan_and_collect;
@@ -55,14 +56,6 @@ use datafusion_expr::{
 };
 use datafusion_functions_aggregate::average::AvgAccumulator;
 
-fn fmt_batches(batches: &[RecordBatch]) -> String {
-    use arrow::util::pretty::pretty_format_batches;
-    match pretty_format_batches(batches) {
-        Ok(formatted) => formatted.to_string(),
-        Err(e) => format!("Error formatting record batches: {}", e),
-    }
-}
-
 /// Test to show the contents of the setup
 #[tokio::test]
 async fn test_setup() {
@@ -71,7 +64,7 @@ async fn test_setup() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +-------+----------------------------+
     | value | time                       |
     +-------+----------------------------+
@@ -93,7 +86,7 @@ async fn test_udaf() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +----------------------------+
     | time_sum(t.time)           |
     +----------------------------+
@@ -114,7 +107,7 @@ async fn test_udaf_as_window() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +----------------------------+
     | time_sum                   |
     +----------------------------+
@@ -139,7 +132,7 @@ async fn test_udaf_as_window_with_frame() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +----------------------------+
     | time_sum                   |
     +----------------------------+
@@ -177,7 +170,7 @@ async fn test_udaf_returning_struct() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +------------------------------------------------+
     | first(t.value,t.time)                          |
     +------------------------------------------------+
@@ -194,7 +187,7 @@ async fn test_udaf_returning_struct_subquery() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +-----------------+----------------------------+
     | sq.first[value] | sq.first[time]             |
     +-----------------+----------------------------+
@@ -214,7 +207,7 @@ async fn test_udaf_shadows_builtin_fn() {
     // compute with builtin `sum` aggregator
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +---------------------------------------+
     | sum(arrow_cast(t.time,Utf8("Int64"))) |
     +---------------------------------------+
@@ -228,7 +221,7 @@ async fn test_udaf_shadows_builtin_fn() {
 
     let actual = execute(&ctx, sql).await.unwrap();
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +----------------------------+
     | sum(t.time)                |
     +----------------------------+
@@ -274,7 +267,7 @@ async fn simple_udaf() -> Result<()> {
 
     let result = ctx.sql("SELECT MY_AVG(a) FROM t").await?.collect().await?;
 
-    insta::assert_snapshot!(fmt_batches(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
     +-------------+
     | my_avg(t.a) |
     +-------------+
@@ -340,7 +333,7 @@ async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
         .collect()
         .await?;
 
-    insta::assert_snapshot!(fmt_batches(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
     +-------------+
     | MY_AVG(t.i) |
     +-------------+
@@ -372,7 +365,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     let result = plan_and_collect(&ctx, "SELECT dummy(i) FROM t").await?;
 
-    insta::assert_snapshot!(fmt_batches(&result), @r###"
+    insta::assert_snapshot!(batches_to_string(&result), @r###"
     +------------+
     | dummy(t.i) |
     +------------+
@@ -382,7 +375,7 @@ async fn test_user_defined_functions_with_alias() -> Result<()> {
 
     let alias_result = plan_and_collect(&ctx, "SELECT dummy_alias(i) FROM t").await?;
 
-    insta::assert_snapshot!(fmt_batches(&alias_result), @r###"
+    insta::assert_snapshot!(batches_to_string(&alias_result), @r###"
     +------------+
     | dummy(t.i) |
     +------------+
@@ -449,7 +442,7 @@ async fn test_parameterized_aggregate_udf() -> Result<()> {
 
     let actual = DataFrame::new(ctx.state(), plan).collect().await?;
 
-    insta::assert_snapshot!(fmt_batches(&actual), @r###"
+    insta::assert_snapshot!(batches_to_string(&actual), @r###"
     +------+---+---+
     | text | a | b |
     +------+---+---+
