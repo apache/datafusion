@@ -776,7 +776,7 @@ pub async fn from_substrait_plan_with_consumer(
                             return Ok(plan);
                         }
                         let renamed_schema = make_renamed_schema(plan.schema(), &root.names)?;
-                        if renamed_schema.equivalent_names_and_types(plan.schema()) {
+                        if renamed_schema.has_equivalent_names_and_types(plan.schema()).is_ok() {
                             // Nothing to do if the schema is already equivalent
                             return Ok(plan);
                         }
