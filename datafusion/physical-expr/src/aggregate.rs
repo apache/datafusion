@@ -226,7 +226,7 @@ pub struct AggregateFunctionExpr {
     /// Output column name that this expression creates
     name: String,
     /// Simplified name for `tree` explain.
-        sql_name: String,
+    sql_name: String,
     schema: Schema,
     // The physical order by expressions
     ordering_req: LexOrdering,
