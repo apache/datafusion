@@ -925,7 +925,7 @@ query TT
 explain SELECT t1_id, (SELECT count(*) + 2 as cnt_plus_2 FROM t2 WHERE t2.t2_int = t1.t1_int having count(*) = 0) from t1
 ----
 logical_plan
-01)Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_1.count(Int64(1)) != Int64(0) THEN NULL ELSE __scalar_sq_1.cnt_plus_2 END AS cnt_plus_2
+01)Projection: t1.t1_id, CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_1.count(Int64(1)) != Int64(0) THEN Int64(NULL) ELSE __scalar_sq_1.cnt_plus_2 END AS cnt_plus_2
 02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
 03)----TableScan: t1 projection=[t1_id, t1_int]
 04)----SubqueryAlias: __scalar_sq_1
@@ -999,7 +999,7 @@ select t1.t1_int from t1 where (
 ----
 logical_plan
 01)Projection: t1.t1_int
-02)--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_1.count(Int64(1)) != Int64(0) THEN NULL ELSE __scalar_sq_1.cnt_plus_two END = Int64(2)
+02)--Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(2) WHEN __scalar_sq_1.count(Int64(1)) != Int64(0) THEN Int64(NULL) ELSE __scalar_sq_1.cnt_plus_two END = Int64(2)
 03)----Projection: t1.t1_int, __scalar_sq_1.cnt_plus_two, __scalar_sq_1.count(Int64(1)), __scalar_sq_1.__always_true
 04)------Left Join: t1.t1_int = __scalar_sq_1.t2_int
 05)--------TableScan: t1 projection=[t1_int]
@@ -1052,6 +1052,26 @@ false
 false
 true
 true
+
+query IT rowsort
+SELECT t1_id, (SELECT case when max(t2.t2_id) > 1 then 'a' else 'b' end FROM t2 WHERE t2.t2_int = t1.t1_int) x from t1
+----
+11 a
+22 b
+33 a
+44 b
+
+query TT
+explain SELECT t1_id, (SELECT max(t2.t2_id) FROM t2 WHERE t2.t2_int = t1.t1_int) x from t1
+----
+logical_plan
+01)Projection: t1.t1_id, __scalar_sq_1.max(t2.t2_id) AS x
+02)--Left Join: t1.t1_int = __scalar_sq_1.t2_int
+03)----TableScan: t1 projection=[t1_id, t1_int]
+04)----SubqueryAlias: __scalar_sq_1
+05)------Projection: max(t2.t2_id), t2.t2_int
+06)--------Aggregate: groupBy=[[t2.t2_int]], aggr=[[max(t2.t2_id)]]
+07)----------TableScan: t2 projection=[t2_id, t2_int]
 
 # in_subquery_to_join_with_correlated_outer_filter_disjunction
 query TT
