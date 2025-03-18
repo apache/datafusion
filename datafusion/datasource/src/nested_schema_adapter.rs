@@ -222,4 +222,76 @@ mod tests {
         assert_eq!(adapted.fields(), target_schema.fields());
         Ok(())
     }
+
+    #[test]
+    fn test_map_schema() -> Result<()> {
+        // Create source schema with a subset of fields
+        let source_schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new(
+                "metadata",
+                DataType::Struct(
+                    vec![
+                        Field::new("created", DataType::Utf8, true),
+                        Field::new("modified", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+        ]);
+
+        // Create target schema with additional/different fields
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new(
+                "metadata",
+                DataType::Struct(
+                    vec![
+                        Field::new("created", DataType::Utf8, true),
+                        Field::new("modified", DataType::Utf8, true),
+                        Field::new("version", DataType::Int64, true), // Added field
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+            Field::new("description", DataType::Utf8, true), // Added field
+        ]));
+
+        let adapter = NestedStructSchemaAdapter::new(target_schema.clone());
+        let (_, projection) = adapter.map_schema(&source_schema)?;
+
+        // Verify projection contains all columns from source schema
+        assert_eq!(projection.len(), 3);
+        assert_eq!(projection, vec![0, 1, 2]);
+
+        // Verify adapted schema separately
+        let adapted = adapter.adapt_schema(Arc::new(source_schema))?;
+        assert_eq!(adapted.fields().len(), 4); // Should have all target fields
+
+        // Check if description field exists
+        let description_idx = adapted.index_of("description");
+        assert!(description_idx.is_ok(), "Should have description field");
+
+        // Check nested struct has the new field
+        let metadata_idx = adapted.index_of("metadata").unwrap();
+        let metadata_field = adapted.field(metadata_idx);
+        if let DataType::Struct(fields) = metadata_field.data_type() {
+            assert_eq!(fields.len(), 3); // Should have all 3 fields including version
+
+            // Find version field in the Fields collection
+            let version_exists = fields.iter().any(|f| f.name() == "version");
+            assert!(
+                version_exists,
+                "Should have version field in metadata struct"
+            );
+        } else {
+            panic!("Expected struct type for metadata field");
+        }
+
+        Ok(())
+    }
 }
