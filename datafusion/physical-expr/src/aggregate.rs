@@ -223,6 +223,7 @@ pub struct AggregateFunctionExpr {
     args: Vec<Arc<dyn PhysicalExpr>>,
     /// Output / return type of this aggregate
     data_type: DataType,
+    /// Output column name that this expression creates
     name: String,
     /// Simplified name for `tree` explain.
         sql_name: String,
