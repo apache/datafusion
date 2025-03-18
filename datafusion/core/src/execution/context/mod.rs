@@ -859,7 +859,8 @@ impl SessionContext {
         }
     }
 
-    fn apply_required_rule(logical_plan: LogicalPlan) -> Result<LogicalPlan> {
+    /// Applies the `TypeCoercion` rewriter to the logical plan.
+    fn apply_type_coercion(logical_plan: LogicalPlan) -> Result<LogicalPlan> {
         let options = ConfigOptions::default();
         Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())]).execute_and_check(
             logical_plan,
@@ -886,19 +887,14 @@ impl SessionContext {
         match (or_replace, view) {
             (true, Ok(_)) => {
                 self.deregister_table(name.clone())?;
-                let table = Arc::new(ViewTable::try_new(
-                    Self::apply_required_rule((*input).clone())?,
-                    definition,
-                )?);
-
+                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }
             (_, Err(_)) => {
-                let table = Arc::new(ViewTable::try_new(
-                    Self::apply_required_rule((*input).clone())?,
-                    definition,
-                )?);
+                let input = Self::apply_type_coercion(input.as_ref().clone())?;
+                let table = Arc::new(ViewTable::new(input, definition));
                 self.register_table(name, table)?;
                 self.return_empty_dataframe()
             }

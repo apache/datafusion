@@ -44,20 +44,30 @@ pub struct ViewTable {
 
 impl ViewTable {
     /// Create new view that is executed at query runtime.
-    /// Takes a `LogicalPlan` and an optional create statement as input.
+    ///
+    /// Takes a `LogicalPlan` and optionally the SQL text of the `CREATE`
+    /// statement.
+    ///
+    /// Notes: the `LogicalPlan` is not validated or type coerced. If this is
+    /// needed it should be done after calling this function.
+    pub fn new(logical_plan: LogicalPlan, definition: Option<String>) -> Self {
+        let table_schema = logical_plan.schema().as_ref().to_owned().into();
+        Self {
+            logical_plan,
+            table_schema,
+            definition,
+        }
+    }
+
+    #[deprecated(
+        since = "47.0.0",
+        note = "Use `ViewTable::new` instead and apply TypeCoercion to the logical plan if needed"
+    )]
     pub fn try_new(
         logical_plan: LogicalPlan,
         definition: Option<String>,
     ) -> Result<Self> {
-        let table_schema = logical_plan.schema().as_ref().to_owned().into();
-
-        let view = Self {
-            logical_plan,
-            table_schema,
-            definition,
-        };
-
-        Ok(view)
+        Ok(Self::new(logical_plan, definition))
     }
 
     /// Get definition ref
