@@ -69,17 +69,35 @@ impl NestedStructSchemaAdapterFactory {
     }
 
     /// Create an appropriate schema adapter based on schema characteristics.
-    /// Returns a NestedStructSchemaAdapter for schemas with nested structs,
-    /// or falls back to DefaultSchemaAdapter for simple schemas.
+    /// Returns a NestedStructSchemaAdapter if either schema contains nested structs
+    /// or when adapting between schemas with different structures.
     pub fn create_appropriate_adapter(
         projected_table_schema: SchemaRef,
         table_schema: SchemaRef,
+        source_schema: Option<&Schema>, // Add optional source schema parameter
     ) -> Box<dyn SchemaAdapter> {
+        // Use nested adapter if target has nested structs
         if Self::has_nested_structs(projected_table_schema.as_ref()) {
-            NestedStructSchemaAdapterFactory.create(projected_table_schema, table_schema)
-        } else {
-            DefaultSchemaAdapterFactory.create(projected_table_schema, table_schema)
+            return NestedStructSchemaAdapterFactory
+                .create(projected_table_schema, table_schema);
         }
+
+        // Also use nested adapter if source has nested structs
+        if let Some(src_schema) = source_schema {
+            if Self::has_nested_structs(src_schema) {
+                return NestedStructSchemaAdapterFactory
+                    .create(projected_table_schema, table_schema);
+            }
+
+            // Or if we're doing schema transformation between different structures
+            if src_schema.fields().len() != projected_table_schema.fields().len() {
+                return NestedStructSchemaAdapterFactory
+                    .create(projected_table_schema, table_schema);
+            }
+        }
+
+        // Default case for simple schemas
+        DefaultSchemaAdapterFactory.create(projected_table_schema, table_schema)
     }
 }
 
@@ -373,7 +391,7 @@ mod tests {
         ]));
 
         // Create source schema with missing field in struct
-        let source_schema = Schema::new(vec![
+        let source_schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new(
                 "metadata",
@@ -386,7 +404,7 @@ mod tests {
                 ),
                 true,
             ),
-        ]);
+        ]));
 
         // Test has_nested_structs detection
         assert!(!NestedStructSchemaAdapterFactory::has_nested_structs(
@@ -419,6 +437,7 @@ mod tests {
             NestedStructSchemaAdapterFactory::create_appropriate_adapter(
                 nested_schema.clone(),
                 nested_schema.clone(),
+                None,
             );
 
         // Verify complex_adapter can handle schema evolution
@@ -426,6 +445,110 @@ mod tests {
             complex_adapter.map_schema(&source_schema).is_ok(),
             "Complex adapter should handle schema with missing fields"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_adapt_simple_to_nested_schema() -> Result<()> {
+        // Simple source schema with flat fields
+        let source_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("user", DataType::Utf8, true),
+            Field::new(
+                "timestamp",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+        ]));
+
+        // Target schema with nested struct fields
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "user_info",
+                DataType::Struct(
+                    vec![
+                        Field::new("name", DataType::Utf8, true), // will map from "user" field
+                        Field::new(
+                            "created_at",
+                            DataType::Timestamp(TimeUnit::Millisecond, None),
+                            true,
+                        ), // will map from "timestamp" field
+                        Field::new(
+                            "settings",
+                            DataType::Struct(
+                                vec![
+                                    Field::new("theme", DataType::Utf8, true),
+                                    Field::new("notifications", DataType::Boolean, true),
+                                ]
+                                .into(),
+                            ),
+                            true,
+                        ),
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+        ]));
+
+        // Test that default adapter fails with this transformation
+        let default_adapter = DefaultSchemaAdapterFactory
+            .create(target_schema.clone(), target_schema.clone());
+        assert!(default_adapter.map_schema(&source_schema).is_err());
+
+        // Create mapping with our adapter - should handle missing nested fields
+        let nested_adapter = NestedStructSchemaAdapter::new(target_schema.clone());
+        let adapted = nested_adapter.adapt_schema(source_schema.clone())?;
+
+        // Verify structure of adapted schema
+        assert_eq!(adapted.fields().len(), 2); // Should have id and user_info
+
+        // Check that user_info is a struct
+        if let Some(idx) = adapted.index_of("user_info").ok() {
+            let user_info_field = adapted.field(idx);
+            assert!(matches!(user_info_field.data_type(), DataType::Struct(_)));
+
+            if let DataType::Struct(fields) = user_info_field.data_type() {
+                assert_eq!(fields.len(), 3); // Should have name, created_at, and settings
+
+                // Check that settings field exists and is a struct
+                let settings_idx = fields.iter().position(|f| f.name() == "settings");
+                assert!(settings_idx.is_some(), "Settings field should exist");
+
+                let settings_field = &fields[settings_idx.unwrap()];
+                assert!(matches!(settings_field.data_type(), DataType::Struct(_)));
+
+                if let DataType::Struct(settings_fields) = settings_field.data_type() {
+                    assert_eq!(settings_fields.len(), 2); // Should have theme and notifications
+
+                    // Verify field names within settings
+                    let theme_exists =
+                        settings_fields.iter().any(|f| f.name() == "theme");
+                    let notif_exists =
+                        settings_fields.iter().any(|f| f.name() == "notifications");
+
+                    assert!(theme_exists, "Settings should contain theme field");
+                    assert!(notif_exists, "Settings should contain notifications field");
+                } else {
+                    panic!("Expected struct type for settings field");
+                }
+            } else {
+                panic!("Expected struct type for user_info field");
+            }
+        } else {
+            panic!("Expected user_info field in adapted schema");
+        }
+
+        // Test mapper creation
+        let (_mapper, projection) = nested_adapter.map_schema(&source_schema)?;
+
+        // Verify the mapper was created successfully and projection includes expected columns
+        assert_eq!(projection.len(), source_schema.fields().len());
+
+        // Or check against the adapted schema we already confirmed is correct
+        assert_eq!(adapted.fields().len(), 2);
 
         Ok(())
     }
